@@ -5,6 +5,93 @@ use crate::theme::{self, Theme};
 use gpui::{prelude::FluentBuilder, *};
 use std::time::Duration;
 
+/// The same colours and counts in the compact progress bar and its detail dialog.
+pub fn fetch_segments(run: &crate::app::FetchRun) -> [(usize, &'static str, Hsla); 5] {
+    [
+        (run.count("saved"), "已保存", Theme::success()),
+        (run.count("not_found"), "未找到地址", Theme::warning()),
+        (run.count("failed"), "下载失败", Theme::danger()),
+        (run.working.len(), "正在查找", theme::accent_of("blue").strong()),
+        (run.remaining(), if run.stopped { "未处理" } else { "等待中" }, Theme::text_placeholder()),
+    ]
+}
+
+pub fn fetch_progress(run: &crate::app::FetchRun) -> Div {
+    progress_bar(run.total, &fetch_segments(run))
+}
+
+pub type ProgressSegment = (usize, &'static str, Hsla);
+
+pub fn import_segments(run: &crate::app::ImportRun) -> [ProgressSegment; 6] {
+    use crate::app::Imported;
+    let mut counts = [0; 4];
+    for row in &run.rows {
+        counts[match row.outcome {
+            Imported::Failed(_) => 3,
+            Imported::InTrash => 2,
+            _ if row.open() => 1,
+            _ => 0,
+        }] += 1;
+    }
+    import_progress(counts, run.working.len(), run.total.saturating_sub(run.rows.len() + run.working.len()))
+}
+
+pub fn zotero_segments(run: &crate::app::ZoteroRun) -> [ProgressSegment; 6] {
+    let mut counts = [0; 4];
+    for row in &run.rows {
+        counts[if row.in_trash { 2 } else if row.paper_id.is_none() { 3 } else if !row.problems.is_empty() { 1 } else { 0 }] += 1;
+    }
+    let remaining = run.total.saturating_sub(run.rows.len());
+    let working = usize::from(run.running && remaining > 0);
+    import_progress(counts, working, remaining.saturating_sub(working))
+}
+
+fn import_progress(counts: [usize; 4], working: usize, waiting: usize) -> [ProgressSegment; 6] {
+    [
+        (counts[0], "已导入", Theme::success()),
+        (counts[1], "待完善", Theme::warning()),
+        (counts[2], "已跳过", Theme::text_tertiary()),
+        (counts[3], "导入失败", Theme::danger()),
+        (working, "处理中", theme::accent_of("blue").strong()),
+        (waiting, "等待中", Theme::text_placeholder()),
+    ]
+}
+
+pub fn progress_bar(total: usize, segments: &[ProgressSegment]) -> Div {
+    div().flex().flex_none().w_full().h(px(7.)).rounded_full().overflow_hidden().bg(Theme::groove())
+        .children(segments.iter().copied().filter(|(count, _, _)| *count > 0).map(|(count, _, color)| {
+            div().flex_none().h_full().w(relative(count as f32 / total.max(1) as f32)).bg(color)
+        }))
+}
+
+pub fn progress_entry(id: &'static str, label: &'static str, done: usize, total: usize, running: bool, segments: &[ProgressSegment]) -> Stateful<Div> {
+    div().id(id).flex().flex_none().flex_col().gap(px(7.)).px(px(8.)).py(px(10.)).rounded(px(6.))
+        .cursor_pointer().hover(|s| s.bg(Theme::hover()))
+        .child(div().flex().items_center().gap(px(6.)).text_size(px(12.)).line_height(px(17.))
+            .when(running, |d| d.child(spinner((id, 0_usize), 12., theme::accent_of("blue").strong())))
+            .child(div().flex_1().min_w_0().truncate().text_color(Theme::text_secondary()).child(label))
+            .child(div().flex_none().text_color(Theme::text_tertiary()).child(if running && total == 0 { "准备中".into() } else { format!("{done}/{total}") }))
+            .child(icon("chevron-right", 12., Theme::text_tertiary())))
+        .child(progress_bar(total, segments))
+}
+
+pub fn progress_overview(done: usize, total: usize, state: &'static str, running: bool, segments: &[ProgressSegment]) -> Div {
+    let color = if running { theme::accent_of("blue").strong() } else { Theme::text_secondary() };
+    div().flex().flex_none().flex_col().gap(px(12.)).px(px(20.)).py(px(14.))
+        .child(div().flex().items_center().gap(px(8.))
+            .child(div().text_size(px(20.)).font_weight(FontWeight::SEMIBOLD).child(if running && total == 0 { "正在准备…".into() } else { format!("{done} / {total}") }))
+            .when(total > 0, |d| d.child(div().text_color(Theme::text_tertiary()).child("项已处理")))
+            .child(div().flex_1())
+            .when(running, |d| d.child(spinner("progress-modal-working", 13., color)))
+            .child(div().text_color(color).child(state)))
+        .child(progress_bar(total, segments).h(px(9.)))
+        .child(div().flex().flex_wrap().gap(px(14.)).children(segments.iter().map(|(count, label, color)| {
+            div().flex().items_center().gap(px(5.)).text_size(px(12.))
+                .child(div().flex_none().size(px(7.)).rounded_full().bg(*color))
+                .child(div().text_color(Theme::text_secondary()).child(format!("{label} {count}")))
+        })))
+}
+
 pub fn icon(name: &str, size: f32, color: Hsla) -> Svg {
     svg().path(SharedString::from(format!("icons/{name}.svg"))).size(px(size)).flex_none().text_color(color)
 }
@@ -265,4 +352,25 @@ pub fn window_controls(window: &Window) -> Option<Div> {
             .child(button("window-maximize", WindowControlArea::Max, if window.is_maximized() { "copy" } else { "expand" }, false))
             .child(button("window-close", WindowControlArea::Close, "x", true)),
     )
+}
+
+#[cfg(test)]
+mod progress_tests {
+    use super::{import_segments, zotero_segments};
+    use crate::app::{ImportRow, ImportRun, Imported, ZoteroRun};
+    use wisp_core::zotero;
+
+    #[test]
+    fn progress_categories_are_exclusive_even_when_failed_rows_have_warnings() {
+        let row = |outcome, unrecognised| ImportRow { name: "same.pdf".into(), outcome, paper_id: None, unrecognised, textless: String::new() };
+        let pdfs = ImportRun { total: 7, working: vec!["same.pdf".into(), "same.pdf".into()], rows: vec![row(Imported::Added, false), row(Imported::Attached, true), row(Imported::InTrash, true), row(Imported::Failed("bad file".into()), true)] };
+        assert_eq!(import_segments(&pdfs).map(|(n, _, _)| n), [1, 1, 1, 1, 2, 1]);
+        let zotero = ZoteroRun { total: 6, running: true, rows: vec![
+            zotero::Row { paper_id: Some("saved".into()), ..Default::default() },
+            zotero::Row { paper_id: Some("incomplete".into()), problems: vec!["missing PDF".into()], ..Default::default() },
+            zotero::Row { in_trash: true, problems: vec!["skipped".into()], ..Default::default() },
+            zotero::Row { problems: vec!["failed".into()], ..Default::default() },
+        ], ..Default::default() };
+        assert_eq!(zotero_segments(&zotero).map(|(n, _, _)| n), [1, 1, 1, 1, 1, 1]);
+    }
 }

@@ -630,8 +630,8 @@ impl ImportRow {
 #[derive(Default)]
 pub struct ImportRun {
     pub total: usize,
-    /// The file being read.
-    pub current: String,
+    /// Names of the files currently being read; duplicate names are separate jobs.
+    pub working: Vec<String>,
     pub rows: Vec<ImportRow>,
 }
 
@@ -704,7 +704,9 @@ pub struct FetchRun {
     todo: Vec<String>,
     pub working: Vec<String>,
     pub rows: Vec<FetchRow>,
-    /// Bumped when a round starts or is stopped, so what still arrives for an earlier one is dropped.
+    /// Stop scheduling papers, but let requests already in flight report their results.
+    pub stopped: bool,
+    /// Bumped when a new round starts, so results from an earlier round are dropped.
     run: u64,
 }
 
@@ -717,14 +719,22 @@ impl FetchRun {
         self.rows.iter().filter(|row| row.outcome == outcome).count()
     }
 
-    /// What came of the papers, in a line.
-    pub fn summary(&self) -> String {
-        let mut facts = vec![];
-        for (outcome, text) in [("saved", "已保存"), ("not_found", "没有开放全文"), ("failed", "没有取到")] {
-            let n = self.count(outcome);
-            if n > 0 { facts.push(format!("{text} {n}")) }
+    pub fn remaining(&self) -> usize {
+        self.total.saturating_sub(self.rows.len() + self.working.len())
+    }
+
+    pub fn status(&self) -> &'static str {
+        match (self.stopped, self.running()) {
+            (true, true) => "正在停止",
+            (true, false) => "已停止",
+            (false, true) => "正在查找",
+            (false, false) => "查找完成",
         }
-        facts.join(" · ")
+    }
+
+    fn stop(&mut self) {
+        self.stopped = true;
+        self.todo.clear();
     }
 }
 
@@ -1560,10 +1570,7 @@ impl Workspace {
             Cmd::FindPdfs(only) => self.fetch_start(only, cx),
             Cmd::StopFetch => {
                 if let Some(run) = self.lib.as_mut().and_then(|lib| lib.fetching.as_mut()) {
-                    run.run += 1;
-                    run.total = run.rows.len();
-                    run.todo.clear();
-                    run.working.clear();
+                    run.stop();
                 }
             }
             Cmd::ShowFetch => {
@@ -2763,7 +2770,7 @@ impl Workspace {
                     let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
                     let known = this.update(cx, |this, cx| {
                         let Some(run) = this.lib.as_mut().filter(|l| l.info.id == library).and_then(|l| l.import.as_mut()) else { return false };
-                        run.current = name;
+                        run.working.push(name);
                         cx.notify();
                         true
                     });
@@ -2849,10 +2856,11 @@ impl Workspace {
         let said = if row.textless.is_empty() { said } else { format!("{said} 但没有读出文字（{}），全文暂时不能用于提问。", fulltext::failure_brief(&row.textless)) };
         let failed = matches!(row.outcome, Imported::Failed(_));
         let Some(run) = lib.import.as_mut() else { return };
+        if let Some(at) = run.working.iter().position(|name| name == &row.name) { run.working.remove(at); }
         run.rows.push(row);
         let (single, finished) = (run.total == 1, !run.running());
         if finished {
-            run.current.clear();
+            run.working.clear();
             // The paper the last file became is opened when nothing else is.
             if let Some(id) = run.rows.iter().rev().find_map(|row| row.paper_id.clone()) && lib.selected.is_none() {
                 lib.selected = Some(id);
@@ -3926,6 +3934,7 @@ impl Workspace {
     /// round under way takes more papers in.
     fn fetch_start(&mut self, only: Option<String>, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
+        if lib.fetching.as_ref().is_some_and(|run| run.stopped && run.running()) { return self.say("正在结束当前请求，请稍后再开始新的查找。", cx) }
         let known = wisp_core::openaccess::lookable;
         let lacking = |paper: &Paper| matches!(paper.fulltext.as_str(), "missing" | "linked");
         let wanted: Vec<String> = match &only {
@@ -4024,14 +4033,14 @@ impl Workspace {
                 let cmd = cmd.clone();
                 self.run(cmd, window, cx);
             }
-            Modal::ImportReport => self.run(Cmd::CloseImport, window, cx),
+            Modal::ImportReport => self.run(Cmd::CloseModal, window, cx),
             Modal::Section { .. } | Modal::History { .. } => self.submit_manuscript_modal(window, cx),
             Modal::Complete(form) => {
                 if form.chosen.is_some() { self.complete_apply(window, cx) } else { self.complete_find(cx) }
             }
             Modal::Zotero => self.run(Cmd::PickZotero, window, cx),
             Modal::ZoteroReport => self.run(Cmd::CloseModal, window, cx),
-            Modal::FetchReport => self.run(Cmd::CloseFetch, window, cx),
+            Modal::FetchReport => self.run(Cmd::CloseModal, window, cx),
             Modal::Library { editing, name, topic, color } => {
                 let (name, topic, color) = (text(name, cx), text(topic, cx), color.clone());
                 let mut created = None;
@@ -4339,7 +4348,55 @@ impl Workspace {
                 // `findpdf` asks about the papers of the list on show, `findpdf:one` about the selected paper; `fetched` shows what came of it.
                 "findpdf" => Some(Cmd::FindPdfs(if arg == "one" { self.lib.as_ref().and_then(|lib| lib.selected.clone()) } else { None })),
                 "fetched" => Some(Cmd::ShowFetch),
+                // A network-free preview of a mixed batch in an isolated demo library.
+                "fetch-preview" => {
+                    let Some(lib) = self.lib.as_mut() else { return };
+                    let total = lib.papers.len().min(428);
+                    let done = if arg == "complete" { total } else if arg == "empty" { 0 } else { total / 3 };
+                    let mut run = FetchRun { total, run: lib.fetching.as_ref().map_or(1, |run| run.run + 1), ..Default::default() };
+                    for (i, paper) in lib.papers.iter().take(total).enumerate() {
+                        if i < done {
+                            let (outcome, detail) = match i % 4 {
+                                0 => ("saved", "来自 OpenAlex · 正式版，读出 12 页文字"),
+                                1 => ("failed", "出版社返回 HTTP 403，拒绝程序下载。可在浏览器中下载 PDF 后拖入文献库。"),
+                                _ => ("not_found", "本次检索未找到可下载的 PDF 地址。"),
+                            };
+                            run.rows.push(FetchRow { paper_id: paper.id.clone(), title: paper.title.clone(), outcome: outcome.into(), detail: detail.into(), textless: false });
+                        } else if run.working.len() < FETCH_WORKERS && arg != "stopped" {
+                            run.working.push(paper.id.clone());
+                        } else {
+                            run.todo.push(paper.id.clone());
+                        }
+                    }
+                    if arg == "stopped" { run.stop() }
+                    lib.fetching = Some(run);
+                    cx.notify();
+                    None
+                }
                 "view" => Some(Cmd::SetView(match arg { "nopdf" => View::NoPdf, "unread" => View::Unread, _ => View::All })),
+                "import-preview" | "zotero-preview" => {
+                    let Some(lib) = self.lib.as_mut() else { return };
+                    let total = lib.papers.len().min(24);
+                    let done = if arg == "complete" { total } else { total / 2 };
+                    let mut pdfs = ImportRun { total, ..Default::default() };
+                    let mut zotero = ZoteroRun { total, running: done < total, ..Default::default() };
+                    for (i, paper) in lib.papers.iter().take(total).enumerate() {
+                        let file = format!("{}.pdf", paper.title);
+                        if i < done {
+                            let failed = i % 5 == 4;
+                            let skipped = i % 5 == 3;
+                            let incomplete = i % 5 == 2;
+                            pdfs.rows.push(ImportRow { name: file, outcome: if failed { Imported::Failed("无法读取这个文件".into()) } else if skipped { Imported::InTrash } else if i % 5 == 1 { Imported::Attached } else { Imported::Added }, paper_id: (!failed).then(|| paper.id.clone()), unrecognised: incomplete, textless: String::new() });
+                            zotero.rows.push(zotero::Row { title: paper.title.clone(), paper_id: (!failed && !skipped).then(|| paper.id.clone()), added: i % 5 == 0, in_trash: skipped, files_added: usize::from(!failed && !skipped), problems: if failed { vec!["无法读取文献记录".into()] } else if incomplete { vec!["附件尚未下载到本机".into()] } else { vec![] }, ..Default::default() });
+                        } else if pdfs.working.len() < IMPORT_WORKERS {
+                            pdfs.working.push(file);
+                            zotero.current = paper.title.clone();
+                        }
+                    }
+                    if name == "import-preview" { lib.import = Some(pdfs) } else { lib.zotero = Some(zotero) }
+                    cx.notify();
+                    None
+                }
                 "materials" => Some(Cmd::ToggleMaterials),
                 "history-paper" => Some(Cmd::ToggleHistory(true)),
                 "newchat" => Some(Cmd::NewChat(arg == "paper")),
@@ -4491,5 +4548,27 @@ impl Workspace {
             };
             if let Some(cmd) = cmd { self.run(cmd, window, cx) }
         }
+    }
+}
+
+#[cfg(test)]
+mod fetch_tests {
+    use super::{FetchRow, FetchRun};
+
+    #[test]
+    fn stopping_keeps_the_total_and_accepts_inflight_results() {
+        let mut run = FetchRun { total: 4, todo: vec!["queued-a".into(), "queued-b".into()], working: vec!["first".into(), "second".into()], run: 7, ..Default::default() };
+        run.stop();
+        assert_eq!((run.total, run.run, run.remaining(), run.status()), (4, 7, 2, "正在停止"));
+        assert!(run.todo.is_empty());
+        assert_eq!(run.working.len(), 2);
+        // An already-started request may save a PDF after Stop. Keep its result visible.
+        for outcome in ["saved", "failed"] {
+            let id = run.working.pop().unwrap();
+            run.rows.push(FetchRow { paper_id: id, title: "Paper".into(), outcome: outcome.into(), detail: String::new(), textless: false });
+        }
+        assert!(!run.running());
+        assert_eq!((run.status(), run.total, run.remaining()), ("已停止", 4, 2));
+        assert_eq!((run.count("saved"), run.count("failed")), (1, 1));
     }
 }
