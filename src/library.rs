@@ -1,7 +1,7 @@
 //! An open library: the sidebar (collect, views, tags), the paper table with
 //! its search and filters, and the trash.
 
-use crate::app::{Cmd, Edge, FilterKey, Library, MenuKind, Page, Tab, Workspace};
+use crate::app::{Cmd, Edge, FilterKey, Library, MenuKind, Page, Tab, Translated, Workspace};
 use crate::settings::SettingsPage;
 use crate::theme::{self, Theme};
 use crate::ui;
@@ -150,7 +150,7 @@ impl Workspace {
             .flex()
             .size_full()
             .when(shown, |d| d.child(self.render_sidebar(sidebar_width, cx)))
-            .child(div().relative().flex().flex_col().flex_1().min_w_0().h_full().bg(Theme::bg_body()).when(shown, |d| d.border_l_1().border_color(Theme::line())).child(strip).child(div().flex().flex_col().flex_1().min_h_0().child(main)).when(shown || dragging, |d| d.child(edge)))
+            .child(div().relative().flex().flex_col().flex_1().min_w_0().h_full().bg(Theme::bg_body()).when(shown, |d| d.border_l_1().border_color(Theme::line())).child(strip).children(self.render_batch_translation(cx)).child(div().flex().flex_col().flex_1().min_h_0().child(main)).when(shown || dragging, |d| d.child(edge)))
             .when(detail_width > 0., |d| d.child(self.render_detail(detail_width, window, cx)))
             .into_any_element()
     }
@@ -418,12 +418,15 @@ impl Workspace {
         } else {
             uniform_list("papers", shown, cx.processor(move |this, range: Range<usize>, window, cx| this.render_rows(range, width, window, cx))).track_scroll(lib.table_scroll.clone()).flex_1().into_any_element()
         };
-        let status = if let Some(run) = lib.import.as_ref().filter(|run| run.running()) {
+        let marked = lib.marked.len();
+        let status = if marked > 0 {
+            format!("已选 {marked} 篇 · 右键批量操作 · Esc 取消")
+        } else if let Some(run) = lib.import.as_ref().filter(|run| run.running()) {
             format!("正在导入 PDF，已完成 {} / {}", run.rows.len(), run.total)
         } else if !lib.extracting.is_empty() {
             format!("正在提取 {} 篇全文的文字，用于提问…", lib.extracting.len())
         } else {
-            format!("↑↓ 切换文献 · 右键更多操作 · {} 搜索 · Esc 关闭详情", crate::shortcuts::pretty(&crate::shortcuts::key_of("search", &self.settings.shortcuts)))
+            format!("↑↓ 切换文献 · Shift / {} 点选多篇 · 右键更多操作 · {} 搜索", if cfg!(target_os = "macos") { "⌘" } else { "Ctrl" }, crate::shortcuts::pretty(&crate::shortcuts::key_of("search", &self.settings.shortcuts)))
         };
         div()
             .flex()
@@ -452,6 +455,7 @@ impl Workspace {
                             .child(lib.search.clone()),
                     )
                     .child(ui::secondary_button("sort", "排序").child(ui::icon("sort-down", 14., Theme::text_secondary())).on_click(self.on_menu(MenuKind::Sort, cx)))
+                    .child(ui::secondary_button("list-translation", if lib.show_translation { "显示原文" } else { "显示译文" }).on_click(self.on(Cmd::ToggleTranslation, cx)))
                     .child(ui::secondary_button("export", "导出").child(ui::icon("export", 14., Theme::text_secondary())).on_click(self.on_menu(MenuKind::Export, cx))),
             )
             .child(div().id("filters").flex().flex_wrap().items_center().gap(px(6.)).px(px(16.)).py(px(10.)).children(chips))
@@ -502,7 +506,7 @@ impl Workspace {
         range
             .filter_map(|row| {
                 let p = lib.papers.get(*lib.shown.get(row)?)?;
-                let selected = lib.selected.as_deref() == Some(p.id.as_str());
+                let selected = lib.selected.as_deref() == Some(p.id.as_str()) || lib.marked.contains(&p.id);
                 // The paper a right-click menu is about.
                 let pointed = self.menu.as_ref().is_some_and(|menu| menu.paper.as_deref() == Some(p.id.as_str()));
                 let cells: Vec<AnyElement> = columns
@@ -536,6 +540,7 @@ impl Workspace {
                                 )
                                 .into_any_element(),
                             ColumnKind::Title => {
+                                let title = if lib.show_translation && let Some(Translated::Done(text)) = lib.translations.get(&wisp_core::store::translation_key(&p.title, wisp_core::ai::translation_prompt(&self.settings.translation_prompt))) { text } else { &p.title };
                                 let mut meta = vec![];
                                 let authors = p.short_authors();
                                 if !authors.is_empty() { meta.push(authors) }
@@ -547,7 +552,7 @@ impl Workspace {
                                         .flex_col()
                                         .min_w_0()
                                         .w_full()
-                                        .child(div().truncate().font_weight(if p.reading == "unread" { FontWeight::MEDIUM } else { FontWeight::NORMAL }).text_color(if p.reading == "unread" { Theme::text() } else { Theme::text_secondary() }).child(p.title.clone()))
+                                        .child(div().truncate().font_weight(if p.reading == "unread" { FontWeight::MEDIUM } else { FontWeight::NORMAL }).text_color(if p.reading == "unread" { Theme::text() } else { Theme::text_secondary() }).child(title.clone()))
                                         .child(
                                             div()
                                                 .flex()
@@ -596,10 +601,14 @@ impl Workspace {
                         .when(selected, |d| d.bg(Theme::accent_soft()))
                         .when(!selected && pointed, |d| d.bg(Theme::hover()))
                         .when(!selected && !pointed, |d| d.hover(|s| s.bg(Theme::hover())))
-                        .on_mouse_down(MouseButton::Right, self.on_context(MenuKind::Paper(p.id.clone()), cx))
+                        .on_mouse_down(MouseButton::Right, self.on_paper_context(p.id.clone(), cx))
                         .on_click(cx.listener({
                             let id = p.id.clone();
                             move |this, ev: &ClickEvent, window, cx| {
+                                // With ⌘ / Ctrl or Shift held the click marks papers; alone it shows one.
+                                let held = ev.modifiers();
+                                if held.secondary() || held.shift { return this.mark(&id, held.shift, window, cx) }
+                                if let Some(lib) = this.lib.as_mut() { (lib.anchor, lib.cursor) = (Some(id.clone()), None) }
                                 // A double click opens the PDF straight away.
                                 if ev.click_count() >= 2 && let Some(lib) = this.lib.as_mut() && lib.pdf_file(&id).is_some() { lib.tab = Tab::Pdf }
                                 this.run(Cmd::Select(id.clone()), window, cx);

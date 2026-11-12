@@ -222,6 +222,11 @@ impl Workspace {
                     .child(footer("改名", false, self, cx))
             }
 
+            Modal::TagPapers { ids, name } => ui::dialog(420.)
+                .child(ui::dialog_title(format!("为 {} 篇文献添加标签", ids.len())))
+                .child(body().child(div().text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_tertiary()).child("多个标签用逗号或分号隔开。已有的标签不动，只添加还没有的。")).child(ui::field(name, window, cx)).child(error))
+                .child(footer("添加", false, self, cx)),
+
             Modal::Note { paper_id, text } => {
                 let title = self.lib.as_ref().and_then(|lib| lib.paper(paper_id)).map(|paper| paper.title.clone()).unwrap_or_default();
                 ui::dialog(620.)

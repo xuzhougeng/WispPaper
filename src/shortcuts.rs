@@ -5,7 +5,7 @@
 use gpui::*;
 use std::collections::BTreeMap;
 
-actions!(workspace, [Dismiss, FocusSearch, AddPaper, ImportPdf, AskLibrary, ToggleDetail, ToggleSidebar, ShowSettings, ShowHome, NewLibrary, ZoomIn, ZoomOut, ZoomFit, CopyPicked, FindCandidates, MoveUp, MoveDown, MoveLeft, MoveRight, MovePageUp, MovePageDown, MoveFirst, MoveLast, OpenSelected, TrashSelected]);
+actions!(workspace, [Dismiss, FocusSearch, AddPaper, ImportPdf, AskLibrary, ToggleDetail, ToggleSidebar, ShowSettings, ShowHome, NewLibrary, ZoomIn, ZoomOut, ZoomFit, CopyPicked, FindCandidates, MoveUp, MoveDown, MoveLeft, MoveRight, MovePageUp, MovePageDown, MoveFirst, MoveLast, OpenSelected, TrashSelected, MarkUp, MarkDown, MarkAll]);
 
 pub struct Shortcut {
     pub id: &'static str,
@@ -92,6 +92,9 @@ pub fn rebuild(custom: &BTreeMap<String, String>, cx: &mut App) {
         KeyBinding::new("pagedown", MovePageDown, context),
         KeyBinding::new("home", MoveFirst, context),
         KeyBinding::new("end", MoveLast, context),
+        KeyBinding::new("shift-up", MarkUp, context),
+        KeyBinding::new("shift-down", MarkDown, context),
+        KeyBinding::new("secondary-a", MarkAll, context),
         KeyBinding::new("enter", OpenSelected, context),
         KeyBinding::new("delete", TrashSelected, context),
         KeyBinding::new(TRASH, TrashSelected, context),

@@ -21,6 +21,10 @@ pub enum Nav {
     Open,
     /// Delete, or ⌘⌫ / Ctrl+Backspace.
     Trash,
+    /// Shift with an arrow: the marked stretch reaches a row further. ⌘A / Ctrl+A: every paper on show.
+    MarkUp,
+    MarkDown,
+    MarkAll,
 }
 
 impl Workspace {
@@ -31,6 +35,101 @@ impl Workspace {
             cx.stop_propagation();
             this.open_menu(kind.clone(), event.position, cx);
         })
+    }
+
+    /// A right click on a row of the list: on one of several marked papers, the menu for all of them;
+    /// on any other, that paper's own (and the marking ends).
+    pub fn on_paper_context(&self, id: String, cx: &mut Context<Self>) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static {
+        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+            cx.stop_propagation();
+            let Some(lib) = this.lib.as_mut() else { return };
+            let kind = if lib.marked.len() > 1 && lib.marked.contains(&id) {
+                // In the order of the list, whatever order they were marked in.
+                MenuKind::Papers(lib.shown.iter().map(|&i| lib.papers[i].id.clone()).filter(|id| lib.marked.contains(id)).collect())
+            } else {
+                if !lib.marked.contains(&id) { lib.marked.clear() }
+                MenuKind::Paper(id.clone())
+            };
+            this.open_menu(kind, event.position, cx);
+        })
+    }
+
+    /// A click on a row with a key held. ⌘ / Ctrl: the paper joins the marked ones or leaves them
+    /// (the paper on show is the first of them). Shift: every paper from where the marking started to this one.
+    pub fn mark(&mut self, id: &str, stretch: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(lib) = self.lib.as_mut() else { return };
+        let ids: Vec<String> = lib.shown.iter().map(|&i| lib.papers[i].id.clone()).collect();
+        let place = |id: &str| ids.iter().position(|other| other == id);
+        if stretch {
+            let from = lib.anchor.clone().or(lib.selected.clone()).filter(|id| place(id).is_some()).unwrap_or_else(|| id.to_string());
+            let (Some(a), Some(b)) = (place(&from), place(id)) else { return };
+            lib.marked = ids[a.min(b)..=a.max(b)].to_vec();
+            (lib.anchor, lib.cursor) = (Some(from), Some(id.to_string()));
+        } else {
+            if lib.marked.is_empty() && let Some(shown) = lib.selected.clone().filter(|shown| shown != id) { lib.marked.push(shown) }
+            match lib.marked.iter().position(|other| other == id) {
+                Some(at) => { lib.marked.remove(at); }
+                None => lib.marked.push(id.to_string()),
+            }
+            (lib.anchor, lib.cursor) = (Some(id.to_string()), None);
+        }
+        // Several papers have no panel of one; the keyboard stays with the list.
+        if lib.marked.len() > 1 { self.select(None, window, cx) }
+        window.focus(&self.focus);
+        cx.notify();
+    }
+
+    /// What is done with several papers at once.
+    pub(crate) fn run_batch(&mut self, cmd: Cmd, window: &mut Window, cx: &mut Context<Self>) {
+        // Each paper read, changed and written; the list is read again once.
+        let each = |this: &mut Self, ids: &[String], cx: &mut Context<Self>, edit: &dyn Fn(&mut wisp_core::model::Paper)| {
+            this.change(cx, |lib| {
+                for id in ids {
+                    let mut paper = lib.store.get_paper(id)?;
+                    edit(&mut paper);
+                    lib.store.save_paper(&mut paper)?;
+                }
+                Ok(())
+            })
+        };
+        match cmd {
+            Cmd::AskPapers(ids) => {
+                // A conversation of its own: what was being asked before is kept in the history.
+                self.run(Cmd::NewChat(false), window, cx);
+                if let Some(lib) = self.lib.as_mut() { lib.asked = ids }
+                self.run(Cmd::SetPage(Page::Ask), window, cx);
+            }
+            Cmd::StarPapers(ids, starred) => {
+                each(self, &ids, cx, &|paper| paper.starred = starred);
+            }
+            Cmd::ReadPapers(ids, value) => {
+                each(self, &ids, cx, &|paper| paper.reading = value.clone());
+            }
+            Cmd::TagPapers(ids) => {
+                self.modal_subscriptions.clear();
+                self.modal_error.clear();
+                let name = self.modal_input("例如 综述、方法", "", false, window, cx);
+                name.read(cx).focus(window);
+                self.modal = Some(crate::app::Modal::TagPapers { ids, name });
+            }
+            Cmd::FindPdfsOf(ids) => {
+                for id in ids { self.fetch_start(Some(id), cx) }
+            }
+            Cmd::AskTrashPapers(ids) => {
+                self.modal_error.clear();
+                self.modal = Some(crate::app::Modal::Confirm { title: format!("把 {} 篇文献移到回收站？", ids.len()), message: "它们的笔记、词条和 PDF 都留着，可以在回收站里恢复。".into(), action: "移到回收站".into(), cmd: Cmd::TrashPapers(ids) });
+            }
+            Cmd::TrashPapers(ids) => {
+                self.modal = None;
+                let done = self.change(cx, |lib| {
+                    for id in &ids { lib.store.trash_paper(id)? }
+                    Ok(())
+                });
+                if done { self.say(format!("已把 {} 篇文献移到回收站。", ids.len()), cx) }
+                window.focus(&self.focus);
+            }
+            _ => {}
+        }
     }
 
     /// The items of a right-click menu, and the ones a line is drawn above.
@@ -67,6 +166,34 @@ impl Workspace {
 
                 breaks.push(items.len());
                 items.push(MenuItem { label: "移到回收站".into(), checked: false, note: Some(crate::shortcuts::pretty("secondary-backspace").into()), cmd: Cmd::TrashPaper(id.clone()) });
+            }
+            MenuKind::Papers(ids) => {
+                let papers: Vec<&wisp_core::model::Paper> = ids.iter().filter_map(|id| lib.paper(id)).collect();
+                if papers.is_empty() { return (items, breaks) }
+                let count = papers.len();
+                items.push(item(&format!("就这 {count} 篇提问"), Cmd::AskPapers(ids.clone())));
+
+                breaks.push(items.len());
+                let starred = papers.iter().all(|p| p.starred);
+                items.push(item(if starred { "取消收藏" } else { "收藏" }, Cmd::StarPapers(ids.clone(), !starred)));
+                for (value, label) in READINGS {
+                    items.push(MenuItem { label: format!("标为{label}").into(), checked: papers.iter().all(|p| p.reading == value), note: None, cmd: Cmd::ReadPapers(ids.clone(), value.into()) });
+                }
+                items.push(item("添加标签…", Cmd::TagPapers(ids.clone())));
+                // Those without a PDF that have a number to be looked up by.
+                let lacking: Vec<String> = papers.iter().filter(|p| lib.pdf_file(&p.id).is_none() && wisp_core::openaccess::lookable(p)).map(|p| p.id.clone()).collect();
+                if !lacking.is_empty() { items.push(MenuItem { label: "查找开放全文".into(), checked: false, note: Some(format!("{} 篇缺 PDF", lacking.len()).into()), cmd: Cmd::FindPdfsOf(lacking) }) }
+
+                breaks.push(items.len());
+                items.push(item("批量翻译标题", Cmd::TranslatePapers(ids.clone(), wisp_core::translation::Field::Title)));
+                items.push(item("批量翻译摘要", Cmd::TranslatePapers(ids.clone(), wisp_core::translation::Field::Abstract)));
+
+                breaks.push(items.len());
+                items.push(item("复制题目", Cmd::CopyText(papers.iter().map(|p| p.title.as_str()).collect::<Vec<_>>().join("\n"))));
+                items.push(item("复制 BibTeX", Cmd::CopyText(wisp_core::export::bibtex(&papers))));
+
+                breaks.push(items.len());
+                items.push(MenuItem { label: format!("把 {count} 篇移到回收站…").into(), checked: false, note: Some(crate::shortcuts::pretty("secondary-backspace").into()), cmd: Cmd::AskTrashPapers(ids.clone()) });
             }
             MenuKind::Trashed(id) => {
                 items.push(item("恢复", Cmd::RestorePaper(id.clone())));
@@ -144,15 +271,38 @@ impl Workspace {
             _ => return,
         };
         let listed = lib.page == Page::Papers;
-        let at = lib.selected.as_deref().and_then(|id| ids.iter().position(|other| other == id));
+        let place = |id: &Option<String>| id.as_deref().and_then(|id| ids.iter().position(|other| other == id));
+        // Marking with the keyboard, in the list of papers.
+        if matches!(nav, Nav::MarkUp | Nav::MarkDown | Nav::MarkAll) {
+            if !listed || ids.is_empty() { return }
+            let from = place(&lib.anchor).or(place(&lib.selected)).unwrap_or(0);
+            let (from, to) = match nav {
+                Nav::MarkAll => (0, ids.len() - 1),
+                Nav::MarkUp => (from, place(&lib.cursor).unwrap_or(from).saturating_sub(1)),
+                _ => (from, (place(&lib.cursor).unwrap_or(from) + 1).min(ids.len() - 1)),
+            };
+            if nav != Nav::MarkAll { lib.table_scroll.scroll_to_item(to, if nav == Nav::MarkDown { ScrollStrategy::Bottom } else { ScrollStrategy::Top }) }
+            let marked = ids[from.min(to)..=from.max(to)].to_vec();
+            let (anchor, cursor) = (ids[from].clone(), ids[to].clone());
+            if marked.len() > 1 { self.select(None, window, cx) }
+            if let Some(lib) = self.lib.as_mut() { (lib.marked, lib.anchor, lib.cursor) = (marked, Some(anchor), Some(cursor)) }
+            return cx.notify();
+        }
+        // Several marked: Delete is for all of them, after asking.
+        if nav == Nav::Trash && listed && lib.marked.len() > 1 {
+            let marked = ids.iter().filter(|id| lib.marked.contains(id)).cloned().collect();
+            return self.run(Cmd::AskTrashPapers(marked), window, cx);
+        }
+        // Where the keys go on from: the paper on show, else where the marking reached.
+        let at = place(&lib.selected).or(place(&lib.cursor)).or(place(&lib.anchor));
         match nav {
             Nav::Open => {
                 // As a double click does: the paper's PDF, when it has one.
-                if let Some(id) = at.map(|at| ids[at].clone()).filter(|id| lib.pdf_file(id).is_some()) { self.run(Cmd::OpenPaper(id, Tab::Pdf), window, cx) }
+                if let Some(id) = place(&lib.selected).map(|at| ids[at].clone()).filter(|id| lib.pdf_file(id).is_some()) { self.run(Cmd::OpenPaper(id, Tab::Pdf), window, cx) }
                 return;
             }
             Nav::Trash => {
-                if listed && let Some(at) = at { self.run(Cmd::TrashPaper(ids[at].clone()), window, cx) }
+                if listed && let Some(at) = place(&lib.selected) { self.run(Cmd::TrashPaper(ids[at].clone()), window, cx) }
                 return;
             }
             _ => {}
@@ -172,10 +322,11 @@ impl Workspace {
             (Nav::PageUp | Nav::Left, Some(at)) => at.saturating_sub(screenful),
             (_, Some(at)) => (at + screenful).min(last),
         };
-        if Some(to) == at { return }
+        if Some(to) == at && lib.selected.is_some() { return }
         // Only as far as brings the row into view: at the bottom going down, at the top going up.
         if listed { lib.table_scroll.scroll_to_item(to, if at.is_some_and(|at| to > at) { ScrollStrategy::Bottom } else { ScrollStrategy::Top }) }
         self.select(Some(ids[to].clone()), window, cx);
+        if let Some(lib) = self.lib.as_mut() { (lib.anchor, lib.cursor) = (Some(ids[to].clone()), None) }
     }
 }
 

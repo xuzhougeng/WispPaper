@@ -60,7 +60,8 @@ impl Workspace {
         let side = if about_paper { "paper" } else { "library" };
 
         // The papers in scope that have a PDF no text came of: said, so that nobody takes them for read.
-        let textless = lib.shown.iter().filter(|&&i| lib.papers[i].fulltext == "textless").count();
+        let in_scope = lib.scope_papers();
+        let textless = in_scope.iter().filter(|p| p.fulltext == "textless").count();
         let textless_note = if textless > 0 && !about_paper { format!("；其中 {textless} 篇的 PDF 没读出文字，只有记录和摘要") } else { String::new() };
         // What the model has been given, or will be given with the first question.
         let scope = match &chat.ctx {
@@ -86,6 +87,7 @@ impl Workspace {
                     None => "这篇文献没有 PDF，将只提供记录和摘要".to_string(),
                 }
             }
+            None if !about_paper && !lib.asked.is_empty() => format!("范围：你在列表里选中的 {} 篇文献，以及其中已存 PDF 的相关页面{textless_note}。「新对话」回到当前列表", in_scope.len()),
             None => format!("范围：当前列表的 {} 篇文献（受左侧视图、搜索和筛选影响），以及其中已存 PDF 的相关页面{textless_note}", lib.shown.len()),
         };
 
@@ -176,7 +178,7 @@ impl Workspace {
         // (paper, its label in this conversation, how its record was given, pages of its text given)
         let rows: Vec<(&wisp_core::model::Paper, String, &str, usize)> = match &chat.ctx {
             Some(ctx) => ctx.given.iter().filter_map(|given| Some((lib.paper(&given.paper_id)?, ctx.sources.iter().find(|source| source.paper_id == given.paper_id).map(|source| source.label.clone()).unwrap_or_default(), given.record, given.pages))).collect(),
-            None => lib.shown.iter().map(|&i| (&lib.papers[i], String::new(), "", 0)).collect(),
+            None => lib.scope_papers().into_iter().map(|paper| (paper, String::new(), "", 0)).collect(),
         };
         let total = rows.len();
         let note = if chat.ctx.is_some() {

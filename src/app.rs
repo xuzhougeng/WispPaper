@@ -20,7 +20,7 @@ use wisp_core::lookup::{self, Identifier};
 use wisp_core::model::*;
 pub(crate) use wisp_core::settings::default_root;
 use wisp_core::settings::{Settings, Task, settings_file};
-use wisp_core::store::{Conversation, ConversationInfo, ImportBatch, SavedSearch, Store, StructureInfo, Suggestion, TrashEntry, translation_key};
+use wisp_core::store::{Conversation, ConversationInfo, ImportBatch, SavedSearch, Store, StructureInfo, Suggestion, TrashEntry};
 use wisp_core::manuscript::{Manuscript, Snapshot};
 use wisp_core::{complete, export, fulltext, import, pdftext, structure, time, tools, zotero};
 pub use crate::manuscripts::ManuscriptExport;
@@ -98,6 +98,8 @@ pub enum MenuKind {
     /// of the selected paper, a tag of the sidebar, a past conversation (of the paper or the library), a
     /// text that can be selected (the whole of it), an answer (of which conversation, and its text).
     Paper(String),
+    /// Several papers marked in the list.
+    Papers(Vec<String>),
     Trashed(String),
     File(String),
     Tag(String),
@@ -178,6 +180,16 @@ pub enum Cmd {
     ClearFilters,
     SetSort(String),
     Select(String),
+    /// What is done with several papers marked in the list (`src/context.rs`): a new conversation about
+    /// them alone, starred or not, a reading status, tags added (the dialog), their open full texts
+    /// looked for, moved to the trash (after asking).
+    AskPapers(Vec<String>),
+    StarPapers(Vec<String>, bool),
+    ReadPapers(Vec<String>, String),
+    TagPapers(Vec<String>),
+    FindPdfsOf(Vec<String>),
+    AskTrashPapers(Vec<String>),
+    TrashPapers(Vec<String>),
     /// Open a paper on one page of the detail panel.
     OpenPaper(String, Tab),
     CloseDetail,
@@ -214,6 +226,9 @@ pub enum Cmd {
     /// Show the selected paper's title and abstract translated, or stop showing it.
     ToggleTranslation,
     RetryTranslation,
+    TranslatePapers(Vec<String>, wisp_core::translation::Field),
+    StopBatchTranslation,
+    DismissBatchTranslation,
     // Custom fields
     ManageFields,
     EditField(String),
@@ -860,6 +875,8 @@ pub enum Modal {
     Confirm { title: String, message: String, action: String, cmd: Cmd },
     /// Another name for a tag, on every paper that has it.
     Tag { tag: String, name: Entity<TextInput> },
+    /// Tags for several papers at once.
+    TagPapers { ids: Vec<String>, name: Entity<TextInput> },
     /// What came of each PDF of the last import (`Library::import`).
     ImportReport,
     Zotero,
@@ -887,6 +904,13 @@ pub struct Library {
     pub search: Entity<TextInput>,
     pub page: Page,
     pub selected: Option<String>,
+    /// The papers marked in the list with Shift or ⌘ / Ctrl, for doing something with all of them.
+    pub marked: Vec<String>,
+    /// Where a stretch marked with Shift starts, and where it reaches to.
+    pub anchor: Option<String>,
+    pub cursor: Option<String>,
+    /// The papers the library's next conversation is about, when they were picked in the list; none means the list on show.
+    pub asked: Vec<String>,
     pub tab: Tab,
     /// The detail panel takes most of the window (reading a PDF).
     pub wide: bool,
@@ -909,6 +933,8 @@ pub struct Library {
     pub suggestions: HashMap<String, Suggestion>,
     /// Translations asked for in this window, by `store::translation_key`.
     pub translations: HashMap<String, Translated>,
+    pub translation_run: Option<crate::translate::TranslationRun>,
+    pub translation_session: Arc<()>,
     /// Whether the detail panel shows the selected paper translated. It
     /// stays on from paper to paper, so each one opened is translated.
     pub show_translation: bool,
@@ -1118,6 +1144,13 @@ impl Library {
         self.papers.iter().find(|p| p.id == id)
     }
 
+    /// The papers a question to the library is put to: those picked for it in the list, else the list on show.
+    pub fn scope_papers(&self) -> Vec<&Paper> {
+        if self.asked.is_empty() { return self.shown.iter().map(|&i| &self.papers[i]).collect() }
+        let asked: HashSet<&str> = self.asked.iter().map(String::as_str).collect();
+        self.papers.iter().filter(|p| asked.contains(p.id.as_str())).collect()
+    }
+
     pub fn selected_paper(&self) -> Option<&Paper> {
         self.selected.as_deref().and_then(|id| self.paper(id))
     }
@@ -1246,6 +1279,13 @@ impl Library {
             self.selected = None;
             self.pdf = None;
         }
+        let held: HashSet<&str> = self.papers.iter().map(|p| p.id.as_str()).collect();
+        let gone = |ids: &Vec<String>| ids.iter().any(|id| !held.contains(id.as_str()));
+        if gone(&self.marked) || gone(&self.asked) {
+            let held: HashSet<String> = held.into_iter().map(str::to_string).collect();
+            self.marked.retain(|id| held.contains(id));
+            self.asked.retain(|id| held.contains(id));
+        }
         self.refilter();
         Ok(())
     }
@@ -1311,7 +1351,7 @@ impl Workspace {
     }
 
     /// Run a store operation on the open library, reload, and report a failure.
-    fn change(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Library) -> anyhow::Result<()>) -> bool {
+    pub(crate) fn change(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Library) -> anyhow::Result<()>) -> bool {
         let Some(lib) = self.lib.as_mut() else { return false };
         let result = f(lib).and_then(|_| lib.reload());
         cx.notify();
@@ -1341,7 +1381,7 @@ impl Workspace {
             _ => None,
         };
         match kind {
-            MenuKind::Paper(_) | MenuKind::Trashed(_) | MenuKind::File(_) | MenuKind::Tag(_) | MenuKind::Conversation(..) | MenuKind::Text(_) | MenuKind::Answer(..) => (items, breaks) = self.context_menu(&kind),
+            MenuKind::Paper(_) | MenuKind::Papers(_) | MenuKind::Trashed(_) | MenuKind::File(_) | MenuKind::Tag(_) | MenuKind::Conversation(..) | MenuKind::Text(_) | MenuKind::Answer(..) => (items, breaks) = self.context_menu(&kind),
             MenuKind::Add => {
                 items.push(item("通过 DOI / PMID 添加…", Cmd::AddById));
                 items.push(item("导入 PDF 文件…", Cmd::ImportPdfs));
@@ -1673,6 +1713,7 @@ impl Workspace {
                 }
             }
             Cmd::Select(id) => self.select(Some(id), window, cx),
+            Cmd::AskPapers(_) | Cmd::StarPapers(..) | Cmd::ReadPapers(..) | Cmd::TagPapers(_) | Cmd::FindPdfsOf(_) | Cmd::AskTrashPapers(_) | Cmd::TrashPapers(_) => self.run_batch(cmd, window, cx),
             Cmd::OpenPaper(id, tab) => {
                 self.select(Some(id), window, cx);
                 self.run(Cmd::SetTab(tab), window, cx);
@@ -1762,9 +1803,17 @@ impl Workspace {
             }
             Cmd::ToggleTranslation => {
                 if let Some(lib) = self.lib.as_mut() { lib.show_translation = !lib.show_translation }
+                self.load_title_translations();
                 self.translate_selected(true, cx);
             }
             Cmd::RetryTranslation => self.translate_selected(true, cx),
+            Cmd::TranslatePapers(ids, field) => self.translate_batch(ids, field, cx),
+            Cmd::StopBatchTranslation => {
+                if let Some(run) = self.lib.as_mut().and_then(|lib| lib.translation_run.as_mut()) { run.batch.stop() }
+            }
+            Cmd::DismissBatchTranslation => {
+                if let Some(lib) = self.lib.as_mut().filter(|lib| lib.translation_run.as_ref().is_some_and(|run| !run.batch.running())) { lib.translation_run = None }
+            }
 
             Cmd::ManageFields => self.fields_dialog(None, window, cx),
             Cmd::EditField(id) => self.fields_dialog(Some(id), window, cx),
@@ -1812,6 +1861,8 @@ impl Workspace {
                     kept = chat.kept;
                     chat.reset(cx);
                     chat.input.read(cx).focus(window);
+                    // A new conversation with the library is about the list on show again.
+                    if !paper { lib.asked.clear() }
                 }
                 if kept { self.say("上一段对话已保存，在「历史」里可以找到。", cx) }
             }
@@ -2241,6 +2292,8 @@ impl Workspace {
         } else if self.settings_view.is_some() {
             self.close_settings(window, cx);
         } else if self.picked.take().is_some() {
+        } else if self.lib.as_ref().is_some_and(|l| !l.marked.is_empty()) {
+            if let Some(lib) = self.lib.as_mut() { lib.marked.clear() }
         } else if self.lib.as_ref().is_some_and(|l| l.selected.is_some()) {
             self.select(None, window, cx);
         }
@@ -2377,6 +2430,10 @@ impl Workspace {
             zoom: Zoom::FitWidth,
             library_chat,
             paper_chat,
+            marked: vec![],
+            anchor: None,
+            cursor: None,
+            asked: vec![],
             table_scroll: UniformListScrollHandle::new(),
             detail_scroll: ScrollHandle::new(),
             extracting: HashSet::new(),
@@ -2384,6 +2441,8 @@ impl Workspace {
             screen,
             suggestions: HashMap::new(),
             translations: HashMap::new(),
+            translation_run: None,
+            translation_session: Arc::new(()),
             show_translation: false,
             searches: vec![],
             batches: vec![],
@@ -2411,6 +2470,8 @@ impl Workspace {
         let Some(lib) = self.lib.as_ref() else { return };
         if lib.selected == id { return }
         self.picked = None;
+        // One paper on show ends a marking of several.
+        if id.is_some() && let Some(lib) = self.lib.as_mut() { lib.marked.clear() }
         // The conversation with the paper being left is kept as far as it got.
         self.stop_chat(true, cx);
         let Some(lib) = self.lib.as_mut() else { return };
@@ -2431,60 +2492,6 @@ impl Workspace {
         }
         self.ensure_pdf(cx);
         self.translate_selected(false, cx);
-        cx.notify();
-    }
-
-    /// Translate the selected paper's title and abstract while translation
-    /// is on. What the library already holds is shown without asking; the
-    /// rest goes to the model for translation, each text on its own, and is
-    /// kept. `retry` asks again for what failed before.
-    fn translate_selected(&mut self, retry: bool, cx: &mut Context<Self>) {
-        let profile = self.settings.profile_for_or_default(Task::Translate);
-        let prompt = self.settings.translation_prompt.clone();
-        let Some(lib) = self.lib.as_mut().filter(|l| l.show_translation) else { return };
-        let Some(paper) = lib.selected_paper() else { return };
-        let library = lib.info.id.clone();
-        for text in [paper.title.clone(), paper.abstract_text.clone()] {
-            if text.trim().is_empty() { continue }
-            let key = translation_key(&text, ai::translation_prompt(&prompt));
-            match lib.translations.get(&key) {
-                Some(Translated::Done(_) | Translated::Busy) => continue,
-                Some(Translated::Failed(_)) if !retry => continue,
-                _ => {}
-            }
-            if let Ok(Some(kept)) = lib.store.translation(&key) {
-                lib.translations.insert(key, Translated::Done(kept));
-                continue;
-            }
-            let request = match ai::translate_request(&profile, &prompt, &text) {
-                Ok(request) => request,
-                Err(err) => {
-                    lib.translations.insert(key, Translated::Failed(err));
-                    continue;
-                }
-            };
-            lib.translations.insert(key.clone(), Translated::Busy);
-            let (library, protocol, author) = (library.clone(), profile.protocol, format!("{} · {}", profile.title(), profile.model));
-            let work = cx.background_executor().spawn(async move { wisp_net::complete(request, protocol) });
-            cx.spawn(async move |this, cx| {
-                let translated = work.await;
-                this.update(cx, |this, cx| {
-                    let Some(lib) = this.lib.as_mut().filter(|l| l.info.id == library) else { return };
-                    let state = match translated {
-                        Ok(text) => {
-                            // Not kept is not lost: it is on show, and asked for again another day.
-                            let _ = lib.store.save_translation(&key, &text, &author);
-                            Translated::Done(text.trim().to_string())
-                        }
-                        Err(err) => Translated::Failed(err),
-                    };
-                    lib.translations.insert(key, state);
-                    cx.notify();
-                })
-                .ok();
-            })
-            .detach();
-        }
         cx.notify();
     }
 
@@ -3104,6 +3111,8 @@ impl Workspace {
             // A question about one paper reads that paper; one about the library reads the current list.
             let papers: Vec<&Paper> = match &scope {
                 Scope::Paper(_) => lib.papers.iter().collect(),
+                // As `Library::scope_papers`, field by field: the conversation is held meanwhile.
+                Scope::Library if !lib.asked.is_empty() => lib.papers.iter().filter(|p| lib.asked.contains(&p.id)).collect(),
                 Scope::Library => lib.shown.iter().map(|&i| &lib.papers[i]).collect(),
             };
             if papers.is_empty() {
@@ -3415,6 +3424,7 @@ impl Workspace {
             Ok(None) => return self.fail("这次对话已经不在了。", cx),
             Err(err) => return self.fail(format!("{err:#}"), cx),
         };
+        if !about_paper { lib.asked.clear() }
         let chat = if about_paper { &mut lib.paper_chat } else { &mut lib.library_chat };
         chat.reset(cx);
         for item in conversation.transcript.items {
@@ -3932,7 +3942,7 @@ impl Workspace {
     /// Look for the open full text of one paper, or of the papers of the
     /// current list that have no PDF and a number to be looked up by. A
     /// round under way takes more papers in.
-    fn fetch_start(&mut self, only: Option<String>, cx: &mut Context<Self>) {
+    pub(crate) fn fetch_start(&mut self, only: Option<String>, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
         if lib.fetching.as_ref().is_some_and(|run| run.stopped && run.running()) { return self.say("正在结束当前请求，请稍后再开始新的查找。", cx) }
         let known = wisp_core::openaccess::lookable;
@@ -4081,6 +4091,25 @@ impl Workspace {
                     return;
                 }
                 if name == tag || self.retag(&tag, Some(&name), cx) { self.run(Cmd::CloseModal, window, cx) }
+            }
+            Modal::TagPapers { ids, name } => {
+                let (ids, tags) = (ids.clone(), wisp_core::model::split_list(&text(name, cx)));
+                if tags.is_empty() {
+                    self.modal_error = "写上要添加的标签，多个用逗号或分号隔开。".into();
+                    return;
+                }
+                let done = self.change(cx, |lib| {
+                    for id in &ids {
+                        let mut paper = lib.store.get_paper(id)?;
+                        for tag in &tags { if !paper.tags.contains(tag) { paper.tags.push(tag.clone()) } }
+                        lib.store.save_paper(&mut paper)?;
+                    }
+                    Ok(())
+                });
+                if done {
+                    self.run(Cmd::CloseModal, window, cx);
+                    self.say(format!("已为 {} 篇文献添加标签。", ids.len()), cx);
+                }
             }
             Modal::Note { paper_id, text: input } => {
                 let (paper_id, note) = (paper_id.clone(), text(input, cx));
@@ -4477,6 +4506,12 @@ impl Workspace {
                     "width" => ZoomTo::Set(Zoom::FitWidth),
                     percent => ZoomTo::Set(Zoom::Percent(percent.parse().unwrap_or(100.))),
                 })),
+                "translate" if matches!(arg, "titles" | "abstracts") => {
+                    let Some(lib) = self.lib.as_ref() else { return };
+                    let ids = lib.shown.iter().map(|&i| lib.papers[i].id.clone()).filter(|id| lib.marked.contains(id)).collect();
+                    Some(Cmd::TranslatePapers(ids, if arg == "titles" { wisp_core::translation::Field::Title } else { wisp_core::translation::Field::Abstract }))
+                }
+                "translate" if arg == "stop" => Some(Cmd::StopBatchTranslation),
                 "translate" => Some(Cmd::ToggleTranslation),
                 // `profile:1` shows the second model service on the AI page.
                 "profile" => Some(Cmd::SelectProfile(arg.parse().unwrap_or(0))),
