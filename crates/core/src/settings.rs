@@ -41,11 +41,13 @@ pub struct Settings {
     pub sidebar_hidden: bool,
     /// How wide the reader made a paper's conversation beside its PDF; 0 is the width it comes with.
     pub chat_width: f32,
+    /// The paper's conversation over its PDF instead of beside it, and where its window was left.
+    pub floating: crate::floating::Floating,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { data_dir: String::new(), profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translation_prompt: String::new(), commands: vec![], auto_update: true, appearance: String::new(), density: String::new(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0. }
+        Settings { data_dir: String::new(), profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translation_prompt: String::new(), commands: vec![], auto_update: true, appearance: String::new(), density: String::new(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., floating: Default::default() }
     }
 }
 

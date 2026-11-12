@@ -227,6 +227,10 @@ pub enum Cmd {
     PdfCut,
     /// Show the paper's PDF to the right of its conversation, or put it away.
     BesidePdf(bool),
+    /// The paper's conversation floats over its PDF, or stands beside it (`Settings::floating`).
+    FloatChat(bool),
+    /// Fold the floating conversation into its button, or open it again.
+    FoldChat(bool),
     /// Show the selected paper's title and abstract translated, or stop showing it.
     ToggleTranslation,
     RetryTranslation,
@@ -920,6 +924,10 @@ pub struct Library {
     pub reading: bool,
     /// The paper's PDF is shown to the right of its conversation, where the panel has room for both.
     pub split: bool,
+    /// The floating conversation's window or button while the pointer holds it (floating.rs).
+    pub float_drag: Option<crate::floating::Drag>,
+    /// The size of the area the floating conversation keeps within, as last drawn.
+    pub float_area: (f32, f32),
     pub notes: Entity<TextInput>,
     pub pdf: Option<Entity<PdfView>>,
     pdf_events: Option<Subscription>,
@@ -1813,6 +1821,8 @@ impl Workspace {
                 if show && self.detail_width(window) < crate::detail::SPLIT_MIN && let Some(lib) = self.lib.as_mut() { lib.wide = true }
                 self.ensure_pdf(cx);
             }
+            Cmd::FloatChat(on) => self.float_chat(on, window, cx),
+            Cmd::FoldChat(fold) => self.fold_chat(fold, window, cx),
             Cmd::PdfZoom(to) => {
                 if let Some(pdf) = self.lib.as_ref().filter(|lib| lib.tab == Tab::Pdf || lib.split).and_then(|lib| lib.pdf.clone()) { pdf.update(cx, |pdf, cx| pdf.zoom_to(to, cx)) }
             }
@@ -2437,6 +2447,8 @@ impl Workspace {
             wide: false,
             reading: false,
             split: true,
+            float_drag: None,
+            float_area: (0., 0.),
             notes,
             pdf: None,
             pdf_events: None,
@@ -2649,6 +2661,7 @@ impl Workspace {
     /// conversation, with what was added over its box.
     fn show_paper_chat(&mut self, cx: &mut Context<Self>) {
         let narrow = self.settings.detail_width < crate::detail::SPLIT_MIN;
+        self.unfold_chat(cx);
         let Some(lib) = self.lib.as_mut() else { return };
         if !(lib.split && lib.tab == Tab::Ask) {
             (lib.split, lib.tab) = (true, Tab::Ask);
@@ -4630,6 +4643,9 @@ impl Workspace {
                 "wide" => Some(Cmd::ToggleWide),
                 "cut" => Some(Cmd::PdfCut),
                 "beside" => Some(Cmd::BesidePdf(arg != "off")),
+                // `float` / `float:off`: the paper's conversation over its PDF, or beside it; `fold` / `fold:off` folds it up or opens it.
+                "float" => Some(Cmd::FloatChat(arg != "off")),
+                "fold" => Some(Cmd::FoldChat(arg != "off")),
                 // `zoom:150`, `zoom:page`, `zoom:width`, `zoom:in`, `zoom:out`
                 "zoom" => Some(Cmd::PdfZoom(match arg {
                     "in" => ZoomTo::In,
