@@ -318,6 +318,30 @@ fn read_section(r: &rusqlite::Row) -> rusqlite::Result<Section> {
 }
 
 impl Store {
+    /// Create a manuscript from prepared sections and pin the citation keys
+    /// in the same transaction. A failure leaves neither a partial manuscript
+    /// nor newly reserved keys. `keys` holds (paper_id, citation_key).
+    pub fn create_manuscript_from_sections(&mut self, title: &str, language: &str, sections: &[(String, String)], keys: &[(String, String)]) -> Result<Manuscript> {
+        if !is_language(language) { bail!("不认识这种语言：{language}") }
+        if sections.is_empty() || sections.iter().any(|(name, _)| name.trim().is_empty()) { bail!("稿件需要有名称的章节") }
+        let (id, now) = (new_id("M"), now_iso());
+        let tx = self.db.transaction()?;
+        for (paper_id, key) in keys {
+            if key.trim().is_empty() { bail!("引用键不能为空") }
+            let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM papers WHERE id = ?1)", [paper_id], |r| r.get(0))?;
+            if !exists { bail!("引用的文献已不存在：{paper_id}") }
+            tx.execute("INSERT OR IGNORE INTO cite_keys(key, paper_id, made_at) VALUES (?1, ?2, ?3)", params![key, paper_id, now])?;
+            let actual: String = tx.query_row("SELECT paper_id FROM cite_keys WHERE key = ?1", [key], |r| r.get(0))?;
+            if &actual != paper_id { bail!("引用键与其他文献冲突：{key}") }
+        }
+        tx.execute("INSERT INTO manuscripts(id, title, language, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)", params![id, title.trim(), language, now])?;
+        for (position, (name, body)) in sections.iter().enumerate() {
+            tx.execute("INSERT INTO manuscript_sections(id, manuscript_id, position, name, kind, body, updated_at) VALUES (?1, ?2, ?3, ?4, 'other', ?5, ?6)", params![new_id("S"), id, position as i64, name.trim(), body, now])?;
+        }
+        tx.commit()?;
+        self.manuscript(&id)?.ok_or_else(|| anyhow::anyhow!("新稿件保存后未找到"))
+    }
+
     /// The manuscripts of the library that were not removed, oldest first, with their sections.
     pub fn manuscripts(&self) -> Result<Vec<Manuscript>> {
         let mut stmt = self.db.prepare("SELECT id, title, language, created_at, updated_at FROM manuscripts WHERE removed_at = '' ORDER BY created_at, id")?;
@@ -463,6 +487,26 @@ mod tests {
 
     fn store() -> Store {
         Store::in_memory(Path::new("/tmp/wisp-manuscript-test")).unwrap()
+    }
+
+    #[test]
+    fn imported_sections_and_citation_keys_commit_together() {
+        let mut store = store();
+        let paper = store.add_paper(crate::model::Paper { title: "Roots".into(), ..Default::default() }).unwrap();
+        let other = store.add_paper(crate::model::Paper { title: "Leaves".into(), ..Default::default() }).unwrap();
+        let sections = vec![("Introduction".into(), "Text [@Root2024, p. 5]".into()), ("Conclusion".into(), "More".into())];
+        let bad = vec![(paper.id.clone(), "Root2024".into()), ("missing".into(), "Missing2024".into())];
+        assert!(store.create_manuscript_from_sections("Review", "en", &sections, &bad).is_err());
+        assert!(store.manuscripts().unwrap().is_empty());
+        assert!(store.cite_keys().unwrap().is_empty(), "an earlier reserved key must roll back");
+
+        let conflict = vec![(paper.id.clone(), "Root2024".into()), (other.id.clone(), "root2024".into())];
+        assert!(store.create_manuscript_from_sections("Review", "en", &sections, &conflict).is_err());
+        assert!(store.manuscripts().unwrap().is_empty() && store.cite_keys().unwrap().is_empty());
+
+        let made = store.create_manuscript_from_sections("Review", "en", &sections, &[(paper.id.clone(), "Root2024".into())]).unwrap();
+        assert_eq!(made.sections.iter().map(|s| (s.name.clone(), s.body.clone())).collect::<Vec<_>>(), sections);
+        assert_eq!(store.cite_keys().unwrap().get("Root2024"), Some(&paper.id));
     }
 
     #[test]

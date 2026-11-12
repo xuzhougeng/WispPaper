@@ -37,6 +37,77 @@ pub fn written(key: &str) -> String {
     format!("[@{key}]")
 }
 
+/// A chat answer converted for the writing page. Each `(paper_id, key)` must
+/// be kept with `Store::keep_cite_key` before saving `text` to a manuscript.
+pub struct AiCitationConversion {
+    pub text: String,
+    pub keys: Vec<(String, String)>,
+}
+
+/// Convert only complete, unambiguous chat citation groups. Unrecognised
+/// text, quoted excerpts and groups with an unavailable source remain exactly
+/// as written; conversion is not verification of the claim or page.
+pub fn convert_ai_citations(answer: &str, sources: &[crate::ai::Source], index: &Index<'_>) -> AiCitationConversion {
+    let mut text = String::new();
+    let mut keys = Vec::new();
+    let mut end = 0;
+    for (range, _) in crate::ai::citation_spans(answer) {
+        if range.start < end { continue }
+        text.push_str(&answer[end..range.start]);
+        let original = &answer[range.clone()];
+        if let Some(cited) = parse_chat_group(original) {
+            let resolved: Option<Vec<_>> = cited.iter().map(|(label, page)| {
+                let mut matches = sources.iter().filter(|source| &source.label == label);
+                let source = matches.next()?;
+                if matches.next().is_some() { return None }
+                Some((source.paper_id.clone(), index.key(&source.paper_id)?.to_string(), *page))
+            }).collect();
+            if let Some(resolved) = resolved {
+                let pieces: Vec<String> = resolved.iter().map(|(_, key, page)| match page {
+                    Some(page) => format!("@{key}, p. {page}"),
+                    None => format!("@{key}"),
+                }).collect();
+                text.push_str(&format!("[{}]", pieces.join("; ")));
+                for (id, key, _) in resolved {
+                    if !keys.iter().any(|pair| pair == &(id.clone(), key.clone())) { keys.push((id, key)) }
+                }
+            } else { text.push_str(original) }
+        } else { text.push_str(original) }
+        end = range.end;
+    }
+    text.push_str(&answer[end..]);
+    AiCitationConversion { text, keys }
+}
+
+/// The deliberately narrow grammar has no free text or quotations, so
+/// converting a group cannot silently drop a qualifier or source detail.
+fn parse_chat_group(group: &str) -> Option<Vec<(String, Option<usize>)>> {
+    let inner = group.strip_prefix('[')?.strip_suffix(']')?;
+    if inner.contains(['[', ']', '\n', '"', '“', '”', '「', '」']) { return None }
+    let mut citations: Vec<(String, Option<usize>)> = Vec::new();
+    let parse_page = |word: &str| -> Option<usize> {
+        let digits = word.strip_prefix("p.").or_else(|| word.strip_prefix('p'))?;
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) { return None }
+        digits.parse::<usize>().ok().filter(|page| *page > 0)
+    };
+    for part in inner.split([',', '，', ';', '、']) {
+        let mut words = part.split_whitespace();
+        let first = words.next()?;
+        if first.starts_with('P') && first.len() > 1 && first[1..].bytes().all(|b| b.is_ascii_digit()) {
+            let page = match words.next() { Some(word) => Some(parse_page(word)?), None => None };
+            if words.next().is_some() { return None }
+            citations.push((first.to_string(), page));
+        } else {
+            let page = parse_page(first)?;
+            if words.next().is_some() { return None }
+            let last = citations.last_mut()?;
+            if last.1.is_some() { return None }
+            last.1 = Some(page);
+        }
+    }
+    (!citations.is_empty()).then_some(citations)
+}
+
 /// Every paper of a library with its key: the open papers and those in the
 /// trash, and the keys kept from earlier citations (key → paper id).
 pub struct Index<'a> {
@@ -528,6 +599,33 @@ mod tests {
             paper("P4", "Jürgen Müller", None, "Auxin", "2024-04-01"),
             paper("P5", "Smith, Alice; Jones, Bob", Some(2019), "Two authors", "2024-05-01"),
         ]
+    }
+
+    #[test]
+    fn converts_only_complete_chat_citations_and_preserves_locators() {
+        let papers = library();
+        let index = Index::new(&papers, [], &BTreeMap::new());
+        let sources = vec![
+            crate::ai::Source { label: "P1".into(), paper_id: "P1".into(), title: "One".into() },
+            crate::ai::Source { label: "P2".into(), paper_id: "P2".into(), title: "Two".into() },
+        ];
+        let original = "测试 [P1 p.5] and [P1, p.6; P2 p.7] [P1, P9] [P1 \"quote\"] [P1 p.5 extra] [P1 p.0].";
+        let converted = convert_ai_citations(original, &sources, &index);
+        assert_eq!(converted.text, "测试 [@Zhang2024, p. 5] and [@Zhang2024, p. 6; @Zhang2024b, p. 7] [P1, P9] [P1 \"quote\"] [P1 p.5 extra] [P1 p.0].");
+        assert_eq!(converted.keys, vec![("P1".into(), "Zhang2024".into()), ("P2".into(), "Zhang2024b".into())]);
+        let references = find(&converted.text, &index);
+        assert_eq!(references.iter().filter(|citation| citation.found.paper().is_some()).count(), 3);
+
+        let mut ambiguous = sources.clone();
+        ambiguous.push(crate::ai::Source { label: "P1".into(), paper_id: "P2".into(), title: "duplicate".into() });
+        let result = convert_ai_citations("[P1, P2] [P2]", &ambiguous, &index);
+        assert_eq!(result.text, "[P1, P2] [@Zhang2024b]");
+        assert_eq!(result.keys, vec![("P2".into(), "Zhang2024b".into())]);
+
+        let removed = vec![crate::ai::Source { label: "P1".into(), paper_id: "gone".into(), title: "Gone".into() }];
+        let result = convert_ai_citations("[P1 p.5]", &removed, &index);
+        assert_eq!(result.text, "[P1 p.5]");
+        assert!(result.keys.is_empty());
     }
 
     #[test]

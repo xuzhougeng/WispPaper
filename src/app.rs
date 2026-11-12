@@ -269,6 +269,14 @@ pub enum Cmd {
     /// Unfold or fold the tool calls that start at this place in the conversation.
     ToggleTools(bool, usize),
     CopyText(String),
+    /// Save an answer and its source labels to a new manuscript, at the person's request.
+    AnswerToManuscript(String, String),
+    /// Start or update the review record tied to the current conversation.
+    StartReview,
+    ReviewToManuscript,
+    ToggleReview,
+    AskRemoveReviewSection(String),
+    ReviewAction(String, String),
     /// Copy what is selected in a text of the window that is not an answer (`src/select.rs`).
     CopySelected,
     /// A tag of the library under another name (the dialog), or taken off every paper (after asking).
@@ -826,6 +834,8 @@ pub struct Chat {
     pub tools_open: HashSet<usize>,
     /// The list of what the model was (or will be) given is unfolded.
     pub materials_open: bool,
+    /// Show the current review record.
+    pub review_open: bool,
     /// What is selected in an answer: the answer's place among the messages, the two ends in order of selecting, and whether the pointer is still held.
     pub picked: Option<(usize, crate::markdown::Place, crate::markdown::Place, bool)>,
     /// The quotations of the answers looked up in the papers they name, by label, page and quotation.
@@ -1035,6 +1045,7 @@ impl Chat {
             running: vec![],
             tools_open: Default::default(),
             materials_open: false,
+            review_open: false,
             picked: None,
             checks: HashMap::new(),
             started: None,
@@ -1977,6 +1988,15 @@ impl Workspace {
                     if !chat.tools_open.remove(&at) { chat.tools_open.insert(at); }
                 }
             }
+            Cmd::AnswerToManuscript(question, answer) => self.answer_to_manuscript(question, answer, window, cx),
+            Cmd::StartReview => self.start_review(cx),
+            Cmd::ReviewToManuscript => self.review_to_manuscript(window, cx),
+            Cmd::ToggleReview => { if let Some(lib) = self.lib.as_mut() { lib.library_chat.review_open = !lib.library_chat.review_open; } },
+            Cmd::AskRemoveReviewSection(name) => {
+                self.modal_error.clear();
+                self.modal = Some(Modal::Confirm { title: format!("删除综述记录中的「{name}」？"), message: "这一节会从综述记录中移除，已创建的稿件不受影响。".into(), action: "删除".into(), cmd: Cmd::ReviewAction("remove_section".into(), name) });
+            }
+            Cmd::ReviewAction(action, text) => self.review_action(&action, text, cx),
             Cmd::CopyText(text) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
                 self.say("已复制", cx);
@@ -3141,6 +3161,7 @@ impl Workspace {
         let paper_id = lib.selected.clone();
         let chat = if about_paper { &mut lib.paper_chat } else { &mut lib.library_chat };
         let question = chat.input.read(cx).text().trim().to_string();
+        let begin_review = !about_paper && question.strip_prefix("/review").is_some_and(|rest| rest.starts_with(char::is_whitespace));
         if (question.is_empty() && chat.attachments.is_empty() && chat.quotes.is_empty()) || chat.busy { return }
         chat.error.clear();
         chat.note.clear();
@@ -3226,6 +3247,21 @@ impl Workspace {
         } else {
             (format!("我在文献的 PDF 里选中了下面的原文，问题是就它提的；引用它时沿用这里的出处写法。\n{}\n\n{prompt}", quoted.join("\n")), [quoted.join("\n"), question].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n"))
         };
+        // The saved record, not an assistant's claim, identifies the user-confirmed stages.
+        // Keep it with the sent question so replay uses the same context.
+        let prompt = if !about_paper && !chat.id.is_empty() {
+            match lib.store.review_for_conversation(&chat.id) {
+                Ok(Some(review)) => {
+                    let stage = if !review.requirements_confirmed { "写作要求尚未确认。先整理并请用户在界面确认，不要写大纲或正文。" }
+                        else if !review.outline_confirmed { "大纲尚未确认。可检索、提出和调整大纲，等待用户在界面确认，不要写正文。" }
+                        else { "要求和大纲已由用户确认。围绕大纲补充证据、按节写作或检查；如用户要改变要求或大纲，请提示在界面重新记录并确认。" };
+                    let sections = review.sections.iter().map(|section| format!("## {}\n{}", section.name, section.body)).collect::<Vec<_>>().join("\n\n");
+                    format!("{prompt}\n\n[当前综述记录]\n{stage}\n写作要求：\n{}\n\n大纲：\n{}\n\n证据记录：\n{}\n\n已保存正文（修改要求或大纲后可能需要重新审阅）：\n{}", review.requirements, review.outline, review.evidence, sections)
+                }
+                Ok(None) => prompt,
+                Err(err) => { chat.error = format!("无法读取综述记录：{err:#}"); chat.quotes = quotes; return cx.notify() }
+            }
+        } else { prompt };
         let images = std::mem::take(&mut chat.attachments);
         chat.wire.push(ai::user_message_with(profile.protocol, &prompt, &wire_images(&images)));
         // Kept with the question, so the conversation taken up later asks what was asked now, whatever the command says by then.
@@ -3247,7 +3283,12 @@ impl Workspace {
             }
         }
         // Kept from the question on, so that closing the window mid-answer does not lose it.
-        if sent { self.save_chat(about_paper, cx) }
+        if sent {
+            self.save_chat(about_paper, cx);
+            // The transcript is saved first so the review and its conversation
+            // can be associated atomically, including across application restarts.
+            if begin_review { self.start_review(cx) }
+        }
         cx.notify();
     }
 
