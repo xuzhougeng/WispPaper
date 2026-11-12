@@ -21,7 +21,7 @@ use wisp_core::model::*;
 pub(crate) use wisp_core::settings::default_root;
 use wisp_core::settings::{Settings, Task, settings_file};
 use wisp_core::store::{Conversation, ConversationInfo, ImportBatch, SavedSearch, Store, StructureInfo, Suggestion, TrashEntry, translation_key};
-use wisp_core::{export, fulltext, import, structure, time, tools, zotero};
+use wisp_core::{complete, export, fulltext, import, pdftext, structure, time, tools, zotero};
 
 /// What the middle of an open library shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -287,6 +287,12 @@ pub enum Cmd {
     // Dialogs
     CloseModal,
     SubmitModal,
+    /// 按题目补全: look for the records a paper without its metadata may be.
+    CompletePaper(String),
+    /// Look at one of the records found, or (`None`) go back to all of them.
+    CompleteChoose(Option<usize>),
+    /// Take or leave one field of the record looked at.
+    CompleteField(&'static str),
     PickColor(String),
     PickKind(FieldKind),
     PickOption(String, String),
@@ -715,6 +721,28 @@ pub struct Chat {
     pub started: Option<Instant>,
 }
 
+/// 按题目补全: what is asked, the records found, and the one being
+/// looked at with the fields to take from it. Nothing is written before
+/// the person has picked a record and said which fields.
+pub struct CompleteForm {
+    pub paper_id: String,
+    /// When the paper was last changed as the dialog opened: a change made meanwhile stops the writing.
+    seen: String,
+    pub title: Entity<TextInput>,
+    pub author: Entity<TextInput>,
+    pub year: Entity<TextInput>,
+    /// The paper's title is the name of its file: not something to look for.
+    pub placeholder: bool,
+    /// The title in the box was read off the first page of the PDF.
+    pub guessed: bool,
+    pub busy: bool,
+    pub found: Option<complete::Found>,
+    /// For each record found, the other paper of the library that it is, if any: (id, title).
+    pub held: Vec<Option<(String, String)>>,
+    pub chosen: Option<usize>,
+    pub fields: Vec<&'static str>,
+}
+
 pub struct PaperForm {
     /// The paper being edited; `None` adds a new one.
     pub id: Option<String>,
@@ -737,6 +765,7 @@ pub enum Modal {
     Library { editing: Option<String>, name: Entity<TextInput>, topic: Entity<TextInput>, color: String },
     AddById { input: Entity<TextInput>, busy: bool },
     Paper(Box<PaperForm>),
+    Complete(Box<CompleteForm>),
     Fields { editing: Option<String>, name: Entity<TextInput>, options: Entity<TextInput>, kind: FieldKind, in_table: bool },
     Search { editing: Option<String>, kind: String, name: Entity<TextInput>, query: Entity<TextInput>, max: Entity<TextInput> },
     Confirm { title: String, message: String, action: String, cmd: Cmd },
@@ -2022,6 +2051,26 @@ impl Workspace {
                 window.focus(&self.focus);
             }
             Cmd::SubmitModal => self.submit_modal(window, cx),
+            Cmd::CompletePaper(id) => self.complete_dialog(id, window, cx),
+            Cmd::CompleteChoose(at) => {
+                self.modal_error.clear();
+                let Some(Modal::Complete(form)) = self.modal.as_mut() else { return };
+                form.chosen = at.filter(|at| form.found.as_ref().is_some_and(|found| *at < found.candidates.len()));
+                form.fields = match (form.chosen, self.lib.as_ref().and_then(|lib| lib.paper(&form.paper_id))) {
+                    (Some(at), Some(paper)) => match &form.found.as_ref().unwrap().candidates[at] {
+                        candidate if candidate.similarity >= complete::ALIKE_ENOUGH => complete::suggested(paper, &candidate.paper, form.placeholder),
+                        _ => vec![],
+                    },
+                    _ => vec![],
+                };
+            }
+            Cmd::CompleteField(key) => {
+                let Some(Modal::Complete(form)) = self.modal.as_mut() else { return };
+                match form.fields.iter().position(|taken| *taken == key) {
+                    Some(at) => { form.fields.remove(at); }
+                    None => form.fields.push(key),
+                }
+            }
             Cmd::PickColor(value) => {
                 if let Some(Modal::Library { color, .. }) = self.modal.as_mut() { *color = value }
             }
@@ -2584,7 +2633,7 @@ impl Workspace {
         if let Err(err) = stored { row.outcome = Imported::Failed(format!("{err:#}")) }
         let title = row.paper_id.as_deref().and_then(|id| lib.paper(id)).map(|p| p.title.clone()).unwrap_or_default();
         let said = match &row.outcome {
-            Imported::Added if row.unrecognised => format!("已添加「{stem}」。没有识别出 DOI，请补全题目和作者。"),
+            Imported::Added if row.unrecognised => format!("已添加「{stem}」。没有识别出 DOI：可以在文献详情里「按题目补全」。"),
             Imported::Added => format!("已添加：{title}"),
             Imported::Attached => format!("「{stem}」已在文献库中，PDF 已附到原条目。"),
             Imported::InTrash => format!("「{stem}」对应的文献在回收站中，未导入。"),
@@ -3197,6 +3246,109 @@ impl Workspace {
         input
     }
 
+    /// Open 按题目补全 for a paper. Its title goes into the box unless it is
+    /// only the name of its file; then the first page of its PDF is read
+    /// for one, which the person looks over before anything is asked.
+    fn complete_dialog(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.modal_subscriptions.clear();
+        self.modal_error.clear();
+        let Some(lib) = &self.lib else { return };
+        let Some(paper) = lib.paper(&id).cloned() else { return };
+        let files: Vec<PaperFile> = lib.paper_files(&id).into_iter().cloned().collect();
+        let placeholder = complete::placeholder_title(&paper, &files);
+        let pdfs: Vec<PathBuf> = files.iter().filter(|file| file.format == "pdf").map(|file| lib.store.file_path(file)).collect();
+        let library = lib.info.id.clone();
+        let title = self.modal_input("文献的题目", if placeholder { "" } else { &paper.title }, true, window, cx);
+        title.update(cx, |input, _| input.min_lines = 2);
+        let first_author = paper.authors.split(';').next().unwrap_or("").trim().to_string();
+        let author = self.modal_input("一位作者的姓名，可不填", &first_author, false, window, cx);
+        let year = self.modal_input("例如 2019，可不填", &paper.year.map(|y| y.to_string()).unwrap_or_default(), false, window, cx);
+        title.read(cx).focus(window);
+        self.modal = Some(Modal::Complete(Box::new(CompleteForm { paper_id: id.clone(), seen: paper.updated_at.clone(), title, author, year, placeholder, guessed: false, busy: false, found: None, held: vec![], chosen: None, fields: vec![] })));
+        cx.notify();
+        if !placeholder || pdfs.is_empty() { return }
+        cx.spawn(async move |this, cx| {
+            let shown = cx.background_executor().spawn(async move { pdfs.into_iter().find_map(|path| pdftext::title_guess(std::fs::read(path).ok()?)) }).await;
+            this.update(cx, |this, cx| {
+                if this.lib.as_ref().is_none_or(|l| l.info.id != library) { return }
+                let (Some(Modal::Complete(form)), Some(shown)) = (this.modal.as_mut(), shown) else { return };
+                // Only into a box the person has not written in meanwhile.
+                if form.paper_id != id || !form.title.read(cx).text().trim().is_empty() { return }
+                form.title.update(cx, |input, cx| input.set_text(&shown, cx));
+                form.guessed = true;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// 按题目补全, the first step: ask the sources about the title in the box.
+    fn complete_find(&mut self, cx: &mut Context<Self>) {
+        let Some(Modal::Complete(form)) = self.modal.as_mut() else { return };
+        if form.busy { return }
+        let text = |input: &Entity<TextInput>| input.read(cx).text().trim().to_string();
+        let title = text(&form.title);
+        if title.is_empty() {
+            self.modal_error = "写上题目再查找。".into();
+            return;
+        }
+        let year = match text(&form.year) {
+            year if year.is_empty() => None,
+            year => match year.parse::<i32>().ok().filter(|y| (1800..=2200).contains(y)) {
+                Some(year) => Some(year),
+                None => {
+                    self.modal_error = "年份应为数字，例如 2019；不确定可以留空。".into();
+                    return;
+                }
+            },
+        };
+        let query = complete::Query { title, author: text(&form.author), year };
+        form.busy = true;
+        let paper_id = form.paper_id.clone();
+        let library = self.lib.as_ref().map(|l| l.info.id.clone()).unwrap_or_default();
+        cx.spawn(async move |this, cx| {
+            let found = cx.background_executor().spawn(async move { complete::find(&query, &wisp_net::get_text) }).await;
+            this.update(cx, |this, cx| {
+                let Some(lib) = this.lib.as_ref().filter(|l| l.info.id == library) else { return };
+                let Some(Modal::Complete(form)) = this.modal.as_mut().filter(|modal| matches!(modal, Modal::Complete(form) if form.paper_id == paper_id)) else { return };
+                form.busy = false;
+                // A record the library holds as another paper cannot be written into this one.
+                form.held = found.candidates.iter().map(|candidate| lib.store.existing_paper(&candidate.paper).ok().flatten().filter(|id| *id != paper_id).map(|id| (id.clone(), lib.paper(&id).or_else(|| lib.trash.iter().map(|entry| &entry.paper).find(|paper| paper.id == id)).map(|paper| paper.title.clone()).unwrap_or_default()))).collect();
+                if found.asked.iter().all(|asked| !asked.error.is_empty()) { this.modal_error = "几个来源都没有查成，见下面的原因。检查网络或「设置 › 网络」里的代理后再试。".into() }
+                form.chosen = None;
+                form.found = Some(found);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// 按题目补全, the last step: write the fields taken from the record
+    /// looked at into the paper.
+    fn complete_apply(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Modal::Complete(form)) = self.modal.as_ref() else { return };
+        let (Some(at), Some(found)) = (form.chosen, form.found.as_ref()) else { return };
+        let (id, candidate, fields) = (form.paper_id.clone(), found.candidates[at].clone(), form.fields.clone());
+        let problem = if form.held.get(at).is_some_and(Option::is_some) {
+            Some("文献库里已经有这条记录了，不能再写进这一篇。")
+        } else if fields.is_empty() {
+            Some("没有勾选要写入的字段。")
+        } else if self.lib.as_ref().and_then(|lib| lib.paper(&id)).is_none_or(|paper| paper.updated_at != form.seen) {
+            Some("这篇文献在查找期间被改过。关掉这个窗口重新打开，按它现在的内容再核对。")
+        } else {
+            None
+        };
+        if let Some(problem) = problem {
+            self.modal_error = problem.into();
+            return;
+        }
+        if !self.edit_paper(&id, cx, |paper| complete::apply(paper, &candidate, &fields)) { return }
+        self.run(Cmd::CloseModal, window, cx);
+        self.say(format!("已补全：{}", self.lib.as_ref().and_then(|lib| lib.paper(&id)).map(|paper| paper.title.clone()).unwrap_or_default()), cx);
+    }
+
     fn library_dialog(&mut self, editing: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         self.modal_subscriptions.clear();
         self.modal_error.clear();
@@ -3735,6 +3887,9 @@ impl Workspace {
                 self.run(cmd, window, cx);
             }
             Modal::ImportReport => self.run(Cmd::CloseImport, window, cx),
+            Modal::Complete(form) => {
+                if form.chosen.is_some() { self.complete_apply(window, cx) } else { self.complete_find(cx) }
+            }
             Modal::Zotero => self.run(Cmd::PickZotero, window, cx),
             Modal::ZoteroReport => self.run(Cmd::CloseModal, window, cx),
             Modal::FetchReport => self.run(Cmd::CloseFetch, window, cx),
@@ -4126,6 +4281,7 @@ impl Workspace {
                     "commands" => SettingsPage::Commands,
                     _ => SettingsPage::General,
                 })),
+                "candidate" => Some(Cmd::CompleteChoose(arg.parse().ok())),
                 // `command:0` opens the first of the person's own commands on 设置 › 命令.
                 "command" => Some(Cmd::SelectCommand(arg.parse().unwrap_or(0))),
                 // Saved like the choice in 设置 › 外观: "light", "dark", or empty for the system's.
@@ -4138,6 +4294,8 @@ impl Workspace {
                     "add" => Some(Cmd::AddById),
                     "search" => Some(Cmd::NewSearch),
                     "paper" => self.lib.as_ref().and_then(|l| l.selected.clone()).map(Cmd::EditPaper),
+                    // 按题目补全 for the selected paper; `submit` then looks, `candidate:0` opens the first record found.
+                    "complete" => self.lib.as_ref().and_then(|l| l.selected.clone()).map(Cmd::CompletePaper),
                     _ => None,
                 },
                 _ => None,

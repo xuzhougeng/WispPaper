@@ -299,6 +299,48 @@ pub fn page_text(marks: &[Mark]) -> String {
     out
 }
 
+/// The title a first page shows: the largest run of lines that reads like
+/// one (a few words, a few lines at most), which leaves out the journal's
+/// name over it and the text under it. A guess for a person to correct.
+pub fn title_of(marks: &[Mark]) -> Option<String> {
+    let lines = lines(marks);
+    // Runs of lines set alike, one under the other.
+    let mut runs: Vec<Vec<&Line>> = vec![];
+    for line in &lines {
+        match runs.last_mut().filter(|run| run.last().is_some_and(|last| (last.size - line.size).abs() < 0.6 && last.bold == line.bold && line.y > last.y && line.y - last.y < last.size * 2.2)) {
+            Some(run) => run.push(line),
+            None => runs.push(vec![line]),
+        }
+    }
+    let reads_like_one = |run: &Vec<&Line>| {
+        let text: String = run.iter().map(|line| line.text.as_str()).collect::<Vec<_>>().join(" ");
+        run.len() <= 6 && text.split_whitespace().count() >= 3 && text.chars().filter(|c| c.is_alphabetic()).count() >= 20
+    };
+    let run = runs.iter().filter(|run| reads_like_one(run)).max_by(|a, b| a[0].size.total_cmp(&b[0].size))?;
+    // Set no larger than most of the page: there is no telling it from the text.
+    let larger = lines.iter().filter(|line| line.size > run[0].size - 0.6).map(|line| line.text.len()).sum::<usize>();
+    if larger * 2 > lines.iter().map(|line| line.text.len()).sum::<usize>() { return None }
+    let mut title = String::new();
+    for line in run {
+        let broken = title.ends_with('-') && title.chars().rev().nth(1).is_some_and(char::is_alphabetic) && line.text.chars().next().is_some_and(char::is_lowercase);
+        if broken { title.pop(); } else if !title.is_empty() { title.push(' ') }
+        title.push_str(line.text.trim());
+    }
+    Some(title.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// The title on the first page of a PDF, when the page can be read and shows one.
+pub fn title_guess(data: Vec<u8>) -> Option<String> {
+    std::panic::catch_unwind(|| {
+        let pdf = Pdf::new(data).ok()?;
+        let cache = InterpreterCache::new();
+        let pages = pdf.pages();
+        title_of(&read_marks(pages.iter().next()?, &cache).marks)
+    })
+    .ok()
+    .flatten()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,6 +348,23 @@ mod tests {
     /// A line of text set glyph by glyph from `x`, each half its size wide.
     fn set(text: &str, x: f32, y: f32, size: f32, bold: bool) -> Vec<Mark> {
         text.chars().enumerate().map(|(i, c)| Mark { text: c.to_string(), x0: x + i as f32 * size * 0.5, x1: x + (i + 1) as f32 * size * 0.5, y, size, bold }).collect()
+    }
+
+    #[test]
+    fn the_title_of_a_first_page() {
+        let mut marks = set("Molecular Plant", 50., 40., 22., true);
+        marks.extend(set("Research Article", 50., 70., 9., false));
+        marks.extend(set("A single-cell atlas of the devel-", 50., 100., 18., true));
+        marks.extend(set("oping Arabidopsis root", 50., 122., 18., true));
+        marks.extend(set("Tian-Qi Zhang, Jia-Wei Wang", 50., 150., 11., false));
+        for row in 0..12 {
+            marks.extend(set("Roots take up water and anchor the plant in the soil it grows in.", 50., 180. + row as f32 * 12., 9., false));
+        }
+        assert_eq!(title_of(&marks).as_deref(), Some("A single-cell atlas of the developing Arabidopsis root"));
+        // A page set in one size throughout shows no title to tell from its text.
+        let plain: Vec<Mark> = (0..8).flat_map(|row| set("Roots take up water and anchor the plant.", 50., 100. + row as f32 * 12., 9., false)).collect();
+        assert_eq!(title_of(&plain), None);
+        assert_eq!((title_of(&[]), title_guess(b"not a pdf".to_vec())), (None, None));
     }
 
     #[test]

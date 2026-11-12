@@ -22,6 +22,7 @@
 //! - `update`   which release is the newest, and whether it is newer than this build
 
 pub mod ai;
+pub mod complete;
 pub mod export;
 pub mod filter;
 pub mod fulltext;
