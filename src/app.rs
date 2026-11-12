@@ -536,6 +536,7 @@ pub struct Writing {
 const SCREEN_GIVE_UP: usize = 3;
 
 /// Where the translation of one text stands.
+#[derive(Clone)]
 pub enum Translated {
     Busy,
     Done(String),
@@ -936,6 +937,8 @@ pub struct Library {
     pub suggestions: HashMap<String, Suggestion>,
     /// Translations asked for in this window, by `store::translation_key`.
     pub translations: HashMap<String, Translated>,
+    /// How many requests went out for each of them: the answer to an earlier one, back after a later, is dropped.
+    pub translation_asks: HashMap<String, u64>,
     /// Whether the detail panel shows the selected paper translated. It
     /// stays on from paper to paper, so each one opened is translated.
     pub show_translation: bool,
@@ -2451,6 +2454,7 @@ impl Workspace {
             screen,
             suggestions: HashMap::new(),
             translations: HashMap::new(),
+            translation_asks: HashMap::new(),
             show_translation: false,
             searches: vec![],
             batches: vec![],
@@ -2510,52 +2514,95 @@ impl Workspace {
     /// kept. `retry` asks again for what failed before.
     fn translate_selected(&mut self, retry: bool, cx: &mut Context<Self>) {
         let profile = self.settings.profile_for_or_default(Task::Translate);
-        let prompt = self.settings.translation_prompt.clone();
-        let Some(lib) = self.lib.as_mut().filter(|l| l.show_translation) else { return };
+        let Some(lib) = self.lib.as_ref().filter(|l| l.show_translation) else { return };
         let Some(paper) = lib.selected_paper() else { return };
-        let library = lib.info.id.clone();
         for text in [paper.title.clone(), paper.abstract_text.clone()] {
-            if text.trim().is_empty() { continue }
-            let key = translation_key(&text, ai::translation_prompt(&prompt));
+            if !text.trim().is_empty() { self.request_translation(text, profile.clone(), retry, false, cx) }
+        }
+        cx.notify();
+    }
+
+    /// Ask for one text's translation, unless the window or the library
+    /// already has it. `retry` asks again for what failed; `again` asks in
+    /// any case and keeps the answer in place of what was kept: the person
+    /// chose another model for this text once.
+    fn request_translation(&mut self, text: String, profile: ai::Profile, retry: bool, again: bool, cx: &mut Context<Self>) {
+        let prompt = self.settings.translation_prompt.clone();
+        let Some(lib) = self.lib.as_mut() else { return };
+        let library = lib.info.id.clone();
+        let key = translation_key(&text, ai::translation_prompt(&prompt));
+        if !again {
             match lib.translations.get(&key) {
-                Some(Translated::Done(_) | Translated::Busy) => continue,
-                Some(Translated::Failed(_)) if !retry => continue,
+                Some(Translated::Done(_) | Translated::Busy) => return,
+                Some(Translated::Failed(_)) if !retry => return,
                 _ => {}
             }
             if let Ok(Some(kept)) = lib.store.translation(&key) {
                 lib.translations.insert(key, Translated::Done(kept));
-                continue;
+                return;
             }
-            let request = match ai::translate_request(&profile, &prompt, &text) {
-                Ok(request) => request,
-                Err(err) => {
-                    lib.translations.insert(key, Translated::Failed(err));
-                    continue;
-                }
-            };
-            lib.translations.insert(key.clone(), Translated::Busy);
-            let (library, protocol, author) = (library.clone(), profile.protocol, format!("{} · {}", profile.title(), profile.model));
-            let work = cx.background_executor().spawn(async move { wisp_net::complete(request, protocol) });
-            cx.spawn(async move |this, cx| {
-                let translated = work.await;
-                this.update(cx, |this, cx| {
-                    let Some(lib) = this.lib.as_mut().filter(|l| l.info.id == library) else { return };
-                    let state = match translated {
-                        Ok(text) => {
-                            // Not kept is not lost: it is on show, and asked for again another day.
-                            let _ = lib.store.save_translation(&key, &text, &author);
-                            Translated::Done(text.trim().to_string())
-                        }
-                        Err(err) => Translated::Failed(err),
-                    };
-                    lib.translations.insert(key, state);
-                    cx.notify();
-                })
-                .ok();
-            })
-            .detach();
         }
-        cx.notify();
+        let request = match ai::translate_request(&profile, &prompt, &text) {
+            Ok(request) => request,
+            Err(err) => {
+                lib.translations.insert(key, Translated::Failed(err));
+                return;
+            }
+        };
+        lib.translations.insert(key.clone(), Translated::Busy);
+        let ask = lib.translation_asks.entry(key.clone()).or_default();
+        *ask += 1;
+        let ask = *ask;
+        let (protocol, author) = (profile.protocol, format!("{} · {}", profile.title(), profile.model));
+        let work = cx.background_executor().spawn(async move { wisp_net::complete(request, protocol) });
+        cx.spawn(async move |this, cx| {
+            let translated = work.await;
+            this.update(cx, |this, cx| {
+                let Some(lib) = this.lib.as_mut().filter(|l| l.info.id == library) else { return };
+                // A later request for the same text has the say.
+                if lib.translation_asks.get(&key) != Some(&ask) { return }
+                let state = match translated {
+                    Ok(text) => {
+                        // Not kept is not lost: it is on show, and asked for again another day.
+                        let _ = if again { lib.store.replace_translation(&key, &text, &author) } else { lib.store.save_translation(&key, &text, &author) };
+                        Translated::Done(text.trim().to_string())
+                    }
+                    Err(err) => Translated::Failed(err),
+                };
+                lib.translations.insert(key, state);
+                this.sync_pdf_translation(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Translate a passage selected in the PDF: with the model bound to
+    /// translation from what is kept, or, with `profile`, asked of that model
+    /// for this once (the settings stay as they are) and kept in place of
+    /// the earlier translation.
+    fn translate_passage(&mut self, text: String, profile: Option<String>, cx: &mut Context<Self>) {
+        let chosen = profile.as_deref().and_then(|id| self.settings.profiles.iter().find(|p| p.id == id)).cloned();
+        let again = chosen.is_some();
+        let profile = chosen.unwrap_or_else(|| self.settings.profile_for_or_default(Task::Translate));
+        // A click is a request: what failed before is asked again.
+        self.request_translation(text, profile, true, again, cx);
+        self.sync_pdf_translation(cx);
+    }
+
+    /// Tell the PDF viewer how the translation on its card stands, and which models it may be asked of.
+    fn sync_pdf_translation(&mut self, cx: &mut Context<Self>) {
+        let prompt = ai::translation_prompt(&self.settings.translation_prompt).to_string();
+        let models: Vec<(String, String)> = self.settings.profiles.iter().map(|p| (p.id.clone(), p.title())).collect();
+        let usual = self.settings.profile_for_or_default(Task::Translate);
+        let Some(lib) = self.lib.as_ref() else { return };
+        let Some(pdf) = lib.pdf.clone() else { return };
+        let Some((text, profile)) = pdf.read(cx).translation_asked() else { return };
+        let state = lib.translations.get(&translation_key(&text, &prompt)).cloned().unwrap_or(Translated::Busy);
+        let model = profile.and_then(|id| self.settings.profiles.iter().find(|p| p.id == id)).unwrap_or(&usual);
+        let model = (model.id.clone(), model.title());
+        pdf.update(cx, |pdf, cx| pdf.show_translation(state, model, models, cx));
     }
 
     /// Open the PDF viewer when its tab is showing and the paper has a PDF.
@@ -2573,6 +2620,7 @@ impl Workspace {
     fn pdf_event(&mut self, event: &PdfEvent, cx: &mut Context<Self>) {
         match event {
             PdfEvent::Copied => self.say("已复制", cx),
+            PdfEvent::Translate(text, profile) => self.translate_passage(text.clone(), profile.clone(), cx),
             PdfEvent::Picture(png, to_library) => {
                 self.attach_images(!*to_library, vec![Picture::Bytes(png.clone())], cx);
                 if *to_library { self.say("截图已加到文献库对话的输入框上方。", cx) } else { self.show_paper_chat(cx) }
@@ -4563,6 +4611,20 @@ impl Workspace {
                 }
                 // `quote:3|a sentence` opens the selected paper's PDF at page 3 with that sentence highlighted.
                 "quote" => self.lib.as_ref().and_then(|l| l.selected.clone()).zip(arg.split_once('|')).map(|(id, (page, quote))| Cmd::GotoSource(id, page.parse().ok(), quote.to_string())),
+                // `pdfpick:<page>;<from>;<to>` selects glyphs of a 1-based page of the PDF on show (after a `shot:` has drawn it);
+                // `pdftranslate` translates the selection, `pdftranslate:<n>` with the n-th model for this once.
+                "pdfpick" => {
+                    let numbers: Vec<usize> = arg.split(';').filter_map(|n| n.parse().ok()).collect();
+                    if let (Some(pdf), [page, from, to]) = (self.lib.as_ref().and_then(|l| l.pdf.clone()), numbers.as_slice()) && !pdf.update(cx, |pdf, cx| pdf.select_marks(page.saturating_sub(1), *from, *to, cx)) {
+                        eprintln!("pdfpick: the glyphs of page {page} are not at hand yet");
+                    }
+                    return;
+                }
+                "pdftranslate" => {
+                    let profile = arg.parse::<usize>().ok().and_then(|n| self.settings.profiles.get(n)).map(|p| p.id.clone());
+                    if let Some(pdf) = self.lib.as_ref().and_then(|l| l.pdf.clone()) { pdf.update(cx, |pdf, cx| pdf.translate(profile, cx)) }
+                    return;
+                }
                 // `try:0` runs the first saved search as a trial.
                 "try" => self.lib.as_ref().and_then(|l| l.searches.get(arg.parse::<usize>().unwrap_or(0)).map(|s| Cmd::TrySearch(s.id.clone()))),
                 "wide" => Some(Cmd::ToggleWide),

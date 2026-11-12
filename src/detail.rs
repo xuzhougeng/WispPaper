@@ -20,6 +20,7 @@ impl Workspace {
         let tab = lib.tab;
         let reading = lib.reading;
         let has_pdf = lib.pdf_file(&p.id).is_some();
+        let title = if lib.show_translation && let Some(Translated::Done(text)) = lib.translations.get(&translation_key(&p.title, ai::translation_prompt(&self.settings.translation_prompt))) { text } else { &p.title };
         let tab_button = |id: &'static str, label: &'static str, value: Tab, this: &Self, cx: &mut Context<Self>| {
             let active = tab == value;
             div()
@@ -66,7 +67,7 @@ impl Workspace {
                     .flex()
                     .items_start()
                     .gap(px(6.))
-                    .child(self.selectable("detail-title", p.title.clone(), cx).flex_1().min_w_0().line_clamp(3).text_size(px(15.)).line_height(px(22.)).font_weight(FontWeight::SEMIBOLD))
+                    .child(self.selectable("detail-title", title.clone(), cx).flex_1().min_w_0().line_clamp(3).text_size(px(15.)).line_height(px(22.)).font_weight(FontWeight::SEMIBOLD))
                     .child(ui::ghost_button("detail-wide", Some(if lib.wide { "panel-left-open" } else { "expand" }), None).on_click(self.on(Cmd::ToggleWide, cx)))
                     .child(ui::ghost_button("detail-close", Some("x"), None).on_click(self.on(Cmd::CloseDetail, cx))),
             )
@@ -152,8 +153,8 @@ impl Workspace {
         div().relative().flex().flex_col().flex_none().w(px(width)).h_full().bg(Theme::bg_body()).when(!reading, |d| d.border_l_1().border_color(Theme::line())).child(ui::title_strip()).child(header).child(div().flex().flex_col().flex_1().min_h_0().child(body)).when(!reading, |d| d.child(edge)).into_any_element()
     }
 
-    /// The paper's title and abstract translated, while translation is on:
-    /// what is there, what is still being made, and what went wrong.
+    /// The translated abstract replaces its source in place. Until it is
+    /// ready, keep the source readable alongside progress or a retry.
     fn render_translation(&self, p: &Paper, cx: &mut Context<Self>) -> Option<AnyElement> {
         let lib = self.lib.as_ref().filter(|l| l.show_translation)?;
         let prompt = ai::translation_prompt(&self.settings.translation_prompt);
@@ -162,15 +163,16 @@ impl Workspace {
             lib.translations.get(&key).map(|state| (key, state))
         }).collect();
         if texts.is_empty() { return None }
-        let mut card = div().flex().flex_col().gap(px(6.)).p(px(10.)).rounded(px(8.)).bg(Theme::accent_soft());
-        // The title is the first of the two, and reads as one.
-        let title_key = translation_key(&p.title, prompt);
-        for (key, state) in &texts {
-            if let Translated::Done(text) = state {
-                let line = self.selectable(format!("translated-{key}"), text.clone(), cx).line_height(px(21.)).when(*key == title_key, |d| d.font_weight(FontWeight::MEDIUM));
-                card = card.child(ui::fade_in(SharedString::from(format!("translated-{key}")), line));
-            }
-        }
+        let abstract_key = translation_key(&p.abstract_text, prompt);
+        let abstract_text = match lib.translations.get(&abstract_key) {
+            Some(Translated::Done(text)) => text,
+            _ => &p.abstract_text,
+        };
+        let mut card = div().flex().flex_col().gap(px(6.)).child(if abstract_text.is_empty() {
+            div().text_color(Theme::text_placeholder()).child("没有摘要")
+        } else {
+            self.selectable("detail-abstract", abstract_text.clone(), cx).text_color(Theme::text_secondary()).line_height(px(21.))
+        });
         if texts.iter().any(|(_, state)| matches!(state, Translated::Busy)) {
             card = card.child(div().flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(Theme::accent()).child(ui::spinner("translating", 13., Theme::accent())).child("正在翻译…"));
         }
@@ -215,10 +217,10 @@ impl Workspace {
         if !p.journal.is_empty() { source_line.push(p.journal.clone()) }
         if let Some(year) = p.year { source_line.push(year.to_string()) }
         if p.publication_status != "unknown" { source_line.push(label(&PUBLICATION_STATUSES, &p.publication_status).to_string()) }
-        let identifiers: Vec<AnyElement> = [("DOI", &p.doi), ("PMID", &p.pmid)]
+        let identifiers: Vec<AnyElement> = [("DOI", &p.doi, format!("https://doi.org/{}", p.doi)), ("PMID", &p.pmid, format!("https://pubmed.ncbi.nlm.nih.gov/{}/", p.pmid))]
             .into_iter()
-            .filter(|(_, value)| !value.is_empty())
-            .map(|(name, value)| div().flex().gap(px(6.)).text_size(px(12.)).child(div().flex_none().w(px(40.)).text_color(Theme::text_tertiary()).child(name)).child(self.selectable(name, value.clone(), cx).min_w_0().text_color(Theme::text_secondary())).into_any_element())
+            .filter(|(_, value, _)| !value.is_empty())
+            .map(|(name, value, url)| div().flex().gap(px(6.)).text_size(px(12.)).child(div().flex_none().w(px(40.)).text_color(Theme::text_tertiary()).child(name)).child(self.selectable_link(name, value.clone(), url, cx).min_w_0()).into_any_element())
             .collect();
         let field_rows: Vec<AnyElement> = lib
             .fields
@@ -320,13 +322,15 @@ impl Workspace {
             .collect();
         let has_fields = !lib.fields.is_empty();
         let translating = lib.show_translation;
-        let translation = self.render_translation(p, cx);
+        let abstract_body = self.render_translation(p, cx).unwrap_or_else(|| {
+            if p.abstract_text.is_empty() { div().text_color(Theme::text_placeholder()).child("没有摘要") } else { self.selectable("detail-abstract", p.abstract_text.clone(), cx).text_color(Theme::text_secondary()).line_height(px(21.)) }.into_any_element()
+        });
         let abstract_head = div()
             .flex()
             .items_center()
             .justify_between()
             .child(ui::caption("摘要"))
-            .child(ui::ghost_button("translate", None, Some(if translating { "隐藏译文".into() } else { "翻译".into() })).h(px(22.)).text_size(px(12.)).when(translating, |d| d.text_color(Theme::accent())).on_click(self.on(Cmd::ToggleTranslation, cx)));
+            .child(ui::ghost_button("translate", None, Some(if translating { "显示原文".into() } else { "显示译文".into() })).h(px(22.)).text_size(px(12.)).when(translating, |d| d.text_color(Theme::accent())).on_click(self.on(Cmd::ToggleTranslation, cx)));
         div()
             .id("detail-info")
             .flex()
@@ -377,7 +381,7 @@ impl Workspace {
             } else {
                 div().text_color(Theme::text_placeholder()).child("这个文献库还没有自定义词条。在左下角「自定义词条」里添加，例如物种、研究方法、所属课题。")
             }))
-            .child(div().flex().flex_col().gap(px(6.)).child(abstract_head).children(translation).child(if p.abstract_text.is_empty() { div().text_color(Theme::text_placeholder()).child("没有摘要") } else { self.selectable("detail-abstract", p.abstract_text.clone(), cx).text_color(Theme::text_secondary()).line_height(px(21.)) }))
+            .child(div().flex().flex_col().gap(px(6.)).child(abstract_head).child(abstract_body))
             .child(section("我的笔记").child(ui::field(&lib.notes, window, cx)))
             .child(section("文件").child(div().flex().flex_col().gap(px(6.)).children(file_rows).child(ui::secondary_button("attach", if files.is_empty() { "添加 PDF 或附件" } else { "再添加一个文件" }).on_click(self.on(Cmd::AttachPdf(id.clone()), cx)))))
             .child(div().text_size(px(12.)).text_color(Theme::text_placeholder()).child(format!("来源：{} · 添加于 {}", p.source, time::date_text(&p.added_at))))

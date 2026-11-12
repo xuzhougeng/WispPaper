@@ -96,7 +96,7 @@ impl Render for Workspace {
                     .occlude()
                     .cursor_text()
                     .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| this.pick_drag(event, cx)))
-                    .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.pick_end(cx)))
+                    .on_mouse_up(MouseButton::Left, cx.listener(|this, event, _, cx| this.pick_release(event, cx)))
             }))
             .children(ui::window_controls(window))
     }

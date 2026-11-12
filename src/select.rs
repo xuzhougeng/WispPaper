@@ -21,6 +21,8 @@ pub struct Picked {
     pub held: bool,
     /// The text as it was laid out when the button went down: where the pointer is in it.
     layout: TextLayout,
+    /// A link waits for release; moving the pointer to select text cancels it.
+    link: Option<(String, Point<Pixels>)>,
 }
 
 impl Picked {
@@ -58,7 +60,15 @@ pub fn word_at(text: &str, index: usize) -> Range<usize> {
 impl Workspace {
     /// `text` drawn so that it can be selected. `key` tells this text from the others on show.
     pub fn selectable(&self, key: impl Into<SharedString>, text: impl Into<SharedString>, cx: &mut Context<Self>) -> Div {
-        let (key, text): (SharedString, SharedString) = (key.into(), text.into());
+        self.selectable_text(key.into(), text.into(), None, cx)
+    }
+
+    /// A single click opens the link; dragging and right clicking still select and copy.
+    pub fn selectable_link(&self, key: impl Into<SharedString>, text: impl Into<SharedString>, url: String, cx: &mut Context<Self>) -> Div {
+        self.selectable_text(key.into(), text.into(), Some(url), cx).cursor_pointer().text_color(Theme::accent()).hover(|s| s.underline())
+    }
+
+    fn selectable_text(&self, key: SharedString, text: SharedString, url: Option<String>, cx: &mut Context<Self>) -> Div {
         let selected = self.picked.as_ref().filter(|picked| picked.key == key && picked.text == text).map(Picked::range).filter(|range| !range.is_empty());
         let styled = StyledText::new(text.clone()).with_highlights(selected.map(|range| (range, HighlightStyle { background_color: Some(Theme::selection()), ..Default::default() })));
         let layout = styled.layout().clone();
@@ -76,12 +86,13 @@ impl Workspace {
                     // One selection in the window: an answer's goes. The keyboard goes to the window, so that copying finds this one and not a text box.
                     if let Some(lib) = this.lib.as_mut() { (lib.paper_chat.picked, lib.library_chat.picked) = (None, None) }
                     window.focus(&this.focus);
-                    this.picked = Some(Picked { key: key.clone(), text: text.clone(), anchor: range.start, head: range.end, held, layout: layout.clone() });
+                    let link = url.clone().filter(|_| held).map(|url| (url, event.position));
+                    this.picked = Some(Picked { key: key.clone(), text: text.clone(), anchor: range.start, head: range.end, held, layout: layout.clone(), link });
                     cx.notify();
                 }
             }))
             // A click is over before the layer that follows the pointer is drawn (home.rs): the text hears the end of it itself.
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.pick_end(cx)))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, event, _, cx| this.pick_release(event, cx)))
             .on_mouse_down(MouseButton::Right, self.on_context(MenuKind::Text(text.to_string()), cx))
             .child(styled)
     }
@@ -90,6 +101,7 @@ impl Workspace {
     pub fn pick_drag(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
         if event.pressed_button != Some(MouseButton::Left) { return self.pick_end(cx) }
         let Some(picked) = self.picked.as_mut().filter(|picked| picked.held) else { return };
+        if picked.link.as_ref().is_some_and(|(_, start)| (event.position - *start).magnitude() > 4.) { picked.link = None }
         let head = index_at(&picked.layout, &picked.text, event.position);
         if head != picked.head {
             picked.head = head;
@@ -97,7 +109,15 @@ impl Workspace {
         }
     }
 
-    /// The button is up: a click that selected nothing leaves nothing.
+    /// Both the text and the selection overlay finish a click here.
+    pub fn pick_release(&mut self, event: &MouseUpEvent, cx: &mut Context<Self>) {
+        let url = self.picked.as_ref().filter(|picked| picked.held && picked.range().is_empty() && event.click_count == 1)
+            .and_then(|picked| picked.link.as_ref()).filter(|(_, start)| (event.position - *start).magnitude() <= 4.).map(|(url, _)| url.clone());
+        self.pick_end(cx);
+        if let Some(url) = url { cx.open_url(&url) }
+    }
+
+    /// Finish or cancel selection without following a link.
     pub fn pick_end(&mut self, cx: &mut Context<Self>) {
         let Some(picked) = self.picked.as_mut().filter(|picked| picked.held) else { return };
         picked.held = false;
