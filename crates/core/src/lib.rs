@@ -34,6 +34,7 @@ pub mod mcp;
 pub mod model;
 pub mod openaccess;
 pub mod pdftext;
+pub mod retrieval;
 pub mod settings;
 pub mod sources;
 pub mod store;

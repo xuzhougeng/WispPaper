@@ -77,7 +77,7 @@ fn main() {
 fn answer(mut stream: TcpStream, delay: u64) {
     {
         let request = body(&mut stream);
-        let kind = if request.contains("文献筛选助手") { "screen" } else if request.contains("翻译助手") { "translate" } else if request.contains("\"tools\"") { "chat" } else { "queries" };
+        let kind = if request.contains("文献筛选助手") { "screen" } else if request.contains("写作检索词助手") { "search words" } else if request.contains("翻译助手") { "translate" } else if request.contains("\"tools\"") { "chat" } else { "queries" };
         println!("{kind}: model {} thinking {} output_config {}", sent(&request, "model"), sent(&request, "thinking"), sent(&request, "output_config"));
         std::thread::sleep(std::time::Duration::from_millis(delay));
         // The last message decides the step: tool results get the answer, a question gets the calls.
@@ -90,6 +90,11 @@ fn answer(mut stream: TcpStream, delay: u64) {
             let reply = format!(r#"{{"verdict": "{verdict}", "reason": "{reason}", "excerpt": "{}", "confidence": {confidence}}}"#, quote.trim());
             events.push_str(&event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#));
             events.push_str(&event(&format!(r#"{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":{}}}}}"#, quoted(&reply))));
+            events.push_str(&event(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#));
+        } else if request.contains("写作检索词助手") {
+            // 写作 asking for groups of search words: three, whatever was written.
+            events.push_str(&event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#));
+            events.push_str(&event(&format!(r#"{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":{}}}}}"#, quoted("内容：root soil compaction cell\n论述：remains unclear little is known poorly understood\n说法：mechanical impedance hard soil").replace('\n', "\\n"))));
             events.push_str(&event(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#));
         } else if request.contains("翻译助手") {
             // A translation request: the start of the text comes back, marked as translated.

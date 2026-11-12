@@ -285,6 +285,12 @@ pub enum Cmd {
     /// Have the model sort the full texts into parts (false), or read the pages of the files that gave no text (true).
     WriteRun(bool),
     WriteStop,
+    /// Look for candidates: the selected text, or the paragraph at the caret.
+    WriteFind,
+    /// Only the papers with this tag (empty: any), and only the starred ones.
+    WriteOnly(String, bool),
+    /// Show or hide the sentences around a candidate, by its card's id.
+    WriteUnfold(String),
     // Dialogs
     CloseModal,
     SubmitModal,
@@ -420,16 +426,8 @@ pub struct Writing {
     pub editor: Entity<TextInput>,
     /// Words to look for, instead of what is being written.
     pub find: Entity<TextInput>,
-    /// What the candidates on show were looked for: the part and the words.
-    asked: Option<(String, String)>,
-    /// The English words a search was made with, when they are not the person's own.
-    pub words: String,
-    /// What `find_sentences` gave.
-    pub candidates: Option<Result<Value, String>>,
-    pub searching: bool,
-    round: u64,
-    /// English search words a model gave for something written in Chinese; `None` while it is asked.
-    keywords: HashMap<String, Option<String>>,
+    /// The candidates: what was asked for, what was found (write_find.rs).
+    pub search: crate::write_find::CandidateSearch,
     /// How each full text was sorted into parts, by file id.
     pub structures: BTreeMap<String, StructureInfo>,
     pub sorting: Sorting,
@@ -1503,8 +1501,7 @@ impl Workspace {
                     if page == Page::Write {
                         lib.writing.editor.read(cx).focus(window);
                         lib.writing.structures = lib.store.structures().unwrap_or_default();
-                        lib.writing.asked = None;
-                        self.writing_changed(cx);
+                        self.write_texts_changed(cx);
                     }
                 }
             }
@@ -1512,10 +1509,10 @@ impl Workspace {
                 if let Some(lib) = self.lib.as_mut().filter(|l| l.writing.section != section) {
                     let draft = lib.store.drafts().ok().and_then(|mut drafts| drafts.remove(&section)).unwrap_or_default();
                     lib.writing.section = section;
-                    lib.writing.candidates = None;
+                    lib.writing.search.candidates = None;
                     lib.writing.editor.update(cx, |input, cx| input.set_text(&draft, cx));
                     lib.writing.editor.read(cx).focus(window);
-                    self.writing_changed(cx);
+                    self.write_openers(cx);
                 }
             }
             Cmd::WriteCite(cite) => {
@@ -1529,6 +1526,11 @@ impl Workspace {
                 }
             }
             Cmd::WriteRun(reading) => self.write_run_start(reading, None, cx),
+            Cmd::WriteFind => self.write_find(false, cx),
+            Cmd::WriteOnly(tag, starred) => self.write_narrow(tag, starred, cx),
+            Cmd::WriteUnfold(card) => {
+                if let Some(unfolded) = self.lib.as_mut().map(|lib| &mut lib.writing.search.unfolded) && !unfolded.remove(&card) { unfolded.insert(card); }
+            }
             Cmd::WriteStop => {
                 if let Some(lib) = self.lib.as_mut() {
                     let sorting = &mut lib.writing.sorting;
@@ -2131,6 +2133,7 @@ impl Workspace {
             "zoom-in" => Cmd::PdfZoom(ZoomTo::In),
             "zoom-out" => Cmd::PdfZoom(ZoomTo::Out),
             "zoom-fit" => Cmd::PdfZoom(ZoomTo::Set(Zoom::FitWidth)),
+            "write-find" if self.lib.as_ref().is_some_and(|l| l.page == Page::Write) => Cmd::WriteFind,
             // What is selected in an answer: the paper's conversation first, when both have something.
             "copy-picked" => match self.lib.as_ref().map(|lib| (lib.paper_chat.picked.is_some(), lib.library_chat.picked.is_some())) {
                 Some((true, _)) => Cmd::CopyPicked(true),
@@ -2192,7 +2195,7 @@ impl Workspace {
         }));
         let section = "introduction".to_string();
         let draft = store.drafts().ok().and_then(|mut drafts| drafts.remove(&section)).unwrap_or_default();
-        let editor = cx.new(|cx| TextInput::new("在这里写。右边会列出文献库里的文献在同一部分是怎么写的；中文也可以，先写下想表达的意思。", cx).multiline(14).with_text(&draft));
+        let editor = cx.new(|cx| TextInput::new("在这里写。写好一段，按「查找候选句」的快捷键，右边就列出文献库里的文献在同一部分相近的写法；中文或别的语言也可以，先写下想表达的意思。", cx).multiline(14).with_text(&draft));
         let find = cx.new(|cx| TextInput::new("找句子：输入词或短语，例如 remains unclear", cx));
         subscriptions.push(cx.subscribe(&editor, |this, input, event: &InputEvent, cx| {
             if *event != InputEvent::Changed { return }
@@ -2200,10 +2203,9 @@ impl Workspace {
             let saved = this.lib.as_mut().map(|lib| lib.store.save_draft(&lib.writing.section.clone(), &text));
             if let Some(Err(err)) = saved { this.fail(format!("草稿没有保存：{err:#}"), cx) }
         }));
-        // The caret moving to another paragraph changes what is looked for, as typing does.
-        subscriptions.push(cx.observe(&editor, |this, _, cx| this.writing_changed(cx)));
-        subscriptions.push(cx.observe(&find, |this, _, cx| this.writing_changed(cx)));
-        let writing = Writing { section, editor, find, asked: None, words: String::new(), candidates: None, searching: false, round: 0, keywords: HashMap::new(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new() };
+        // Candidates are asked for: the find box on Enter, the manuscript by the shortcut.
+        subscriptions.push(cx.subscribe(&find, |this, _, event: &InputEvent, cx| if *event == InputEvent::Submit { this.write_find(true, cx) }));
+        let writing = Writing { section, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new() };
         let mut lib = Library {
             info,
             store,
@@ -2758,10 +2760,7 @@ impl Workspace {
                     // Whether a text came of it shows in the list.
                     let _ = lib.reload();
                     // The candidates on show were found without this paper.
-                    if lib.extracting.is_empty() {
-                        lib.writing.asked = None;
-                        this.writing_changed(cx);
-                    }
+                    if lib.extracting.is_empty() { this.write_texts_changed(cx) }
                     cx.notify();
                     true
                 });
@@ -3643,80 +3642,6 @@ impl Workspace {
 
     // ---- writing
 
-    /// Look for candidates again when the part, the words looked for or
-    /// what is being written has changed: a moment after the last change,
-    /// so typing does not ask for every letter.
-    fn writing_changed(&mut self, cx: &mut Context<Self>) {
-        let Some(lib) = self.lib.as_mut().filter(|l| l.page == Page::Write) else { return };
-        let writing = &mut lib.writing;
-        let find = writing.find.read(cx).text().trim().to_string();
-        let query = if find.is_empty() {
-            let editor = writing.editor.read(cx);
-            structure::writing_at(editor.text(), editor.caret())
-        } else {
-            find
-        };
-        let wanted = (writing.section.clone(), query);
-        if writing.asked.as_ref() == Some(&wanted) { return }
-        writing.asked = Some(wanted);
-        writing.round += 1;
-        let (round, library) = (writing.round, lib.info.id.clone());
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(std::time::Duration::from_millis(220)).await;
-            this.update(cx, |this, cx| {
-                if this.lib.as_ref().is_some_and(|l| l.info.id == library && l.writing.round == round) { this.writing_search(cx) }
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// Find the candidates for what was last asked. Something written in
-    /// Chinese is first put into English search words by the model for
-    /// translation (once per text): the library's sentences are English.
-    fn writing_search(&mut self, cx: &mut Context<Self>) {
-        let profile = self.settings.profile_for_or_default(Task::Translate);
-        let Some(lib) = self.lib.as_mut() else { return };
-        let Some((section, query)) = lib.writing.asked.clone() else { return };
-        let round = lib.writing.round;
-        let mut words = query.clone();
-        if structure::in_chinese(&query) {
-            match lib.writing.keywords.get(&query) {
-                Some(Some(known)) => words = known.clone(),
-                Some(None) => return,
-                None => {
-                    // Without a model the words go as written, and find what little they can.
-                    if let Ok(request) = ai::plain_request(&profile, structure::KEYWORDS_SYSTEM, &query) {
-                        lib.writing.keywords.insert(query.clone(), None);
-                        lib.writing.searching = true;
-                        let (library, protocol) = (lib.info.id.clone(), profile.protocol);
-                        let work = cx.background_executor().spawn(async move { wisp_net::complete(request, protocol) });
-                        cx.spawn(async move |this, cx| {
-                            let reply = work.await;
-                            this.update(cx, |this, cx| {
-                                let Some(lib) = this.lib.as_mut().filter(|l| l.info.id == library) else { return };
-                                let found = reply.map(|words| words.split_whitespace().collect::<Vec<_>>().join(" ")).unwrap_or_else(|_| query.clone());
-                                lib.writing.keywords.insert(query, Some(found));
-                                if lib.writing.round == round { this.writing_search(cx) }
-                            })
-                            .ok();
-                        })
-                        .detach();
-                        return cx.notify();
-                    }
-                }
-            }
-        }
-        lib.writing.searching = true;
-        lib.writing.words = if words == query { String::new() } else { words.clone() };
-        self.library_tool("find_sentences", serde_json::json!({"section": section, "query": words, "limit": 30}), cx, move |this, result, _| {
-            let Some(lib) = this.lib.as_mut().filter(|l| l.writing.round == round) else { return };
-            lib.writing.searching = false;
-            lib.writing.candidates = Some(result);
-            lib.writing.scroll.set_offset(point(px(0.), px(0.)));
-        });
-    }
-
     /// Start the model on the full texts: sorting those the rules sorted
     /// into parts, or reading the pages of those that gave no text.
     fn write_run_start(&mut self, reading: bool, only: Option<String>, cx: &mut Context<Self>) {
@@ -3800,9 +3725,8 @@ impl Workspace {
                         // A paper whose pages were read has a text now, and says so in the list.
                         let _ = lib.reload();
                         lib.texts_changed();
-                        lib.writing.asked = None;
                         this.write_run_next(run, cx);
-                        this.writing_changed(cx);
+                        this.write_texts_changed(cx);
                     }
                     Err(err) => {
                         sorting.failed += 1;
@@ -3896,7 +3820,7 @@ impl Workspace {
     /// Run a library tool off the main thread, on a connection of its own
     /// and with the network, and hand the result back if the same library
     /// is still open.
-    fn library_tool(&mut self, name: &'static str, args: Value, cx: &mut Context<Self>, done: impl FnOnce(&mut Self, Result<Value, String>, &mut Context<Self>) + 'static) {
+    pub fn library_tool(&mut self, name: &'static str, args: Value, cx: &mut Context<Self>, done: impl FnOnce(&mut Self, Result<Value, String>, &mut Context<Self>) + 'static) {
         let Some(lib) = self.lib.as_ref() else { return };
         let info = lib.info.clone();
         let library = info.id.clone();
@@ -4144,6 +4068,16 @@ impl Workspace {
                 "page" => Some(Cmd::SetPage(match arg { "ask" => Page::Ask, "trash" => Page::Trash, "sources" => Page::Sources, "screen" => Page::Screen, "write" => Page::Write, _ => Page::Papers })),
                 // `write:methods` shows another part of the manuscript; `draft:<text>` leaves text in it, as if typed.
                 "write" => Some(Cmd::WriteSection(arg.to_string())),
+                // `find` asks for candidates as the shortcut does; `find:<words>` puts words in the find box and presses Enter.
+                "find" if arg.is_empty() => Some(Cmd::WriteFind),
+                "find" => {
+                    if let Some(lib) = self.lib.as_ref() { lib.writing.find.update(cx, |input, cx| input.set_text(arg, cx)) }
+                    self.write_find(true, cx);
+                    return;
+                }
+                // `unfold` shows the sentences around the first candidate.
+                "unfold" => self.lib.as_ref().and_then(|lib| lib.writing.search.candidates.as_ref()?.as_ref().ok()?["sentences"].get(0).map(|s| Cmd::WriteUnfold(format!("{}-{}", s["paperId"].as_str().unwrap_or(""), s["position"].as_u64().unwrap_or(0))))),
+                "only" => Some(Cmd::WriteOnly(arg.strip_prefix('*').unwrap_or(arg).to_string(), arg.starts_with('*'))),
                 "draft" => {
                     if let Some(lib) = self.lib.as_ref() { lib.writing.editor.update(cx, |input, cx| input.insert(arg, cx)) }
                     return;

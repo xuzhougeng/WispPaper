@@ -1055,6 +1055,18 @@ impl Store {
         Ok(self.db.query_row("SELECT 1 FROM structures WHERE resource_id = ?1", [resource_id], |_| Ok(())).optional()?.is_none())
     }
 
+    /// Whether any full-text file (of one paper, or of all with `""`) has yet
+    /// to be read and sorted, or was sorted by rules older than these:
+    /// what `tools::extract_missing` would do something about.
+    pub fn structure_wanted(&self, paper_id: &str) -> Result<bool> {
+        Ok(self.db.query_row(
+            "SELECT EXISTS (SELECT 1 FROM resources r WHERE r.resource_type = 'fulltext' AND (?1 = '' OR r.paper_id = ?1) AND NOT EXISTS (SELECT 1 FROM structures s WHERE s.resource_id = r.id)) \
+             OR EXISTS (SELECT 1 FROM structures WHERE method = 'rules' AND version < ?2)",
+            params![paper_id, crate::structure::VERSION],
+            |r| r.get(0),
+        )?)
+    }
+
     /// Sort again, by rule, the texts sorted by an earlier version of the
     /// rules. What a model sorted stays. Returns how many were redone.
     pub fn restructure_outdated(&mut self) -> Result<usize> {
