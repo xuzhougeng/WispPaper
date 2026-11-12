@@ -12,6 +12,7 @@
 //! - `fulltext` page text of a stored PDF
 //! - `pdftext`  that text read off a PDF's glyphs, with the breaks the page shows
 //! - `structure` that text sorted into the parts of a paper and cut into sentences, for 写作
+//! - `cite`     citations in a manuscript: keys, finding them, the reference list and BibTeX
 //! - `markdown` the Markdown of an answer → blocks to draw
 //! - `ai`       context building, request bodies and stream parsing for 文献库提问
 //! - `sources`  literature database searches: URLs to ask, records read from the replies
@@ -22,6 +23,7 @@
 //! - `update`   which release is the newest, and whether it is newer than this build
 
 pub mod ai;
+pub mod cite;
 pub mod complete;
 pub mod export;
 pub mod filter;
@@ -29,11 +31,13 @@ pub mod fulltext;
 pub mod import;
 pub mod libraries;
 pub mod lookup;
+pub mod manuscript;
 pub mod markdown;
 pub mod mcp;
 pub mod model;
 pub mod openaccess;
 pub mod pdftext;
+pub mod retrieval;
 pub mod settings;
 pub mod sources;
 pub mod store;

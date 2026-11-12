@@ -46,6 +46,8 @@ impl Workspace {
         let body = || div().id("modal-body").flex().flex_col().flex_1().min_h_0().overflow_y_scroll().gap(px(12.)).px(px(20.)).py(px(8.));
 
         let card = match modal {
+            Modal::Section { .. } => self.render_section_dialog(window, cx)?,
+            Modal::History { .. } => self.render_history_dialog(cx)?,
             Modal::Zotero => ui::dialog(560.)
                 .child(ui::dialog_title("从 Zotero 导入"))
                 .child(body()

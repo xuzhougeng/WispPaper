@@ -7,12 +7,14 @@
 mod app;
 mod assets;
 mod chat;
+mod cite;
 mod detail;
 mod dialogs;
 mod guide;
 mod home;
 mod input;
 mod library;
+mod manuscripts;
 mod markdown;
 mod pdf;
 mod picture;
@@ -23,6 +25,8 @@ mod shortcuts;
 mod theme;
 mod ui;
 mod write;
+mod write_find;
+mod write_assist;
 
 use gpui::*;
 

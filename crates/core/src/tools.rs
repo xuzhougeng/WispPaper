@@ -106,11 +106,16 @@ pub fn catalog() -> Vec<ToolDef> {
         scoped(
             "find_sentences",
             "查找候选句",
-            "写作时的参考：从文献库里各篇文献的同一部分（摘要、导言、方法、结果、讨论）找出句子，看别人在这个位置是怎么写的。给出 query 时返回与它意思最接近的句子（按词匹配，英文效果最好）；不给时返回各篇文献这一部分开头的句子。句子逐字取自已保存的全文（摘要取自文献记录），带页码，可用于核对和引用；写作时应借鉴写法并注明出处，不要照抄。没有保存全文的文献只有摘要可查。",
+            "写作时的参考：从文献库里各篇文献的同一部分（摘要、导言、方法、结果、讨论）找出句子，看别人在这个位置是怎么写的。给出 query 或 queries 时返回与它意思最接近的句子（按词匹配，英文效果最好）；不给时返回各篇文献这一部分开头的句子。句子逐字取自已保存的全文（摘要取自文献记录），带页码，可用于核对和引用；写作时应借鉴写法并注明出处，不要照抄。没有保存全文的文献只有摘要可查。",
             json!({
                 "section": {"type": "string", "enum": keys(&crate::structure::SECTIONS), "description": "论文的哪个部分：abstract 摘要、introduction 导言、methods 方法、results 结果、discussion 讨论（含结论）、other 其他正文（如综述的主题章节）。"},
                 "query": {"type": "string", "description": "正在写的句子或要表达的意思，最好用英文关键词。"},
+                "queries": {"type": "array", "items": {"type": "string"}, "description": "几组检索词（例如一组讲内容、一组讲论述方式、一组是同义说法），各自排序后合并，比一组词找得全；可与 query 同时给出。"},
                 "paperId": {"type": "string", "description": "只看这一篇文献。"},
+                "tag": {"type": "string", "description": "只看带有这个标签的文献。"},
+                "starred": {"type": "boolean", "description": "为 true 时只看加了星标的文献。"},
+                "language": {"type": "string", "enum": keys(&crate::structure::LANGUAGES), "description": "只要这种语言写的句子（写英文稿时别的语言的句子当不了范文）；不给时不分语言。认不出语言的文本不会被排除。"},
+                "context": {"type": "boolean", "description": "为 true 时每句另附同一篇文献同一部分里的前一句和后一句（before、after），便于看清上下文。"},
                 "limit": {"type": "integer", "description": "最多返回多少句，默认 20，最大 100。"},
             }),
             &["section"],
@@ -464,6 +469,8 @@ fn get_paper(store: &mut Store, args: &Value) -> Result<Value> {
 /// Extract the page text of the full-text files that have none cached yet:
 /// those of one paper, or of the whole library.
 fn extract_missing(store: &mut Store, paper_id: Option<&str>) -> Result<()> {
+    // Most calls find everything read and sorted: one look says so, without going through the files.
+    if !store.structure_wanted(paper_id.unwrap_or(""))? { return Ok(()) }
     let files = match paper_id {
         Some(id) => store.paper_files(id)?,
         None => store.list_files()?,
@@ -480,11 +487,22 @@ fn extract_missing(store: &mut Store, paper_id: Option<&str>) -> Result<()> {
 fn find_sentences(store: &mut Store, args: &Value) -> Result<Value> {
     let section = choice(args, "section", &crate::structure::SECTIONS)?;
     if section.is_empty() { bail!("请用 section 指明论文的哪个部分。") }
-    let query = text(args, "query")?;
+    let mut queries: Vec<String> = match &args["queries"] {
+        Value::Null => vec![],
+        Value::Array(items) => items.iter().map(|item| item.as_str().map(|q| q.trim().to_string()).ok_or_else(|| anyhow::anyhow!("queries 应是一组字符串。"))).collect::<Result<_>>()?,
+        _ => bail!("queries 应是一组字符串。"),
+    };
+    let query = text(args, "query")?.trim();
+    if !query.is_empty() { queries.insert(0, query.to_string()) }
+    queries.retain(|q| !q.is_empty());
     let only = text(args, "paperId")?;
+    let tag = text(args, "tag")?;
+    let starred = args["starred"].as_bool().unwrap_or(false);
+    let context = args["context"].as_bool().unwrap_or(false);
+    let language = choice(args, "language", &crate::structure::LANGUAGES)?;
     let limit = number(args, "limit", 20, 100)?.max(1);
     extract_missing(store, (!only.is_empty()).then_some(only))?;
-    let papers: Vec<Paper> = store.list_papers()?.into_iter().filter(|p| p.screening != "irrelevant" && (only.is_empty() || p.id == only)).collect();
+    let papers: Vec<Paper> = store.list_papers()?.into_iter().filter(|p| p.screening != "irrelevant" && (only.is_empty() || p.id == only) && (tag.is_empty() || p.tags.iter().any(|t| t == tag)) && (!starred || p.starred)).collect();
     let by_id: BTreeMap<&str, &Paper> = papers.iter().map(|p| (p.id.as_str(), p)).collect();
     // The abstract is the record's; the other parts are read off the stored full text.
     let found: Vec<crate::store::PaperSentence> = if section == "abstract" {
@@ -492,21 +510,34 @@ fn find_sentences(store: &mut Store, args: &Value) -> Result<Value> {
             .iter()
             .flat_map(|p| {
                 let kept = crate::structure::split_sentences(&p.abstract_text).into_iter().filter(|s| crate::structure::usable(s)).enumerate();
-                kept.map(|(position, text)| crate::store::PaperSentence { paper_id: p.id.clone(), sentence: crate::structure::Sentence { section: "abstract".into(), position, text, ..Default::default() } }).collect::<Vec<_>>()
+                let written = crate::structure::language(std::slice::from_ref(&p.abstract_text));
+                kept.map(|(position, text)| crate::store::PaperSentence { paper_id: p.id.clone(), sentence: crate::structure::Sentence { section: "abstract".into(), position, text, language: written.to_string(), ..Default::default() } }).collect::<Vec<_>>()
             })
             .collect()
     } else {
         store.section_sentences(section, only)?.into_iter().filter(|s| by_id.contains_key(s.paper_id.as_str())).collect()
     };
+    // A sentence in another language is no model for this one; a text too short to tell stays.
+    let in_all = found.len();
+    let found: Vec<crate::store::PaperSentence> = found.into_iter().filter(|s| language.is_empty() || s.sentence.language.is_empty() || s.sentence.language == language).collect();
     let texts: Vec<&str> = found.iter().map(|s| s.sentence.text.as_str()).collect();
     let owners: Vec<&str> = found.iter().map(|s| s.paper_id.as_str()).collect();
-    let picked: Vec<usize> = if query.is_empty() {
+    let picked: Vec<usize> = if queries.is_empty() {
         // How each paper opens the part: first sentences first, paper by paper.
         let mut order: Vec<usize> = (0..found.len()).collect();
         order.sort_by_key(|i| (found[*i].sentence.position, *i));
         order.into_iter().take(limit).collect()
     } else {
-        crate::structure::rank(&texts, &owners, query, limit).into_iter().map(|(index, _)| index).collect()
+        // Each query ranked on its own over the part's words (made once and kept), the lists merged.
+        let index = crate::retrieval::index_for(&texts);
+        let lists: Vec<Vec<(usize, f32)>> = queries.iter().map(|q| index.rank(q)).collect();
+        crate::retrieval::fuse(&lists, &owners, limit)
+    };
+    // The sentence next to one, in the same paper and part, if there is one.
+    let beside = |index: usize, step: isize| -> Option<&str> {
+        let other = index.checked_add_signed(step)?;
+        let (here, there) = (&found[index], found.get(other)?);
+        (there.paper_id == here.paper_id && there.sentence.position as isize == here.sentence.position as isize + step).then_some(there.sentence.text.as_str())
     };
     let sentences: Vec<Value> = picked
         .into_iter()
@@ -515,18 +546,25 @@ fn find_sentences(store: &mut Store, args: &Value) -> Result<Value> {
             let mut out = json!({"paperId": paper.id, "title": paper.title, "cite": paper.citation(), "journal": paper.journal, "position": sentence.position, "text": sentence.text});
             if sentence.page > 0 { out["page"] = json!(sentence.page) }
             if !sentence.heading.is_empty() { out["heading"] = json!(sentence.heading) }
+            if context {
+                if let Some(before) = beside(index, -1) { out["before"] = json!(before) }
+                if let Some(after) = beside(index, 1) { out["after"] = json!(after) }
+            }
             out
         })
         .collect();
     let with_sentences: std::collections::BTreeSet<&str> = owners.iter().copied().collect();
     Ok(json!({
         "section": section,
-        "query": query,
+        "query": queries.first().map_or("", String::as_str),
+        "queries": queries,
         "sentences": sentences,
         // What there was to choose from: a short list must not pass for "nobody writes this".
         "sentencesInSection": found.len(),
         "papersWithSection": with_sentences.len(),
         "papersWithout": papers.len() - with_sentences.len(),
+        // Left out for being written in another language than the one asked for.
+        "sentencesInOtherLanguages": in_all - found.len(),
     }))
 }
 
@@ -1163,7 +1201,7 @@ pub(crate) mod tests {
         let info = libraries::create(&root, "根", "根尖发育", "green").unwrap();
         let mut store = Store::open(&info.dir).unwrap();
         let paper = |title: &str, authors: &str, abstract_text: &str| Paper { title: title.into(), authors: authors.into(), year: Some(2021), abstract_text: abstract_text.into(), ..Default::default() };
-        let soil = store.add_paper(paper("Roots in compacted soil", "Zhu, Mingyuan; Hsu, Che-Wei; Pandey, Bipin", "Roots adapt to compacted soil by remodelling their cell walls in outer tissues. We profiled rice roots at single-cell resolution.")).unwrap();
+        let soil = store.add_paper(Paper { tags: vec!["soil".into()], starred: true, ..paper("Roots in compacted soil", "Zhu, Mingyuan; Hsu, Che-Wei; Pandey, Bipin", "Roots adapt to compacted soil by remodelling their cell walls in outer tissues. We profiled rice roots at single-cell resolution.") }).unwrap();
         let atlas = store.add_paper(paper("A root atlas", "Zhang, Tian-Qi; Wang, Jia-Wei", "")).unwrap();
         let text = |intro: &str, results: &str| format!("Introduction\n\n{intro}\n\nResults\n\nA heading of the paper\n\n{results}\n\nReferences\n\n1. Someone, A. A paper that is cited here and nowhere else. Journal 1, 1 (2020).");
         for (id, name, body) in [
@@ -1184,6 +1222,21 @@ pub(crate) mod tests {
         let best = &found["sentences"][0];
         assert_eq!((best["paperId"].as_str(), best["cite"].as_str(), best["page"].as_u64()), (Some(soil.id.as_str()), Some("Zhu et al., 2021"), Some(1)));
         assert!(best["text"].as_str().unwrap().starts_with("However, how roots respond"));
+        // With its context: the sentence before it in the same part, and none after (it closes the introduction).
+        let around = call(&root, "find_sentences", &json!({"section": "introduction", "query": "how roots respond to compaction is poorly understood", "limit": 1, "context": true})).unwrap();
+        assert!(around["sentences"][0]["before"].as_str().unwrap().starts_with("Soil compaction reduces") && around["sentences"][0]["after"].is_null());
+        assert!(best["before"].is_null());
+        // Several groups of words, merged: each finds its own paper.
+        let both = call(&root, "find_sentences", &json!({"section": "introduction", "queries": ["compacted soil", "stem cells tips"]})).unwrap();
+        assert_eq!((both["queries"].as_array().unwrap().len(), both["query"].as_str()), (2, Some("compacted soil")));
+        let papers: std::collections::BTreeSet<&str> = both["sentences"].as_array().unwrap().iter().map(|s| s["paperId"].as_str().unwrap()).collect();
+        assert_eq!(papers.len(), 2);
+        assert!(call(&root, "find_sentences", &json!({"section": "introduction", "queries": "soil"})).is_err());
+        // Narrowed to a tag, or to the starred papers: only the soil paper is either.
+        for narrow in [json!({"section": "introduction", "tag": "soil"}), json!({"section": "introduction", "starred": true})] {
+            let found = call(&root, "find_sentences", &narrow).unwrap();
+            assert!(found["sentences"].as_array().unwrap().iter().all(|s| s["paperId"] == soil.id.as_str()) && found["papersWithSection"] == 1, "{narrow}");
+        }
         // The same words in another part are another matter; the paper's own heading comes along.
         let results = call(&root, "find_sentences", &json!({"section": "results", "query": "compacted soil", "paperId": soil.id})).unwrap();
         assert_eq!((results["sentences"].as_array().unwrap().len(), results["sentences"][0]["heading"].as_str()), (2, Some("A heading of the paper")));
@@ -1192,6 +1245,12 @@ pub(crate) mod tests {
         let abstracts = call(&root, "find_sentences", &json!({"section": "abstract", "query": "cell walls"})).unwrap();
         assert_eq!((abstracts["sentences"][0]["paperId"].as_str(), abstracts["sentences"][0].get("page"), abstracts["papersWithout"].as_u64()), (Some(soil.id.as_str()), None, Some(1)));
         assert!(call(&root, "find_sentences", &json!({"section": "preface"})).is_err());
+        // Asked for one language, sentences of another are left out and counted; a text too short to tell stays.
+        let english = call(&root, "find_sentences", &json!({"section": "introduction", "language": "en"})).unwrap();
+        assert_eq!(english["sentencesInOtherLanguages"].as_u64().unwrap() + english["sentencesInSection"].as_u64().unwrap(), openers["sentencesInSection"].as_u64().unwrap());
+        let chinese = call(&root, "find_sentences", &json!({"section": "introduction", "language": "zh"})).unwrap();
+        assert!(chinese["sentences"].as_array().unwrap().iter().all(|s| !s["text"].as_str().unwrap().is_ascii()) || chinese["sentencesInOtherLanguages"].as_u64() == Some(0));
+        assert!(call(&root, "find_sentences", &json!({"section": "introduction", "language": "xx"})).is_err());
         assert_eq!(describe_call("find_sentences", &json!({"section": "introduction", "query": "soil"})), "查找候选句：soil · introduction");
     }
 

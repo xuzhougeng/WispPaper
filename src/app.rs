@@ -21,7 +21,9 @@ use wisp_core::model::*;
 pub(crate) use wisp_core::settings::default_root;
 use wisp_core::settings::{Settings, Task, settings_file};
 use wisp_core::store::{Conversation, ConversationInfo, ImportBatch, SavedSearch, Store, StructureInfo, Suggestion, TrashEntry, translation_key};
+use wisp_core::manuscript::{Manuscript, Snapshot};
 use wisp_core::{complete, export, fulltext, import, pdftext, structure, time, tools, zotero};
+pub use crate::manuscripts::ManuscriptExport;
 
 /// What the middle of an open library shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,6 +89,11 @@ pub enum MenuKind {
     TaskModel(Task),
     /// How large the PDF's pages are drawn.
     PdfZoom,
+    /// 写作: the library's manuscripts, one section's own, export, and the language.
+    Manuscripts,
+    Section(String),
+    ManuscriptExport,
+    WriteLanguage,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -278,13 +285,49 @@ pub enum Cmd {
     SetAutoSync(u32),
     ToggleSearch(String),
     // Writing
-    /// Write another part of the manuscript (a key of `structure::SECTIONS`).
+    /// Write another section of the manuscript: its id, or a key of `structure::SECTIONS` for the first section of that kind.
     WriteSection(String),
-    /// Put a citation in at the caret.
+    /// Write another of the library's manuscripts.
+    WriteManuscript(String),
+    NewManuscript,
+    AskRemoveManuscript(String),
+    RemoveManuscript(String),
+    /// What the manuscript is written in: a code of `manuscript::LANGUAGES`.
+    WriteLanguage(String),
+    /// Add a section (`None`) or change one's name and kind: the dialog.
+    EditSection(Option<String>),
+    PickSectionKind(String),
+    MoveSection(String, i64),
+    AskRemoveSection(String),
+    RemoveSection(String),
+    /// The whole manuscript to read (true), or one section to write.
+    WriteReading(bool),
+    ExportManuscript(ManuscriptExport),
+    /// The section's earlier versions.
+    WriteHistory,
+    HistoryPick(usize),
+    /// Cite a paper (by id) at the caret: its key, `[@Zhang2024]` (`src/cite.rs`).
     WriteCite(String),
+    /// The reference list of the whole manuscript (true) or of the part being written.
+    WriteCiteScope(bool),
+    /// Put citations in the part being written right: (start, end, what is there, what replaces it), last first.
+    WriteCiteFix(Vec<(usize, usize, String, String)>),
+    WriteCopyReferences,
+    /// The cited papers as BibTeX.
+    WriteExportCited,
     /// Have the model sort the full texts into parts (false), or read the pages of the files that gave no text (true).
     WriteRun(bool),
     WriteStop,
+    /// Look for candidates: the selected text, or the paragraph at the caret.
+    WriteFind,
+    /// Only the papers with this tag (empty: any), and only the starred ones.
+    WriteOnly(String, bool),
+    /// Show or hide the sentences around a candidate, by its card's id.
+    WriteUnfold(String),
+    /// Have the model work on the selected text or the caret's paragraph; stop it; use what it gave.
+    WriteAssist(ai::Assist),
+    WriteAssistStop,
+    WriteAssistUse(crate::write_assist::Use),
     // Dialogs
     CloseModal,
     SubmitModal,
@@ -399,6 +442,8 @@ pub struct Sorting {
     streak: usize,
     pub model: String,
     pub error: String,
+    /// The files whose pages were read only in part, longer than `READ_PAGES`: (title, pages read, pages in all).
+    pub cut: Vec<(String, usize, usize)>,
     /// Bumped when a run starts or stops, so what still arrives for an earlier one is dropped.
     run: u64,
 }
@@ -409,31 +454,38 @@ impl Sorting {
     }
 }
 
-/// The pages of one file a model is asked to read: a paper is rarely longer, a book is not what this is for.
-const READ_PAGES: usize = 40;
+/// The pages of one file a model is asked to read in one run: a paper is
+/// rarely longer. What is left is read by the next run, from where this one stopped.
+pub const READ_PAGES: usize = 40;
 
-/// The writing page: the part of the manuscript being written, and the
-/// sentences the library's papers have in the same part.
+/// The writing page: the manuscript and section being written, and the
+/// sentences the library's papers have in the same part. `Writing::kind`
+/// is that part, `Writing::language` what the manuscript is written in
+/// (both in `src/manuscripts.rs`).
 pub struct Writing {
-    /// The part being written, a key of `structure::SECTIONS`.
-    pub section: String,
+    /// The library's manuscripts, oldest first; a section's text is kept here as it is typed, as in the store.
+    pub manuscripts: Vec<Manuscript>,
+    /// The manuscript being written: its id.
+    pub manuscript: String,
+    /// The section being written: its id.
+    pub section_id: String,
+    /// The whole manuscript is shown to be read, instead of one section to write.
+    pub reading: bool,
+    /// The manuscript's title, edited in place.
+    pub title: Entity<TextInput>,
+    /// Counts the changes typed, so a pause is the timer of the last one still being the last.
+    pub(crate) typed: u64,
     pub editor: Entity<TextInput>,
     /// Words to look for, instead of what is being written.
     pub find: Entity<TextInput>,
-    /// What the candidates on show were looked for: the part and the words.
-    asked: Option<(String, String)>,
-    /// The English words a search was made with, when they are not the person's own.
-    pub words: String,
-    /// What `find_sentences` gave.
-    pub candidates: Option<Result<Value, String>>,
-    pub searching: bool,
-    round: u64,
-    /// English search words a model gave for something written in Chinese; `None` while it is asked.
-    keywords: HashMap<String, Option<String>>,
+    /// The candidates: what was asked for, what was found (write_find.rs).
+    pub search: crate::write_find::CandidateSearch,
     /// How each full text was sorted into parts, by file id.
     pub structures: BTreeMap<String, StructureInfo>,
     pub sorting: Sorting,
     pub scroll: ScrollHandle,
+    /// The model's work on a paragraph (`write_assist.rs`).
+    pub assist: crate::write_assist::Assisting,
 }
 
 /// A run of the screening assistant gives up after this many papers in a
@@ -778,6 +830,10 @@ pub enum Modal {
     FetchReport,
     /// An answer about a paper, to be looked over before it joins that paper's notes.
     Note { paper_id: String, text: Entity<TextInput> },
+    /// 写作: a section's name and kind (`editing` its id, `None` for a new one).
+    Section { editing: Option<String>, name: Entity<TextInput>, kind: String },
+    /// 写作: a section's earlier versions, newest first.
+    History { section: String, snapshots: Vec<Snapshot>, chosen: usize },
 }
 
 pub struct Library {
@@ -833,6 +889,7 @@ pub struct Library {
     /// Where the fetched files came from, by file: (address, who listed it, version).
     pub origins: BTreeMap<String, (String, String, String)>,
     pub writing: Writing,
+    pub citing: crate::cite::Citing,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -1247,6 +1304,7 @@ impl Workspace {
                 items.push(item("从 Zotero 导入…", Cmd::ImportZotero));
                 items.push(item("手动录入…", Cmd::AddManual));
             }
+            MenuKind::Manuscripts | MenuKind::Section(_) | MenuKind::ManuscriptExport | MenuKind::WriteLanguage => items = self.manuscript_menu(&kind),
             MenuKind::Export => {
                 items.push(item("BibTeX（.bib）", Cmd::Export(ExportKind::Bibtex)));
                 items.push(item("表格（.csv）", Cmd::Export(ExportKind::Csv)));
@@ -1329,6 +1387,7 @@ impl Workspace {
         match cmd {
             Cmd::OpenLibrary(id) => self.open_library(&id, window, cx),
             Cmd::GoHome => {
+                self.write_snapshot("leave");
                 self.lib = None;
                 self.settings_view = None;
                 self.modal = None;
@@ -1497,38 +1556,38 @@ impl Workspace {
                 }
             }
             Cmd::SetPage(page) => {
+                if self.lib.as_ref().is_some_and(|l| l.page == Page::Write && page != Page::Write) { self.write_snapshot("leave") }
+                if page == Page::Write { self.write_ensure(cx) }
                 if let Some(lib) = self.lib.as_mut() {
                     lib.page = page;
                     if page == Page::Ask { lib.library_chat.input.read(cx).focus(window) }
                     if page == Page::Write {
                         lib.writing.editor.read(cx).focus(window);
                         lib.writing.structures = lib.store.structures().unwrap_or_default();
-                        lib.writing.asked = None;
-                        self.writing_changed(cx);
+                        self.write_texts_changed(cx);
                     }
                 }
             }
-            Cmd::WriteSection(section) => {
-                if let Some(lib) = self.lib.as_mut().filter(|l| l.writing.section != section) {
-                    let draft = lib.store.drafts().ok().and_then(|mut drafts| drafts.remove(&section)).unwrap_or_default();
-                    lib.writing.section = section;
-                    lib.writing.candidates = None;
-                    lib.writing.editor.update(cx, |input, cx| input.set_text(&draft, cx));
-                    lib.writing.editor.read(cx).focus(window);
-                    self.writing_changed(cx);
-                }
+            Cmd::WriteSection(_) | Cmd::WriteManuscript(_) | Cmd::NewManuscript | Cmd::AskRemoveManuscript(_) | Cmd::RemoveManuscript(_) | Cmd::WriteLanguage(_) | Cmd::EditSection(_) | Cmd::PickSectionKind(_) | Cmd::MoveSection(..) | Cmd::AskRemoveSection(_) | Cmd::RemoveSection(_) | Cmd::WriteReading(_) | Cmd::ExportManuscript(_) | Cmd::WriteHistory | Cmd::HistoryPick(_) => self.run_manuscript(cmd, window, cx),
+            Cmd::WriteCite(id) => {
+                self.cite_paper(&id, cx);
+                if let Some(lib) = self.lib.as_ref() { lib.writing.editor.read(cx).focus(window) }
             }
-            Cmd::WriteCite(cite) => {
-                if let Some(lib) = self.lib.as_ref() {
-                    lib.writing.editor.update(cx, |input, cx| {
-                        let before = input.text()[..input.caret()].chars().last();
-                        let space = if before.is_none_or(|c| c.is_whitespace()) { "" } else { " " };
-                        input.insert(&format!("{space}({cite})"), cx);
-                    });
-                    lib.writing.editor.read(cx).focus(window);
-                }
+            Cmd::WriteCiteScope(whole) => {
+                if let Some(lib) = self.lib.as_mut() { lib.citing.whole = whole }
             }
+            Cmd::WriteCiteFix(pieces) => self.cite_fix(pieces, cx),
+            Cmd::WriteCopyReferences => self.copy_references(cx),
+            Cmd::WriteExportCited => self.export_cited(cx),
             Cmd::WriteRun(reading) => self.write_run_start(reading, None, cx),
+            Cmd::WriteFind => self.write_find(false, cx),
+            Cmd::WriteOnly(tag, starred) => self.write_narrow(tag, starred, cx),
+            Cmd::WriteUnfold(card) => {
+                if let Some(unfolded) = self.lib.as_mut().map(|lib| &mut lib.writing.search.unfolded) && !unfolded.remove(&card) { unfolded.insert(card); }
+            }
+            Cmd::WriteAssist(assist) => self.assist_start(assist, cx),
+            Cmd::WriteAssistStop => self.assist_stop(cx),
+            Cmd::WriteAssistUse(how) => self.assist_use(how, window, cx),
             Cmd::WriteStop => {
                 if let Some(lib) = self.lib.as_mut() {
                     let sorting = &mut lib.writing.sorting;
@@ -2131,6 +2190,7 @@ impl Workspace {
             "zoom-in" => Cmd::PdfZoom(ZoomTo::In),
             "zoom-out" => Cmd::PdfZoom(ZoomTo::Out),
             "zoom-fit" => Cmd::PdfZoom(ZoomTo::Set(Zoom::FitWidth)),
+            "write-find" if self.lib.as_ref().is_some_and(|l| l.page == Page::Write) => Cmd::WriteFind,
             // What is selected in an answer: the paper's conversation first, when both have something.
             "copy-picked" => match self.lib.as_ref().map(|lib| (lib.paper_chat.picked.is_some(), lib.library_chat.picked.is_some())) {
                 Some((true, _)) => Cmd::CopyPicked(true),
@@ -2150,6 +2210,7 @@ impl Workspace {
             Ok(store) => store,
             Err(err) => return self.fail(format!("{err:#}"), cx),
         };
+        self.write_snapshot("leave");
         info.opened_at = time::now_iso();
         let _ = libraries::save(&info);
         theme::set_accent(&info.color);
@@ -2190,20 +2251,25 @@ impl Workspace {
             lib.info.criteria = goal;
             if let Err(err) = libraries::save(&lib.info) { this.fail(format!("筛选目标没有保存：{err:#}"), cx) }
         }));
-        let section = "introduction".to_string();
-        let draft = store.drafts().ok().and_then(|mut drafts| drafts.remove(&section)).unwrap_or_default();
-        let editor = cx.new(|cx| TextInput::new("在这里写。右边会列出文献库里的文献在同一部分是怎么写的；中文也可以，先写下想表达的意思。", cx).multiline(14).with_text(&draft));
+        let manuscripts = store.manuscripts().unwrap_or_default();
+        let (manuscript, section_id) = Writing::latest(&manuscripts);
+        let opened = manuscripts.iter().find(|m| m.id == manuscript);
+        let draft = opened.and_then(|m| m.section(&section_id)).map(|s| s.body.clone()).unwrap_or_default();
+        let title = cx.new(|cx| TextInput::new(wisp_core::manuscript::UNTITLED, cx).with_text(&opened.map(|m| m.title.clone()).unwrap_or_default()));
+        subscriptions.push(cx.subscribe(&title, |this, input, event: &InputEvent, cx| {
+            if *event == InputEvent::Changed { this.write_title_typed(input.read(cx).text().to_string(), cx) }
+        }));
+        let editor = cx.new(|cx| TextInput::new("在这里写。写好一段，按「查找候选句」的快捷键，右边就列出文献库里的文献在同一部分相近的写法；中文或别的语言也可以，先写下想表达的意思。", cx).multiline(14).with_text(&draft));
         let find = cx.new(|cx| TextInput::new("找句子：输入词或短语，例如 remains unclear", cx));
         subscriptions.push(cx.subscribe(&editor, |this, input, event: &InputEvent, cx| {
             if *event != InputEvent::Changed { return }
             let text = input.read(cx).text().to_string();
-            let saved = this.lib.as_mut().map(|lib| lib.store.save_draft(&lib.writing.section.clone(), &text));
-            if let Some(Err(err)) = saved { this.fail(format!("草稿没有保存：{err:#}"), cx) }
+            this.write_typed(text, cx);
         }));
-        // The caret moving to another paragraph changes what is looked for, as typing does.
-        subscriptions.push(cx.observe(&editor, |this, _, cx| this.writing_changed(cx)));
-        subscriptions.push(cx.observe(&find, |this, _, cx| this.writing_changed(cx)));
-        let writing = Writing { section, editor, find, asked: None, words: String::new(), candidates: None, searching: false, round: 0, keywords: HashMap::new(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new() };
+        // Candidates are asked for: the find box on Enter, the manuscript by the shortcut.
+        subscriptions.push(cx.subscribe(&find, |this, _, event: &InputEvent, cx| if *event == InputEvent::Submit { this.write_find(true, cx) }));
+        let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new(), assist: Default::default() };
+        let citing = crate::cite::Citing::new(&store, &mut subscriptions, cx);
         let mut lib = Library {
             info,
             store,
@@ -2242,6 +2308,7 @@ impl Workspace {
             fetching: None,
             origins: BTreeMap::new(),
             writing,
+            citing,
             _subscriptions: subscriptions,
         };
         if let Err(err) = lib.reload() {
@@ -2758,10 +2825,7 @@ impl Workspace {
                     // Whether a text came of it shows in the list.
                     let _ = lib.reload();
                     // The candidates on show were found without this paper.
-                    if lib.extracting.is_empty() {
-                        lib.writing.asked = None;
-                        this.writing_changed(cx);
-                    }
+                    if lib.extracting.is_empty() { this.write_texts_changed(cx) }
                     cx.notify();
                     true
                 });
@@ -3643,80 +3707,6 @@ impl Workspace {
 
     // ---- writing
 
-    /// Look for candidates again when the part, the words looked for or
-    /// what is being written has changed: a moment after the last change,
-    /// so typing does not ask for every letter.
-    fn writing_changed(&mut self, cx: &mut Context<Self>) {
-        let Some(lib) = self.lib.as_mut().filter(|l| l.page == Page::Write) else { return };
-        let writing = &mut lib.writing;
-        let find = writing.find.read(cx).text().trim().to_string();
-        let query = if find.is_empty() {
-            let editor = writing.editor.read(cx);
-            structure::writing_at(editor.text(), editor.caret())
-        } else {
-            find
-        };
-        let wanted = (writing.section.clone(), query);
-        if writing.asked.as_ref() == Some(&wanted) { return }
-        writing.asked = Some(wanted);
-        writing.round += 1;
-        let (round, library) = (writing.round, lib.info.id.clone());
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(std::time::Duration::from_millis(220)).await;
-            this.update(cx, |this, cx| {
-                if this.lib.as_ref().is_some_and(|l| l.info.id == library && l.writing.round == round) { this.writing_search(cx) }
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// Find the candidates for what was last asked. Something written in
-    /// Chinese is first put into English search words by the model for
-    /// translation (once per text): the library's sentences are English.
-    fn writing_search(&mut self, cx: &mut Context<Self>) {
-        let profile = self.settings.profile_for_or_default(Task::Translate);
-        let Some(lib) = self.lib.as_mut() else { return };
-        let Some((section, query)) = lib.writing.asked.clone() else { return };
-        let round = lib.writing.round;
-        let mut words = query.clone();
-        if structure::in_chinese(&query) {
-            match lib.writing.keywords.get(&query) {
-                Some(Some(known)) => words = known.clone(),
-                Some(None) => return,
-                None => {
-                    // Without a model the words go as written, and find what little they can.
-                    if let Ok(request) = ai::plain_request(&profile, structure::KEYWORDS_SYSTEM, &query) {
-                        lib.writing.keywords.insert(query.clone(), None);
-                        lib.writing.searching = true;
-                        let (library, protocol) = (lib.info.id.clone(), profile.protocol);
-                        let work = cx.background_executor().spawn(async move { wisp_net::complete(request, protocol) });
-                        cx.spawn(async move |this, cx| {
-                            let reply = work.await;
-                            this.update(cx, |this, cx| {
-                                let Some(lib) = this.lib.as_mut().filter(|l| l.info.id == library) else { return };
-                                let found = reply.map(|words| words.split_whitespace().collect::<Vec<_>>().join(" ")).unwrap_or_else(|_| query.clone());
-                                lib.writing.keywords.insert(query, Some(found));
-                                if lib.writing.round == round { this.writing_search(cx) }
-                            })
-                            .ok();
-                        })
-                        .detach();
-                        return cx.notify();
-                    }
-                }
-            }
-        }
-        lib.writing.searching = true;
-        lib.writing.words = if words == query { String::new() } else { words.clone() };
-        self.library_tool("find_sentences", serde_json::json!({"section": section, "query": words, "limit": 30}), cx, move |this, result, _| {
-            let Some(lib) = this.lib.as_mut().filter(|l| l.writing.round == round) else { return };
-            lib.writing.searching = false;
-            lib.writing.candidates = Some(result);
-            lib.writing.scroll.set_offset(point(px(0.), px(0.)));
-        });
-    }
-
     /// Start the model on the full texts: sorting those the rules sorted
     /// into parts, or reading the pages of those that gave no text.
     fn write_run_start(&mut self, reading: bool, only: Option<String>, cx: &mut Context<Self>) {
@@ -3730,12 +3720,13 @@ impl Workspace {
             return cx.notify();
         }
         // Pages to look at: only a PDF has them. Parts to sort: the texts the rules had to guess at.
-        let mut todo: Vec<String> = lib.writing.structures.iter().filter(|(id, _)| only.as_ref().is_none_or(|only| only == *id)).filter(|(id, info)| if reading { info.method == "none" && lib.files.iter().any(|f| f.id == **id && f.format == "pdf") } else { info.method == "rules" && info.open >= structure::OPEN_ENOUGH }).map(|(id, _)| id.clone()).collect();
+        let mut todo: Vec<String> = lib.writing.structures.iter().filter(|(id, _)| only.as_ref().is_none_or(|only| only == *id)).filter(|(id, info)| if reading { (info.method == "none" || info.read_in_part()) && lib.files.iter().any(|f| f.id == **id && f.format == "pdf") } else { info.worth_asking() }).map(|(id, _)| id.clone()).collect();
         if todo.is_empty() { return }
         todo.reverse();
         let sorting = &mut lib.writing.sorting;
         sorting.run += 1;
         (sorting.reading, sorting.total, sorting.done, sorting.failed, sorting.streak, sorting.todo) = (reading, todo.len(), 0, 0, 0, todo);
+        sorting.cut.clear();
         sorting.model = format!("{} · {}", profile.title(), profile.model);
         let run = sorting.run;
         // A file's pages are read one after another; two files at a time is as much as a service takes kindly.
@@ -3749,7 +3740,8 @@ impl Workspace {
     fn write_run_next(&mut self, run: u64, cx: &mut Context<Self>) {
         enum Made {
             Sorted(Vec<structure::Sentence>),
-            Read(Vec<String>),
+            /// All the pages read so far, and how many the file has.
+            Read(Vec<String>, usize),
         }
         let profile = self.settings.profile_for_or_default(Task::Structure);
         let Some(lib) = self.lib.as_mut().filter(|l| l.writing.sorting.run == run) else { return };
@@ -3760,17 +3752,20 @@ impl Workspace {
         let (library, protocol, reading) = (lib.info.id.clone(), profile.protocol, lib.writing.sorting.reading);
         let path = lib.store.file_path(&file);
         let pages = lib.store.fulltext_pages(&file.id).ok().flatten().and_then(Result::ok).unwrap_or_default();
+        // A file read in part goes on from the first page not read.
+        let before = if reading && lib.writing.structures.get(&file.id).is_some_and(StructureInfo::read_in_part) { pages.clone() } else { vec![] };
         lib.writing.sorting.working.push(file_id.clone());
         let name = title.clone();
         let work = cx.background_executor().spawn(async move {
             if reading {
-                let mut pages = vec![];
-                for picture in crate::pdf::page_pictures(&path, READ_PAGES)? {
+                let mut pages = before;
+                let (pictures, count) = crate::pdf::page_pictures(&path, pages.len(), READ_PAGES)?;
+                for picture in pictures {
                     let request = ai::read_page_request(&profile, ai::ImageData { media_type: "image/png".into(), data: ai::base64(&picture) })?;
                     pages.push(ai::page_reading(&wisp_net::complete(request, protocol)?));
                 }
                 if pages.iter().all(|page| page.trim().is_empty()) { return Err("模型在页面上没有读到文字。".to_string()) }
-                Ok(Made::Read(pages))
+                Ok(Made::Read(pages, count))
             } else {
                 let blocks = structure::blocks(&pages);
                 let request = ai::plain_request(&profile, structure::OUTLINE_SYSTEM, &structure::outline_prompt(&name, &blocks))?;
@@ -3789,7 +3784,11 @@ impl Workspace {
                 let saved = made.and_then(|made| {
                     match made {
                         Made::Sorted(sentences) => lib.store.save_model_structure(&file_id, &author, &sentences),
-                        Made::Read(pages) => lib.store.save_read_pages(&file_id, pages, &author),
+                        Made::Read(pages, count) => {
+                            // A file longer than one run reads says how much of it was read.
+                            if pages.len() < count { lib.writing.sorting.cut.push((title.clone(), pages.len(), count)) }
+                            lib.store.save_read_pages(&file_id, pages, &author, count)
+                        }
                     }
                     .map_err(|e| format!("{e:#}"))
                 });
@@ -3800,9 +3799,8 @@ impl Workspace {
                         // A paper whose pages were read has a text now, and says so in the list.
                         let _ = lib.reload();
                         lib.texts_changed();
-                        lib.writing.asked = None;
                         this.write_run_next(run, cx);
-                        this.writing_changed(cx);
+                        this.write_texts_changed(cx);
                     }
                     Err(err) => {
                         sorting.failed += 1;
@@ -3896,7 +3894,7 @@ impl Workspace {
     /// Run a library tool off the main thread, on a connection of its own
     /// and with the network, and hand the result back if the same library
     /// is still open.
-    fn library_tool(&mut self, name: &'static str, args: Value, cx: &mut Context<Self>, done: impl FnOnce(&mut Self, Result<Value, String>, &mut Context<Self>) + 'static) {
+    pub fn library_tool(&mut self, name: &'static str, args: Value, cx: &mut Context<Self>, done: impl FnOnce(&mut Self, Result<Value, String>, &mut Context<Self>) + 'static) {
         let Some(lib) = self.lib.as_ref() else { return };
         let info = lib.info.clone();
         let library = info.id.clone();
@@ -3927,6 +3925,7 @@ impl Workspace {
                 self.run(cmd, window, cx);
             }
             Modal::ImportReport => self.run(Cmd::CloseImport, window, cx),
+            Modal::Section { .. } | Modal::History { .. } => self.submit_manuscript_modal(window, cx),
             Modal::Complete(form) => {
                 if form.chosen.is_some() { self.complete_apply(window, cx) } else { self.complete_find(cx) }
             }
@@ -4144,6 +4143,28 @@ impl Workspace {
                 "page" => Some(Cmd::SetPage(match arg { "ask" => Page::Ask, "trash" => Page::Trash, "sources" => Page::Sources, "screen" => Page::Screen, "write" => Page::Write, _ => Page::Papers })),
                 // `write:methods` shows another part of the manuscript; `draft:<text>` leaves text in it, as if typed.
                 "write" => Some(Cmd::WriteSection(arg.to_string())),
+                // `manuscript:new` makes another manuscript, `manuscript:<title>` gives the current one its title;
+                // `section` / `section:<id>` is the dialog for a new section / one's name and kind;
+                // `reading` shows the whole manuscript, `versions` the section's history.
+                "manuscript" if arg == "new" => Some(Cmd::NewManuscript),
+                "manuscript" => {
+                    if let Some(lib) = self.lib.as_ref() { lib.writing.title.update(cx, |input, cx| input.set_text(arg, cx)) }
+                    self.write_title_typed(arg.to_string(), cx);
+                    None
+                }
+                "section" => Some(Cmd::EditSection((!arg.is_empty()).then(|| arg.to_string()))),
+                "reading" => Some(Cmd::WriteReading(true)),
+                "versions" => Some(Cmd::WriteHistory),
+                // `find` asks for candidates as the shortcut does; `find:<words>` puts words in the find box and presses Enter.
+                "find" if arg.is_empty() => Some(Cmd::WriteFind),
+                "find" => {
+                    if let Some(lib) = self.lib.as_ref() { lib.writing.find.update(cx, |input, cx| input.set_text(arg, cx)) }
+                    self.write_find(true, cx);
+                    return;
+                }
+                // `unfold` shows the sentences around the first candidate.
+                "unfold" => self.lib.as_ref().and_then(|lib| lib.writing.search.candidates.as_ref()?.as_ref().ok()?["sentences"].get(0).map(|s| Cmd::WriteUnfold(format!("{}-{}", s["paperId"].as_str().unwrap_or(""), s["position"].as_u64().unwrap_or(0))))),
+                "only" => Some(Cmd::WriteOnly(arg.strip_prefix('*').unwrap_or(arg).to_string(), arg.starts_with('*'))),
                 "draft" => {
                     if let Some(lib) = self.lib.as_ref() { lib.writing.editor.update(cx, |input, cx| input.insert(arg, cx)) }
                     return;
@@ -4249,6 +4270,21 @@ impl Workspace {
                 }
                 // `sort` has the model sort the full texts into parts, `read` has it read the pages of those without text.
                 "sort" => Some(Cmd::WriteRun(false)),
+                // `assist:rewrite|translate|polish|<own command>` asks the model about the caret's paragraph;
+                // `assisted:replace|below|copy|drop` uses the result, `assiststop` stops it; `caret:<byte>` / `pick:<from>;<to>` place the caret / select.
+                "assist" => Some(Cmd::WriteAssist(match arg { "rewrite" => ai::Assist::Rewrite, "translate" => ai::Assist::Translate, "polish" => ai::Assist::Polish, own => ai::Assist::Own(own.to_string()) })),
+                "assiststop" => Some(Cmd::WriteAssistStop),
+                "assisted" => Some(Cmd::WriteAssistUse(match arg { "replace" => crate::write_assist::Use::Replace, "below" => crate::write_assist::Use::Below, "copy" => crate::write_assist::Use::Copy, _ => crate::write_assist::Use::Drop })),
+                "undo" => {
+                    if let Some(lib) = self.lib.as_ref() { lib.writing.editor.update(cx, |input, cx| input.undo_last(cx)) }
+                    return;
+                }
+                "caret" | "pick" => {
+                    let (from, to) = arg.split_once(';').unwrap_or((arg, arg));
+                    let (from, to) = (from.parse().unwrap_or(0), to.parse().unwrap_or(0));
+                    if let Some(lib) = self.lib.as_ref() { lib.writing.editor.update(cx, |input, cx| input.select_range(from..to, cx)) }
+                    return;
+                }
                 "read" => Some(Cmd::WriteRun(true)),
                 // `guide:new` is what a new library shows; `guide:search` goes straight to composing, `guide:go` also generates.
                 "guide" => {
@@ -4274,8 +4310,8 @@ impl Workspace {
                 // `profile:1` shows the second model service on the AI page.
                 "profile" => Some(Cmd::SelectProfile(arg.parse().unwrap_or(0))),
                 "menu" => {
-                    let kind = match arg { "sort" => MenuKind::Sort, "year" => MenuKind::Filter(FilterKey::Year), "zoom" => MenuKind::PdfZoom, "fulltext" => MenuKind::Filter(FilterKey::Fulltext), _ => MenuKind::Add };
-                    self.open_menu(kind, point(px(if arg == "zoom" { 900. } else { 20. }), px(120.)), cx);
+                    let kind = match arg { "sort" => MenuKind::Sort, "year" => MenuKind::Filter(FilterKey::Year), "zoom" => MenuKind::PdfZoom, "fulltext" => MenuKind::Filter(FilterKey::Fulltext), "manuscripts" => MenuKind::Manuscripts, "export" => MenuKind::ManuscriptExport, _ => MenuKind::Add };
+                    self.open_menu(kind, point(px(if matches!(arg, "zoom" | "manuscripts" | "export") { 900. } else { 20. }), px(120.)), cx);
                     return;
                 }
                 "search" => {
