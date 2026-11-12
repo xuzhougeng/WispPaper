@@ -98,6 +98,8 @@ pub enum MenuKind {
     /// of the selected paper, a tag of the sidebar, a past conversation (of the paper or the library), a
     /// text that can be selected (the whole of it), an answer (of which conversation, and its text).
     Paper(String),
+    /// Several papers marked in the list.
+    Papers(Vec<String>),
     Trashed(String),
     File(String),
     Tag(String),
@@ -178,6 +180,16 @@ pub enum Cmd {
     ClearFilters,
     SetSort(String),
     Select(String),
+    /// What is done with several papers marked in the list (`src/context.rs`): a new conversation about
+    /// them alone, starred or not, a reading status, tags added (the dialog), their open full texts
+    /// looked for, moved to the trash (after asking).
+    AskPapers(Vec<String>),
+    StarPapers(Vec<String>, bool),
+    ReadPapers(Vec<String>, String),
+    TagPapers(Vec<String>),
+    FindPdfsOf(Vec<String>),
+    AskTrashPapers(Vec<String>),
+    TrashPapers(Vec<String>),
     /// Open a paper on one page of the detail panel.
     OpenPaper(String, Tab),
     CloseDetail,
@@ -860,6 +872,8 @@ pub enum Modal {
     Confirm { title: String, message: String, action: String, cmd: Cmd },
     /// Another name for a tag, on every paper that has it.
     Tag { tag: String, name: Entity<TextInput> },
+    /// Tags for several papers at once.
+    TagPapers { ids: Vec<String>, name: Entity<TextInput> },
     /// What came of each PDF of the last import (`Library::import`).
     ImportReport,
     Zotero,
@@ -887,6 +901,13 @@ pub struct Library {
     pub search: Entity<TextInput>,
     pub page: Page,
     pub selected: Option<String>,
+    /// The papers marked in the list with Shift or ⌘ / Ctrl, for doing something with all of them.
+    pub marked: Vec<String>,
+    /// Where a stretch marked with Shift starts, and where it reaches to.
+    pub anchor: Option<String>,
+    pub cursor: Option<String>,
+    /// The papers the library's next conversation is about, when they were picked in the list; none means the list on show.
+    pub asked: Vec<String>,
     pub tab: Tab,
     /// The detail panel takes most of the window (reading a PDF).
     pub wide: bool,
@@ -1118,6 +1139,13 @@ impl Library {
         self.papers.iter().find(|p| p.id == id)
     }
 
+    /// The papers a question to the library is put to: those picked for it in the list, else the list on show.
+    pub fn scope_papers(&self) -> Vec<&Paper> {
+        if self.asked.is_empty() { return self.shown.iter().map(|&i| &self.papers[i]).collect() }
+        let asked: HashSet<&str> = self.asked.iter().map(String::as_str).collect();
+        self.papers.iter().filter(|p| asked.contains(p.id.as_str())).collect()
+    }
+
     pub fn selected_paper(&self) -> Option<&Paper> {
         self.selected.as_deref().and_then(|id| self.paper(id))
     }
@@ -1246,6 +1274,13 @@ impl Library {
             self.selected = None;
             self.pdf = None;
         }
+        let held: HashSet<&str> = self.papers.iter().map(|p| p.id.as_str()).collect();
+        let gone = |ids: &Vec<String>| ids.iter().any(|id| !held.contains(id.as_str()));
+        if gone(&self.marked) || gone(&self.asked) {
+            let held: HashSet<String> = held.into_iter().map(str::to_string).collect();
+            self.marked.retain(|id| held.contains(id));
+            self.asked.retain(|id| held.contains(id));
+        }
         self.refilter();
         Ok(())
     }
@@ -1311,7 +1346,7 @@ impl Workspace {
     }
 
     /// Run a store operation on the open library, reload, and report a failure.
-    fn change(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Library) -> anyhow::Result<()>) -> bool {
+    pub(crate) fn change(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Library) -> anyhow::Result<()>) -> bool {
         let Some(lib) = self.lib.as_mut() else { return false };
         let result = f(lib).and_then(|_| lib.reload());
         cx.notify();
@@ -1341,7 +1376,7 @@ impl Workspace {
             _ => None,
         };
         match kind {
-            MenuKind::Paper(_) | MenuKind::Trashed(_) | MenuKind::File(_) | MenuKind::Tag(_) | MenuKind::Conversation(..) | MenuKind::Text(_) | MenuKind::Answer(..) => (items, breaks) = self.context_menu(&kind),
+            MenuKind::Paper(_) | MenuKind::Papers(_) | MenuKind::Trashed(_) | MenuKind::File(_) | MenuKind::Tag(_) | MenuKind::Conversation(..) | MenuKind::Text(_) | MenuKind::Answer(..) => (items, breaks) = self.context_menu(&kind),
             MenuKind::Add => {
                 items.push(item("通过 DOI / PMID 添加…", Cmd::AddById));
                 items.push(item("导入 PDF 文件…", Cmd::ImportPdfs));
@@ -1673,6 +1708,7 @@ impl Workspace {
                 }
             }
             Cmd::Select(id) => self.select(Some(id), window, cx),
+            Cmd::AskPapers(_) | Cmd::StarPapers(..) | Cmd::ReadPapers(..) | Cmd::TagPapers(_) | Cmd::FindPdfsOf(_) | Cmd::AskTrashPapers(_) | Cmd::TrashPapers(_) => self.run_batch(cmd, window, cx),
             Cmd::OpenPaper(id, tab) => {
                 self.select(Some(id), window, cx);
                 self.run(Cmd::SetTab(tab), window, cx);
@@ -1812,6 +1848,8 @@ impl Workspace {
                     kept = chat.kept;
                     chat.reset(cx);
                     chat.input.read(cx).focus(window);
+                    // A new conversation with the library is about the list on show again.
+                    if !paper { lib.asked.clear() }
                 }
                 if kept { self.say("上一段对话已保存，在「历史」里可以找到。", cx) }
             }
@@ -2241,6 +2279,8 @@ impl Workspace {
         } else if self.settings_view.is_some() {
             self.close_settings(window, cx);
         } else if self.picked.take().is_some() {
+        } else if self.lib.as_ref().is_some_and(|l| !l.marked.is_empty()) {
+            if let Some(lib) = self.lib.as_mut() { lib.marked.clear() }
         } else if self.lib.as_ref().is_some_and(|l| l.selected.is_some()) {
             self.select(None, window, cx);
         }
@@ -2377,6 +2417,10 @@ impl Workspace {
             zoom: Zoom::FitWidth,
             library_chat,
             paper_chat,
+            marked: vec![],
+            anchor: None,
+            cursor: None,
+            asked: vec![],
             table_scroll: UniformListScrollHandle::new(),
             detail_scroll: ScrollHandle::new(),
             extracting: HashSet::new(),
@@ -2411,6 +2455,8 @@ impl Workspace {
         let Some(lib) = self.lib.as_ref() else { return };
         if lib.selected == id { return }
         self.picked = None;
+        // One paper on show ends a marking of several.
+        if id.is_some() && let Some(lib) = self.lib.as_mut() { lib.marked.clear() }
         // The conversation with the paper being left is kept as far as it got.
         self.stop_chat(true, cx);
         let Some(lib) = self.lib.as_mut() else { return };
@@ -3104,6 +3150,8 @@ impl Workspace {
             // A question about one paper reads that paper; one about the library reads the current list.
             let papers: Vec<&Paper> = match &scope {
                 Scope::Paper(_) => lib.papers.iter().collect(),
+                // As `Library::scope_papers`, field by field: the conversation is held meanwhile.
+                Scope::Library if !lib.asked.is_empty() => lib.papers.iter().filter(|p| lib.asked.contains(&p.id)).collect(),
                 Scope::Library => lib.shown.iter().map(|&i| &lib.papers[i]).collect(),
             };
             if papers.is_empty() {
@@ -3415,6 +3463,7 @@ impl Workspace {
             Ok(None) => return self.fail("这次对话已经不在了。", cx),
             Err(err) => return self.fail(format!("{err:#}"), cx),
         };
+        if !about_paper { lib.asked.clear() }
         let chat = if about_paper { &mut lib.paper_chat } else { &mut lib.library_chat };
         chat.reset(cx);
         for item in conversation.transcript.items {
@@ -3932,7 +3981,7 @@ impl Workspace {
     /// Look for the open full text of one paper, or of the papers of the
     /// current list that have no PDF and a number to be looked up by. A
     /// round under way takes more papers in.
-    fn fetch_start(&mut self, only: Option<String>, cx: &mut Context<Self>) {
+    pub(crate) fn fetch_start(&mut self, only: Option<String>, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
         if lib.fetching.as_ref().is_some_and(|run| run.stopped && run.running()) { return self.say("正在结束当前请求，请稍后再开始新的查找。", cx) }
         let known = wisp_core::openaccess::lookable;
@@ -4081,6 +4130,25 @@ impl Workspace {
                     return;
                 }
                 if name == tag || self.retag(&tag, Some(&name), cx) { self.run(Cmd::CloseModal, window, cx) }
+            }
+            Modal::TagPapers { ids, name } => {
+                let (ids, tags) = (ids.clone(), wisp_core::model::split_list(&text(name, cx)));
+                if tags.is_empty() {
+                    self.modal_error = "写上要添加的标签，多个用逗号或分号隔开。".into();
+                    return;
+                }
+                let done = self.change(cx, |lib| {
+                    for id in &ids {
+                        let mut paper = lib.store.get_paper(id)?;
+                        for tag in &tags { if !paper.tags.contains(tag) { paper.tags.push(tag.clone()) } }
+                        lib.store.save_paper(&mut paper)?;
+                    }
+                    Ok(())
+                });
+                if done {
+                    self.run(Cmd::CloseModal, window, cx);
+                    self.say(format!("已为 {} 篇文献添加标签。", ids.len()), cx);
+                }
             }
             Modal::Note { paper_id, text: input } => {
                 let (paper_id, note) = (paper_id.clone(), text(input, cx));

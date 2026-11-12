@@ -4,7 +4,7 @@
 use crate::app::{Cmd, Edge, MenuKind, Workspace};
 use crate::context::Nav;
 use crate::settings::{SettingsPage, UpdateState};
-use crate::shortcuts::{MoveDown, MoveFirst, MoveLast, MoveLeft, MovePageDown, MovePageUp, MoveRight, MoveUp, OpenSelected, TrashSelected, AddPaper, AskLibrary, FocusSearch, ImportPdf, NewLibrary, ShowHome, ShowSettings, CopyPicked, FindCandidates, ToggleDetail, ToggleSidebar, ZoomFit, ZoomIn, ZoomOut};
+use crate::shortcuts::{MarkAll, MarkDown, MarkUp, MoveDown, MoveFirst, MoveLast, MoveLeft, MovePageDown, MovePageUp, MoveRight, MoveUp, OpenSelected, TrashSelected, AddPaper, AskLibrary, FocusSearch, ImportPdf, NewLibrary, ShowHome, ShowSettings, CopyPicked, FindCandidates, ToggleDetail, ToggleSidebar, ZoomFit, ZoomIn, ZoomOut};
 use crate::theme::{self, Theme};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
@@ -55,6 +55,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &MovePageDown, window, cx| this.nav(Nav::PageDown, window, cx)))
             .on_action(cx.listener(|this, _: &MoveFirst, window, cx| this.nav(Nav::First, window, cx)))
             .on_action(cx.listener(|this, _: &MoveLast, window, cx| this.nav(Nav::Last, window, cx)))
+            .on_action(cx.listener(|this, _: &MarkUp, window, cx| this.nav(Nav::MarkUp, window, cx)))
+            .on_action(cx.listener(|this, _: &MarkDown, window, cx| this.nav(Nav::MarkDown, window, cx)))
+            .on_action(cx.listener(|this, _: &MarkAll, window, cx| this.nav(Nav::MarkAll, window, cx)))
             .on_action(cx.listener(|this, _: &OpenSelected, window, cx| this.nav(Nav::Open, window, cx)))
             .on_action(cx.listener(|this, _: &TrashSelected, window, cx| this.nav(Nav::Trash, window, cx)))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.import_paths(paths.paths().to_vec(), cx)))

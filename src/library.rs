@@ -418,12 +418,15 @@ impl Workspace {
         } else {
             uniform_list("papers", shown, cx.processor(move |this, range: Range<usize>, window, cx| this.render_rows(range, width, window, cx))).track_scroll(lib.table_scroll.clone()).flex_1().into_any_element()
         };
-        let status = if let Some(run) = lib.import.as_ref().filter(|run| run.running()) {
+        let marked = lib.marked.len();
+        let status = if marked > 0 {
+            format!("已选 {marked} 篇 · 右键批量操作 · Esc 取消")
+        } else if let Some(run) = lib.import.as_ref().filter(|run| run.running()) {
             format!("正在导入 PDF，已完成 {} / {}", run.rows.len(), run.total)
         } else if !lib.extracting.is_empty() {
             format!("正在提取 {} 篇全文的文字，用于提问…", lib.extracting.len())
         } else {
-            format!("↑↓ 切换文献 · 右键更多操作 · {} 搜索 · Esc 关闭详情", crate::shortcuts::pretty(&crate::shortcuts::key_of("search", &self.settings.shortcuts)))
+            format!("↑↓ 切换文献 · Shift / {} 点选多篇 · 右键更多操作 · {} 搜索", if cfg!(target_os = "macos") { "⌘" } else { "Ctrl" }, crate::shortcuts::pretty(&crate::shortcuts::key_of("search", &self.settings.shortcuts)))
         };
         div()
             .flex()
@@ -502,7 +505,7 @@ impl Workspace {
         range
             .filter_map(|row| {
                 let p = lib.papers.get(*lib.shown.get(row)?)?;
-                let selected = lib.selected.as_deref() == Some(p.id.as_str());
+                let selected = lib.selected.as_deref() == Some(p.id.as_str()) || lib.marked.contains(&p.id);
                 // The paper a right-click menu is about.
                 let pointed = self.menu.as_ref().is_some_and(|menu| menu.paper.as_deref() == Some(p.id.as_str()));
                 let cells: Vec<AnyElement> = columns
@@ -596,10 +599,14 @@ impl Workspace {
                         .when(selected, |d| d.bg(Theme::accent_soft()))
                         .when(!selected && pointed, |d| d.bg(Theme::hover()))
                         .when(!selected && !pointed, |d| d.hover(|s| s.bg(Theme::hover())))
-                        .on_mouse_down(MouseButton::Right, self.on_context(MenuKind::Paper(p.id.clone()), cx))
+                        .on_mouse_down(MouseButton::Right, self.on_paper_context(p.id.clone(), cx))
                         .on_click(cx.listener({
                             let id = p.id.clone();
                             move |this, ev: &ClickEvent, window, cx| {
+                                // With ⌘ / Ctrl or Shift held the click marks papers; alone it shows one.
+                                let held = ev.modifiers();
+                                if held.secondary() || held.shift { return this.mark(&id, held.shift, window, cx) }
+                                if let Some(lib) = this.lib.as_mut() { (lib.anchor, lib.cursor) = (Some(id.clone()), None) }
                                 // A double click opens the PDF straight away.
                                 if ev.click_count() >= 2 && let Some(lib) = this.lib.as_mut() && lib.pdf_file(&id).is_some() { lib.tab = Tab::Pdf }
                                 this.run(Cmd::Select(id.clone()), window, cx);
