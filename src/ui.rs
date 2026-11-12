@@ -223,7 +223,9 @@ pub fn traffic_lights_width() -> f32 {
 pub fn title_strip() -> Div {
     let strip = div().flex().flex_none().items_center().w_full().h(px(if custom_titlebar() { TITLE_H } else { 0. }));
     if cfg!(target_os = "windows") {
-        strip.window_control_area(WindowControlArea::Drag)
+        // Keep the workspace's focus handler from preventing the native caption action
+        // (activation, dragging and double-click maximising) on mouse down.
+        strip.occlude().window_control_area(WindowControlArea::Drag)
     } else if cfg!(target_os = "macos") {
         strip.on_mouse_down(MouseButton::Left, |ev, window, _| match ev.click_count {
             1 => window.start_window_move(),
