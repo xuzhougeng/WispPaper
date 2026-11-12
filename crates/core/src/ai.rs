@@ -1025,9 +1025,9 @@ pub const SLASH: [Slash; 7] = [
     },
     Slash {
         name: "review",
-        about: "围绕一个主题写带引用的小综述",
+        about: "先拟大纲确认，再写带引用的综述",
         hint: "主题",
-        template: "依据文献库里的文献，围绕下面的主题写一段综述：{}\n\n先用 list_papers 和 search_fulltext 找出相关的文献，拿不准的地方用 read_fulltext 核对原文。按观点组织，不要逐篇罗列；每个论断后面给出引用标签，依据全文的写上页码；文献之间一致和分歧的地方要指出来；文献库里证据不足的部分直接说明，不要用常识补齐。",
+        template: "依据文献库里的文献，围绕下面的主题写一段综述：{}\n\n先出大纲：用 list_papers 和 search_fulltext 找出相关文献，然后给出大纲——整段回答什么问题、分几个方面、每个方面依据哪些文献、哪里证据还缺——请用户确认或调整后再动笔；用户没有要调整的，按大纲写。\n\n写正文时：\n1. 按观点组织，不逐篇罗列。每段先给中心判断，再把回答同一问题的文献放在一起比较：一致的说成共识，分歧的指出分歧、说明它可能来自什么（对象、方法、统计口径不同），不替文献取舍。\n2. 每个论断后给出引用标签，依据全文的写上页码。关键的数字、比较和有争议的结论，动笔前用 read_fulltext 核对原文；只有摘要可依据的文献，写明依据是摘要。\n3. 区分文献的发现与你的综合判断；文献库里证据不足的部分直接说明，不要用常识补齐。",
         alone: "",
     },
     Slash {
@@ -2182,6 +2182,9 @@ mod tests {
         assert_eq!(expand_slash("/dance now"), "/dance now");
         // Every command that stands for a request says what to write after it.
         assert!(SLASH.iter().all(|command| command.template.is_empty() == command.hint.is_empty() && command.template.contains("{}") != command.template.is_empty()));
+        // /review shows its outline for confirmation before the prose, so the structure can be steered before it is written.
+        let review = expand_slash("/review 根系如何感知土壤紧实");
+        assert!(review.contains("确认或调整后再动笔") && review.contains("动笔前用 read_fulltext 核对原文"));
     }
 
     #[test]
