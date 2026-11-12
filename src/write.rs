@@ -16,18 +16,10 @@ use wisp_core::model::label;
 use wisp_core::settings::Task;
 use wisp_core::structure::SECTIONS;
 
-/// The parts a manuscript is written in: `SECTIONS` without the catch-all.
-const PARTS: usize = 5;
-
 impl Workspace {
     pub fn render_write(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let lib = self.lib.as_ref().unwrap();
         let writing = &lib.writing;
-        let part = |n: usize, key: &'static str, name: &'static str, this: &Self, cx: &mut Context<Self>| {
-            let on = writing.section == key;
-            div().id(("write-part", n)).flex().flex_none().items_center().h(px(28.)).px(px(12.)).rounded(px(14.)).text_size(px(13.)).cursor_pointer().border_1().when(on, |d| d.bg(Theme::accent_soft()).text_color(Theme::accent()).border_color(Theme::accent().opacity(0.35)).font_weight(FontWeight::MEDIUM)).when(!on, |d| d.border_color(Theme::line()).text_color(Theme::text_secondary()).hover(|s| s.bg(Theme::hover()))).on_click(this.on(Cmd::WriteSection(key.to_string()), cx)).child(name)
-        };
-        let parts: Vec<AnyElement> = SECTIONS.iter().take(PARTS).enumerate().map(|(n, (key, name))| part(n, key, name, self, cx).into_any_element()).collect();
         let text = writing.editor.read(cx).text();
         let (words, characters) = (text.split_whitespace().filter(|word| word.chars().any(char::is_alphanumeric)).count(), text.chars().filter(|c| !c.is_whitespace()).count());
         let focused = writing.editor.focus_handle(cx).is_focused(window);
@@ -48,12 +40,11 @@ impl Workspace {
                     .px(px(20.))
                     .pt(px(16.))
                     .pb(px(12.))
-                    .child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child("写作"))
-                    .child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child("写哪一部分，右边就列出文献库里的文献在这一部分的句子：先看别人怎么写，再写自己的。句子是用来参考和引用的，不要照抄。"))
-                    .child(div().flex().items_center().flex_wrap().gap(px(6.)).children(parts)),
+                    .child(self.render_manuscript_bar(window, cx))
+                    .when(!writing.reading, |d| d.child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child("写哪一节，右边就列出文献库里的文献在这一部分的句子：先看别人怎么写，再写自己的。句子是用来参考和引用的，不要照抄。"))),
             )
             .child(
-                div().flex().flex_col().flex_1().min_h_0().px(px(20.)).pb(px(8.)).child(
+                div().flex().flex_col().flex_1().min_h_0().px(px(20.)).pb(px(8.)).child(if writing.reading { self.render_manuscript_reading(cx) } else {
                     div()
                         .id("write-editor")
                         .flex_1()
@@ -63,19 +54,27 @@ impl Workspace {
                         .border_1()
                         .border_color(if focused { Theme::accent().opacity(0.55) } else { Theme::line() })
                         .bg(Theme::bg_body())
-                        .child(div().px(px(18.)).py(px(14.)).text_size(px(15.)).line_height(px(26.)).text_color(Theme::text()).child(writing.editor.clone())),
-                ),
+                        .child(div().px(px(18.)).py(px(14.)).text_size(px(15.)).line_height(px(26.)).text_color(Theme::text()).child(writing.editor.clone()))
+                        .into_any_element()
+                }),
             )
-            .child(div().flex().flex_none().items_center().px(px(22.)).pb(px(12.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(if characters == 0 { "草稿随写随存，留在这个文献库里。".to_string() } else { format!("{words} 词 · {characters} 字符 · 已保存") }));
+            .child(div().flex().flex_none().items_center().px(px(22.)).pb(px(12.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(if writing.reading {
+                let total: usize = writing.current().map_or(0, |m| m.sections.iter().map(|s| s.body.split_whitespace().filter(|word| word.chars().any(char::is_alphanumeric)).count()).sum());
+                format!("全文 {total} 词 · 点一节的名称，回到那一节写")
+            } else if characters == 0 {
+                "草稿随写随存，留在这个文献库里；停笔或换一节时会留一个历史版本。".to_string()
+            } else {
+                format!("{words} 词 · {characters} 字符 · 已保存")
+            }));
 
-        div().flex().size_full().child(editor).child(self.render_candidates(panel, window, cx)).into_any_element()
+        div().flex().size_full().child(editor).when(!writing.reading, |d| d.child(self.render_candidates(panel, window, cx))).into_any_element()
     }
 
     /// The panel beside the manuscript: what there is to draw on, and the candidates.
     fn render_candidates(&self, width: f32, window: &Window, cx: &mut Context<Self>) -> Div {
         let lib = self.lib.as_ref().unwrap();
         let writing = &lib.writing;
-        let name = label(&SECTIONS, &writing.section);
+        let name = label(&SECTIONS, writing.kind());
         let asked = writing.find.read(cx).text().trim().to_string();
         let found = writing.candidates.as_ref().and_then(|result| result.as_ref().ok());
         let sentences: &[Value] = found.and_then(|value| value["sentences"].as_array()).map_or(&[], Vec::as_slice);
@@ -96,7 +95,7 @@ impl Workspace {
             Some(Err(error)) => Some(ui::error_line(error).into_any_element()),
             Some(Ok(value)) if rows.is_empty() => Some(
                 if value["sentencesInSection"].as_u64() == Some(0) {
-                    if writing.section == "abstract" { ui::empty_state("pen-line", "还没有摘要可参考", "文献库里的文献都没有摘要。通过 DOI 或检索式添加的文献会带上摘要。") } else { ui::empty_state("pen-line", "还没有全文可参考", "把论文的 PDF 拖进文献库，或者在文献详情里附上 PDF。全文会被分成导言、方法、结果、讨论，这里就有句子可看了。") }
+                    if writing.kind() == "abstract" { ui::empty_state("pen-line", "还没有摘要可参考", "文献库里的文献都没有摘要。通过 DOI 或检索式添加的文献会带上摘要。") } else { ui::empty_state("pen-line", "还没有全文可参考", "把论文的 PDF 拖进文献库，或者在文献详情里附上 PDF。全文会被分成导言、方法、结果、讨论，这里就有句子可看了。") }
                 } else {
                     ui::empty_state("search", "没有相近的句子", "换几个词试试；用英文关键词效果最好。")
                 }

@@ -21,7 +21,9 @@ use wisp_core::model::*;
 pub(crate) use wisp_core::settings::default_root;
 use wisp_core::settings::{Settings, Task, settings_file};
 use wisp_core::store::{Conversation, ConversationInfo, ImportBatch, SavedSearch, Store, StructureInfo, Suggestion, TrashEntry, translation_key};
+use wisp_core::manuscript::{Manuscript, Snapshot};
 use wisp_core::{complete, export, fulltext, import, pdftext, structure, time, tools, zotero};
+pub use crate::manuscripts::ManuscriptExport;
 
 /// What the middle of an open library shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,6 +89,11 @@ pub enum MenuKind {
     TaskModel(Task),
     /// How large the PDF's pages are drawn.
     PdfZoom,
+    /// 写作: the library's manuscripts, one section's own, export, and the language.
+    Manuscripts,
+    Section(String),
+    ManuscriptExport,
+    WriteLanguage,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -278,8 +285,27 @@ pub enum Cmd {
     SetAutoSync(u32),
     ToggleSearch(String),
     // Writing
-    /// Write another part of the manuscript (a key of `structure::SECTIONS`).
+    /// Write another section of the manuscript: its id, or a key of `structure::SECTIONS` for the first section of that kind.
     WriteSection(String),
+    /// Write another of the library's manuscripts.
+    WriteManuscript(String),
+    NewManuscript,
+    AskRemoveManuscript(String),
+    RemoveManuscript(String),
+    /// What the manuscript is written in: a code of `manuscript::LANGUAGES`.
+    WriteLanguage(String),
+    /// Add a section (`None`) or change one's name and kind: the dialog.
+    EditSection(Option<String>),
+    PickSectionKind(String),
+    MoveSection(String, i64),
+    AskRemoveSection(String),
+    RemoveSection(String),
+    /// The whole manuscript to read (true), or one section to write.
+    WriteReading(bool),
+    ExportManuscript(ManuscriptExport),
+    /// The section's earlier versions.
+    WriteHistory,
+    HistoryPick(usize),
     /// Put a citation in at the caret.
     WriteCite(String),
     /// Have the model sort the full texts into parts (false), or read the pages of the files that gave no text (true).
@@ -412,16 +438,28 @@ impl Sorting {
 /// The pages of one file a model is asked to read: a paper is rarely longer, a book is not what this is for.
 const READ_PAGES: usize = 40;
 
-/// The writing page: the part of the manuscript being written, and the
-/// sentences the library's papers have in the same part.
+/// The writing page: the manuscript and section being written, and the
+/// sentences the library's papers have in the same part. `Writing::kind`
+/// is that part, `Writing::language` what the manuscript is written in
+/// (both in `src/manuscripts.rs`).
 pub struct Writing {
-    /// The part being written, a key of `structure::SECTIONS`.
-    pub section: String,
+    /// The library's manuscripts, oldest first; a section's text is kept here as it is typed, as in the store.
+    pub manuscripts: Vec<Manuscript>,
+    /// The manuscript being written: its id.
+    pub manuscript: String,
+    /// The section being written: its id.
+    pub section_id: String,
+    /// The whole manuscript is shown to be read, instead of one section to write.
+    pub reading: bool,
+    /// The manuscript's title, edited in place.
+    pub title: Entity<TextInput>,
+    /// Counts the changes typed, so a pause is the timer of the last one still being the last.
+    pub(crate) typed: u64,
     pub editor: Entity<TextInput>,
     /// Words to look for, instead of what is being written.
     pub find: Entity<TextInput>,
     /// What the candidates on show were looked for: the part and the words.
-    asked: Option<(String, String)>,
+    pub(crate) asked: Option<(String, String)>,
     /// The English words a search was made with, when they are not the person's own.
     pub words: String,
     /// What `find_sentences` gave.
@@ -778,6 +816,10 @@ pub enum Modal {
     FetchReport,
     /// An answer about a paper, to be looked over before it joins that paper's notes.
     Note { paper_id: String, text: Entity<TextInput> },
+    /// 写作: a section's name and kind (`editing` its id, `None` for a new one).
+    Section { editing: Option<String>, name: Entity<TextInput>, kind: String },
+    /// 写作: a section's earlier versions, newest first.
+    History { section: String, snapshots: Vec<Snapshot>, chosen: usize },
 }
 
 pub struct Library {
@@ -1247,6 +1289,7 @@ impl Workspace {
                 items.push(item("从 Zotero 导入…", Cmd::ImportZotero));
                 items.push(item("手动录入…", Cmd::AddManual));
             }
+            MenuKind::Manuscripts | MenuKind::Section(_) | MenuKind::ManuscriptExport | MenuKind::WriteLanguage => items = self.manuscript_menu(&kind),
             MenuKind::Export => {
                 items.push(item("BibTeX（.bib）", Cmd::Export(ExportKind::Bibtex)));
                 items.push(item("表格（.csv）", Cmd::Export(ExportKind::Csv)));
@@ -1329,6 +1372,7 @@ impl Workspace {
         match cmd {
             Cmd::OpenLibrary(id) => self.open_library(&id, window, cx),
             Cmd::GoHome => {
+                self.write_snapshot("leave");
                 self.lib = None;
                 self.settings_view = None;
                 self.modal = None;
@@ -1497,6 +1541,8 @@ impl Workspace {
                 }
             }
             Cmd::SetPage(page) => {
+                if self.lib.as_ref().is_some_and(|l| l.page == Page::Write && page != Page::Write) { self.write_snapshot("leave") }
+                if page == Page::Write { self.write_ensure(cx) }
                 if let Some(lib) = self.lib.as_mut() {
                     lib.page = page;
                     if page == Page::Ask { lib.library_chat.input.read(cx).focus(window) }
@@ -1508,16 +1554,7 @@ impl Workspace {
                     }
                 }
             }
-            Cmd::WriteSection(section) => {
-                if let Some(lib) = self.lib.as_mut().filter(|l| l.writing.section != section) {
-                    let draft = lib.store.drafts().ok().and_then(|mut drafts| drafts.remove(&section)).unwrap_or_default();
-                    lib.writing.section = section;
-                    lib.writing.candidates = None;
-                    lib.writing.editor.update(cx, |input, cx| input.set_text(&draft, cx));
-                    lib.writing.editor.read(cx).focus(window);
-                    self.writing_changed(cx);
-                }
-            }
+            Cmd::WriteSection(_) | Cmd::WriteManuscript(_) | Cmd::NewManuscript | Cmd::AskRemoveManuscript(_) | Cmd::RemoveManuscript(_) | Cmd::WriteLanguage(_) | Cmd::EditSection(_) | Cmd::PickSectionKind(_) | Cmd::MoveSection(..) | Cmd::AskRemoveSection(_) | Cmd::RemoveSection(_) | Cmd::WriteReading(_) | Cmd::ExportManuscript(_) | Cmd::WriteHistory | Cmd::HistoryPick(_) => self.run_manuscript(cmd, window, cx),
             Cmd::WriteCite(cite) => {
                 if let Some(lib) = self.lib.as_ref() {
                     lib.writing.editor.update(cx, |input, cx| {
@@ -2150,6 +2187,7 @@ impl Workspace {
             Ok(store) => store,
             Err(err) => return self.fail(format!("{err:#}"), cx),
         };
+        self.write_snapshot("leave");
         info.opened_at = time::now_iso();
         let _ = libraries::save(&info);
         theme::set_accent(&info.color);
@@ -2190,20 +2228,25 @@ impl Workspace {
             lib.info.criteria = goal;
             if let Err(err) = libraries::save(&lib.info) { this.fail(format!("筛选目标没有保存：{err:#}"), cx) }
         }));
-        let section = "introduction".to_string();
-        let draft = store.drafts().ok().and_then(|mut drafts| drafts.remove(&section)).unwrap_or_default();
+        let manuscripts = store.manuscripts().unwrap_or_default();
+        let (manuscript, section_id) = Writing::latest(&manuscripts);
+        let opened = manuscripts.iter().find(|m| m.id == manuscript);
+        let draft = opened.and_then(|m| m.section(&section_id)).map(|s| s.body.clone()).unwrap_or_default();
+        let title = cx.new(|cx| TextInput::new(wisp_core::manuscript::UNTITLED, cx).with_text(&opened.map(|m| m.title.clone()).unwrap_or_default()));
+        subscriptions.push(cx.subscribe(&title, |this, input, event: &InputEvent, cx| {
+            if *event == InputEvent::Changed { this.write_title_typed(input.read(cx).text().to_string(), cx) }
+        }));
         let editor = cx.new(|cx| TextInput::new("在这里写。右边会列出文献库里的文献在同一部分是怎么写的；中文也可以，先写下想表达的意思。", cx).multiline(14).with_text(&draft));
         let find = cx.new(|cx| TextInput::new("找句子：输入词或短语，例如 remains unclear", cx));
         subscriptions.push(cx.subscribe(&editor, |this, input, event: &InputEvent, cx| {
             if *event != InputEvent::Changed { return }
             let text = input.read(cx).text().to_string();
-            let saved = this.lib.as_mut().map(|lib| lib.store.save_draft(&lib.writing.section.clone(), &text));
-            if let Some(Err(err)) = saved { this.fail(format!("草稿没有保存：{err:#}"), cx) }
+            this.write_typed(text, cx);
         }));
         // The caret moving to another paragraph changes what is looked for, as typing does.
         subscriptions.push(cx.observe(&editor, |this, _, cx| this.writing_changed(cx)));
         subscriptions.push(cx.observe(&find, |this, _, cx| this.writing_changed(cx)));
-        let writing = Writing { section, editor, find, asked: None, words: String::new(), candidates: None, searching: false, round: 0, keywords: HashMap::new(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new() };
+        let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, asked: None, words: String::new(), candidates: None, searching: false, round: 0, keywords: HashMap::new(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new() };
         let mut lib = Library {
             info,
             store,
@@ -3646,7 +3689,7 @@ impl Workspace {
     /// Look for candidates again when the part, the words looked for or
     /// what is being written has changed: a moment after the last change,
     /// so typing does not ask for every letter.
-    fn writing_changed(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn writing_changed(&mut self, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut().filter(|l| l.page == Page::Write) else { return };
         let writing = &mut lib.writing;
         let find = writing.find.read(cx).text().trim().to_string();
@@ -3656,7 +3699,7 @@ impl Workspace {
         } else {
             find
         };
-        let wanted = (writing.section.clone(), query);
+        let wanted = (writing.kind().to_string(), query);
         if writing.asked.as_ref() == Some(&wanted) { return }
         writing.asked = Some(wanted);
         writing.round += 1;
@@ -3927,6 +3970,7 @@ impl Workspace {
                 self.run(cmd, window, cx);
             }
             Modal::ImportReport => self.run(Cmd::CloseImport, window, cx),
+            Modal::Section { .. } | Modal::History { .. } => self.submit_manuscript_modal(window, cx),
             Modal::Complete(form) => {
                 if form.chosen.is_some() { self.complete_apply(window, cx) } else { self.complete_find(cx) }
             }
@@ -4144,6 +4188,18 @@ impl Workspace {
                 "page" => Some(Cmd::SetPage(match arg { "ask" => Page::Ask, "trash" => Page::Trash, "sources" => Page::Sources, "screen" => Page::Screen, "write" => Page::Write, _ => Page::Papers })),
                 // `write:methods` shows another part of the manuscript; `draft:<text>` leaves text in it, as if typed.
                 "write" => Some(Cmd::WriteSection(arg.to_string())),
+                // `manuscript:new` makes another manuscript, `manuscript:<title>` gives the current one its title;
+                // `section` / `section:<id>` is the dialog for a new section / one's name and kind;
+                // `reading` shows the whole manuscript, `versions` the section's history.
+                "manuscript" if arg == "new" => Some(Cmd::NewManuscript),
+                "manuscript" => {
+                    if let Some(lib) = self.lib.as_ref() { lib.writing.title.update(cx, |input, cx| input.set_text(arg, cx)) }
+                    self.write_title_typed(arg.to_string(), cx);
+                    None
+                }
+                "section" => Some(Cmd::EditSection((!arg.is_empty()).then(|| arg.to_string()))),
+                "reading" => Some(Cmd::WriteReading(true)),
+                "versions" => Some(Cmd::WriteHistory),
                 "draft" => {
                     if let Some(lib) = self.lib.as_ref() { lib.writing.editor.update(cx, |input, cx| input.insert(arg, cx)) }
                     return;
@@ -4274,8 +4330,8 @@ impl Workspace {
                 // `profile:1` shows the second model service on the AI page.
                 "profile" => Some(Cmd::SelectProfile(arg.parse().unwrap_or(0))),
                 "menu" => {
-                    let kind = match arg { "sort" => MenuKind::Sort, "year" => MenuKind::Filter(FilterKey::Year), "zoom" => MenuKind::PdfZoom, "fulltext" => MenuKind::Filter(FilterKey::Fulltext), _ => MenuKind::Add };
-                    self.open_menu(kind, point(px(if arg == "zoom" { 900. } else { 20. }), px(120.)), cx);
+                    let kind = match arg { "sort" => MenuKind::Sort, "year" => MenuKind::Filter(FilterKey::Year), "zoom" => MenuKind::PdfZoom, "fulltext" => MenuKind::Filter(FilterKey::Fulltext), "manuscripts" => MenuKind::Manuscripts, "export" => MenuKind::ManuscriptExport, _ => MenuKind::Add };
+                    self.open_menu(kind, point(px(if matches!(arg, "zoom" | "manuscripts" | "export") { 900. } else { 20. }), px(120.)), cx);
                     return;
                 }
                 "search" => {

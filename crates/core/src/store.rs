@@ -210,7 +210,8 @@ CREATE TABLE IF NOT EXISTS structures (
     open INTEGER NOT NULL DEFAULT 0,
     made_at TEXT NOT NULL
 );
--- 草稿: what the person is writing, one text per part of the manuscript.
+-- 草稿 of builds before manuscripts: one text per part. Kept so an older
+-- build still opens the library; `manuscript::migrate_drafts` empties it.
 CREATE TABLE IF NOT EXISTS drafts (
     section TEXT PRIMARY KEY NOT NULL,
     body TEXT NOT NULL DEFAULT '',
@@ -387,7 +388,7 @@ fn row_to_batch(r: &rusqlite::Row) -> rusqlite::Result<ImportBatch> {
 
 pub struct Store {
     root: PathBuf,
-    db: Connection,
+    pub(crate) db: Connection,
 }
 
 /// Table, column and type of each column added after its table was first made.
@@ -425,7 +426,7 @@ impl Store {
         Self::init(root.to_path_buf(), Connection::open_in_memory()?)
     }
 
-    fn init(root: PathBuf, db: Connection) -> Result<Store> {
+    fn init(root: PathBuf, mut db: Connection) -> Result<Store> {
         db.pragma_update(None, "foreign_keys", "ON")?;
         // WAL keeps a crash from losing the library; ignored for in-memory databases.
         let _ = db.pragma_update(None, "journal_mode", "WAL");
@@ -434,7 +435,9 @@ impl Store {
             bail!("这个文献库由更新版本的 Wisp Paper 创建（数据库版本 {version}），请升级后再打开。");
         }
         db.execute_batch(SCHEMA)?;
+        db.execute_batch(crate::manuscript::SCHEMA)?;
         add_columns(&db)?;
+        crate::manuscript::migrate_drafts(&mut db)?;
         db.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(Store { root, db })
     }
@@ -1100,20 +1103,6 @@ impl Store {
             .collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    // ---- drafts
-
-    /// What the person has written for each part of the manuscript, by a key of `structure::SECTIONS`.
-    pub fn drafts(&self) -> Result<BTreeMap<String, String>> {
-        let mut stmt = self.db.prepare("SELECT section, body FROM drafts")?;
-        Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<BTreeMap<_, _>>>()?)
-    }
-
-    pub fn save_draft(&mut self, section: &str, body: &str) -> Result<()> {
-        if !crate::structure::SECTIONS.iter().any(|(key, _)| *key == section) { bail!("没有这个部分：{section}") }
-        self.db.execute("INSERT INTO drafts(section, body, updated_at) VALUES (?1, ?2, ?3) ON CONFLICT(section) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at", params![section, body, now_iso()])?;
-        Ok(())
-    }
-
     /// Every extracted full text, by paper id: (file, pages).
     /// The full-text files that gave no text, with why: (file, paper, reason).
     /// A paper that has another file with text is not among them.
@@ -1256,7 +1245,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn structure_and_drafts() {
+    fn structure() {
         let dir = temp_dir("structure");
         let mut store = Store::in_memory(&dir).unwrap();
         let p = store.add_paper(paper("A paper with parts", "")).unwrap();
@@ -1304,11 +1293,6 @@ mod tests {
         store.remove_file(&scanned.id).unwrap();
         assert!(store.section_sentences("introduction", "").unwrap().is_empty());
 
-        assert!(store.drafts().unwrap().is_empty());
-        store.save_draft("introduction", "Roots are").unwrap();
-        store.save_draft("introduction", "Roots are long.").unwrap();
-        assert_eq!(store.drafts().unwrap().get("introduction").map(String::as_str), Some("Roots are long."));
-        assert!(store.save_draft("preface", "x").is_err());
         std::fs::remove_dir_all(dir).ok();
     }
 
