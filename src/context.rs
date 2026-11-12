@@ -185,6 +185,10 @@ impl Workspace {
                 if !lacking.is_empty() { items.push(MenuItem { label: "查找开放全文".into(), checked: false, note: Some(format!("{} 篇缺 PDF", lacking.len()).into()), cmd: Cmd::FindPdfsOf(lacking) }) }
 
                 breaks.push(items.len());
+                items.push(item("批量翻译标题", Cmd::TranslatePapers(ids.clone(), wisp_core::translation::Field::Title)));
+                items.push(item("批量翻译摘要", Cmd::TranslatePapers(ids.clone(), wisp_core::translation::Field::Abstract)));
+
+                breaks.push(items.len());
                 items.push(item("复制题目", Cmd::CopyText(papers.iter().map(|p| p.title.as_str()).collect::<Vec<_>>().join("\n"))));
                 items.push(item("复制 BibTeX", Cmd::CopyText(wisp_core::export::bibtex(&papers))));
 
