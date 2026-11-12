@@ -4,7 +4,7 @@
 //! at it, a panel shows how far the run is. The queue can be looked at one
 //! suggested verdict at a time, and such a part decided in one go.
 
-use crate::app::{Cmd, Screen, Workspace};
+use crate::app::{Cmd, MenuKind, Screen, Workspace};
 use crate::settings::SettingsPage;
 use crate::theme::Theme;
 use crate::ui;
@@ -214,6 +214,7 @@ impl Workspace {
             .py(px(10.))
             .border_b_1()
             .border_color(Theme::line())
+            .on_mouse_down(MouseButton::Right, self.on_context(MenuKind::Paper(paper.id.clone()), cx))
             .when(selected, |d| d.bg(Theme::accent_soft()))
             .when(!selected, |d| d.cursor_pointer().hover(|s| s.bg(Theme::hover())).on_click(self.on(Cmd::Select(paper.id.clone()), cx)))
             .child(head);
@@ -225,7 +226,7 @@ impl Workspace {
                 "abstract" => "只读了摘要",
                 _ => "没有可读的内容",
             };
-            row = row.child(div().text_size(px(13.)).line_height(px(20.)).child(s.reason.clone()));
+            row = row.child(self.selectable(format!("screen-reason-{}", paper.id), s.reason.clone(), cx).text_size(px(13.)).line_height(px(20.)));
             if !s.excerpt.is_empty() {
                 // The words the suggestion rests on; with a page, a click opens the PDF there.
                 let quote = div().id(id("quote")).flex().gap(px(8.)).px(px(10.)).py(px(8.)).rounded(px(6.)).bg(Theme::bg_body()).border_l_2().border_color(Theme::accent()).text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_secondary()).child(div().flex_1().min_w_0().child(s.excerpt.clone()));

@@ -5,7 +5,7 @@
 use gpui::*;
 use std::collections::BTreeMap;
 
-actions!(workspace, [Dismiss, FocusSearch, AddPaper, ImportPdf, AskLibrary, ToggleDetail, ToggleSidebar, ShowSettings, ShowHome, NewLibrary, ZoomIn, ZoomOut, ZoomFit, CopyPicked, FindCandidates]);
+actions!(workspace, [Dismiss, FocusSearch, AddPaper, ImportPdf, AskLibrary, ToggleDetail, ToggleSidebar, ShowSettings, ShowHome, NewLibrary, ZoomIn, ZoomOut, ZoomFit, CopyPicked, FindCandidates, MoveUp, MoveDown, MoveLeft, MoveRight, MovePageUp, MovePageDown, MoveFirst, MoveLast, OpenSelected, TrashSelected]);
 
 pub struct Shortcut {
     pub id: &'static str,
@@ -38,6 +38,8 @@ pub const SHORTCUTS: [Shortcut; 13] = [
 /// The text field's own keys (input.rs): a shortcut on one of them would
 /// never fire while typing, and would surprise when it did.
 const EDITING: [&str; 4] = ["secondary-a", "secondary-c", "secondary-x", "secondary-v"];
+/// Moving a paper to the trash from the list.
+const TRASH: &str = "secondary-backspace";
 
 fn find(id: &str) -> Option<&'static Shortcut> {
     SHORTCUTS.iter().find(|s| s.id == id)
@@ -68,6 +70,7 @@ pub fn refusal(id: &str, key: &str, custom: &BTreeMap<String, String>) -> Option
         return Some(if cfg!(target_os = "macos") { "快捷键需要带上 ⌘、⌃ 或 ⌥，或者使用 F1–F12。".into() } else { "快捷键需要带上 Ctrl 或 Alt，或者使用 F1–F12。".into() });
     }
     if EDITING.iter().any(|e| same(e, key)) { return Some(format!("{} 用于文本编辑（全选、复制、剪切、粘贴），不能改作他用。", pretty(key))) }
+    if same(TRASH, key) { return Some(format!("{} 用于把选中的文献移到回收站，不能改作他用。", pretty(key))) }
     SHORTCUTS.iter().find(|s| s.id != id && same(&key_of(s.id, custom), key)).map(|other| format!("{} 已用于「{}」。先修改或移除那个快捷键。", pretty(key), other.label))
 }
 
@@ -78,6 +81,21 @@ pub fn rebuild(custom: &BTreeMap<String, String>, cx: &mut App) {
     let context = Some("Workspace");
     // Copying what is selected in a PDF or in an answer: the text fields have the same key for their own selection.
     let mut bindings = vec![KeyBinding::new("escape", Dismiss, context), KeyBinding::new("secondary-c", crate::pdf::CopySelection, Some("PdfView")), KeyBinding::new("secondary-c", CopyPicked, context)];
+    // Moving in the list of papers and in an open menu: fixed keys, as the text field's are. A text field
+    // with the keyboard hears its own arrows, Enter and Delete first.
+    bindings.extend([
+        KeyBinding::new("up", MoveUp, context),
+        KeyBinding::new("down", MoveDown, context),
+        KeyBinding::new("left", MoveLeft, context),
+        KeyBinding::new("right", MoveRight, context),
+        KeyBinding::new("pageup", MovePageUp, context),
+        KeyBinding::new("pagedown", MovePageDown, context),
+        KeyBinding::new("home", MoveFirst, context),
+        KeyBinding::new("end", MoveLast, context),
+        KeyBinding::new("enter", OpenSelected, context),
+        KeyBinding::new("delete", TrashSelected, context),
+        KeyBinding::new(TRASH, TrashSelected, context),
+    ]);
     for shortcut in &SHORTCUTS {
         let key = key_of(shortcut.id, custom);
         // A key from a hand-edited settings.json may not parse; `KeyBinding::new` would panic on it.
@@ -109,8 +127,8 @@ pub fn pretty(key: &str) -> String {
         "escape" => "Esc".to_string(),
         "space" => "Space".to_string(),
         "enter" => "Enter".to_string(),
-        "backspace" => "Backspace".to_string(),
-        "delete" => "Delete".to_string(),
+        "backspace" => if cfg!(target_os = "macos") { "⌫" } else { "Backspace" }.to_string(),
+        "delete" => if cfg!(target_os = "macos") { "⌦" } else { "Delete" }.to_string(),
         "tab" => "Tab".to_string(),
         "up" => "↑".to_string(),
         "down" => "↓".to_string(),
