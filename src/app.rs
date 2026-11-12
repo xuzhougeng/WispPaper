@@ -20,7 +20,7 @@ use wisp_core::lookup::{self, Identifier};
 use wisp_core::model::*;
 pub(crate) use wisp_core::settings::default_root;
 use wisp_core::settings::{Settings, Task, settings_file};
-use wisp_core::store::{Conversation, ConversationInfo, ImportBatch, SavedSearch, Store, StructureInfo, Suggestion, TrashEntry, translation_key};
+use wisp_core::store::{Conversation, ConversationInfo, ImportBatch, SavedSearch, Store, StructureInfo, Suggestion, TrashEntry};
 use wisp_core::manuscript::{Manuscript, Snapshot};
 use wisp_core::{complete, export, fulltext, import, pdftext, structure, time, tools, zotero};
 pub use crate::manuscripts::ManuscriptExport;
@@ -234,6 +234,9 @@ pub enum Cmd {
     /// Show the selected paper's title and abstract translated, or stop showing it.
     ToggleTranslation,
     RetryTranslation,
+    TranslatePapers(Vec<String>, wisp_core::translation::Field),
+    StopBatchTranslation,
+    DismissBatchTranslation,
     // Custom fields
     ManageFields,
     EditField(String),
@@ -947,6 +950,8 @@ pub struct Library {
     pub translations: HashMap<String, Translated>,
     /// How many requests went out for each of them: the answer to an earlier one, back after a later, is dropped.
     pub translation_asks: HashMap<String, u64>,
+    pub translation_run: Option<crate::translate::TranslationRun>,
+    pub translation_session: Arc<()>,
     /// Whether the detail panel shows the selected paper translated. It
     /// stays on from paper to paper, so each one opened is translated.
     pub show_translation: bool,
@@ -1828,9 +1833,17 @@ impl Workspace {
             }
             Cmd::ToggleTranslation => {
                 if let Some(lib) = self.lib.as_mut() { lib.show_translation = !lib.show_translation }
+                self.load_title_translations();
                 self.translate_selected(true, cx);
             }
             Cmd::RetryTranslation => self.translate_selected(true, cx),
+            Cmd::TranslatePapers(ids, field) => self.translate_batch(ids, field, cx),
+            Cmd::StopBatchTranslation => {
+                if let Some(run) = self.lib.as_mut().and_then(|lib| lib.translation_run.as_mut()) { run.batch.stop() }
+            }
+            Cmd::DismissBatchTranslation => {
+                if let Some(lib) = self.lib.as_mut().filter(|lib| lib.translation_run.as_ref().is_some_and(|run| !run.batch.running())) { lib.translation_run = None }
+            }
 
             Cmd::ManageFields => self.fields_dialog(None, window, cx),
             Cmd::EditField(id) => self.fields_dialog(Some(id), window, cx),
@@ -2467,6 +2480,8 @@ impl Workspace {
             suggestions: HashMap::new(),
             translations: HashMap::new(),
             translation_asks: HashMap::new(),
+            translation_run: None,
+            translation_session: Arc::new(()),
             show_translation: false,
             searches: vec![],
             batches: vec![],
@@ -2520,76 +2535,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Translate the selected paper's title and abstract while translation
-    /// is on. What the library already holds is shown without asking; the
-    /// rest goes to the model for translation, each text on its own, and is
-    /// kept. `retry` asks again for what failed before.
-    fn translate_selected(&mut self, retry: bool, cx: &mut Context<Self>) {
-        let profile = self.settings.profile_for_or_default(Task::Translate);
-        let Some(lib) = self.lib.as_ref().filter(|l| l.show_translation) else { return };
-        let Some(paper) = lib.selected_paper() else { return };
-        for text in [paper.title.clone(), paper.abstract_text.clone()] {
-            if !text.trim().is_empty() { self.request_translation(text, profile.clone(), retry, false, cx) }
-        }
-        cx.notify();
-    }
-
-    /// Ask for one text's translation, unless the window or the library
-    /// already has it. `retry` asks again for what failed; `again` asks in
-    /// any case and keeps the answer in place of what was kept: the person
-    /// chose another model for this text once.
-    fn request_translation(&mut self, text: String, profile: ai::Profile, retry: bool, again: bool, cx: &mut Context<Self>) {
-        let prompt = self.settings.translation_prompt.clone();
-        let Some(lib) = self.lib.as_mut() else { return };
-        let library = lib.info.id.clone();
-        let key = translation_key(&text, ai::translation_prompt(&prompt));
-        if !again {
-            match lib.translations.get(&key) {
-                Some(Translated::Done(_) | Translated::Busy) => return,
-                Some(Translated::Failed(_)) if !retry => return,
-                _ => {}
-            }
-            if let Ok(Some(kept)) = lib.store.translation(&key) {
-                lib.translations.insert(key, Translated::Done(kept));
-                return;
-            }
-        }
-        let request = match ai::translate_request(&profile, &prompt, &text) {
-            Ok(request) => request,
-            Err(err) => {
-                lib.translations.insert(key, Translated::Failed(err));
-                return;
-            }
-        };
-        lib.translations.insert(key.clone(), Translated::Busy);
-        let ask = lib.translation_asks.entry(key.clone()).or_default();
-        *ask += 1;
-        let ask = *ask;
-        let (protocol, author) = (profile.protocol, format!("{} · {}", profile.title(), profile.model));
-        let work = cx.background_executor().spawn(async move { wisp_net::complete(request, protocol) });
-        cx.spawn(async move |this, cx| {
-            let translated = work.await;
-            this.update(cx, |this, cx| {
-                let Some(lib) = this.lib.as_mut().filter(|l| l.info.id == library) else { return };
-                // A later request for the same text has the say.
-                if lib.translation_asks.get(&key) != Some(&ask) { return }
-                let state = match translated {
-                    Ok(text) => {
-                        // Not kept is not lost: it is on show, and asked for again another day.
-                        let _ = if again { lib.store.replace_translation(&key, &text, &author) } else { lib.store.save_translation(&key, &text, &author) };
-                        Translated::Done(text.trim().to_string())
-                    }
-                    Err(err) => Translated::Failed(err),
-                };
-                lib.translations.insert(key, state);
-                this.sync_pdf_translation(cx);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
     /// Translate a passage selected in the PDF: with the model bound to
     /// translation from what is kept, or, with `profile`, asked of that model
     /// for this once (the settings stay as they are) and kept in place of
@@ -2599,19 +2544,20 @@ impl Workspace {
         let again = chosen.is_some();
         let profile = chosen.unwrap_or_else(|| self.settings.profile_for_or_default(Task::Translate));
         // A click is a request: what failed before is asked again.
-        self.request_translation(text, profile, true, again, cx);
+        let prompt = self.settings.translation_prompt.clone();
+        self.translate_text(&text, &profile, &prompt, true, again, cx);
         self.sync_pdf_translation(cx);
     }
 
     /// Tell the PDF viewer how the translation on its card stands, and which models it may be asked of.
-    fn sync_pdf_translation(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn sync_pdf_translation(&mut self, cx: &mut Context<Self>) {
         let prompt = ai::translation_prompt(&self.settings.translation_prompt).to_string();
         let models: Vec<(String, String)> = self.settings.profiles.iter().map(|p| (p.id.clone(), p.title())).collect();
         let usual = self.settings.profile_for_or_default(Task::Translate);
         let Some(lib) = self.lib.as_ref() else { return };
         let Some(pdf) = lib.pdf.clone() else { return };
         let Some((text, profile)) = pdf.read(cx).translation_asked() else { return };
-        let state = lib.translations.get(&translation_key(&text, &prompt)).cloned().unwrap_or(Translated::Busy);
+        let state = lib.translations.get(&wisp_core::store::translation_key(&text, &prompt)).cloned().unwrap_or(Translated::Busy);
         let model = profile.and_then(|id| self.settings.profiles.iter().find(|p| p.id == id)).unwrap_or(&usual);
         let model = (model.id.clone(), model.title());
         pdf.update(cx, |pdf, cx| pdf.show_translation(state, model, models, cx));
@@ -4654,6 +4600,12 @@ impl Workspace {
                     "width" => ZoomTo::Set(Zoom::FitWidth),
                     percent => ZoomTo::Set(Zoom::Percent(percent.parse().unwrap_or(100.))),
                 })),
+                "translate" if matches!(arg, "titles" | "abstracts") => {
+                    let Some(lib) = self.lib.as_ref() else { return };
+                    let ids = lib.shown.iter().map(|&i| lib.papers[i].id.clone()).filter(|id| lib.marked.contains(id)).collect();
+                    Some(Cmd::TranslatePapers(ids, if arg == "titles" { wisp_core::translation::Field::Title } else { wisp_core::translation::Field::Abstract }))
+                }
+                "translate" if arg == "stop" => Some(Cmd::StopBatchTranslation),
                 "translate" => Some(Cmd::ToggleTranslation),
                 // `profile:1` shows the second model service on the AI page.
                 "profile" => Some(Cmd::SelectProfile(arg.parse().unwrap_or(0))),

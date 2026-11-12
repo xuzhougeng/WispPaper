@@ -1,7 +1,7 @@
 //! An open library: the sidebar (collect, views, tags), the paper table with
 //! its search and filters, and the trash.
 
-use crate::app::{Cmd, Edge, FilterKey, Library, MenuKind, Page, Tab, Workspace};
+use crate::app::{Cmd, Edge, FilterKey, Library, MenuKind, Page, Tab, Translated, Workspace};
 use crate::settings::SettingsPage;
 use crate::theme::{self, Theme};
 use crate::ui;
@@ -183,7 +183,7 @@ impl Workspace {
             .flex()
             .size_full()
             .when(shown, |d| d.child(self.render_sidebar(sidebar_width, cx)))
-            .child(div().relative().flex().flex_col().flex_1().min_w_0().h_full().bg(Theme::bg_body()).when(shown, |d| d.border_l_1().border_color(Theme::line())).child(strip).child(div().flex().flex_col().flex_1().min_h_0().child(main)).when(shown || dragging, |d| d.child(edge)))
+            .child(div().relative().flex().flex_col().flex_1().min_w_0().h_full().bg(Theme::bg_body()).when(shown, |d| d.border_l_1().border_color(Theme::line())).child(strip).children(self.render_batch_translation(cx)).child(div().flex().flex_col().flex_1().min_h_0().child(main)).when(shown || dragging, |d| d.child(edge)))
             .when(detail_width > 0., |d| d.child(self.render_detail(detail_width, window, cx)))
             .into_any_element()
     }
@@ -488,6 +488,7 @@ impl Workspace {
                             .child(lib.search.clone()),
                     )
                     .child(ui::secondary_button("sort", "排序").child(ui::icon("sort-down", 14., Theme::text_secondary())).on_click(self.on_menu(MenuKind::Sort, cx)))
+                    .child(ui::secondary_button("list-translation", if lib.show_translation { "显示原文" } else { "显示译文" }).on_click(self.on(Cmd::ToggleTranslation, cx)))
                     .child(ui::secondary_button("export", "导出").child(ui::icon("export", 14., Theme::text_secondary())).on_click(self.on_menu(MenuKind::Export, cx))),
             )
             .child(div().id("filters").flex().flex_wrap().items_center().gap(px(6.)).px(px(16.)).py(px(10.)).children(chips))
@@ -572,6 +573,7 @@ impl Workspace {
                                 )
                                 .into_any_element(),
                             ColumnKind::Title => {
+                                let title = if lib.show_translation && let Some(Translated::Done(text)) = lib.translations.get(&wisp_core::store::translation_key(&p.title, wisp_core::ai::translation_prompt(&self.settings.translation_prompt))) { text } else { &p.title };
                                 let mut meta = vec![];
                                 let authors = p.short_authors();
                                 if !authors.is_empty() { meta.push(authors) }
@@ -583,7 +585,7 @@ impl Workspace {
                                         .flex_col()
                                         .min_w_0()
                                         .w_full()
-                                        .child(div().truncate().font_weight(if p.reading == "unread" { FontWeight::MEDIUM } else { FontWeight::NORMAL }).text_color(if p.reading == "unread" { Theme::text() } else { Theme::text_secondary() }).child(p.title.clone()))
+                                        .child(div().truncate().font_weight(if p.reading == "unread" { FontWeight::MEDIUM } else { FontWeight::NORMAL }).text_color(if p.reading == "unread" { Theme::text() } else { Theme::text_secondary() }).child(title.clone()))
                                         .child(
                                             div()
                                                 .flex()

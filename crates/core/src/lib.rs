@@ -45,5 +45,6 @@ pub mod store;
 pub mod structure;
 pub mod time;
 pub mod tools;
+pub mod translation;
 pub mod update;
 pub mod zotero;

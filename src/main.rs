@@ -26,6 +26,7 @@ mod select;
 mod settings;
 mod shortcuts;
 mod theme;
+mod translate;
 mod ui;
 mod write;
 mod write_find;
