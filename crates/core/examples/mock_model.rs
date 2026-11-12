@@ -13,6 +13,9 @@
 //! paper the search returned, saying how many pictures came with the
 //! conversation. A question containing 「试试撤销」 makes it call
 //! `undo_import` instead, a tool the window asks the person about first.
+//! Asked to work on a paragraph of the manuscript (写作), it streams the
+//! paragraph back in pieces with a few words changed (a translation is
+//! marked as one), so the result card and its marks can be watched.
 //!
 //! Requests are answered side by side, each after the given number of
 //! milliseconds (none by default), so a run of several screening requests
@@ -77,13 +80,33 @@ fn main() {
 fn answer(mut stream: TcpStream, delay: u64) {
     {
         let request = body(&mut stream);
-        let kind = if request.contains("文献筛选助手") { "screen" } else if request.contains("翻译助手") { "translate" } else if request.contains("\"tools\"") { "chat" } else { "queries" };
+        let kind = if request.contains("学术写作助手") { "write" } else if request.contains("文献筛选助手") { "screen" } else if request.contains("翻译助手") { "translate" } else if request.contains("\"tools\"") { "chat" } else { "queries" };
         println!("{kind}: model {} thinking {} output_config {}", sent(&request, "model"), sent(&request, "thinking"), sent(&request, "output_config"));
         std::thread::sleep(std::time::Duration::from_millis(delay));
         // The last message decides the step: tool results get the answer, a question gets the calls.
         let answered = request.rfind("\"tool_result\"").is_some_and(|at| request.rfind("\"role\":\"user\"").is_some_and(|user| user < at));
         let mut events = String::new();
-        if request.contains("文献筛选助手") {
+        if request.contains("学术写作助手") {
+            // The paragraph is the message's last block; the rewrite marks itself as one.
+            let value: serde_json::Value = serde_json::from_str(&request).unwrap_or_default();
+            let message = value["messages"][0]["content"].as_str().unwrap_or("").to_string();
+            let paragraph = message.rsplit("\n\n").next().unwrap_or("").trim().trim_start_matches("要改写的段落：\n").to_string();
+            let reply = if message.contains("译成") { format!("(mock translation) {paragraph}") } else { paragraph.replacen(" is ", " remains ", 1).replacen(" very ", " ", 1) + " (mock edit)" };
+            events.push_str(&event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#));
+            let mut sent = 0;
+            let chars: Vec<char> = reply.chars().collect();
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n");
+            let _ = stream.write_all(events.as_bytes());
+            while sent < chars.len() {
+                let piece: String = chars[sent..(sent + 12).min(chars.len())].iter().collect();
+                sent += 12;
+                let _ = stream.write_all(event(&format!(r#"{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":{}}}}}"#, quoted(&piece))).as_bytes());
+                let _ = stream.flush();
+                std::thread::sleep(std::time::Duration::from_millis(60));
+            }
+            let _ = stream.write_all(event(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#).as_bytes());
+            return;
+        } else if request.contains("文献筛选助手") {
             // A screening request: the verdict turns on one word, and the excerpt is the start of the abstract.
             let quote: String = request.split("摘要：").nth(1).map(|rest| rest.chars().take_while(|c| *c != '\\' && *c != '"').take(90).collect()).unwrap_or_default();
             let (verdict, reason, confidence) = if request.contains("rabidopsis") { ("include", "（假模型）文中提到拟南芥，按主题收录。", 0.9) } else if quote.is_empty() { ("uncertain", "（假模型）没有摘要可读。", 0.3) } else { ("irrelevant", "（假模型）文中没有提到拟南芥。", 0.7) };

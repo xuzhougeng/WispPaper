@@ -7,7 +7,7 @@ use gpui::*;
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
-actions!(text_input, [Backspace, Delete, Left, Right, SelectLeft, SelectRight, Home, End, SelectHome, SelectEnd, SelectAll, Copy, Cut, Paste, Enter, ShiftEnter, Escape, Up, Down, Complete]);
+actions!(text_input, [Backspace, Delete, Left, Right, SelectLeft, SelectRight, Home, End, SelectHome, SelectEnd, SelectAll, Copy, Cut, Paste, Enter, ShiftEnter, Escape, Up, Down, Complete, Undo, Redo]);
 
 pub fn bind_keys(cx: &mut App) {
     let c = Some("TextInput");
@@ -32,6 +32,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("up", Up, c),
         KeyBinding::new("down", Down, c),
         KeyBinding::new("tab", Complete, c),
+        KeyBinding::new("secondary-z", Undo, c),
+        KeyBinding::new("secondary-shift-z", Redo, c),
     ]);
 }
 
@@ -82,7 +84,15 @@ pub struct TextInput {
     layout: Option<Layout>,
     selecting: bool,
     scroll_x: Pixels,
+    /// The text and selection before each change, to go back to; what was undone, to go forward to.
+    undo: Vec<(String, Range<usize>)>,
+    redo: Vec<(String, Range<usize>)>,
+    /// The last change was a character typed: the next one joins its step.
+    typing: bool,
 }
+
+/// The most changes a field can go back through.
+const UNDO_STEPS: usize = 200;
 
 impl EventEmitter<InputEvent> for TextInput {}
 
@@ -113,6 +123,9 @@ impl TextInput {
             layout: None,
             selecting: false,
             scroll_x: px(0.),
+            undo: vec![],
+            redo: vec![],
+            typing: false,
         }
     }
 
@@ -137,6 +150,31 @@ impl TextInput {
         self.sel = self.text.len()..self.text.len();
         self.marked = None;
         self.scroll_x = px(0.);
+        // Another text altogether (a draft of another part): its changes are not this one's.
+        (self.undo, self.redo, self.typing) = (vec![], vec![], false);
+        cx.notify();
+    }
+
+    /// What is selected, in bytes; empty at the caret.
+    pub fn selection(&self) -> Range<usize> {
+        self.sel.clone()
+    }
+
+    /// Select `range` (bytes, kept within the text).
+    pub fn select_range(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+        let at = |o: usize| self.text.floor_char_boundary(o.min(self.text.len()));
+        (self.sel, self.reversed, self.typing) = (at(range.start)..at(range.end.max(range.start)), false, false);
+        cx.notify();
+    }
+
+    /// Put `text` in place of `range` as one step that Undo takes back, and select it.
+    pub fn replace_range(&mut self, range: Range<usize>, text: &str, cx: &mut Context<Self>) {
+        let range = self.text.floor_char_boundary(range.start.min(self.text.len()))..self.text.floor_char_boundary(range.end.min(self.text.len()));
+        self.typing = false;
+        let start = range.start;
+        self.replace(range, text, cx);
+        self.typing = false;
+        self.sel = start..self.sel.end;
         cx.notify();
     }
 
@@ -165,6 +203,7 @@ impl TextInput {
     }
 
     fn move_to(&mut self, o: usize, cx: &mut Context<Self>) {
+        self.typing = false;
         self.sel = o..o;
         self.reversed = false;
         cx.notify();
@@ -196,11 +235,54 @@ impl TextInput {
     }
 
     fn replace(&mut self, range: Range<usize>, s: &str, cx: &mut Context<Self>) {
+        self.edit(range, s, true, cx)
+    }
+
+    /// Change the text; `keep` makes it a step to undo (a composition was kept when it began).
+    fn edit(&mut self, range: Range<usize>, s: &str, keep: bool, cx: &mut Context<Self>) {
         let s = if self.multiline { s.replace("\r\n", "\n").replace('\r', "\n") } else { s.replace(['\n', '\r'], " ") };
+        if keep { self.remember(&range, &s) }
         self.text.replace_range(range.clone(), &s);
         let o = range.start + s.len();
         self.sel = o..o;
         self.reversed = false;
+        cx.emit(InputEvent::Changed);
+        cx.notify();
+    }
+
+    /// Keep the text as it is before a change. Letters typed one after
+    /// another are one step, until a space, a line break or a move.
+    fn remember(&mut self, range: &Range<usize>, s: &str) {
+        let typed = range.is_empty() && s.chars().count() == 1 && !s.contains(char::is_whitespace);
+        if !(typed && self.typing) {
+            self.undo.push((self.text.clone(), self.sel.clone()));
+            if self.undo.len() > UNDO_STEPS { self.undo.remove(0); }
+        }
+        self.redo.clear();
+        self.typing = typed;
+    }
+
+    fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
+        self.undo_last(cx)
+    }
+
+    /// Go back to before the last change, as Cmd/Ctrl+Z does.
+    pub fn undo_last(&mut self, cx: &mut Context<Self>) {
+        let Some((text, sel)) = self.undo.pop() else { return };
+        self.redo.push((std::mem::replace(&mut self.text, text), self.sel.clone()));
+        self.restore(sel, cx);
+    }
+
+    fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
+        let Some((text, sel)) = self.redo.pop() else { return };
+        self.undo.push((std::mem::replace(&mut self.text, text), self.sel.clone()));
+        self.restore(sel, cx);
+    }
+
+    fn restore(&mut self, sel: Range<usize>, cx: &mut Context<Self>) {
+        let end = self.text.len();
+        self.sel = sel.start.min(end)..sel.end.min(end);
+        (self.reversed, self.marked, self.typing) = (false, None, false);
         cx.emit(InputEvent::Changed);
         cx.notify();
     }
@@ -451,12 +533,17 @@ impl EntityInputHandler for TextInput {
 
     fn replace_text_in_range(&mut self, range: Option<Range<usize>>, s: &str, _: &mut Window, cx: &mut Context<Self>) {
         let r = range.map(|r| self.range8(&r)).or(self.marked.clone()).unwrap_or(self.sel.clone());
-        self.marked = None;
-        self.replace(r, s, cx);
+        let composed = self.marked.take().is_some();
+        self.edit(r, s, !composed, cx);
     }
 
     fn replace_and_mark_text_in_range(&mut self, range: Option<Range<usize>>, s: &str, new_sel: Option<Range<usize>>, _: &mut Window, cx: &mut Context<Self>) {
         let r = range.map(|r| self.range8(&r)).or(self.marked.clone()).unwrap_or(self.sel.clone());
+        // Undo goes back to before the composition, not to the letters typed for it.
+        if self.marked.is_none() {
+            self.typing = false;
+            self.remember(&r, "");
+        }
         self.text.replace_range(r.clone(), s);
         self.marked = (!s.is_empty()).then(|| r.start..r.start + s.len());
         self.sel = new_sel
@@ -512,6 +599,8 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::up))
             .on_action(cx.listener(Self::down))
             .on_action(cx.listener(Self::tab))
+            .on_action(cx.listener(Self::undo))
+            .on_action(cx.listener(Self::redo))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_down))
             .on_mouse_move(cx.listener(Self::on_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_up))

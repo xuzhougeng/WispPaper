@@ -285,6 +285,10 @@ pub enum Cmd {
     /// Have the model sort the full texts into parts (false), or read the pages of the files that gave no text (true).
     WriteRun(bool),
     WriteStop,
+    /// Have the model work on the selected text or the caret's paragraph; stop it; use what it gave.
+    WriteAssist(ai::Assist),
+    WriteAssistStop,
+    WriteAssistUse(crate::write_assist::Use),
     // Dialogs
     CloseModal,
     SubmitModal,
@@ -434,6 +438,8 @@ pub struct Writing {
     pub structures: BTreeMap<String, StructureInfo>,
     pub sorting: Sorting,
     pub scroll: ScrollHandle,
+    /// The model's work on a paragraph (`write_assist.rs`).
+    pub assist: crate::write_assist::Assisting,
 }
 
 /// A run of the screening assistant gives up after this many papers in a
@@ -1513,6 +1519,7 @@ impl Workspace {
                     let draft = lib.store.drafts().ok().and_then(|mut drafts| drafts.remove(&section)).unwrap_or_default();
                     lib.writing.section = section;
                     lib.writing.candidates = None;
+                    lib.writing.assist.leave();
                     lib.writing.editor.update(cx, |input, cx| input.set_text(&draft, cx));
                     lib.writing.editor.read(cx).focus(window);
                     self.writing_changed(cx);
@@ -1529,6 +1536,9 @@ impl Workspace {
                 }
             }
             Cmd::WriteRun(reading) => self.write_run_start(reading, None, cx),
+            Cmd::WriteAssist(assist) => self.assist_start(assist, cx),
+            Cmd::WriteAssistStop => self.assist_stop(cx),
+            Cmd::WriteAssistUse(how) => self.assist_use(how, window, cx),
             Cmd::WriteStop => {
                 if let Some(lib) = self.lib.as_mut() {
                     let sorting = &mut lib.writing.sorting;
@@ -2203,7 +2213,7 @@ impl Workspace {
         // The caret moving to another paragraph changes what is looked for, as typing does.
         subscriptions.push(cx.observe(&editor, |this, _, cx| this.writing_changed(cx)));
         subscriptions.push(cx.observe(&find, |this, _, cx| this.writing_changed(cx)));
-        let writing = Writing { section, editor, find, asked: None, words: String::new(), candidates: None, searching: false, round: 0, keywords: HashMap::new(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new() };
+        let writing = Writing { section, editor, find, asked: None, words: String::new(), candidates: None, searching: false, round: 0, keywords: HashMap::new(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new(), assist: Default::default() };
         let mut lib = Library {
             info,
             store,
@@ -4249,6 +4259,21 @@ impl Workspace {
                 }
                 // `sort` has the model sort the full texts into parts, `read` has it read the pages of those without text.
                 "sort" => Some(Cmd::WriteRun(false)),
+                // `assist:rewrite|translate|polish|<own command>` asks the model about the caret's paragraph;
+                // `assisted:replace|below|copy|drop` uses the result, `assiststop` stops it; `caret:<byte>` / `pick:<from>;<to>` place the caret / select.
+                "assist" => Some(Cmd::WriteAssist(match arg { "rewrite" => ai::Assist::Rewrite, "translate" => ai::Assist::Translate, "polish" => ai::Assist::Polish, own => ai::Assist::Own(own.to_string()) })),
+                "assiststop" => Some(Cmd::WriteAssistStop),
+                "assisted" => Some(Cmd::WriteAssistUse(match arg { "replace" => crate::write_assist::Use::Replace, "below" => crate::write_assist::Use::Below, "copy" => crate::write_assist::Use::Copy, _ => crate::write_assist::Use::Drop })),
+                "undo" => {
+                    if let Some(lib) = self.lib.as_ref() { lib.writing.editor.update(cx, |input, cx| input.undo_last(cx)) }
+                    return;
+                }
+                "caret" | "pick" => {
+                    let (from, to) = arg.split_once(';').unwrap_or((arg, arg));
+                    let (from, to) = (from.parse().unwrap_or(0), to.parse().unwrap_or(0));
+                    if let Some(lib) = self.lib.as_ref() { lib.writing.editor.update(cx, |input, cx| input.select_range(from..to, cx)) }
+                    return;
+                }
                 "read" => Some(Cmd::WriteRun(true)),
                 // `guide:new` is what a new library shows; `guide:search` goes straight to composing, `guide:go` also generates.
                 "guide" => {

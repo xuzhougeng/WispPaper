@@ -66,6 +66,7 @@ impl Workspace {
                         .child(div().px(px(18.)).py(px(14.)).text_size(px(15.)).line_height(px(26.)).text_color(Theme::text()).child(writing.editor.clone())),
                 ),
             )
+            .child(self.render_assist_bar(cx))
             .child(div().flex().flex_none().items_center().px(px(22.)).pb(px(12.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(if characters == 0 { "草稿随写随存，留在这个文献库里。".to_string() } else { format!("{words} 词 · {characters} 字符 · 已保存") }));
 
         div().flex().size_full().child(editor).child(self.render_candidates(panel, window, cx)).into_any_element()
@@ -137,6 +138,7 @@ impl Workspace {
                     .when(!writing.words.is_empty(), |d| d.child(div().text_size(px(11.)).text_color(Theme::text_tertiary()).child(format!("按英文关键词查找：{}", writing.words))))
                     .child(self.render_groundwork(cx)),
             )
+            .children(self.render_assist_card(width, cx))
             .child(div().flex_none().px(px(14.)).pb(px(6.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(heading))
             .child(match empty {
                 Some(empty) => div().flex().flex_col().flex_1().min_h_0().px(px(14.)).child(empty).into_any_element(),
