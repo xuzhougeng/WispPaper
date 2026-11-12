@@ -103,10 +103,9 @@ impl Workspace {
         let (body, title) = (section.map(|s| s.body.clone()).unwrap_or_default(), manuscript.title.clone());
         writing.section_id = section.map(|s| s.id.clone()).unwrap_or_default();
         writing.manuscript = manuscript.id.clone();
-        writing.candidates = None;
         writing.editor.update(cx, |input, cx| input.set_text(&body, cx));
         writing.title.update(cx, |input, cx| input.set_text(&title, cx));
-        self.writing_changed(cx);
+        self.write_openers(cx);
         cx.notify();
     }
 
@@ -295,7 +294,7 @@ impl Workspace {
                         self.modal = None;
                         if editing.is_none() { self.write_snapshot("leave") }
                         // A section's kind decides its candidates: they are looked for again.
-                        if let Some(lib) = self.lib.as_mut() { lib.writing.asked = None }
+                        if let Some(lib) = self.lib.as_mut() { lib.writing.search.asked = None }
                         self.write_reload(Some(id), cx);
                         if let Some(lib) = self.lib.as_ref() { lib.writing.editor.read(cx).focus(window) }
                     }

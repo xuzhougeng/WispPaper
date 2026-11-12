@@ -3,7 +3,7 @@
 
 use crate::app::{Cmd, Edge, MenuKind, Workspace};
 use crate::settings::{SettingsPage, UpdateState};
-use crate::shortcuts::{AddPaper, AskLibrary, FocusSearch, ImportPdf, NewLibrary, ShowHome, ShowSettings, CopyPicked, ToggleDetail, ToggleSidebar, ZoomFit, ZoomIn, ZoomOut};
+use crate::shortcuts::{AddPaper, AskLibrary, FocusSearch, ImportPdf, NewLibrary, ShowHome, ShowSettings, CopyPicked, FindCandidates, ToggleDetail, ToggleSidebar, ZoomFit, ZoomIn, ZoomOut};
 use crate::theme::{self, Theme};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
@@ -45,6 +45,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ZoomOut, window, cx| this.shortcut("zoom-out", window, cx)))
             .on_action(cx.listener(|this, _: &ZoomFit, window, cx| this.shortcut("zoom-fit", window, cx)))
             .on_action(cx.listener(|this, _: &CopyPicked, window, cx| this.shortcut("copy-picked", window, cx)))
+            .on_action(cx.listener(|this, _: &FindCandidates, window, cx| this.shortcut("write-find", window, cx)))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.import_paths(paths.paths().to_vec(), cx)))
 
             .child(page)

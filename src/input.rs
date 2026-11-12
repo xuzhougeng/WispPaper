@@ -149,6 +149,11 @@ impl TextInput {
         window.focus(&self.focus);
     }
 
+    /// What is selected; empty when nothing is.
+    pub fn selected(&self) -> &str {
+        &self.text[self.sel.clone()]
+    }
+
     /// Where the caret stands, in bytes from the start of the text.
     pub fn caret(&self) -> usize {
         self.cursor()

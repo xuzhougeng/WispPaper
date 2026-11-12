@@ -24,6 +24,7 @@ mod shortcuts;
 mod theme;
 mod ui;
 mod write;
+mod write_find;
 
 use gpui::*;
 
