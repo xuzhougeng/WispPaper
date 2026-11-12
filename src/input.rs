@@ -159,6 +159,12 @@ impl TextInput {
         self.cursor()
     }
 
+    /// Put text in place of a piece of the text (in bytes), as if it were typed there.
+    pub fn replace_text(&mut self, range: Range<usize>, text: &str, cx: &mut Context<Self>) {
+        self.marked = None;
+        self.replace(range, text, cx);
+    }
+
     /// Put text in at the caret, over what is selected, as if it were typed.
     pub fn insert(&mut self, text: &str, cx: &mut Context<Self>) {
         let range = self.marked.take().unwrap_or(self.sel.clone());

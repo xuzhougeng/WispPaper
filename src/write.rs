@@ -62,6 +62,7 @@ impl Workspace {
                         .into_any_element()
                 }),
             )
+            .child(self.render_references(window, cx))
             .child(div().flex().flex_none().items_center().px(px(22.)).pb(px(12.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(if writing.reading {
                 let total: usize = writing.current().map_or(0, |m| m.sections.iter().map(|s| s.body.split_whitespace().filter(|word| word.chars().any(char::is_alphanumeric)).count()).sum());
                 format!("全文 {total} 词 · 点一节的名称，回到那一节写")
@@ -223,7 +224,7 @@ impl Workspace {
                     .gap(px(2.))
                     .child(div().flex_1().min_w_0().truncate().text_size(px(11.)).text_color(Theme::text_tertiary()).child(about.join(" · ")))
                     .when(!before.is_empty() || !after.is_empty(), |d| d.child(small(id("around"), if unfolded { "收起" } else { "上下文" }).on_click(self.on(Cmd::WriteUnfold(card.clone()), cx))))
-                    .child(small(id("cite"), "引用").on_click(self.on(Cmd::WriteCite(cite), cx)))
+                    .child(small(id("cite"), "引用").on_click(self.on(Cmd::WriteCite(paper.clone()), cx)))
                     .child(small(id("copy"), "复制").on_click(self.on(Cmd::CopyText(text.clone()), cx)))
                     // With a page, the sentence is shown where it stands in the PDF; an abstract's opens the record.
                     .child(small(id("source"), if page.is_some() { "原文" } else { "文献" }).on_click(self.on(Cmd::GotoSource(paper.clone(), page, if page.is_some() { text } else { String::new() }), cx))),

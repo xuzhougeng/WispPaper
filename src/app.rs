@@ -306,8 +306,15 @@ pub enum Cmd {
     /// The section's earlier versions.
     WriteHistory,
     HistoryPick(usize),
-    /// Put a citation in at the caret.
+    /// Cite a paper (by id) at the caret: its key, `[@Zhang2024]` (`src/cite.rs`).
     WriteCite(String),
+    /// The reference list of the whole manuscript (true) or of the part being written.
+    WriteCiteScope(bool),
+    /// Put citations in the part being written right: (start, end, what is there, what replaces it), last first.
+    WriteCiteFix(Vec<(usize, usize, String, String)>),
+    WriteCopyReferences,
+    /// The cited papers as BibTeX.
+    WriteExportCited,
     /// Have the model sort the full texts into parts (false), or read the pages of the files that gave no text (true).
     WriteRun(bool),
     WriteStop,
@@ -873,6 +880,7 @@ pub struct Library {
     /// Where the fetched files came from, by file: (address, who listed it, version).
     pub origins: BTreeMap<String, (String, String, String)>,
     pub writing: Writing,
+    pub citing: crate::cite::Citing,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -1552,16 +1560,16 @@ impl Workspace {
                 }
             }
             Cmd::WriteSection(_) | Cmd::WriteManuscript(_) | Cmd::NewManuscript | Cmd::AskRemoveManuscript(_) | Cmd::RemoveManuscript(_) | Cmd::WriteLanguage(_) | Cmd::EditSection(_) | Cmd::PickSectionKind(_) | Cmd::MoveSection(..) | Cmd::AskRemoveSection(_) | Cmd::RemoveSection(_) | Cmd::WriteReading(_) | Cmd::ExportManuscript(_) | Cmd::WriteHistory | Cmd::HistoryPick(_) => self.run_manuscript(cmd, window, cx),
-            Cmd::WriteCite(cite) => {
-                if let Some(lib) = self.lib.as_ref() {
-                    lib.writing.editor.update(cx, |input, cx| {
-                        let before = input.text()[..input.caret()].chars().last();
-                        let space = if before.is_none_or(|c| c.is_whitespace()) { "" } else { " " };
-                        input.insert(&format!("{space}({cite})"), cx);
-                    });
-                    lib.writing.editor.read(cx).focus(window);
-                }
+            Cmd::WriteCite(id) => {
+                self.cite_paper(&id, cx);
+                if let Some(lib) = self.lib.as_ref() { lib.writing.editor.read(cx).focus(window) }
             }
+            Cmd::WriteCiteScope(whole) => {
+                if let Some(lib) = self.lib.as_mut() { lib.citing.whole = whole }
+            }
+            Cmd::WriteCiteFix(pieces) => self.cite_fix(pieces, cx),
+            Cmd::WriteCopyReferences => self.copy_references(cx),
+            Cmd::WriteExportCited => self.export_cited(cx),
             Cmd::WriteRun(reading) => self.write_run_start(reading, None, cx),
             Cmd::WriteFind => self.write_find(false, cx),
             Cmd::WriteOnly(tag, starred) => self.write_narrow(tag, starred, cx),
@@ -2249,6 +2257,7 @@ impl Workspace {
         // Candidates are asked for: the find box on Enter, the manuscript by the shortcut.
         subscriptions.push(cx.subscribe(&find, |this, _, event: &InputEvent, cx| if *event == InputEvent::Submit { this.write_find(true, cx) }));
         let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new() };
+        let citing = crate::cite::Citing::new(&store, &mut subscriptions, cx);
         let mut lib = Library {
             info,
             store,
@@ -2287,6 +2296,7 @@ impl Workspace {
             fetching: None,
             origins: BTreeMap::new(),
             writing,
+            citing,
             _subscriptions: subscriptions,
         };
         if let Err(err) = lib.reload() {
