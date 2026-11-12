@@ -961,6 +961,15 @@ impl Store {
         Ok(())
     }
 
+    /// Keep a translation in place of the one held: the person asked another
+    /// model for this text once, and its answer is the one shown from now on.
+    pub fn replace_translation(&mut self, key: &str, text: &str, author: &str) -> Result<()> {
+        let text = text.trim();
+        if text.is_empty() { bail!("译文是空的。") }
+        self.db.execute("INSERT INTO translations(cache_key, translated_text, author, created_at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(cache_key) DO UPDATE SET translated_text = excluded.translated_text, author = excluded.author, created_at = excluded.created_at", params![key, text, author, now_iso()])?;
+        Ok(())
+    }
+
     // ---- conversations
 
     /// Keep a conversation: a new one gets its id here, a known one is
@@ -1639,6 +1648,16 @@ mod tests {
         // A second answer for the same text does not replace the first.
         store.save_translation(&key, "根部干细胞", "Haiku").unwrap();
         assert_eq!(store.translation(&key).unwrap().as_deref(), Some("根干细胞"));
+        // Asked again of another model, its answer takes the place of the first, under the same key.
+        assert!(store.replace_translation(&key, " ", "Opus").is_err());
+        store.replace_translation(&key, " 根部的干细胞 ", "Opus").unwrap();
+        assert_eq!(store.translation(&key).unwrap().as_deref(), Some("根部的干细胞"));
+        let other = translation_key("Shoot apex", "译成中文");
+        store.replace_translation(&other, "茎尖", "Opus").unwrap();
+        assert_eq!(store.translation(&other).unwrap().as_deref(), Some("茎尖"));
+        // And an ordinary answer after it does not undo the choice.
+        store.save_translation(&key, "根干细胞", "Haiku").unwrap();
+        assert_eq!(store.translation(&key).unwrap().as_deref(), Some("根部的干细胞"));
     }
 
     #[test]
