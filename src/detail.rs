@@ -214,8 +214,9 @@ impl Workspace {
                         // How much of the file gave text: a page without any is a figure, or a page that could not be read.
                         let with_text = pages.iter().filter(|page| !page.trim().is_empty()).count();
                         let count = if with_text == pages.len() { format!("{} 页文字可用于提问", pages.len()) } else { format!("{} 页中 {with_text} 页有文字，可用于提问", pages.len()) };
-                        match lib.writing.structures.get(&file.id).map(|info| info.text_by.as_str()).filter(|by| !by.is_empty()) {
-                            Some(by) => format!("{count}（由 {by} 读出）"),
+                        match lib.writing.structures.get(&file.id).filter(|info| !info.text_by.is_empty()) {
+                            Some(info) if info.read_in_part() => format!("{count}（由 {} 读出，全文 {} 页，还有 {} 页没读）", info.text_by, info.page_count, info.page_count - info.pages_read),
+                            Some(info) => format!("{count}（由 {} 读出）", info.text_by),
                             None => count,
                         }
                     }
@@ -267,6 +268,8 @@ impl Workspace {
                             )
                             .when(lib.writing.sorting.reading && !lib.writing.sorting.error.is_empty(), |d| d.child(ui::error_line(&lib.writing.sorting.error)))
                     })
+                    // Pages a model read in part: the rest are read from where it stopped.
+                    .when(!by_eye && file.format == "pdf" && lib.writing.structures.get(&file.id).is_some_and(|info| info.read_in_part()), |d| d.child(div().flex().child(small(("file-read-rest", i), "读完剩下的页面").on_click(self.on(Cmd::ReadPages(file.id.clone()), cx)))))
                     .into_any_element()
             })
             .collect();

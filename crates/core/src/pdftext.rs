@@ -265,10 +265,58 @@ fn lines(marks: &[Mark]) -> Vec<Line> {
     out
 }
 
+/// The first letter of a line, past the spaces set before it.
+fn first_letter(text: &str) -> Option<char> {
+    text.trim_start().chars().next()
+}
+
+/// A short line that opens with a section number (`1.2`, `2.1.3`) and a
+/// word, and does not end as a sentence does.
+fn numbered_title(line: &Line, size: f32) -> bool {
+    let text = line.text.trim();
+    let number = text.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(text.len());
+    let (digits, rest) = text.split_at(number);
+    let dotted = digits.matches('.').count();
+    // `1.2` and `2.1.3`, not `1` alone (a list, a count) or `3.5` and a unit (`3.5 mM`) set on a line's start.
+    let section = dotted >= 1 && !digits.ends_with('.') && digits.split('.').all(|part| !part.is_empty() && part.len() <= 2) && (dotted >= 2 || !digits.starts_with('0'));
+    let rest = rest.trim_start_matches(|c: char| c.is_whitespace());
+    // A word (`Plant`), not a unit or a symbol (`mM`, `PCR`), unless the title is in Chinese or Japanese (`CCK-8检测`).
+    let starts = rest.chars().next().is_some_and(|c| capital(c) && (!c.is_ascii() || rest.chars().nth(1).is_some_and(char::is_lowercase) || rest.chars().any(|c| !c.is_ascii() && c.is_alphabetic() && !c.is_lowercase() && !c.is_uppercase())));
+    section && rest.len() > 1 && starts && line.x1 - line.x0 < size * 22. && !text.ends_with(['.', ',', ';', ':', '。', '，', '；', '：', '、'])
+}
+
+/// A letter a sentence or a title may open with: a capital, or one of a script without capitals.
+fn capital(c: char) -> bool {
+    c.is_alphabetic() && !c.is_lowercase()
+}
+
+/// How far apart the lines of a page's text usually are, by the size they
+/// are set in: Chinese and Japanese are set with more space between lines
+/// (1.75 times the size and more), which is no break between paragraphs.
+fn usual_leading(lines: &[Line]) -> impl Fn(f32) -> f32 {
+    // (size, distance to the next line in tenths of a point, how many such pairs)
+    let mut seen: Vec<(f32, i32, usize)> = vec![];
+    for pair in lines.windows(2) {
+        let (last, line) = (&pair[0], &pair[1]);
+        let gap = line.y - last.y;
+        if (line.size - last.size).abs() >= 0.3 || gap <= last.size * 0.9 || gap > last.size * 3. { continue }
+        let step = (gap * 10.).round() as i32;
+        match seen.iter_mut().find(|(size, at, _)| (*size - last.size).abs() < 0.3 && (*at - step).abs() <= 2) {
+            Some((_, _, count)) => *count += 1,
+            None => seen.push((last.size, step, 1)),
+        }
+    }
+    move |size: f32| {
+        // A spacing seen a few times at least, not a pair of lines that happen to stand apart.
+        seen.iter().filter(|(at, _, count)| (*at - size).abs() < 0.3 && *count >= 4).max_by_key(|(_, _, count)| *count).map_or(0., |(_, step, _)| *step as f32 / 10.)
+    }
+}
+
 /// The text of a page from its marks: one line of text per line of the
 /// page, a blank line wherever the page shows a break.
 pub fn page_text(marks: &[Mark]) -> String {
     let lines = lines(marks);
+    let leading = usual_leading(&lines);
     let mut out = String::new();
     let mut opens = true;
     for (index, line) in lines.iter().enumerate() {
@@ -276,13 +324,17 @@ pub fn page_text(marks: &[Mark]) -> String {
             let last = &lines[index - 1];
             let size = last.size.max(line.size);
             let breaks = line.y < last.y - size * 0.5
-                || line.y - last.y > size * 1.75
+                || line.y - last.y > (size * 1.75).max(leading(size) * 1.25)
                 || (line.size - last.size).abs() > 0.6
                 || line.bold != last.bold
                 || (line.x0 > last.x0 + size * 0.9 && line.x0 < last.x0 + size * 4. && last.x1 - last.x0 > size * 12.)
                 || (line.x0 - last.x0).abs() > size * 5.
                 // A short line that opens a paragraph and stops without a mark, before a full line: a title set like the text.
-                || (opens && last.x1 - last.x0 < (line.x1 - line.x0) * 0.75 && !last.text.ends_with(['.', ',', ';', ':', '-', '‑']) && line.text.chars().next().is_some_and(|c| c.is_uppercase()) && last.text.chars().next().is_some_and(|c| c.is_uppercase() || c.is_ascii_digit()));
+                // (A capital, or a letter of a script without capitals: `1.1 材料` / `CAL27耐药细胞株…`.)
+                || (opens && last.x1 - last.x0 < (line.x1 - line.x0) * 0.75 && !last.text.ends_with(['.', ',', ';', ':', '-', '‑', '。', '，', '；', '：', '、']) && first_letter(&line.text).is_some_and(capital) && first_letter(&last.text).is_some_and(|c| capital(c) || c.is_ascii_digit()))
+                // A numbered title set like the text (`1.2 方法`, `2.1 Plant material`): it stands alone, before and after.
+                || numbered_title(line, size)
+                || numbered_title(last, size);
             opens = breaks;
             out.push_str(if breaks { "\n\n" } else { "\n" });
         }
@@ -401,6 +453,27 @@ mod tests {
         // The next column starts higher up.
         marks.extend(set("The other column.", 320., 100., 10., false));
         assert_eq!(page_text(&marks), "Results\n\nRoots adapt to compacted soil in many ways. They grow.\nand they thicken as the soil gets harder\n\nA second paragraph starts here.\n\nThe other column.");
+    }
+
+    #[test]
+    fn chinese_set_with_wide_lines() {
+        // 四川大学学报（医学版）: 9.5 point text 16.7 points apart, a numbered title set like the text.
+        let mut marks = set("1 材料与方法", 308., 100., 12., false);
+        marks.extend(set("\u{a0}1.1 \u{a0} \u{a0}材料", 308., 124.7, 9.5, false));
+        let lines = ["CAL27耐药细胞株由四川大学华西口腔医院构建；", "南美胎牛血清（FBS-PAN）购自成都宝科生物科技有限公", "司；DMEM高糖培养基、Opti-MEM培养基购自美国", "Gibco公司；PBS缓冲液、CCK-8试剂盒及青霉素-链霉素"];
+        for (row, line) in lines.iter().enumerate() {
+            marks.extend(set(line, if row == 0 { 327. } else { 308. }, 141.4 + row as f32 * 16.7, 9.5, false));
+        }
+        marks.extend(set("1.2 方法", 308., 141.4 + 4. * 16.7, 9.5, false));
+        marks.extend(set("CAL27细胞采用含10%胎牛血清的DMEM高糖培养基进行培养。", 308., 141.4 + 5. * 16.7, 9.5, false));
+        let text = page_text(&marks);
+        assert_eq!(text.split("\n\n").map(str::trim).collect::<Vec<_>>(), ["1 材料与方法", "1.1 \u{a0} \u{a0}材料", &lines.join("\n"), "1.2 方法", "CAL27细胞采用含10%胎牛血清的DMEM高糖培养基进行培养。"]);
+        // In English a number at a line's start is not a title: `2.5 mM`, `3.5 cm`, or a line ending a sentence.
+        let english = |text: &str| Line { text: text.into(), x0: 50., x1: 50. + text.len() as f32 * 5., y: 100., size: 10., bold: false, bold_opening: 0 };
+        assert!(numbered_title(&english("2.1 Plant material"), 10.) && numbered_title(&english("3.2.1 Total RNA extraction"), 10.));
+        for not in ["2.5 mM MgCl2 and", "1 Department of Biology", "3.5 cm long roots were cut.", "0.5 Units of enzyme"] {
+            assert!(!numbered_title(&english(not), 10.), "{not}");
+        }
     }
 
     #[test]

@@ -442,6 +442,8 @@ pub struct Sorting {
     streak: usize,
     pub model: String,
     pub error: String,
+    /// The files whose pages were read only in part, longer than `READ_PAGES`: (title, pages read, pages in all).
+    pub cut: Vec<(String, usize, usize)>,
     /// Bumped when a run starts or stops, so what still arrives for an earlier one is dropped.
     run: u64,
 }
@@ -452,8 +454,9 @@ impl Sorting {
     }
 }
 
-/// The pages of one file a model is asked to read: a paper is rarely longer, a book is not what this is for.
-const READ_PAGES: usize = 40;
+/// The pages of one file a model is asked to read in one run: a paper is
+/// rarely longer. What is left is read by the next run, from where this one stopped.
+pub const READ_PAGES: usize = 40;
 
 /// The writing page: the manuscript and section being written, and the
 /// sentences the library's papers have in the same part. `Writing::kind`
@@ -3717,12 +3720,13 @@ impl Workspace {
             return cx.notify();
         }
         // Pages to look at: only a PDF has them. Parts to sort: the texts the rules had to guess at.
-        let mut todo: Vec<String> = lib.writing.structures.iter().filter(|(id, _)| only.as_ref().is_none_or(|only| only == *id)).filter(|(id, info)| if reading { info.method == "none" && lib.files.iter().any(|f| f.id == **id && f.format == "pdf") } else { info.method == "rules" && info.open >= structure::OPEN_ENOUGH }).map(|(id, _)| id.clone()).collect();
+        let mut todo: Vec<String> = lib.writing.structures.iter().filter(|(id, _)| only.as_ref().is_none_or(|only| only == *id)).filter(|(id, info)| if reading { (info.method == "none" || info.read_in_part()) && lib.files.iter().any(|f| f.id == **id && f.format == "pdf") } else { info.worth_asking() }).map(|(id, _)| id.clone()).collect();
         if todo.is_empty() { return }
         todo.reverse();
         let sorting = &mut lib.writing.sorting;
         sorting.run += 1;
         (sorting.reading, sorting.total, sorting.done, sorting.failed, sorting.streak, sorting.todo) = (reading, todo.len(), 0, 0, 0, todo);
+        sorting.cut.clear();
         sorting.model = format!("{} · {}", profile.title(), profile.model);
         let run = sorting.run;
         // A file's pages are read one after another; two files at a time is as much as a service takes kindly.
@@ -3736,7 +3740,8 @@ impl Workspace {
     fn write_run_next(&mut self, run: u64, cx: &mut Context<Self>) {
         enum Made {
             Sorted(Vec<structure::Sentence>),
-            Read(Vec<String>),
+            /// All the pages read so far, and how many the file has.
+            Read(Vec<String>, usize),
         }
         let profile = self.settings.profile_for_or_default(Task::Structure);
         let Some(lib) = self.lib.as_mut().filter(|l| l.writing.sorting.run == run) else { return };
@@ -3747,17 +3752,20 @@ impl Workspace {
         let (library, protocol, reading) = (lib.info.id.clone(), profile.protocol, lib.writing.sorting.reading);
         let path = lib.store.file_path(&file);
         let pages = lib.store.fulltext_pages(&file.id).ok().flatten().and_then(Result::ok).unwrap_or_default();
+        // A file read in part goes on from the first page not read.
+        let before = if reading && lib.writing.structures.get(&file.id).is_some_and(StructureInfo::read_in_part) { pages.clone() } else { vec![] };
         lib.writing.sorting.working.push(file_id.clone());
         let name = title.clone();
         let work = cx.background_executor().spawn(async move {
             if reading {
-                let mut pages = vec![];
-                for picture in crate::pdf::page_pictures(&path, READ_PAGES)? {
+                let mut pages = before;
+                let (pictures, count) = crate::pdf::page_pictures(&path, pages.len(), READ_PAGES)?;
+                for picture in pictures {
                     let request = ai::read_page_request(&profile, ai::ImageData { media_type: "image/png".into(), data: ai::base64(&picture) })?;
                     pages.push(ai::page_reading(&wisp_net::complete(request, protocol)?));
                 }
                 if pages.iter().all(|page| page.trim().is_empty()) { return Err("模型在页面上没有读到文字。".to_string()) }
-                Ok(Made::Read(pages))
+                Ok(Made::Read(pages, count))
             } else {
                 let blocks = structure::blocks(&pages);
                 let request = ai::plain_request(&profile, structure::OUTLINE_SYSTEM, &structure::outline_prompt(&name, &blocks))?;
@@ -3776,7 +3784,11 @@ impl Workspace {
                 let saved = made.and_then(|made| {
                     match made {
                         Made::Sorted(sentences) => lib.store.save_model_structure(&file_id, &author, &sentences),
-                        Made::Read(pages) => lib.store.save_read_pages(&file_id, pages, &author),
+                        Made::Read(pages, count) => {
+                            // A file longer than one run reads says how much of it was read.
+                            if pages.len() < count { lib.writing.sorting.cut.push((title.clone(), pages.len(), count)) }
+                            lib.store.save_read_pages(&file_id, pages, &author, count)
+                        }
                     }
                     .map_err(|e| format!("{e:#}"))
                 });
