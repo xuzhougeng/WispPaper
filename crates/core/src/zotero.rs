@@ -4,7 +4,7 @@
 use crate::model::{Paper, clean_strings, normalize_doi, normalize_pmid, strip_markup};
 use crate::store::Store;
 use anyhow::{Context, Result, bail};
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, ErrorCode, OpenFlags};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
@@ -40,12 +40,22 @@ impl Row {
 /// A read transaction includes committed WAL data and keeps all queries on the
 /// same snapshot. Do not use `immutable=1`, which would ignore Zotero's WAL.
 pub fn read(path: &Path) -> Result<Import> {
+    read_snapshot(path).map_err(|error| {
+        let locked = matches!(error.downcast_ref::<rusqlite::Error>(), Some(rusqlite::Error::SqliteFailure(code, _)) if matches!(code.code, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked));
+        if locked {
+            error.context("Zotero 数据库正在被占用。请在 Zotero 中选择「退出」，等待 Zotero 后台进程结束，再重新导入同一个 zotero.sqlite；仅关闭窗口可能仍在后台运行。")
+        } else {
+            error.context("无法读取 Zotero 数据库，请选择 Zotero 6 / 7 数据目录中的 zotero.sqlite（不是导出文件或 Wisp Paper 数据库）")
+        }
+    })
+}
+
+fn read_snapshot(path: &Path) -> Result<Import> {
     let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .with_context(|| format!("无法只读打开 {}，请先退出 Zotero，再选择数据目录中的 zotero.sqlite", path.display()))?;
+        .with_context(|| format!("无法只读打开 {}", path.display()))?;
     db.busy_timeout(std::time::Duration::from_secs(2))?;
     db.execute_batch("BEGIN")?;
     read_items(&db, path.parent().unwrap_or_else(|| Path::new(".")))
-        .context("无法读取 Zotero 数据库，请选择 Zotero 6 / 7 数据目录中的 zotero.sqlite（不是导出文件或 Wisp Paper 数据库）")
 }
 
 fn read_items(db: &Connection, root: &Path) -> Result<Import> {
@@ -318,6 +328,21 @@ mod tests {
         let missing = fixture.root.join("absent.sqlite");
         assert!(read(&missing).is_err());
         assert!(!missing.exists());
+    }
+
+    #[test]
+    fn locked_database_explains_how_to_release_it_and_can_be_retried() {
+        let fixture = Fixture::new();
+        fixture.db.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        let error = read(&fixture.root.join("zotero.sqlite")).err().unwrap();
+        let message = format!("{error:#}");
+        assert!(message.contains("正在被占用"));
+        assert!(message.contains("退出"));
+        assert!(message.contains("同一个 zotero.sqlite"));
+        assert!(!message.contains("请选择 Zotero 6 / 7"));
+        assert!(matches!(error.downcast_ref::<rusqlite::Error>(), Some(rusqlite::Error::SqliteFailure(code, _)) if code.code == ErrorCode::DatabaseBusy));
+        fixture.db.execute_batch("ROLLBACK").unwrap();
+        assert_eq!(fixture.read().entries.len(), 2);
     }
 
     #[test]
