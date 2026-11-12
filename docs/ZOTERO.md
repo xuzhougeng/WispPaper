@@ -74,7 +74,9 @@ Zotero 中的编辑者等非作者角色、卷期页码、条目关联、保存�
 
 **提示“相对链接附件需要基础目录”。** `attachments:` 开头的路径依赖 Zotero 设置中的「链接附件基础目录」，数据库本身没有保存可独立使用的完整路径。当前入口不会猜测这个目录。可以在 Zotero 中将链接附件转换为绝对路径后重试，或在 Wisp Paper 对应文献的附件区手动添加 PDF。
 
-**数据库无法打开或格式不支持。** 确认选择的是 `zotero.sqlite`，不是 `.bak`、导出的 JSON、BibTeX / RIS，或 Wisp Paper 自己的 `wisp-paper.sqlite`。关闭 Zotero 后重试。错误原因会留在导入结果中；无法识别的数据库不会作为空库继续处理。
+**提示 `database is locked` 或“数据库正在被占用”。** 这表示数据库被 Zotero 或其他进程锁住，不代表文件选错或数据库损坏。在 Zotero 中选择「退出」，等待后台进程结束，再导入同一个 `zotero.sqlite`。Windows 可以在任务管理器中确认 `zotero.exe` 已退出；macOS 用「Zotero › 退出 Zotero」，仅关闭窗口可能仍在后台运行。若退出后仍有锁，检查是否有另一个 Zotero 实例或数据库工具打开着这个文件。不要删除 `-wal` / `-shm` 文件来解锁，里面可能有尚未写回主数据库的更新。
+
+**数据库无法打开或格式不支持。** 确认选择的是 `zotero.sqlite`，不是 `.bak`、导出的 JSON、BibTeX / RIS，或 Wisp Paper 自己的 `wisp-paper.sqlite`。错误原因会留在导入结果中；无法识别的数据库不会作为空库继续处理。
 
 **重新导入后，笔记为什么没更新？** 这是一次复制式迁移。已有记录保留 Wisp Paper 中的内容，重新导入只补 PDF，不把 Zotero 后续修改覆盖进来。需要更新的字段请在 Wisp Paper 中编辑。
 
