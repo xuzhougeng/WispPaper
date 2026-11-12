@@ -30,12 +30,13 @@ pub enum SettingsPage {
     Appearance,
     Shortcuts,
     Ai,
+    Commands,
     Network,
     About,
 }
 
 impl SettingsPage {
-    const ALL: [SettingsPage; 6] = [SettingsPage::General, SettingsPage::Appearance, SettingsPage::Shortcuts, SettingsPage::Ai, SettingsPage::Network, SettingsPage::About];
+    const ALL: [SettingsPage; 7] = [SettingsPage::General, SettingsPage::Appearance, SettingsPage::Shortcuts, SettingsPage::Ai, SettingsPage::Commands, SettingsPage::Network, SettingsPage::About];
 
     fn title(self) -> &'static str {
         match self {
@@ -43,6 +44,7 @@ impl SettingsPage {
             SettingsPage::Appearance => "外观",
             SettingsPage::Shortcuts => "快捷键",
             SettingsPage::Ai => "AI",
+            SettingsPage::Commands => "命令",
             SettingsPage::Network => "网络",
             SettingsPage::About => "关于",
         }
@@ -54,6 +56,7 @@ impl SettingsPage {
             SettingsPage::Appearance => "palette",
             SettingsPage::Shortcuts => "keyboard",
             SettingsPage::Ai => "sparkle",
+            SettingsPage::Commands => "list",
             SettingsPage::Network => "link",
             SettingsPage::About => "info",
         }
@@ -75,6 +78,8 @@ pub struct SettingsView {
     /// The proxy for everything.
     proxy: Entity<TextInput>,
     translation_prompt: Entity<TextInput>,
+    /// The command of the person's own whose fields 命令 shows, as an index into `Settings::commands`.
+    command: Option<(usize, CommandFields)>,
     /// The shortcut waiting for its new key. While it waits, every key
     /// binding is cleared, so the keys pressed reach `record_key`.
     recording: Option<String>,
@@ -114,6 +119,41 @@ impl ProfileFields {
             .collect();
         ProfileFields { name, base_url, model, api_key, proxy, _subscriptions: subscriptions }
     }
+}
+
+/// The text fields of one command of the person's own, made anew for the one on show.
+struct CommandFields {
+    name: Entity<TextInput>,
+    about: Entity<TextInput>,
+    template: Entity<TextInput>,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl CommandFields {
+    fn new(command: &ai::Command, cx: &mut Context<Workspace>) -> CommandFields {
+        let name = cx.new(|cx| TextInput::new("style-check", cx).with_text(&command.name));
+        let about = cx.new(|cx| TextInput::new("显示在命令列表里的一句说明", cx).with_text(&command.about));
+        let template = cx.new(|cx| TextInput::new("要发给模型的话，例如：指出下面这段文字里空泛、重复的表达，逐条说明理由并给出改法，保留数值、术语和引用：{}", cx).multiline(6).with_text(&command.template));
+        let subscriptions = [&name, &about, &template]
+            .into_iter()
+            .map(|input| {
+                cx.subscribe(input, |this, _, event: &InputEvent, cx| {
+                    if *event == InputEvent::Changed { this.save_command(cx) }
+                })
+            })
+            .collect();
+        CommandFields { name, about, template, _subscriptions: subscriptions }
+    }
+
+    /// The name as it would be kept: without the slash, in lower case.
+    fn typed_name(&self, cx: &App) -> String {
+        self.name.read(cx).text().trim().trim_start_matches('/').to_lowercase()
+    }
+}
+
+/// What is wrong with the name typed for the `index`-th command, if anything.
+fn name_problem(name: &str, index: usize, commands: &[ai::Command]) -> Option<String> {
+    ai::command_name_problem(name, commands.iter().enumerate().filter(|(i, _)| *i != index).map(|(_, command)| command.name.as_str()))
 }
 
 /// Where the check for a newer release stands.
@@ -266,7 +306,7 @@ impl Workspace {
                 ];
                 // A model that cannot answer yet opens with its fields showing.
                 let expanded = profile.missing().is_some();
-                self.settings_view = Some(SettingsView { page, scroll: ScrollHandle::new(), editing, expanded, protocol: profile.protocol, effort: profile.effort, fields, proxy, translation_prompt, recording: None, shortcut_error: None, _subscriptions: subscriptions });
+                self.settings_view = Some(SettingsView { page, scroll: ScrollHandle::new(), editing, expanded, protocol: profile.protocol, effort: profile.effort, fields, proxy, translation_prompt, command: None, recording: None, shortcut_error: None, _subscriptions: subscriptions });
             }
         }
         window.focus(&self.focus);
@@ -532,6 +572,48 @@ impl Workspace {
         cx.notify();
     }
 
+    // ---- 命令
+
+    /// One more command, under a name to be changed, and its fields on show.
+    pub fn add_command(&mut self, cx: &mut Context<Self>) {
+        let index = self.settings.add_command();
+        self.save_settings(cx);
+        self.select_command(index, cx);
+    }
+
+    /// Show a command's fields under its row; a click on the one already open folds it up again.
+    pub fn select_command(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(command) = self.settings.commands.get(index) else { return };
+        let open = self.settings_view.as_ref().and_then(|view| view.command.as_ref()).map(|(open, _)| *open);
+        let fields = (open != Some(index)).then(|| (index, CommandFields::new(command, cx)));
+        if let Some(view) = self.settings_view.as_mut() { view.command = fields }
+        cx.notify();
+    }
+
+    pub fn remove_command(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index >= self.settings.commands.len() { return }
+        self.settings.commands.remove(index);
+        if let Some(view) = self.settings_view.as_mut() { view.command = None }
+        self.save_settings(cx);
+        cx.notify();
+    }
+
+    /// Keep what 命令 shows as the command on show. A name that cannot be
+    /// used is said beside the field, and the last good one stays.
+    fn save_command(&mut self, cx: &mut Context<Self>) {
+        let Some((index, fields)) = self.settings_view.as_ref().and_then(|view| view.command.as_ref()) else { return };
+        let Some(mut command) = self.settings.commands.get(*index).cloned() else { return };
+        let name = fields.typed_name(cx);
+        if name_problem(&name, *index, &self.settings.commands).is_none() { command.name = name }
+        command.about = fields.about.read(cx).text().trim().to_string();
+        command.template = fields.template.read(cx).text().trim().to_string();
+        cx.notify();
+        if self.settings.commands[*index] == command { return }
+        let index = *index;
+        self.settings.commands[index] = command;
+        self.save_settings(cx);
+    }
+
     /// Keep the global proxy as typed, and put it to use once it is an
     /// address that can work; until then the last good one stays in force.
     fn save_proxy(&mut self, cx: &mut Context<Self>) {
@@ -607,6 +689,7 @@ impl Workspace {
             SettingsPage::Appearance => self.appearance_page(cx),
             SettingsPage::Shortcuts => self.shortcuts_page(cx),
             SettingsPage::Ai => self.ai_page(window, cx),
+            SettingsPage::Commands => self.commands_page(window, cx),
             SettingsPage::Network => self.network_page(window, cx),
             SettingsPage::About => self.about_page(cx),
         };
@@ -849,6 +932,75 @@ impl Workspace {
             .child(group(Some("模型"), models).child(note("可以放进多个模型，各做各的事：点一个模型展开它的设置，修改会自动保存。下面的「任务」决定谁做什么。")))
             .child(group(Some("任务"), tasks).child(note("没有单独指定模型的任务，使用提问的模型。")))
             .child(group(Some("翻译"), vec![translation.into_any_element()]).child(note("可以在这里指定别的目标语言、术语的译法或输出的格式。要求改了以后，同一段文字会按新的要求重新翻译；译过的文字保存在文献库里，不会再次请求。")))
+            .into_any_element()
+    }
+
+    fn commands_page(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let Some(view) = &self.settings_view else { return div().into_any_element() };
+        let commands = &self.settings.commands;
+        // In pixels, as for the translation instructions on the AI page: the template wraps.
+        let wide = (f32::from(window.viewport_size().width) - SIDEBAR_W - 65.).min(COLUMN_W) - 34.;
+        let mut open = view.command.as_ref().map(|(index, fields)| {
+            let problem = name_problem(&fields.typed_name(cx), *index, commands);
+            let wrong = problem.is_some();
+            let field = |input: &Entity<TextInput>| div().w(px(INPUT_W)).child(ui::field(input, window, cx));
+            let name_detail = problem.map_or_else(|| format!("在提问框里输入 /{} 使用。", commands[*index].name), |why| format!("{why}现在仍是 /{}。", commands[*index].name));
+            let name = div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(24.))
+                .w_full()
+                .min_h(px(48.))
+                .px(px(16.))
+                .py(px(10.))
+                .child(div().flex().flex_col().flex_1().min_w_0().gap(px(2.)).child("名称").child(div().text_size(px(12.)).line_height(px(17.)).text_color(if wrong { Theme::danger() } else { Theme::text_tertiary() }).child(name_detail)))
+                .child(field(&fields.name));
+            let template = div()
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .px(px(16.))
+                .py(px(12.))
+                .child(div().flex().flex_col().gap(px(2.)).w(px(wide)).child("模板").child(div().text_size(px(12.)).line_height(px(17.)).text_color(Theme::text_tertiary()).child("发给模型的就是这段话。写上 {} 的地方换成命令后面的内容，这时命令后面必须写内容；不写 {} 的模板可以单独使用，后面写了内容就接在末尾。")))
+                .child(div().w(px(wide)).child(ui::field(&fields.template, window, cx)));
+            let about = row("说明", None, field(&fields.about));
+            let remove = row("删除这个命令", Some("用过它的对话保留着当时发出的内容，不受影响。".into()), button("command-remove", "删除…").text_color(Theme::danger()).on_click(self.on(Cmd::AskRemoveCommand(*index), cx)));
+            (*index, div().flex().flex_col().w_full().bg(Theme::bg_sunken()).children([name, about, template, remove].into_iter().map(|row| row.border_t_1().border_color(Theme::line()))))
+        });
+        let mut own: Vec<AnyElement> = commands
+            .iter()
+            .enumerate()
+            .map(|(i, command)| {
+                let shown = open.as_ref().is_some_and(|(index, _)| *index == i);
+                let about = if command.template.trim().is_empty() { "还没有写模板".to_string() } else if command.about.is_empty() { command.template.split_whitespace().collect::<Vec<_>>().join(" ") } else { command.about.clone() };
+                let head = div()
+                    .id(("command", i))
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .w_full()
+                    .min_h(px(48.))
+                    .px(px(16.))
+                    .py(px(9.))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(Theme::hover()))
+                    .on_click(self.on(Cmd::SelectCommand(i), cx))
+                    .child(div().flex_none().font_weight(FontWeight::MEDIUM).text_color(Theme::accent()).child(format!("/{}", command.name)))
+                    .child(div().flex_1().min_w_0().truncate().text_color(Theme::text_tertiary()).child(about))
+                    .child(ui::icon(if shown { "chevron-up" } else { "chevron-down" }, 14., Theme::text_tertiary()));
+                div().flex().flex_col().w_full().child(head).children(open.take_if(|_| shown).map(|(_, fields)| fields)).into_any_element()
+            })
+            .collect();
+        own.push(div().flex().items_center().w_full().px(px(16.)).py(px(10.)).child(button("command-add", "添加命令").on_click(self.on(Cmd::AddCommand, cx))).into_any_element());
+        let builtin = ai::SLASH.iter().map(|command| row(format!("/{}", command.name), Some(command.about.into()), div().max_w(px(280.)).truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(command.hint)).into_any_element()).collect();
+        div()
+            .flex()
+            .flex_col()
+            .w_full()
+            .gap(px(24.))
+            .child(group(Some("我的命令"), own).child(note("把常用的提问存成一条命令：在提问框里输入 / 就能选到它，选中后可以接着写内容，按 Enter 才发送。命令只是一段提示：它不运行脚本，也不会让助手多出工具或绕过确认；材料范围、模型和引文核对都和平常提问一样。修改会自动保存在本机的 settings.json 里，保存时不请求模型。")))
+            .child(group(Some("内置命令"), builtin).child(note("内置命令不能修改，也不能被同名的命令替换。")))
             .into_any_element()
     }
 

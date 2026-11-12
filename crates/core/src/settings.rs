@@ -1,7 +1,7 @@
 //! settings.json: where the libraries live, the model profiles, and the
 //! choices made on the settings pages.
 
-use crate::ai::Profile;
+use crate::ai::{Command, Profile};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -20,6 +20,8 @@ pub struct Settings {
     pub screen_workers: usize,
     /// The instructions translations are made with; empty means `ai::TRANSLATION_PROMPT`.
     pub translation_prompt: String,
+    /// The slash commands the person wrote: prompt templates under a name (`ai::read_input`).
+    pub commands: Vec<Command>,
     /// Look for a newer release after launch and twice a day.
     pub auto_update: bool,
     /// "light" or "dark"; empty follows the system.
@@ -41,7 +43,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { data_dir: String::new(), profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translation_prompt: String::new(), auto_update: true, appearance: String::new(), density: String::new(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false }
+        Settings { data_dir: String::new(), profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translation_prompt: String::new(), commands: vec![], auto_update: true, appearance: String::new(), density: String::new(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false }
     }
 }
 
@@ -214,6 +216,13 @@ impl Settings {
         self.tidy();
     }
 
+    /// One more command of the person's own, under a name nothing has yet, and its place in `commands`.
+    pub fn add_command(&mut self) -> usize {
+        let name = (1..).map(|n| format!("command-{n}")).find(|name| !self.commands.iter().any(|command| command.name == *name)).unwrap_or_default();
+        self.commands.push(Command { name, ..Default::default() });
+        self.commands.len() - 1
+    }
+
     /// The folder holding the libraries: the configured one, else `default`.
     pub fn data_root(&self, default: &Path) -> PathBuf {
         if self.data_dir.trim().is_empty() { default.to_path_buf() } else { PathBuf::from(self.data_dir.trim()) }
@@ -241,7 +250,16 @@ mod tests {
         assert!(old.auto_update && old.appearance.is_empty());
         assert_eq!((old.data_dir.as_str(), old.shortcuts.get("search").map(String::as_str)), ("/x", Some("")));
         assert_eq!(s.data_root(Path::new("/d")), PathBuf::from("/d"));
-        assert!(old.proxy.is_empty());
+        assert!(old.proxy.is_empty() && old.commands.is_empty());
+        // Commands of one's own are kept as written, each new one under a free name.
+        let mut with = Settings::default();
+        assert_eq!((with.add_command(), with.add_command()), (0, 1));
+        with.commands[0].template = "检查方法：{}".into();
+        with.commands.remove(0);
+        assert_eq!(with.add_command(), 1);
+        assert_eq!(with.commands.iter().map(|command| command.name.as_str()).collect::<Vec<_>>(), ["command-2", "command-1"]);
+        with.save(&path).unwrap();
+        assert_eq!(Settings::load(&path).unwrap(), with);
         // A profile saved before proxies existed has none of its own.
         std::fs::write(&path, r#"{"proxy":"socks5://127.0.0.1:1080","profiles":[{"name":"x","protocol":"openai","baseUrl":"http://h/v1","apiKey":"","model":"m"}]}"#).unwrap();
         let with = Settings::load(&path).unwrap();
