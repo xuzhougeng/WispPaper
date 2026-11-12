@@ -20,6 +20,16 @@ pub const DETAIL_W: f32 = 448.;
 const DETAIL_MIN: f32 = 320.;
 const MAIN_MIN: f32 = 260.;
 
+/// The narrowest a paper's conversation is dragged to beside its PDF, and what the PDF keeps.
+const SPLIT_CHAT_MIN: f32 = 320.;
+const SPLIT_PDF_MIN: f32 = 360.;
+
+/// How wide the conversation is in a panel `width` wide, when the reader asked for `own` (0 or less: no wish).
+fn split_chat_width(own: f32, width: f32) -> f32 {
+    let wished = if own > 0. { own } else { (width * 0.45).clamp(360., 520.) };
+    wished.min(width - SPLIT_PDF_MIN).max(SPLIT_CHAT_MIN)
+}
+
 /// A column of the paper table: fixed width, or the flexible title column.
 struct Column {
     label: String,
@@ -76,6 +86,8 @@ impl Workspace {
         let Some(lib) = &self.lib else { return 0. };
         if lib.selected.is_none() || matches!(lib.page, Page::Trash | Page::Sources | Page::Guide) { return 0. }
         let viewport = f32::from(window.viewport_size().width);
+        // Reading mode: the paper has the window.
+        if lib.reading { return viewport }
         let own = if self.settings.detail_width > 0. { self.settings.detail_width } else { DETAIL_W };
         let sidebar = self.sidebar_width(window);
         if lib.wide { (viewport * 0.62).max(DETAIL_W).min(viewport - sidebar - 80.) } else { own.min(viewport - sidebar - MAIN_MIN).max(DETAIL_MIN) }
@@ -95,6 +107,25 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The conversation's width beside the PDF in a detail panel `width` wide: the one the reader
+    /// dragged it to, or a good share of the panel; the PDF keeps `SPLIT_PDF_MIN`.
+    pub fn chat_width(&self, width: f32) -> f32 {
+        split_chat_width(self.settings.chat_width, width)
+    }
+
+    /// The edge between a paper's conversation and its PDF is being dragged:
+    /// the conversation reaches from the panel's left edge to the pointer.
+    pub fn drag_split(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.resizing != Some(Edge::Split) { return }
+        if event.pressed_button != Some(MouseButton::Left) { return self.end_drag(cx) }
+        let panel = self.detail_width(window);
+        let left = f32::from(window.viewport_size().width) - panel;
+        let width = split_chat_width(f32::from(event.position.x) - left, panel);
+        if (width - self.settings.chat_width).abs() < 0.5 { return }
+        self.settings.chat_width = width;
+        cx.notify();
+    }
+
     /// The edge was let go: the width is kept for the next time.
     pub fn end_drag(&mut self, cx: &mut Context<Self>) {
         if self.resizing.take().is_none() { return }
@@ -103,8 +134,10 @@ impl Workspace {
     }
 
     pub fn render_library(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let sidebar_width = self.sidebar_width(window);
         let detail_width = self.detail_width(window);
+        // Reading mode: nothing but the paper.
+        if detail_width > 0. && self.lib.as_ref().is_some_and(|l| l.reading) { return div().size_full().child(self.render_detail(detail_width, window, cx)).into_any_element() }
+        let sidebar_width = self.sidebar_width(window);
         let main_width = f32::from(window.viewport_size().width) - sidebar_width - detail_width;
         let page = self.lib.as_ref().map_or(Page::Papers, |l| l.page);
         let main = match page {
@@ -654,5 +687,23 @@ impl Workspace {
             .child(div().px(px(16.)).pt(px(16.)).pb(px(10.)).child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child("回收站")).child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child("这里的文献保留着笔记、词条和 PDF，可以恢复。它们仍会阻止同一篇文献被重复导入。")))
             .child(if rows.is_empty() { ui::empty_state("bin", "回收站是空的", "").into_any_element() } else { div().id("trash").flex().flex_col().flex_1().min_h_0().overflow_y_scroll().border_t_1().border_color(Theme::line()).children(rows).into_any_element() })
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Not `super::*`: that would bring in gpui's own `test` attribute.
+    use super::{SPLIT_CHAT_MIN, SPLIT_PDF_MIN, split_chat_width};
+
+    #[test]
+    fn conversation_beside_pdf() {
+        // No wish: a good share of the panel, within its own bounds.
+        assert_eq!((split_chat_width(0., 760.), split_chat_width(0., 1000.), split_chat_width(0., 1600.)), (360., 450., 520.));
+        // A wish is kept where the panel has room, and the PDF keeps its least.
+        assert_eq!(split_chat_width(600., 1600.), 600.);
+        assert_eq!(split_chat_width(900., 1000.), 1000. - SPLIT_PDF_MIN);
+        assert_eq!(split_chat_width(40., 1000.), SPLIT_CHAT_MIN);
+        // The narrowest panel that shows both gives each its least.
+        assert!(split_chat_width(2000., crate::detail::SPLIT_MIN) >= SPLIT_CHAT_MIN);
     }
 }

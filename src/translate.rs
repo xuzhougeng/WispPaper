@@ -34,7 +34,7 @@ impl Workspace {
         let prompt = self.settings.translation_prompt.clone();
         let Some(paper) = self.lib.as_ref().filter(|lib| lib.show_translation).and_then(|lib| lib.selected_paper()) else { return };
         for text in [paper.title.clone(), paper.abstract_text.clone()] {
-            self.translate_text(&text, &profile, &prompt, retry, cx);
+            self.translate_text(&text, &profile, &prompt, retry, false, cx);
         }
         cx.notify();
     }
@@ -65,7 +65,7 @@ impl Workspace {
             let active = run.batch.active;
             if !active {
                 let (profile, prompt) = (run.profile.clone(), run.prompt.clone());
-                self.translate_text(&job.text, &profile, &prompt, true, cx);
+                self.translate_text(&job.text, &profile, &prompt, true, false, cx);
             }
             let lib = self.lib.as_mut().unwrap();
             let run = lib.translation_run.as_mut().unwrap();
@@ -81,29 +81,41 @@ impl Workspace {
         }
     }
 
-    fn translate_text(&mut self, text: &str, profile: &Profile, prompt: &str, retry: bool, cx: &mut Context<Self>) {
+    /// Ask for one text's translation, unless the window or the library
+    /// already has it. `retry` asks again for what failed; `again` asks in
+    /// any case and keeps the answer in place of what was kept: the person
+    /// chose another model for this text once (a passage selected in the PDF).
+    pub(crate) fn translate_text(&mut self, text: &str, profile: &Profile, prompt: &str, retry: bool, again: bool, cx: &mut Context<Self>) {
         if text.trim().is_empty() { return }
         let Some(lib) = self.lib.as_mut() else { return };
         let key = translation_key(text, ai::translation_prompt(prompt));
-        match lib.translations.get(&key) {
-            Some(Translated::Done(_) | Translated::Busy) => return,
-            Some(Translated::Failed(_)) if !retry => return,
-            _ => {}
-        }
-        let request = lib.store.translation(&key).map_err(|e| format!("无法读取译文：{e:#}")).and_then(|cached| {
-            if let Some(text) = cached {
-                lib.translations.insert(key.clone(), Translated::Done(text));
-                Ok(None)
-            } else {
-                ai::translate_request(profile, prompt, text).map(Some)
+        if !again {
+            match lib.translations.get(&key) {
+                Some(Translated::Done(_) | Translated::Busy) => return,
+                Some(Translated::Failed(_)) if !retry => return,
+                _ => {}
             }
-        });
+        }
+        let request = if again { ai::translate_request(profile, prompt, text).map(Some) } else {
+            lib.store.translation(&key).map_err(|e| format!("无法读取译文：{e:#}")).and_then(|cached| {
+                if let Some(text) = cached {
+                    lib.translations.insert(key.clone(), Translated::Done(text));
+                    Ok(None)
+                } else {
+                    ai::translate_request(profile, prompt, text).map(Some)
+                }
+            })
+        };
         let request = match request {
             Ok(Some(request)) => request,
             Ok(None) => return,
             Err(error) => { lib.translations.insert(key, Translated::Failed(error)); return }
         };
         lib.translations.insert(key.clone(), Translated::Busy);
+        // The answer to an earlier request for this text, back after a later one, is dropped.
+        let ask = lib.translation_asks.entry(key.clone()).or_default();
+        *ask += 1;
+        let ask = *ask;
         let (session, protocol, author) = (lib.translation_session.clone(), profile.protocol, format!("{} · {}", profile.title(), profile.model));
         let work = cx.background_executor().spawn(async move { wisp_net::complete(request, protocol) });
         cx.spawn(async move |this, cx| {
@@ -111,11 +123,13 @@ impl Workspace {
             this.update(cx, |this, cx| {
                 // Even closing and reopening the same library creates a new session.
                 let Some(lib) = this.lib.as_mut().filter(|lib| Arc::ptr_eq(&lib.translation_session, &session)) else { return };
+                if lib.translation_asks.get(&key) != Some(&ask) { return }
                 let saved = translated.and_then(|text| {
-                    lib.store.save_translation(&key, &text, &author).map_err(|e| format!("无法保存译文：{e:#}"))?;
+                    if again { lib.store.replace_translation(&key, &text, &author) } else { lib.store.save_translation(&key, &text, &author) }.map_err(|e| format!("无法保存译文：{e:#}"))?;
                     Ok(text.trim().to_string())
                 });
                 lib.translations.insert(key, match saved { Ok(text) => Translated::Done(text), Err(error) => Translated::Failed(error) });
+                this.sync_pdf_translation(cx);
                 this.batch_translation_next(cx);
                 cx.notify();
             }).ok();

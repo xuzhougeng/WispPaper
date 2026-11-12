@@ -4,6 +4,7 @@
 //! thread finds a quoted sentence among the glyphs of a page, so a citation
 //! can be shown where it stands.
 
+use crate::app::Translated;
 use crate::theme::Theme;
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
@@ -19,6 +20,64 @@ pub enum PdfEvent {
     Quote(usize, String, bool),
     /// A piece of a page as a picture (PNG) for the next question, and whether for the library's conversation.
     Picture(Vec<u8>, bool),
+    /// Translate the selected text: the text, and the model service (its id) asked for this once, else the one translation is bound to.
+    /// The answer comes back through `PdfView::show_translation`.
+    Translate(String, Option<String>),
+}
+
+/// The translation of the selected text, on a card beside it. It lasts as long as that selection.
+struct Translation {
+    selection: Selection,
+    text: String,
+    /// The model service asked for this card alone, by id.
+    profile: Option<String>,
+    state: Translated,
+    /// The model the text is translated with: its id (empty for the default one) and its name.
+    model: (String, String),
+    /// The list of models to translate it with instead is open.
+    menu: bool,
+}
+
+/// The translation card's width and the height it may grow to, in logical pixels.
+const CARD_W: f32 = 360.;
+const CARD_TALL: f32 = 280.;
+/// The room kept between the card and the viewer's edges, and the gap between it and the selection.
+const CARD_EDGE: f32 = 8.;
+const CARD_GAP: f32 = 6.;
+
+/// Where the translation card stands in the viewer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CardPlace {
+    left: f32,
+    width: f32,
+    /// Its top edge, when it hangs under the selection; else its bottom edge, from the viewer's bottom, when it stands over it.
+    top: Option<f32>,
+    bottom: Option<f32>,
+    /// How tall it may be there.
+    max_height: f32,
+}
+
+/// The card for a selection whose lines cover `anchor` (left, top, right,
+/// bottom in the viewer's pixels): under it when the room there takes a
+/// card `tall` high or is the larger, else over it; its height held to the
+/// room it has, and nothing of it past the viewer's edges, even for a
+/// selection scrolled partly out of view.
+fn card_place(anchor: [f32; 4], width: f32, tall: f32, (view_w, view_h): (f32, f32)) -> CardPlace {
+    let width = width.min(view_w - 2. * CARD_EDGE).max(0.);
+    let left = anchor[0].clamp(CARD_EDGE, (view_w - width - CARD_EDGE).max(CARD_EDGE));
+    let (low, high) = (CARD_EDGE, (view_h - CARD_EDGE).max(CARD_EDGE));
+    let under = (anchor[3] + CARD_GAP).clamp(low, high);
+    let over = (anchor[1] - CARD_GAP).clamp(low, high);
+    let (room_under, room_over) = (high - under, over - low);
+    // A sliver of room is no place for it: past that it may cover the selection.
+    let least = 80f32.min(high - low);
+    if room_under >= tall || room_under >= room_over {
+        let top = under.min(high - least);
+        CardPlace { left, width, top: Some(top), bottom: None, max_height: (high - top).min(tall) }
+    } else {
+        let edge = over.max(low + least);
+        CardPlace { left, width, top: None, bottom: Some(view_h - edge), max_height: (edge - low).min(tall) }
+    }
 }
 
 /// A stretch of one page's glyphs, from where the pointer went down to where it is.
@@ -331,6 +390,10 @@ pub struct PdfView {
     cutting: bool,
     /// The piece being cut or cut out: its page, and two corners in the page's points.
     cut: Option<(usize, [f32; 4])>,
+    /// The translation asked for the selection.
+    translation: Option<Translation>,
+    /// The model services the card offers, by id and name.
+    models: Vec<(String, String)>,
     focus: FocusHandle,
 }
 
@@ -373,6 +436,8 @@ impl PdfView {
             library_chat: false,
             cutting: false,
             cut: None,
+            translation: None,
+            models: vec![],
             focus: cx.focus_handle(),
         }
     }
@@ -609,8 +674,7 @@ impl PdfView {
     /// The pointer went down on a page: a selection starts at the glyph under it.
     fn press(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus);
-        self.selection = None;
-        self.selecting = false;
+        (self.selection, self.selecting, self.translation) = (None, false, None);
         if self.cutting {
             // A piece of the page is cut out from here.
             self.cut = self.locate(event.position).map(|(page, x, y)| (page, [x, y, x, y]));
@@ -655,7 +719,7 @@ impl PdfView {
     /// Cut pieces out of pages with the pointer, or go back to selecting text.
     pub fn toggle_cutting(&mut self, cx: &mut Context<Self>) {
         self.cutting = !self.cutting;
-        (self.cut, self.selection, self.selecting) = (None, None, false);
+        (self.cut, self.selection, self.selecting, self.translation) = (None, None, false, None);
         cx.notify();
     }
 
@@ -713,9 +777,180 @@ impl PdfView {
         cx.notify();
     }
 
+    /// Select glyphs `from` to `to` of a 0-based page, as a drag would; nothing when that page's glyphs are not at hand.
+    pub fn select_marks(&mut self, page: usize, from: usize, to: usize, cx: &mut Context<Self>) -> bool {
+        let Some(marks) = self.marks.get(&page) else { return false };
+        if marks.is_empty() { return false }
+        let last = marks.len() - 1;
+        (self.selection, self.selecting, self.translation, self.cut) = (Some(Selection { page, anchor: from.min(last), focus: to.min(last) }), false, None, None);
+        cx.notify();
+        true
+    }
+
+    /// Translate the selected text, with the model service `profile` for this once or the usual one.
+    pub fn translate(&mut self, profile: Option<String>, cx: &mut Context<Self>) {
+        let (Some(selection), Some((_, text))) = (self.selection, self.selected()) else { return };
+        // The model on show stays until the window says which one was asked.
+        let model = self.translation.take().map(|t| t.model).unwrap_or_default();
+        self.translation = Some(Translation { selection, text: text.clone(), profile: profile.clone(), state: Translated::Busy, model, menu: false });
+        cx.emit(PdfEvent::Translate(text, profile));
+        cx.notify();
+    }
+
+    /// The text of the translation card on show, and the model asked for it alone, for the window to say how it stands.
+    pub fn translation_asked(&self) -> Option<(String, Option<String>)> {
+        self.translation.as_ref().map(|t| (t.text.clone(), t.profile.clone()))
+    }
+
+    /// How the card's translation stands, the model it is made with (id and name), and the models it can be asked of instead.
+    pub fn show_translation(&mut self, state: Translated, model: (String, String), models: Vec<(String, String)>, cx: &mut Context<Self>) {
+        let Some(card) = self.translation.as_mut() else { return };
+        (card.state, card.model) = (state, model);
+        self.models = models;
+        cx.notify();
+    }
+
+    fn copy_translation(&mut self, cx: &mut Context<Self>) {
+        let Some(Translated::Done(text)) = self.translation.as_ref().map(|t| &t.state) else { return };
+        cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+        cx.emit(PdfEvent::Copied);
+    }
+
+    /// The translation of the selection, on a card under it (over it when the room is there), kept inside the viewer.
+    fn translation_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.selecting { return None }
+        let card = self.translation.as_ref().filter(|t| Some(t.selection) == self.selection)?;
+        let selection = card.selection;
+        let boxes = pdftext::mark_boxes(self.marks.get(&selection.page)?.get(selection.anchor.min(selection.focus)..=selection.anchor.max(selection.focus))?);
+        let (first, last) = (boxes.first()?, boxes.last()?);
+        let (item, view) = (self.list.bounds_for_item(selection.page)?, self.list.viewport_bounds());
+        let scale = self.scale_of(selection.page);
+        let (x, y) = (f32::from(item.left() - view.left()) + self.sheet_left(self.sizes.get(selection.page)?.0 * scale), f32::from(item.top() - view.top()));
+        let (left, right) = boxes.iter().fold((f32::MAX, f32::MIN), |(l, r), line| (l.min(line[0]), r.max(line[2])));
+        let place = card_place([x + left * scale, y + first[1] * scale, x + right * scale, y + last[3] * scale], CARD_W, CARD_TALL, (self.width, self.height));
+        let button = |id: &'static str, label: &'static str| div().id(id).flex().flex_none().items_center().h(px(24.)).px(px(8.)).rounded(px(6.)).cursor_pointer().text_color(Theme::accent()).hover(|s| s.bg(Theme::hover())).child(label);
+        let body = match &card.state {
+            Translated::Busy => div().flex().items_center().gap(px(8.)).text_color(Theme::text_secondary()).child(ui::spinner("pdf-translation-busy", 14., Theme::text_tertiary())).child("正在翻译…"),
+            Translated::Done(text) => div().text_color(Theme::text()).child(text.clone()),
+            Translated::Failed(error) => div().text_color(Theme::danger()).child(error.clone()),
+        };
+        let chosen = &card.model.0;
+        let menu = card.menu.then(|| {
+            let rows: Vec<AnyElement> = self
+                .models
+                .iter()
+                .enumerate()
+                .map(|(n, (id, name))| {
+                    let id = id.clone();
+                    ui::menu_row(("pdf-translation-with", n), name.clone(), id == *chosen, None).on_click(cx.listener(move |this, _, _, cx| this.translate(Some(id.clone()), cx))).into_any_element()
+                })
+                .collect();
+            div()
+                .flex()
+                .flex_col()
+                .flex_none()
+                .p(px(4.))
+                .border_b_1()
+                .border_color(Theme::line())
+                .text_size(px(13.))
+                .child(div().px(px(8.)).py(px(4.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child("只这一次换用，不改设置"))
+                .when(rows.is_empty(), |d| d.child(div().px(px(8.)).py(px(6.)).text_color(Theme::text_secondary()).child("还没有配置模型：在 设置 › AI 里添加。")))
+                .children(rows)
+        });
+        let footer = match &card.state {
+            Translated::Done(_) => Some(button("pdf-translation-copy", "复制译文").on_click(cx.listener(|this, _, _, cx| this.copy_translation(cx)))),
+            Translated::Failed(_) => Some(button("pdf-translation-retry", "重试").on_click(cx.listener(|this, _, _, cx| {
+                let profile = this.translation.as_ref().and_then(|t| t.profile.clone());
+                this.translate(profile, cx);
+            }))),
+            Translated::Busy => None,
+        };
+        let header = div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(4.))
+            .h(px(34.))
+            .pl(px(12.))
+            .pr(px(4.))
+            .border_b_1()
+            .border_color(Theme::line())
+            .child(div().flex_1().text_size(px(12.)).text_color(Theme::text_tertiary()).child("译文"))
+            .child(
+                div()
+                    .id("pdf-translation-model")
+                    .flex()
+                    .min_w_0()
+                    .items_center()
+                    .gap(px(4.))
+                    .h(px(24.))
+                    .px(px(8.))
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .text_size(px(12.))
+                    .text_color(Theme::text_secondary())
+                    .hover(|s| s.bg(Theme::hover()))
+                    .when(card.menu, |d| d.bg(Theme::pressed()))
+                    .child(div().max_w(px(180.)).truncate().child(card.model.1.clone()))
+                    .child(ui::icon("chevron-down", 12., Theme::text_tertiary()))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(card) = this.translation.as_mut() { card.menu = !card.menu }
+                        cx.notify();
+                    })),
+            )
+            .child(
+                div()
+                    .id("pdf-translation-close")
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .size(px(24.))
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(Theme::hover()))
+                    .child(ui::icon("x", 13., Theme::text_tertiary()))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.translation = None;
+                        cx.notify();
+                    })),
+            );
+        Some(
+            div()
+                .id("pdf-translation")
+                .absolute()
+                .left(px(place.left))
+                .when_some(place.top, |d, top| d.top(px(top)))
+                .when_some(place.bottom, |d, bottom| d.bottom(px(bottom)))
+                .w(px(place.width))
+                .max_h(px(place.max_height))
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .rounded(px(10.))
+                .bg(Theme::bg_body())
+                .border_1()
+                .border_color(Theme::line_strong())
+                .shadow(crate::theme::shadow_card())
+                .font_family(crate::theme::UI_FONT)
+                .text_size(px(13.))
+                .line_height(px(20.))
+                .occlude()
+                // A press on the card is not a press on the page.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(header)
+                .children(menu)
+                .child(div().id("pdf-translation-text").flex_shrink().min_h_0().overflow_y_scroll().px(px(12.)).py(px(10.)).child(body))
+                .children(footer.map(|button| div().flex().flex_none().justify_end().px(px(4.)).pb(px(4.)).child(button)))
+                .into_any_element(),
+        )
+    }
+
     /// What can be done with the selection, beside where it ends.
     fn selection_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.selecting { return None }
+        // The selection's translation takes the bar's place while it is on show.
+        if self.cut.is_none() && self.translation.as_ref().is_some_and(|t| Some(t.selection) == self.selection) { return None }
         // What the bar is about: the piece cut out of a page, or the text selected; and the box it stands under.
         let (page, last, piece) = match (self.cut, self.selection) {
             (Some((page, [x0, y0, x1, y1])), _) => (page, [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)], true),
@@ -734,7 +969,7 @@ impl PdfView {
         Some(
             div()
                 .absolute()
-                .left(px(left.clamp(8., (self.width - 250.).max(8.))))
+                .left(px(left.clamp(8., (self.width - if self.library_chat { 330. } else { 250. }).max(8.))))
                 .top(px(top.clamp(8., (self.height - 44.).max(8.))))
                 .flex()
                 .items_center()
@@ -752,6 +987,7 @@ impl PdfView {
                 .when(!piece, |d| d.child(button("pdf-copy", "复制").on_click(cx.listener(|this, _, _, cx| this.copy(cx)))))
                 .when(!piece && self.library_chat, |d| d.child(button("pdf-quote-library", "加到文献库对话").text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.quote(true, cx)))).child(button("pdf-quote-paper", "加到这篇的对话").text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.quote(false, cx)))))
                 .when(!piece && !self.library_chat, |d| d.child(button("pdf-quote-paper", "添加到对话").text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.quote(false, cx)))))
+                .when(!piece, |d| d.child(button("pdf-translate", "翻译").on_click(cx.listener(|this, _, _, cx| this.translate(None, cx)))))
                 // A piece of the page: a picture for the next question.
                 .when(piece && self.library_chat, |d| d.child(button("pdf-cut-library", "截图加到文献库对话").text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.send_cut(true, cx)))).child(button("pdf-cut-paper", "截图加到这篇的对话").text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.send_cut(false, cx)))))
                 .when(piece && !self.library_chat, |d| d.child(button("pdf-cut-paper", "用这张截图提问").text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.send_cut(false, cx)))))
@@ -791,7 +1027,10 @@ impl Render for PdfView {
         self.device_scale = window.scale_factor();
         let entity = cx.entity();
         let (measured, wheel) = (cx.entity(), cx.entity());
+        // A card for a selection that has since gone goes with it.
+        if self.translation.as_ref().is_some_and(|t| Some(t.selection) != self.selection) { self.translation = None }
         let bar = self.selection_bar(cx);
+        let card = self.translation_card(cx);
         div()
             .id("pdf-viewer")
             .key_context("PdfView")
@@ -821,6 +1060,7 @@ impl Render for PdfView {
             .child(list(self.list.clone(), move |index, _, cx| entity.update(cx, |this, _| this.page(index))).size_full().pt(px(PAGE_GAP)))
             // Said plainly: the page is the cited one, the sentence was not found on it or anywhere else.
             .children(bar)
+            .children(card)
             .children(self.missing.then(|| div().absolute().top(px(8.)).left_0().w_full().flex().justify_center().child(div().px(px(10.)).py(px(5.)).rounded(px(6.)).bg(Theme::bg_body()).border_1().border_color(Theme::line()).text_size(px(12.)).text_color(Theme::text_secondary()).child("已跳到引用的页，但没有在 PDF 里找到这句原文。"))))
             .into_any_element()
     }
@@ -829,7 +1069,33 @@ impl Render for PdfView {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that would bring in gpui's own `test` attribute.
-    use super::{MARGIN, POINT_PX, Zoom, page_scale, render_scale, zoom_step};
+    use super::{CARD_EDGE, CardPlace, MARGIN, POINT_PX, Zoom, card_place, page_scale, render_scale, zoom_step};
+
+    #[test]
+    fn translation_card_stays_in_view() {
+        let view = (800., 600.);
+        // Under the selection, where it starts, as tall as it may be.
+        let under = card_place([100., 100., 400., 140.], 360., 280., view);
+        assert_eq!(under, CardPlace { left: 100., width: 360., top: Some(146.), bottom: None, max_height: 280. });
+        // Near the right edge it moves in; near the bottom it stands over the selection, its bottom over the first line.
+        let over = card_place([700., 500., 780., 540.], 360., 280., view);
+        assert_eq!((over.left, over.top, over.bottom, over.max_height), (800. - 360. - CARD_EDGE, None, Some(600. - 494.), 280.));
+        // With little room either way it takes the side with more, held to that room.
+        let short = card_place([10., 150., 300., 200.], 360., 280., (800., 300.));
+        assert_eq!((short.top, short.max_height), (None, 144. - CARD_EDGE));
+        // A viewer narrower than the card: the card is narrowed to it.
+        let narrow = card_place([0., 10., 50., 20.], 360., 280., (300., 600.));
+        assert_eq!((narrow.left, narrow.width), (CARD_EDGE, 300. - 2. * CARD_EDGE));
+        // A selection scrolled out of view above or below: the card stays inside, at the edge nearest it.
+        let gone_up = card_place([100., -400., 300., -300.], 360., 280., view);
+        assert_eq!((gone_up.top, gone_up.max_height), (Some(CARD_EDGE), 280.));
+        let gone_down = card_place([100., 900., 300., 950.], 360., 280., view);
+        assert_eq!((gone_down.bottom, gone_down.max_height), (Some(CARD_EDGE), 280.));
+        // A selection at the very bottom of a short viewer still leaves the card some room, over the text.
+        let low = card_place([100., 0., 300., 290.], 360., 280., (800., 300.));
+        let bottom = low.bottom.map(|b| 300. - b).or(low.top).unwrap();
+        assert!(low.max_height >= 80. && bottom - CARD_EDGE >= 0. && bottom <= 300. - CARD_EDGE);
+    }
 
     #[test]
     fn sizes_of_a_page() {

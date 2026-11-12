@@ -18,6 +18,7 @@ impl Workspace {
         let lib = self.lib.as_ref().unwrap();
         let Some(p) = lib.selected_paper() else { return div().into_any_element() };
         let tab = lib.tab;
+        let reading = lib.reading;
         let has_pdf = lib.pdf_file(&p.id).is_some();
         let title = if lib.show_translation && let Some(Translated::Done(text)) = lib.translations.get(&translation_key(&p.title, ai::translation_prompt(&self.settings.translation_prompt))) { text } else { &p.title };
         let tab_button = |id: &'static str, label: &'static str, value: Tab, this: &Self, cx: &mut Context<Self>| {
@@ -37,7 +38,23 @@ impl Workspace {
                 .on_click(this.on(Cmd::SetTab(value), cx))
                 .child(label)
         };
-        let header = div()
+        // Reading mode keeps one line over the paper: what is read, the three tabs, and the way back.
+        let header = if reading {
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(px(16.))
+                .px(px(16.))
+                .border_b_1()
+                .border_color(Theme::line())
+                .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(p.title.clone()))
+                .child(tab_button("tab-info", "信息", Tab::Info, self, cx))
+                .child(tab_button("tab-pdf", if has_pdf { "PDF" } else { "PDF（无）" }, Tab::Pdf, self, cx))
+                .child(tab_button("tab-ask", "提问", Tab::Ask, self, cx))
+                .when(tab == Tab::Ask && has_pdf && !(lib.split && width >= SPLIT_MIN), |d| d.child(ui::ghost_button("beside-pdf", Some("file-text"), Some("对照 PDF".into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::BesidePdf(true), cx))))
+                .child(ui::ghost_button("reading-leave", Some("x"), Some(format!("退出阅读 {}", crate::shortcuts::pretty("escape")).into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::ToggleReading, cx)))
+        } else { div()
             .flex()
             .flex_col()
             .flex_none()
@@ -64,15 +81,42 @@ impl Workspace {
                     .child(tab_button("tab-ask", "提问", Tab::Ask, self, cx))
                     // Asking with the PDF put away, or in a panel too narrow for both: one click brings it beside the conversation.
                     .when(tab == Tab::Ask && has_pdf && !(lib.split && width >= SPLIT_MIN), |d| d.child(div().flex_1()).child(ui::ghost_button("beside-pdf", Some("file-text"), Some("对照 PDF".into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::BesidePdf(true), cx)))),
-            );
+            ) };
         // Asking about a paper: the conversation, and the paper's PDF to its right where the panel has room for both.
         let split = lib.split && tab == Tab::Ask && has_pdf && width >= SPLIT_MIN;
         let body = match tab {
+            Tab::Ask if split && self.settings.floating.on => self.render_floating(width, window, cx),
             Tab::Ask if split => {
-                let chat_width = (width * 0.45).clamp(360., 520.);
+                let chat_width = self.chat_width(width);
                 let chat = self.render_chat(true, window, cx);
                 let pdf = self.render_pdf_tab(width - chat_width, cx);
-                div().flex().size_full().child(div().flex_none().w(px(chat_width)).h_full().border_r_1().border_color(Theme::line()).child(chat)).child(div().flex_1().min_w_0().h_full().child(pdf)).into_any_element()
+                // The edge between the two: drag it to give either more room, click it twice for the widths they came with.
+                let held = self.resizing == Some(Edge::Split);
+                let between = div()
+                    .id("split-edge")
+                    .group("split-edge")
+                    .absolute()
+                    .top_0()
+                    .left(px(chat_width - 5.))
+                    .w(px(9.))
+                    .h_full()
+                    .flex()
+                    .justify_center()
+                    .cursor_col_resize()
+                    .occlude()
+                    .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                        if event.click_count >= 2 {
+                            this.resizing = None;
+                            this.settings.chat_width = 0.;
+                            this.save_settings(cx);
+                        } else {
+                            this.resizing = Some(Edge::Split);
+                        }
+                        cx.notify();
+                    }))
+                    .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_drag(cx)))
+                    .child(div().w(px(2.)).h_full().when(held, |d| d.bg(Theme::accent())).when(!held, |d| d.group_hover("split-edge", |s| s.bg(Theme::accent().opacity(0.5)))));
+                div().relative().flex().size_full().child(div().flex_none().w(px(chat_width)).h_full().border_r_1().border_color(Theme::line()).child(chat)).child(div().flex_1().min_w_0().h_full().child(pdf)).child(between).into_any_element()
             }
             Tab::Info => self.render_info(window, cx),
             Tab::Pdf => self.render_pdf_tab(width, cx),
@@ -106,7 +150,8 @@ impl Workspace {
             // A tap is over before the layer that follows the pointer is drawn: the edge hears the end of it itself.
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_drag(cx)))
             .child(div().w(px(2.)).h_full().when(resizing, |d| d.bg(Theme::accent())).when(!resizing, |d| d.group_hover("detail-edge", |s| s.bg(Theme::accent().opacity(0.5)))));
-        div().relative().flex().flex_col().flex_none().w(px(width)).h_full().bg(Theme::bg_body()).border_l_1().border_color(Theme::line()).child(ui::title_strip()).child(header).child(div().flex().flex_col().flex_1().min_h_0().child(body)).child(edge).into_any_element()
+        // In reading mode the panel is the window: no edge to drag, no line at its left.
+        div().relative().flex().flex_col().flex_none().w(px(width)).h_full().bg(Theme::bg_body()).when(!reading, |d| d.border_l_1().border_color(Theme::line())).child(ui::title_strip()).child(header).child(div().flex().flex_col().flex_1().min_h_0().child(body)).when(!reading, |d| d.child(edge)).into_any_element()
     }
 
     /// The translated abstract replaces its source in place. Until it is
@@ -344,7 +389,7 @@ impl Workspace {
             .into_any_element()
     }
 
-    fn render_pdf_tab(&mut self, width: f32, cx: &mut Context<Self>) -> AnyElement {
+    pub fn render_pdf_tab(&mut self, width: f32, cx: &mut Context<Self>) -> AnyElement {
         let lib = self.lib.as_ref().unwrap();
         let Some(p) = lib.selected_paper() else { return div().into_any_element() };
         let Some(file) = lib.pdf_file(&p.id) else {
@@ -359,6 +404,7 @@ impl Workspace {
         let Some(pdf) = lib.pdf.clone() else { return div().into_any_element() };
         let (file_id, file_title) = (file.id.clone(), file.title.clone());
         let beside = lib.split && lib.tab == Tab::Ask;
+        let reading = lib.reading;
         // With the library's conversation on show as well, a selection can go to either.
         let library_chat = lib.page == crate::app::Page::Ask;
         pdf.update(cx, |pdf, _| {
@@ -409,6 +455,8 @@ impl Workspace {
                     })
                     // Cut a piece out of a page (a figure, a table) as a picture for the next question.
                     .when(count > 0, |d| d.child(ui::ghost_button("pdf-cut", None, Some(if cutting { "取消截图".into() } else { "截图提问".into() })).h(px(24.)).px(px(6.)).text_size(px(12.)).when(cutting, |d| d.text_color(Theme::accent())).on_click(self.on(Cmd::PdfCut, cx))))
+                    // The whole window for this paper; in reading mode the way back is at the top.
+                    .when(!reading, |d| d.child(ui::ghost_button("pdf-reading", None, Some("阅读模式".into())).h(px(24.)).px(px(6.)).text_size(px(12.)).on_click(self.on(Cmd::ToggleReading, cx))))
                     .child(ui::ghost_button("pdf-open", Some("link"), (width >= 700.).then(|| "用系统应用打开".into())).h(px(24.)).on_click(self.on(Cmd::OpenFile(file_id), cx)))
                     // Beside the conversation: put the PDF away again.
                     .when(beside, |d| d.child(tool("pdf-beside-close", "x").on_click(self.on(Cmd::BesidePdf(false), cx)))),
