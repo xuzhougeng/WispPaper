@@ -1479,10 +1479,10 @@ mod tests {
         let dir = temp_dir("conversations");
         let mut store = Store::in_memory(&dir).unwrap();
         let paper = store.add_paper(Paper { title: "Alpha".into(), ..Default::default() }).unwrap();
-        let transcript = Transcript { items: vec![Said::User { text: "WOX5 做什么？".into(), images: vec!["I-1".into()] }, Said::Answer { text: "见 [P1]。".into() }], sources: vec![Source { label: "P1".into(), paper_id: paper.id.clone(), title: "Alpha".into() }] };
+        let transcript = Transcript { items: vec![Said::User { text: "WOX5 做什么？".into(), images: vec!["I-1".into()], prompt: String::new() }, Said::Answer { text: "见 [P1]。".into() }], sources: vec![Source { label: "P1".into(), paper_id: paper.id.clone(), title: "Alpha".into() }] };
         let mut with_library = Conversation { transcript: transcript.clone(), ..Default::default() };
         store.save_conversation(&mut with_library).unwrap();
-        let mut with_paper = Conversation { paper_id: paper.id.clone(), transcript: Transcript { items: vec![Said::User { text: "总结一下".into(), images: vec![] }], sources: vec![] }, ..Default::default() };
+        let mut with_paper = Conversation { paper_id: paper.id.clone(), transcript: Transcript { items: vec![Said::User { text: "总结一下".into(), images: vec![], prompt: String::new() }], sources: vec![] }, ..Default::default() };
         store.save_conversation(&mut with_paper).unwrap();
         assert!(with_library.id.starts_with("C-") && with_library.id != with_paper.id);
         // Each side lists its own, with a title and the number of questions.
@@ -1492,7 +1492,7 @@ mod tests {
         assert_eq!(store.conversation(&with_library.id).unwrap().unwrap().transcript, transcript);
         // Saved again it is the same conversation, with what was added.
         let created = with_library.created_at.clone();
-        with_library.transcript.items.push(Said::User { text: "再说说 SCR".into(), images: vec![] });
+        with_library.transcript.items.push(Said::User { text: "再说说 SCR".into(), images: vec![], prompt: String::new() });
         store.save_conversation(&mut with_library).unwrap();
         let again = store.conversation(&with_library.id).unwrap().unwrap();
         assert_eq!((store.list_conversations("").unwrap().len(), again.transcript.questions(), again.created_at), (1, 2, created));

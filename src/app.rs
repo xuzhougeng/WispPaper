@@ -126,6 +126,12 @@ pub enum Cmd {
     SetTaskModel(Task, String),
     SetScreenWorkers(usize),
     ResetTranslationPrompt,
+    /// One more slash command of the person's own, on 设置 › 命令.
+    AddCommand,
+    /// Show or fold up the fields of the n-th.
+    SelectCommand(usize),
+    AskRemoveCommand(usize),
+    RemoveCommand(usize),
     // Collect
     AddById,
     AddManual,
@@ -465,8 +471,10 @@ pub enum Picture {
 
 /// What a conversation shows, in order.
 pub enum ChatItem {
-    /// A question, as typed, with the pictures that went with it.
-    User { text: String, images: Vec<ChatImage> },
+    /// A question, as typed, with the pictures that went with it, and
+    /// what went to the model where that is not the text (a slash command
+    /// written out, passages from a PDF put before it).
+    User { text: String, images: Vec<ChatImage>, prompt: String },
     /// Text of the model; one answer may come in several pieces with tool calls between them.
     Answer(String),
     /// A tool the model called, and what came back (summary, failed) once it has run.
@@ -883,8 +891,9 @@ impl Chat {
     }
 
     /// The slash commands to offer for what is in the box right now.
-    pub fn slash_list(&self, cx: &App) -> Vec<&'static ai::Slash> {
-        if self.slash_closed { vec![] } else { ai::slash_matches(self.input.read(cx).text()) }
+    /// `own` are the person's commands from the settings.
+    pub fn slash_list(&self, own: &[ai::Command], cx: &App) -> Vec<ai::Offer> {
+        if self.slash_closed { vec![] } else { ai::slash_matches(self.input.read(cx).text(), own) }
     }
 
     /// Have the context built again with the next question. The labels
@@ -918,7 +927,7 @@ impl Chat {
             .messages
             .iter()
             .filter_map(|item| match item {
-                ChatItem::User { text, images } => Some(ai::Said::User { text: text.clone(), images: images.iter().map(|picture| picture.id.clone()).collect() }),
+                ChatItem::User { text, images, prompt } => Some(ai::Said::User { text: text.clone(), images: images.iter().map(|picture| picture.id.clone()).collect(), prompt: prompt.clone() }),
                 ChatItem::Answer(text) if !text.is_empty() => {
                     cited.extend(ai::citations(text).into_iter().map(|citation| citation.label));
                     Some(ai::Said::Answer { text: text.clone() })
@@ -1374,6 +1383,17 @@ impl Workspace {
                 self.save_settings(cx);
             }
             Cmd::ResetTranslationPrompt => self.reset_translation_prompt(cx),
+            Cmd::AddCommand => self.add_command(cx),
+            Cmd::SelectCommand(index) => self.select_command(index, cx),
+            Cmd::AskRemoveCommand(index) => {
+                let Some(command) = self.settings.commands.get(index) else { return };
+                self.modal_error.clear();
+                self.modal = Some(Modal::Confirm { title: format!("删除命令 /{}？", command.name), message: "它的模板会从 settings.json 里删除。用过它的对话不受影响：对话里保存着当时发出的内容。".into(), action: "删除".into(), cmd: Cmd::RemoveCommand(index) });
+            }
+            Cmd::RemoveCommand(index) => {
+                self.run(Cmd::CloseModal, window, cx);
+                self.remove_command(index, cx);
+            }
 
             Cmd::AddById => {
                 let input = self.modal_input("10.1038/s41586-020-2649-2、PMID 或它们的链接", "", false, window, cx);
@@ -2694,7 +2714,7 @@ impl Workspace {
     fn chat_input(&mut self, about_paper: bool, event: InputEvent, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
         let chat = lib.chat_mut(about_paper);
-        let (offered, picked) = (chat.slash_list(cx).len(), chat.slash);
+        let (offered, picked) = (chat.slash_list(&self.settings.commands, cx).len(), chat.slash);
         match event {
             // Enter on a command in the list takes it; otherwise the message goes.
             InputEvent::Submit if offered > 0 => return self.pick_slash(about_paper, picked, cx),
@@ -2714,18 +2734,19 @@ impl Workspace {
             _ => {}
         }
         // While the list is on show the arrow keys and Tab are its keys.
-        let choosing = !chat.slash_list(cx).is_empty();
+        let choosing = !chat.slash_list(&self.settings.commands, cx).is_empty();
         chat.input.update(cx, |input, _| input.choosing = choosing);
         cx.notify();
     }
 
-    /// Take one of the slash commands on offer: a command that stands
-    /// alone runs, the others are written out for their subject to follow.
+    /// Take one of the slash commands on offer: one the window carries out
+    /// runs, the others are written out for their subject to follow, or
+    /// to be sent as they are.
     fn pick_slash(&mut self, about_paper: bool, at: usize, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
         let chat = lib.chat_mut(about_paper);
-        let Some(command) = chat.slash_list(cx).get(at).copied() else { return };
-        let alone = command.hint.is_empty();
+        let Some(command) = chat.slash_list(&self.settings.commands, cx).into_iter().nth(at) else { return };
+        let alone = command.runs;
         chat.slash = 0;
         chat.input.update(cx, |input, cx| {
             input.choosing = false;
@@ -2790,7 +2811,7 @@ impl Workspace {
             return cx.notify();
         }
         // `/search …` and the like stand for a longer request; the bubble shows what was typed.
-        let prompt = match ai::read_input(if question.is_empty() && !chat.quotes.is_empty() { "这段原文说了什么？在这篇文献里起什么作用？" } else { &question }) {
+        let prompt = match ai::read_input(if question.is_empty() && !chat.quotes.is_empty() { "这段原文说了什么？在这篇文献里起什么作用？" } else { &question }, &self.settings.commands) {
             Ok(ai::Input::Ask(prompt)) => prompt,
             Ok(ai::Input::NewChat) => {
                 chat.reset(cx);
@@ -2835,14 +2856,16 @@ impl Workspace {
             chat.ctx = Some(ctx);
         }
         if replay {
-            // Questions with their pictures and what a slash command stood for; the pieces of one answer as one turn.
+            // Questions with their pictures, as they were sent (what a slash command stood for then); the pieces of one answer as one turn.
             let mut wire: Vec<Value> = vec![];
             let mut answer = String::new();
             for item in &chat.messages {
                 match item {
-                    ChatItem::User { text, images } => {
+                    ChatItem::User { text, images, prompt } => {
                         if !answer.is_empty() { wire.push(ai::assistant_message(&std::mem::take(&mut answer))) }
-                        wire.push(ai::user_message_with(profile.protocol, &ai::expand_slash(text), &wire_images(images)));
+                        // A question from before the request was kept is read again as it would be now.
+                        let sent = if prompt.is_empty() { ai::expand_slash(text) } else { prompt.clone() };
+                        wire.push(ai::user_message_with(profile.protocol, &sent, &wire_images(images)));
                     }
                     ChatItem::Answer(text) if !text.is_empty() => {
                         if !answer.is_empty() { answer.push_str("\n\n") }
@@ -2865,7 +2888,9 @@ impl Workspace {
         };
         let images = std::mem::take(&mut chat.attachments);
         chat.wire.push(ai::user_message_with(profile.protocol, &prompt, &wire_images(&images)));
-        chat.messages.push(ChatItem::User { text: question, images });
+        // Kept with the question, so the conversation taken up later asks what was asked now, whatever the command says by then.
+        let sent = if prompt == question { String::new() } else { prompt };
+        chat.messages.push(ChatItem::User { text: question, images, prompt: sent });
         chat.steps = 0;
         chat.started = Some(Instant::now());
         let sent = self.chat_step(about_paper, cx);
@@ -3133,7 +3158,7 @@ impl Workspace {
         chat.reset(cx);
         for item in conversation.transcript.items {
             chat.messages.push(match item {
-                ai::Said::User { text, images } => {
+                ai::Said::User { text, images, prompt } => {
                     let mut pictures = vec![];
                     for image_id in images {
                         // A picture that cannot be read back is left out; the question stays.
@@ -3142,7 +3167,7 @@ impl Workspace {
                         chat.stored_images.insert(image_id.clone());
                         pictures.push(ChatImage { id: image_id, image: Arc::new(Image::from_bytes(format, data)) });
                     }
-                    ChatItem::User { text, images: pictures }
+                    ChatItem::User { text, images: pictures, prompt }
                 }
                 ai::Said::Answer { text } => ChatItem::Answer(text),
                 ai::Said::Tool { call, result, failed } => ChatItem::Tool { call, result: Some((result, failed)) },
@@ -4098,8 +4123,11 @@ impl Workspace {
                     "ai" => SettingsPage::Ai,
                     "network" => SettingsPage::Network,
                     "about" => SettingsPage::About,
+                    "commands" => SettingsPage::Commands,
                     _ => SettingsPage::General,
                 })),
+                // `command:0` opens the first of the person's own commands on 设置 › 命令.
+                "command" => Some(Cmd::SelectCommand(arg.parse().unwrap_or(0))),
                 // Saved like the choice in 设置 › 外观: "light", "dark", or empty for the system's.
                 "theme" => Some(Cmd::SetAppearance(arg.to_string())),
                 "record" => Some(Cmd::RecordShortcut(arg.to_string())),

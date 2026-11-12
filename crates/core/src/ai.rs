@@ -1054,6 +1054,46 @@ pub const SLASH: [Slash; 7] = [
     Slash { name: "new", about: "开始一次新对话", hint: "", template: "", alone: "" },
 ];
 
+/// A command the person wrote: a name and the request it stands for, kept
+/// in `Settings::commands`. It is a prompt template and nothing more: it
+/// runs nothing and reaches nothing a typed question could not.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Command {
+    /// What follows the slash: letters, digits, `-` and `_`, in lower case.
+    pub name: String,
+    pub about: String,
+    /// The request. `{}` is where what follows the name goes, and then
+    /// something must follow; without it, what follows is added at the end.
+    pub template: String,
+}
+
+impl Command {
+    /// The request this command stands for with `argument` after its name.
+    fn expand(&self, argument: &str) -> Result<String, String> {
+        let (name, template) = (&self.name, self.template.trim());
+        if template.is_empty() { return Err(format!("/{name} 还没有写模板。在「设置 › 命令」里补上。")) }
+        match (template.contains("{}"), argument.is_empty()) {
+            (true, true) => Err(format!("/{name} 后面写上内容：模板里的 {{}} 会换成它。")),
+            (true, false) => Ok(template.replace("{}", argument)),
+            (false, true) => Ok(template.to_string()),
+            (false, false) => Ok(format!("{template}\n\n{argument}")),
+        }
+    }
+}
+
+/// What is wrong with a name for a command of one's own, if anything.
+/// `others` are the names of the person's other commands.
+pub fn command_name_problem<'a>(name: &str, mut others: impl Iterator<Item = &'a str>) -> Option<String> {
+    if name.is_empty() { return Some("命令要有名称。".into()) }
+    if !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') { return Some("名称只能用字母、数字、汉字、- 和 _，不能有空格。".into()) }
+    if name.chars().count() > 32 { return Some("名称最多 32 个字。".into()) }
+    if name.chars().any(char::is_uppercase) { return Some("名称里的字母用小写。".into()) }
+    if SLASH.iter().any(|command| command.name == name) { return Some(format!("/{name} 是内置命令，换一个名称。")) }
+    if others.any(|other| other == name) { return Some(format!("已经有一个 /{name} 了。")) }
+    None
+}
+
 /// What a typed message asks for.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Input {
@@ -1063,14 +1103,17 @@ pub enum Input {
     NewChat,
 }
 
-/// Read a typed message. The error is a sentence for the person: an unknown
-/// command, or one that is missing what it works on.
-pub fn read_input(input: &str) -> Result<Input, String> {
+/// Read a typed message; `custom` are the person's own commands, which a
+/// built-in one of the same name comes before. The error is a sentence for
+/// the person: an unknown command, or one that is missing what it works on.
+pub fn read_input(input: &str, custom: &[Command]) -> Result<Input, String> {
     let input = input.trim();
     let Some(rest) = input.strip_prefix('/') else { return Ok(Input::Ask(input.to_string())) };
     let (name, argument) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
     let Some(command) = SLASH.iter().find(|command| command.name == name) else {
-        return Err(format!("没有 /{name} 这个命令。可用：{}", SLASH.iter().map(|command| format!("/{}（{}）", command.name, command.about)).collect::<Vec<_>>().join("、")));
+        if let Some(command) = custom.iter().find(|command| command.name == name) { return command.expand(argument.trim()).map(Input::Ask) }
+        let known = SLASH.iter().map(|command| (command.name, command.about)).chain(custom.iter().map(|command| (command.name.as_str(), command.about.as_str())));
+        return Err(format!("没有 /{name} 这个命令。可用：{}", known.map(|(name, about)| if about.is_empty() { format!("/{name}") } else { format!("/{name}（{about}）") }).collect::<Vec<_>>().join("、")));
     };
     if command.template.is_empty() { return Ok(Input::NewChat) }
     let argument = if argument.trim().is_empty() { command.alone } else { argument.trim() };
@@ -1078,25 +1121,50 @@ pub fn read_input(input: &str) -> Result<Input, String> {
     Ok(Input::Ask(command.template.replace("{}", argument)))
 }
 
-/// The request behind a message that was already accepted once: what goes
-/// to the model when a conversation is replayed.
+/// The request behind a question kept before conversations kept what they
+/// sent (`Said::User::prompt`): a built-in command is expanded as it is
+/// now. A command of the person's own is not, since its template then is
+/// not known: the question goes as it was typed.
 pub fn expand_slash(input: &str) -> String {
-    match read_input(input) {
+    match read_input(input, &[]) {
         Ok(Input::Ask(prompt)) => prompt,
         _ => input.trim().to_string(),
     }
 }
 
+/// A command on offer over the box.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Offer {
+    pub name: String,
+    pub about: String,
+    /// What to write after the name.
+    pub hint: String,
+    /// One of the person's own.
+    pub custom: bool,
+    /// Taking it carries it out at once (`/new`); the others are written out for the person to go on.
+    pub runs: bool,
+}
+
 /// The commands to offer while a message is still the beginning of one: a
 /// slash and perhaps part of a name, nothing after it. Those whose name
 /// starts with what was typed come first, then those described by it
-/// (`/引` finds 「配引用」).
-pub fn slash_matches(input: &str) -> Vec<&'static Slash> {
+/// (`/引` finds 「配引用」); the built-in ones before the person's own.
+pub fn slash_matches(input: &str, custom: &[Command]) -> Vec<Offer> {
     let Some(typed) = input.strip_prefix('/') else { return vec![] };
     if typed.chars().any(char::is_whitespace) { return vec![] }
     let typed = typed.to_lowercase();
-    let mut found: Vec<&Slash> = SLASH.iter().filter(|command| command.name.starts_with(&typed)).collect();
-    if !typed.is_empty() { found.extend(SLASH.iter().filter(|command| !command.name.starts_with(&typed) && command.about.contains(&typed))) }
+    let builtin = SLASH.iter().map(|command| Offer { name: command.name.into(), about: command.about.into(), hint: command.hint.into(), custom: false, runs: command.template.is_empty() });
+    // One that a built-in command hides, or that has no name yet, cannot be called.
+    let own = custom.iter().filter(|command| command_name_problem(&command.name, std::iter::empty()).is_none()).map(|command| Offer {
+        name: command.name.clone(),
+        about: command.about.clone(),
+        hint: if command.template.contains("{}") { "要处理的内容" } else { "可以接着补充" }.into(),
+        custom: true,
+        runs: false,
+    });
+    let all: Vec<Offer> = builtin.chain(own).collect();
+    let (mut found, rest): (Vec<Offer>, Vec<Offer>) = all.into_iter().partition(|offer| offer.name.starts_with(&typed));
+    if !typed.is_empty() { found.extend(rest.into_iter().filter(|offer| offer.about.to_lowercase().contains(&typed))) }
     found
 }
 
@@ -1111,6 +1179,12 @@ pub enum Said {
         text: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         images: Vec<String>,
+        /// What went to the model where that is not the text: what a slash
+        /// command stood for when it was sent, so a template changed or
+        /// removed since does not change what was asked. Empty in
+        /// conversations from before this was kept.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        prompt: String,
     },
     Answer { text: String },
     /// A tool the assistant called, as the window described it, and what came back.
@@ -1137,7 +1211,7 @@ impl Transcript {
     /// What the conversation is listed as: the start of its first question.
     pub fn title(&self) -> String {
         let first = self.items.iter().find_map(|item| match item {
-            Said::User { text, images } => Some((text.split_whitespace().collect::<Vec<_>>().join(" "), !images.is_empty())),
+            Said::User { text, images, .. } => Some((text.split_whitespace().collect::<Vec<_>>().join(" "), !images.is_empty())),
             _ => None,
         });
         match first {
@@ -1833,14 +1907,14 @@ mod tests {
 
     #[test]
     fn slash_commands() {
-        assert_eq!(read_input("  WOX5 做什么？ ").unwrap(), Input::Ask("WOX5 做什么？".into()));
+        assert_eq!(read_input("  WOX5 做什么？ ", &[]).unwrap(), Input::Ask("WOX5 做什么？".into()));
         let search = expand_slash("/search 10x Genomics");
         assert!(search.starts_with("在文献库里检索：10x Genomics\n") && search.contains("search_fulltext"));
         let cite = expand_slash("/cite 根尖有干细胞。\n它们由 WOX5 维持。");
         assert!(cite.contains("根尖有干细胞。\n它们由 WOX5 维持。") && cite.contains("find_citations"));
-        assert!(read_input("/search").unwrap_err().contains("/search 后面写上内容"));
-        assert!(read_input("/dance now").unwrap_err().contains("/cite"));
-        assert_eq!(read_input("/new").unwrap(), Input::NewChat);
+        assert!(read_input("/search", &[]).unwrap_err().contains("/search 后面写上内容"));
+        assert!(read_input("/dance now", &[]).unwrap_err().contains("/cite"));
+        assert_eq!(read_input("/new", &[]).unwrap(), Input::NewChat);
         // A message that cannot be expanded is replayed as it was typed.
         assert_eq!(expand_slash("/dance now"), "/dance now");
         // Every command that stands for a request says what to write after it.
@@ -1848,16 +1922,47 @@ mod tests {
     }
 
     #[test]
+    fn own_commands() {
+        let command = |name: &str, about: &str, template: &str| Command { name: name.into(), about: about.into(), template: template.into() };
+        let own = [command("style-check", "找出空泛的表达", "指出下面文字里的套话：\n{}\n保留 {} 里的数值。"), command("润色", "", "把上一个回答改得更简洁。"), command("search", "mine", "x"), command("empty", "", "  ")];
+        // The text after the name goes where the template says, as it is: braces in it are not read again.
+        assert_eq!(read_input("/style-check a {} b\n第二行", &own).unwrap(), Input::Ask("指出下面文字里的套话：\na {} b\n第二行\n保留 a {} b\n第二行 里的数值。".into()));
+        assert!(read_input("/style-check  ", &own).unwrap_err().contains("/style-check 后面写上内容"));
+        // A template without a place for it stands alone, and takes what follows at its end.
+        assert_eq!(read_input("/润色", &own).unwrap(), Input::Ask("把上一个回答改得更简洁。".into()));
+        assert_eq!(read_input("/润色 用英文", &own).unwrap(), Input::Ask("把上一个回答改得更简洁。\n\n用英文".into()));
+        assert!(read_input("/empty", &own).unwrap_err().contains("还没有写模板"));
+        // A built-in command is never replaced by one of the same name.
+        assert!(matches!(read_input("/search x", &own), Ok(Input::Ask(prompt)) if prompt.starts_with("在文献库里检索：x")));
+        assert!(read_input("/dance", &own).unwrap_err().contains("/style-check（找出空泛的表达）、/润色"));
+        // A conversation from before the request was kept does not guess at a template.
+        assert_eq!(expand_slash("/style-check 一段话"), "/style-check 一段话");
+
+        let names = |input: &str| slash_matches(input, &own).into_iter().map(|offer| offer.name).collect::<Vec<_>>();
+        assert_eq!(names("/"), ["search", "cite", "review", "compare", "write", "verify", "new", "style-check", "润色", "empty"]);
+        assert_eq!(names("/s"), ["search", "style-check"]);
+        assert_eq!(names("/润"), ["润色"]);
+        assert_eq!(names("/空泛"), ["style-check"]);
+        let offers = slash_matches("/", &own);
+        assert!(offers.iter().all(|offer| offer.custom == !SLASH.iter().any(|command| command.name == offer.name) && offer.runs == (offer.name == "new")));
+
+        let problem = |name: &str| command_name_problem(name, own.iter().map(|command| command.name.as_str()));
+        for good in ["methods-check", "检查方法", "a_1"] { assert_eq!(problem(good), None, "{good}") }
+        for bad in ["", "a b", "a/b", "{}", "Style", "new", "cite", "润色", "style-check", &"a".repeat(33)] { assert!(problem(bad).is_some(), "{bad}") }
+    }
+
+    #[test]
     fn slash_popup() {
-        let names = |input: &str| slash_matches(input).iter().map(|command| command.name).collect::<Vec<_>>();
+        let names = |input: &str| slash_matches(input, &[]).into_iter().map(|command| command.name).collect::<Vec<_>>();
         assert_eq!(names("/"), ["search", "cite", "review", "compare", "write", "verify", "new"]);
         // A command that can stand alone works on what it says it does.
-        assert!(matches!(read_input("/verify"), Ok(Input::Ask(prompt)) if prompt.contains("逐条核对下面这段内容的依据：上一个回答")));
-        assert!(read_input("/cite").is_err());
+        assert!(matches!(read_input("/verify", &[]), Ok(Input::Ask(prompt)) if prompt.contains("逐条核对下面这段内容的依据：上一个回答")));
+        assert!(read_input("/cite", &[]).is_err());
         assert_eq!(names("/c"), ["cite", "compare"]);
         assert_eq!(names("/RE"), ["review"]);
         // Found by what it does, after those found by name.
-        assert_eq!((names("/配"), names("/引")), (vec!["cite"], vec!["cite", "review"]));
+        assert_eq!(names("/配"), ["cite"]);
+        assert_eq!(names("/引"), ["cite", "review"]);
         assert_eq!(names("/综述"), ["review"]);
         // Not a command being typed: no slash, something after the name, or no such command.
         assert!(names("search").is_empty() && names("/search ").is_empty() && names("/search x").is_empty() && names("/zz").is_empty() && names(" /s").is_empty());
@@ -1908,7 +2013,7 @@ mod tests {
     fn transcripts() {
         let transcript = Transcript {
             items: vec![
-                Said::User { text: "这张图\n说明了什么？".into(), images: vec!["I-1".into()] },
+                Said::User { text: "这张图\n说明了什么？".into(), images: vec!["I-1".into()], prompt: String::new() },
                 Said::Tool { call: "检索全文：WOX5".into(), result: "3 条结果".into(), failed: false },
                 Said::Answer { text: "见 [P1]。".into() },
             ],
@@ -1920,7 +2025,7 @@ mod tests {
         assert_eq!((transcript.title(), transcript.questions()), ("这张图 说明了什么？".to_string(), 1));
         // Kept by an older build, or damaged: what is missing is empty, not an error.
         assert_eq!(serde_json::from_str::<Transcript>("{}").unwrap(), Transcript::default());
-        let pictures = Transcript { items: vec![Said::User { text: String::new(), images: vec!["I-1".into()] }], sources: vec![] };
+        let pictures = Transcript { items: vec![Said::User { text: String::new(), images: vec!["I-1".into()], prompt: String::new() }], sources: vec![] };
         assert_eq!((pictures.title(), Transcript::default().title()), ("（图片）".to_string(), "未命名对话".to_string()));
     }
 }

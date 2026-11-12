@@ -258,7 +258,7 @@ impl Workspace {
         let mut i = 0;
         while i < chat.messages.len() {
             let content = match &chat.messages[i] {
-                ChatItem::User { text, images } => {
+                ChatItem::User { text, images, .. } => {
                     items.push(
                         div()
                             .flex()
@@ -565,7 +565,7 @@ impl Workspace {
     fn render_composer(&self, about_paper: bool, chat: &Chat, model: &str, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let side = if about_paper { "paper" } else { "library" };
         let focused = chat.input.focus_handle(cx).is_focused(window);
-        let commands = if focused { chat.slash_list(cx) } else { vec![] };
+        let commands = if focused { chat.slash_list(&self.settings.commands, cx) } else { vec![] };
         let ready = !chat.input.read(cx).text().trim().is_empty() || !chat.attachments.is_empty() || !chat.quotes.is_empty();
         let lib = self.lib.as_ref().unwrap();
         let round = |id: String, icon_name: &'static str, lit: bool| {
@@ -602,8 +602,10 @@ impl Workspace {
                                 .hover(|s| s.bg(Theme::hover()))
                                 .on_click(self.on(Cmd::PickSlash(about_paper, n), cx))
                                 .child(div().flex_none().font_weight(FontWeight::MEDIUM).text_color(Theme::accent()).child(format!("/{}", command.name)))
-                                .when(!command.hint.is_empty(), |d| d.child(div().flex_none().text_color(Theme::text_placeholder()).child(command.hint)))
-                                .child(div().flex_1().min_w_0().truncate().text_right().text_color(Theme::text_secondary()).child(command.about))
+                                .when(!command.hint.is_empty(), |d| d.child(div().flex_none().text_color(Theme::text_placeholder()).child(command.hint.clone())))
+                                .child(div().flex_1().min_w_0().truncate().text_right().text_color(Theme::text_secondary()).child(command.about.clone()))
+                                // One the person wrote says so: what it asks is theirs, not the app's.
+                                .when(command.custom, |d| d.child(div().flex_none().px(px(6.)).rounded(px(5.)).bg(Theme::groove()).text_size(px(11.)).text_color(Theme::text_tertiary()).child("自定义")))
                         }))
                         .child(div().px(px(8.)).pt(px(5.)).pb(px(2.)).mt(px(3.)).border_t_1().border_color(Theme::line()).text_size(px(11.)).text_color(Theme::text_placeholder()).child("↑↓ 选择 · Enter 或 Tab 确认 · Esc 关闭")),
                 )
