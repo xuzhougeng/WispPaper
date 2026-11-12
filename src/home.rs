@@ -4,7 +4,7 @@
 use crate::app::{Cmd, Edge, MenuKind, Workspace};
 use crate::context::Nav;
 use crate::settings::{SettingsPage, UpdateState};
-use crate::shortcuts::{MarkAll, MarkDown, MarkUp, MoveDown, MoveFirst, MoveLast, MoveLeft, MovePageDown, MovePageUp, MoveRight, MoveUp, OpenSelected, TrashSelected, AddPaper, AskLibrary, FocusSearch, ImportPdf, NewLibrary, ShowHome, ShowSettings, CopyPicked, FindCandidates, ToggleDetail, ToggleSidebar, ZoomFit, ZoomIn, ZoomOut};
+use crate::shortcuts::{MarkAll, MarkDown, MarkUp, MoveDown, MoveFirst, MoveLast, MoveLeft, MovePageDown, MovePageUp, MoveRight, MoveUp, OpenSelected, TrashSelected, AddPaper, AskLibrary, FocusSearch, ImportPdf, NewLibrary, ShowHome, ShowSettings, CopyPicked, FindCandidates, ToggleDetail, ToggleReading, ToggleSidebar, ZoomFit, ZoomIn, ZoomOut};
 use crate::theme::{self, Theme};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
@@ -42,6 +42,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &AskLibrary, window, cx| this.shortcut("ask", window, cx)))
             .on_action(cx.listener(|this, _: &ToggleDetail, window, cx| this.shortcut("detail", window, cx)))
             .on_action(cx.listener(|this, _: &ToggleSidebar, window, cx| this.shortcut("sidebar", window, cx)))
+            .on_action(cx.listener(|this, _: &ToggleReading, window, cx| this.shortcut("reading", window, cx)))
             .on_action(cx.listener(|this, _: &ZoomIn, window, cx| this.shortcut("zoom-in", window, cx)))
             .on_action(cx.listener(|this, _: &ZoomOut, window, cx| this.shortcut("zoom-out", window, cx)))
             .on_action(cx.listener(|this, _: &ZoomFit, window, cx| this.shortcut("zoom-fit", window, cx)))
@@ -66,7 +67,7 @@ impl Render for Workspace {
             .children(self.render_modal(window, cx))
             .children(self.render_menu(cx))
             .children(self.render_toast())
-            // While an edge is held (the sidebar's, the detail panel's), a layer over everything hears the pointer
+            // While an edge is held (the sidebar's, the detail panel's, the one between a conversation and its PDF), a layer over everything hears the pointer
             // wherever it goes: an element only hears the moves made over it.
             .children(self.resizing.map(|edge| {
                 div()
@@ -80,6 +81,7 @@ impl Render for Workspace {
                     .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, window, cx| match edge {
                         Edge::Sidebar => this.drag_sidebar(event, window, cx),
                         Edge::Detail => this.drag_detail(event, window, cx),
+                        Edge::Split => this.drag_split(event, window, cx),
                     }))
                     .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_drag(cx)))
             }))

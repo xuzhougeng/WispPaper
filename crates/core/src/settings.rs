@@ -39,11 +39,13 @@ pub struct Settings {
     pub sidebar_width: f32,
     /// The sidebar is put away: the list and the paper have the whole window.
     pub sidebar_hidden: bool,
+    /// How wide the reader made a paper's conversation beside its PDF; 0 is the width it comes with.
+    pub chat_width: f32,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { data_dir: String::new(), profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translation_prompt: String::new(), commands: vec![], auto_update: true, appearance: String::new(), density: String::new(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false }
+        Settings { data_dir: String::new(), profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translation_prompt: String::new(), commands: vec![], auto_update: true, appearance: String::new(), density: String::new(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0. }
     }
 }
 
@@ -183,6 +185,7 @@ impl Settings {
         self.screen_workers = self.screen_workers.clamp(1, MAX_SCREEN_WORKERS);
         if !self.detail_width.is_finite() || self.detail_width < 0. { self.detail_width = 0. }
         if !self.sidebar_width.is_finite() || self.sidebar_width < 0. { self.sidebar_width = 0. }
+        if !self.chat_width.is_finite() || self.chat_width < 0. { self.chat_width = 0. }
     }
 
     /// The first of `m1`, `m2`, … no profile has yet.

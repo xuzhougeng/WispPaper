@@ -5,7 +5,7 @@
 use gpui::*;
 use std::collections::BTreeMap;
 
-actions!(workspace, [Dismiss, FocusSearch, AddPaper, ImportPdf, AskLibrary, ToggleDetail, ToggleSidebar, ShowSettings, ShowHome, NewLibrary, ZoomIn, ZoomOut, ZoomFit, CopyPicked, FindCandidates, MoveUp, MoveDown, MoveLeft, MoveRight, MovePageUp, MovePageDown, MoveFirst, MoveLast, OpenSelected, TrashSelected, MarkUp, MarkDown, MarkAll]);
+actions!(workspace, [Dismiss, FocusSearch, AddPaper, ImportPdf, AskLibrary, ToggleDetail, ToggleSidebar, ToggleReading, ShowSettings, ShowHome, NewLibrary, ZoomIn, ZoomOut, ZoomFit, CopyPicked, FindCandidates, MoveUp, MoveDown, MoveLeft, MoveRight, MovePageUp, MovePageDown, MoveFirst, MoveLast, OpenSelected, TrashSelected, MarkUp, MarkDown, MarkAll]);
 
 pub struct Shortcut {
     pub id: &'static str,
@@ -19,7 +19,7 @@ pub struct Shortcut {
 pub const GROUPS: [&str; 2] = ["应用", "文献库"];
 
 /// What each one does is in `Workspace::shortcut` (app.rs).
-pub const SHORTCUTS: [Shortcut; 13] = [
+pub const SHORTCUTS: [Shortcut; 14] = [
     Shortcut { id: "settings", label: "打开设置", group: 0, default: "secondary-," },
     Shortcut { id: "home", label: "回到所有文献库", group: 0, default: "secondary-shift-h" },
     Shortcut { id: "new-library", label: "新建文献库", group: 0, default: "secondary-shift-n" },
@@ -29,6 +29,7 @@ pub const SHORTCUTS: [Shortcut; 13] = [
     Shortcut { id: "ask", label: "向文献库提问", group: 1, default: "secondary-l" },
     Shortcut { id: "detail", label: "展开 / 收起文献详情", group: 1, default: "secondary-e" },
     Shortcut { id: "sidebar", label: "显示 / 收起侧边栏", group: 1, default: "secondary-b" },
+    Shortcut { id: "reading", label: "进入 / 退出阅读模式", group: 1, default: "secondary-shift-f" },
     Shortcut { id: "zoom-in", label: "放大 PDF", group: 1, default: "secondary-=" },
     Shortcut { id: "zoom-out", label: "缩小 PDF", group: 1, default: "secondary--" },
     Shortcut { id: "zoom-fit", label: "PDF 适应宽度", group: 1, default: "secondary-0" },
@@ -112,6 +113,7 @@ pub fn rebuild(custom: &BTreeMap<String, String>, cx: &mut App) {
             "import-pdf" => KeyBinding::new(&key, ImportPdf, context),
             "ask" => KeyBinding::new(&key, AskLibrary, context),
             "sidebar" => KeyBinding::new(&key, ToggleSidebar, context),
+            "reading" => KeyBinding::new(&key, ToggleReading, context),
             "zoom-in" => KeyBinding::new(&key, ZoomIn, context),
             "zoom-out" => KeyBinding::new(&key, ZoomOut, context),
             "zoom-fit" => KeyBinding::new(&key, ZoomFit, context),

@@ -49,6 +49,8 @@ pub enum Edge {
     Sidebar,
     /// Between the list and the detail panel.
     Detail,
+    /// Between a paper's conversation and its PDF.
+    Split,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -215,6 +217,8 @@ pub enum Cmd {
     ReadPages(String),
     SetTab(Tab),
     ToggleWide,
+    /// Reading mode: the selected paper has the whole window, or the library is back around it.
+    ToggleReading,
     /// Put the library's sidebar away, or bring it back.
     ToggleSidebar,
     /// Draw the pages of the PDF on show larger, smaller, or at a given size.
@@ -911,6 +915,8 @@ pub struct Library {
     pub tab: Tab,
     /// The detail panel takes most of the window (reading a PDF).
     pub wide: bool,
+    /// Reading mode: the sidebar and the list are put away and the paper has the whole window.
+    pub reading: bool,
     /// The paper's PDF is shown to the right of its conversation, where the panel has room for both.
     pub split: bool,
     pub notes: Entity<TextInput>,
@@ -1639,6 +1645,7 @@ impl Workspace {
                 if page == Page::Write { self.write_ensure(cx) }
                 if let Some(lib) = self.lib.as_mut() {
                     lib.page = page;
+                    lib.reading = false;
                     if page == Page::Ask { lib.library_chat.input.read(cx).focus(window) }
                     if page == Page::Write {
                         lib.writing.editor.read(cx).focus(window);
@@ -1771,14 +1778,24 @@ impl Workspace {
             Cmd::RereadFile(id) => self.reread_file(id, cx),
             Cmd::ReadPages(id) => self.write_run_start(true, Some(id), cx),
             Cmd::SetTab(tab) => {
+                // Without a model the question box is not drawn: the keyboard stays with the window, so Esc is still heard.
+                let asking = !self.settings.profile_for_or_default(Task::Chat).key().is_empty();
                 if let Some(lib) = self.lib.as_mut() {
                     lib.tab = tab;
-                    if tab == Tab::Ask { lib.paper_chat.input.read(cx).focus(window) }
+                    if tab == Tab::Ask && asking { lib.paper_chat.input.read(cx).focus(window) } else if tab == Tab::Ask { window.focus(&self.focus) }
                 }
                 self.ensure_pdf(cx);
             }
             Cmd::ToggleWide => {
                 if let Some(lib) = self.lib.as_mut() { lib.wide = !lib.wide }
+            }
+            Cmd::ToggleReading => {
+                if let Some(lib) = self.lib.as_mut().filter(|lib| lib.selected.is_some()) {
+                    lib.reading = !lib.reading;
+                    // Reading starts at the paper itself: the PDF, when there is one and the record was on show.
+                    if lib.reading && lib.tab == Tab::Info && lib.selected.clone().is_some_and(|id| lib.pdf_file(&id).is_some()) { lib.tab = Tab::Pdf }
+                }
+                self.ensure_pdf(cx);
             }
             Cmd::ToggleSidebar => {
                 self.settings.sidebar_hidden = !self.settings.sidebar_hidden;
@@ -2281,6 +2298,9 @@ impl Workspace {
         } else if self.picked.take().is_some() {
         } else if self.lib.as_ref().is_some_and(|l| !l.marked.is_empty()) {
             if let Some(lib) = self.lib.as_mut() { lib.marked.clear() }
+        } else if self.lib.as_ref().is_some_and(|l| l.reading && l.selected.is_some()) {
+            // Out of reading mode first: the paper stays open where it was read.
+            if let Some(lib) = self.lib.as_mut() { lib.reading = false }
         } else if self.lib.as_ref().is_some_and(|l| l.selected.is_some()) {
             self.select(None, window, cx);
         }
@@ -2301,6 +2321,7 @@ impl Workspace {
             "search" => {
                 if let Some(lib) = self.lib.as_mut() {
                     lib.page = Page::Papers;
+                    lib.reading = false;
                     lib.search.read(cx).focus(window);
                     cx.notify();
                 }
@@ -2311,6 +2332,7 @@ impl Workspace {
             "ask" => Cmd::SetPage(Page::Ask),
             "detail" if self.lib.as_ref().is_some_and(|l| l.selected.is_some()) => Cmd::ToggleWide,
             "sidebar" => Cmd::ToggleSidebar,
+            "reading" if self.lib.as_ref().is_some_and(|l| l.selected.is_some()) => Cmd::ToggleReading,
             // The PDF's size, while a PDF is on show.
             "zoom-in" => Cmd::PdfZoom(ZoomTo::In),
             "zoom-out" => Cmd::PdfZoom(ZoomTo::Out),
@@ -2410,6 +2432,7 @@ impl Workspace {
             selected: None,
             tab: Tab::Info,
             wide: false,
+            reading: false,
             split: true,
             notes,
             pdf: None,
@@ -2471,6 +2494,7 @@ impl Workspace {
             }
             None => {
                 lib.wide = false;
+                lib.reading = false;
                 lib.tab = Tab::Info;
                 window.focus(&self.focus);
             }
@@ -4479,6 +4503,13 @@ impl Workspace {
                 }
                 "width" => {
                     self.settings.detail_width = arg.parse().unwrap_or(0.);
+                    cx.notify();
+                    return;
+                }
+                // `readmode` gives the selected paper the whole window, or brings the library back; `chatwidth:400` is the conversation's width beside the PDF.
+                "readmode" => Some(Cmd::ToggleReading),
+                "chatwidth" => {
+                    self.settings.chat_width = arg.parse().unwrap_or(0.);
                     cx.notify();
                     return;
                 }
