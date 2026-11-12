@@ -299,6 +299,7 @@ impl Workspace {
                     .when(active, |d| d.bg(Theme::accent_soft()).text_color(Theme::accent()))
                     .when(!active, |d| d.hover(|s| s.bg(Theme::hover())))
                     .on_click(self.on(Cmd::SetFilter(FilterKey::Tag, if active { String::new() } else { tag.clone() }), cx))
+                    .on_mouse_down(MouseButton::Right, self.on_context(MenuKind::Tag(tag.clone()), cx))
                     .child(div().size(px(6.)).flex_none().rounded_full().bg(if active { Theme::accent() } else { Theme::text_placeholder() }))
                     .child(div().flex_1().min_w_0().truncate().child(tag.clone()))
                     .child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(count.to_string()))
@@ -485,7 +486,7 @@ impl Workspace {
         } else if !lib.extracting.is_empty() {
             format!("正在提取 {} 篇全文的文字，用于提问…", lib.extracting.len())
         } else {
-            "拖入 PDF 或文件夹即可添加 · Ctrl+F 搜索 · Esc 关闭详情".to_string()
+            format!("↑↓ 切换文献 · 右键更多操作 · {} 搜索 · Esc 关闭详情", crate::shortcuts::pretty(&crate::shortcuts::key_of("search", &self.settings.shortcuts)))
         };
         div()
             .flex()
@@ -565,6 +566,8 @@ impl Workspace {
             .filter_map(|row| {
                 let p = lib.papers.get(*lib.shown.get(row)?)?;
                 let selected = lib.selected.as_deref() == Some(p.id.as_str());
+                // The paper a right-click menu is about.
+                let pointed = self.menu.as_ref().is_some_and(|menu| menu.paper.as_deref() == Some(p.id.as_str()));
                 let cells: Vec<AnyElement> = columns
                     .iter()
                     .map(|c| {
@@ -654,7 +657,9 @@ impl Workspace {
                         .border_color(Theme::line())
                         .cursor_pointer()
                         .when(selected, |d| d.bg(Theme::accent_soft()))
-                        .when(!selected, |d| d.hover(|s| s.bg(Theme::hover())))
+                        .when(!selected && pointed, |d| d.bg(Theme::hover()))
+                        .when(!selected && !pointed, |d| d.hover(|s| s.bg(Theme::hover())))
+                        .on_mouse_down(MouseButton::Right, self.on_context(MenuKind::Paper(p.id.clone()), cx))
                         .on_click(cx.listener({
                             let id = p.id.clone();
                             move |this, ev: &ClickEvent, window, cx| {
@@ -662,6 +667,8 @@ impl Workspace {
                                 if ev.click_count() >= 2 && let Some(lib) = this.lib.as_mut() && lib.pdf_file(&id).is_some() { lib.tab = Tab::Pdf }
                                 this.run(Cmd::Select(id.clone()), window, cx);
                                 this.run(Cmd::SetTab(this.lib.as_ref().map_or(Tab::Info, |l| l.tab)), window, cx);
+                                // The keyboard stays with the list, for the arrow keys; a question about the paper keeps its box.
+                                if this.lib.as_ref().is_some_and(|l| l.tab != Tab::Ask) { window.focus(&this.focus) }
                             }
                         }))
                         .children(cells)
@@ -687,6 +694,7 @@ impl Workspace {
                     .py(px(10.))
                     .border_b_1()
                     .border_color(Theme::line())
+                    .on_mouse_down(MouseButton::Right, self.on_context(MenuKind::Trashed(p.id.clone()), cx))
                     .child(div().flex().flex_col().flex_1().min_w_0().child(div().truncate().child(p.title.clone())).child(div().truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(format!("{} · 删除于 {}", if p.authors.is_empty() { "作者待补".to_string() } else { p.short_authors() }, time::date_text(&entry.deleted_at)))))
                     .child(ui::secondary_button(("restore", i), "恢复").on_click(self.on(Cmd::RestorePaper(p.id.clone()), cx)))
                     .child(ui::ghost_button(("delete", i), Some("bin"), Some("彻底删除".into())).text_color(Theme::danger()).on_click(self.on(Cmd::AskDeletePaper(p.id.clone()), cx)))

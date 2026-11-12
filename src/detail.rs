@@ -49,7 +49,7 @@ impl Workspace {
                     .flex()
                     .items_start()
                     .gap(px(6.))
-                    .child(div().flex_1().min_w_0().line_clamp(3).text_size(px(15.)).line_height(px(22.)).font_weight(FontWeight::SEMIBOLD).child(p.title.clone()))
+                    .child(self.selectable("detail-title", p.title.clone(), cx).flex_1().min_w_0().line_clamp(3).text_size(px(15.)).line_height(px(22.)).font_weight(FontWeight::SEMIBOLD))
                     .child(ui::ghost_button("detail-wide", Some(if lib.wide { "panel-left-open" } else { "expand" }), None).on_click(self.on(Cmd::ToggleWide, cx)))
                     .child(ui::ghost_button("detail-close", Some("x"), None).on_click(self.on(Cmd::CloseDetail, cx))),
             )
@@ -123,7 +123,7 @@ impl Workspace {
         let title_key = translation_key(&p.title, prompt);
         for (key, state) in &texts {
             if let Translated::Done(text) = state {
-                let line = div().line_height(px(21.)).when(*key == title_key, |d| d.font_weight(FontWeight::MEDIUM)).child(text.clone());
+                let line = self.selectable(format!("translated-{key}"), text.clone(), cx).line_height(px(21.)).when(*key == title_key, |d| d.font_weight(FontWeight::MEDIUM));
                 card = card.child(ui::fade_in(SharedString::from(format!("translated-{key}")), line));
             }
         }
@@ -174,7 +174,7 @@ impl Workspace {
         let identifiers: Vec<AnyElement> = [("DOI", &p.doi), ("PMID", &p.pmid)]
             .into_iter()
             .filter(|(_, value)| !value.is_empty())
-            .map(|(name, value)| div().flex().gap(px(6.)).text_size(px(12.)).child(div().flex_none().w(px(40.)).text_color(Theme::text_tertiary()).child(name)).child(div().min_w_0().text_color(Theme::text_secondary()).child(value.clone())).into_any_element())
+            .map(|(name, value)| div().flex().gap(px(6.)).text_size(px(12.)).child(div().flex_none().w(px(40.)).text_color(Theme::text_tertiary()).child(name)).child(self.selectable(name, value.clone(), cx).min_w_0().text_color(Theme::text_secondary())).into_any_element())
             .collect();
         let field_rows: Vec<AnyElement> = lib
             .fields
@@ -237,6 +237,7 @@ impl Workspace {
                     .rounded(px(8.))
                     .border_1()
                     .border_color(Theme::line())
+                    .on_mouse_down(MouseButton::Right, self.on_context(MenuKind::File(file.id.clone()), cx))
                     .child(
                         div()
                             .flex()
@@ -296,8 +297,8 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .gap(px(6.))
-                    .child(div().text_color(Theme::text_secondary()).child(if p.authors.is_empty() { "作者待补".to_string() } else { p.authors.clone() }))
-                    .when(!source_line.is_empty(), |d| d.child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(source_line.join(" · "))))
+                    .child(if p.authors.is_empty() { div().text_color(Theme::text_secondary()).child("作者待补") } else { self.selectable("detail-authors", p.authors.clone(), cx).text_color(Theme::text_secondary()) })
+                    .when(!source_line.is_empty(), |d| d.child(self.selectable("detail-source", source_line.join(" · "), cx).text_size(px(12.)).text_color(Theme::text_tertiary())))
                     .children(identifiers),
             )
             .child(
@@ -332,7 +333,7 @@ impl Workspace {
             } else {
                 div().text_color(Theme::text_placeholder()).child("这个文献库还没有自定义词条。在左下角「自定义词条」里添加，例如物种、研究方法、所属课题。")
             }))
-            .child(div().flex().flex_col().gap(px(6.)).child(abstract_head).children(translation).child(if p.abstract_text.is_empty() { div().text_color(Theme::text_placeholder()).child("没有摘要") } else { div().text_color(Theme::text_secondary()).line_height(px(21.)).child(p.abstract_text.clone()) }))
+            .child(div().flex().flex_col().gap(px(6.)).child(abstract_head).children(translation).child(if p.abstract_text.is_empty() { div().text_color(Theme::text_placeholder()).child("没有摘要") } else { self.selectable("detail-abstract", p.abstract_text.clone(), cx).text_color(Theme::text_secondary()).line_height(px(21.)) }))
             .child(section("我的笔记").child(ui::field(&lib.notes, window, cx)))
             .child(section("文件").child(div().flex().flex_col().gap(px(6.)).children(file_rows).child(ui::secondary_button("attach", if files.is_empty() { "添加 PDF 或附件" } else { "再添加一个文件" }).on_click(self.on(Cmd::AttachPdf(id.clone()), cx)))))
             .child(div().text_size(px(12.)).text_color(Theme::text_placeholder()).child(format!("来源：{} · 添加于 {}", p.source, time::date_text(&p.added_at))))
