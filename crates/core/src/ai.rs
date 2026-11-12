@@ -1290,6 +1290,210 @@ pub fn translate_request(profile: &Profile, prompt: &str, text: &str) -> Result<
     plain_request(profile, translation_prompt(prompt), text)
 }
 
+// ---- writing assistance
+
+/// What the model is asked to do with a paragraph of the manuscript on the
+/// writing page. The answer is shown beside the paragraph; only the person
+/// puts it into the draft.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Assist {
+    /// Rewrite it after the candidate sentences beside it, citing where they are drawn on.
+    Rewrite,
+    /// Put it into the manuscript's language.
+    Translate,
+    /// Tighten it, changing as little as needed.
+    Polish,
+    /// One of the person's own commands (`Settings::commands`), by name.
+    Own(String),
+}
+
+impl Assist {
+    /// What the action is called on its button and over its result.
+    pub fn title(&self, language: &str) -> String {
+        match self {
+            Assist::Rewrite => "参照候选句改写".into(),
+            Assist::Translate => format!("译成{}", language_name(language)),
+            Assist::Polish => "润色".into(),
+            Assist::Own(name) => format!("/{name}"),
+        }
+    }
+}
+
+/// A manuscript language as it reads in a sentence: `English` is 英文, others as they are given.
+pub fn language_name(language: &str) -> String {
+    match language.trim().to_lowercase().as_str() {
+        "" | "en" | "english" | "英文" | "英语" => "英文".into(),
+        "zh" | "chinese" | "中文" | "汉语" | "简体中文" => "中文".into(),
+        other => other.to_string(),
+    }
+}
+
+/// A candidate sentence a rewrite may draw on: its text and where it is from.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Example {
+    pub text: String,
+    /// How the paper is cited in the draft, `Smith et al., 2020`.
+    pub cite: String,
+    pub page: Option<usize>,
+    pub heading: String,
+}
+
+/// The most candidates a rewrite is shown: the closest come first, and more only blur the paragraph.
+pub const ASSIST_EXAMPLES: usize = 12;
+
+/// The longest paragraph an action takes, in bytes: the selection may be a whole section, not a book.
+pub const ASSIST_LIMIT: usize = 20_000;
+
+/// What a writing request is made of: the instructions and the message.
+pub fn assist_prompt(assist: &Assist, language: &str, paragraph: &str, examples: &[Example], own: &[Command]) -> Result<(String, String), String> {
+    let paragraph = paragraph.trim();
+    if paragraph.is_empty() { return Err("没有要处理的文字：先选中一段，或把光标放在要处理的段落里。".into()) }
+    if paragraph.len() > ASSIST_LIMIT { return Err("选中的文字太长，一次处理一两段就好。".into()) }
+    let language = language_name(language);
+    let system = format!(
+        "你是学术写作助手，帮用户修改他正在写的论文稿件。稿件语言是{language}。\n\
+         只输出处理后的文字本身：不加解释、不加标题、不加引号，不用 Markdown。段落之间空一行。\n\
+         段落里已有的引用（如 (Smith et al., 2020)、[3]）保持原样，不删除、不改写；不要编造文献或数据。"
+    );
+    let message = match assist {
+        Assist::Rewrite => {
+            if examples.is_empty() { return Err("右边还没有候选句可参照。先写几句，或在右上角的框里找句子。".into()) }
+            let listed: Vec<String> = examples.iter().take(ASSIST_EXAMPLES).enumerate().map(|(n, example)| {
+                let mut from = vec![example.cite.trim().to_string()];
+                if let Some(page) = example.page { from.push(format!("p. {page}")) }
+                if !example.heading.trim().is_empty() { from.push(example.heading.trim().to_string()) }
+                from.retain(|part| !part.is_empty());
+                format!("[{}] ({}) {}", n + 1, from.join(", "), example.text.trim())
+            }).collect();
+            format!(
+                "参照下面这些候选句，用{language}改写我的段落。候选句出自文献库里的论文同一部分，括号里是它的出处。\n\n\
+                 要求：\n\
+                 1. 意思以我的段落为准：不增加我没有写的论断，也不删掉我写了的。\n\
+                 2. 借鉴候选句的结构、衔接和措辞习惯，但每句话都要自己写，不要照抄候选句（连续相同的词不超过五六个）。\n\
+                 3. 我的段落里已有的引用一个都不能删、不能改，留在它所支持的那句话上。\n\
+                 4. 我的段落在陈述某篇候选论文的发现时，补上这篇论文的引用：用候选句前面括号里的出处，写成 (作者, 年份) 的样子。候选句正文里引用的其他文献不是这篇论文本身，不要搬过来；也不要给我自己的论断配引用。\n\n\
+                 候选句：\n{}\n\n要改写的段落：\n{paragraph}",
+                listed.join("\n")
+            )
+        }
+        Assist::Translate => format!(
+            "把下面这段译成{language}的学术论文文字：意思准确，用这个领域的论文惯用的说法，而不是逐字直译。\n\
+             术语、基因名、物种学名、数字和单位保持原样；已经是{language}的部分照原样保留。\n\n{paragraph}"
+        ),
+        Assist::Polish => format!(
+            "润色下面这段{language}文字：改得越少越好，只改语法错误、不准确或不地道的用词、冗余和不通顺的地方。\n\
+             不改变意思，不增删论断，不调整段落的结构；本来就好的句子原样保留。\n\n{paragraph}"
+        ),
+        Assist::Own(name) => {
+            let Some(command) = own.iter().find(|command| command.name == *name) else { return Err(format!("没有 /{name} 这个命令了，可能已在「设置 › 命令」里删掉。")) };
+            return Ok((
+                format!(
+                    "你是学术写作助手，帮用户处理他正在写的论文稿件里的一段文字。稿件语言是{language}。\n\
+                     要求是修改这段文字时，只输出修改后的文字，不加解释；要求是检查或评论时，直接给出意见。不用 Markdown。\n\
+                     段落里已有的引用保持原样；不要编造文献或数据。"
+                ),
+                command.expand(paragraph)?,
+            ));
+        }
+    };
+    Ok((system, message))
+}
+
+/// The request for one action on a paragraph.
+pub fn assist_request(profile: &Profile, assist: &Assist, language: &str, paragraph: &str, examples: &[Example], own: &[Command]) -> Result<HttpRequest, String> {
+    let (system, message) = assist_prompt(assist, language, paragraph, examples, own)?;
+    plain_request(profile, &system, &message)
+}
+
+/// The paragraph an action works on when nothing is selected: the line the
+/// caret is in, without the spaces around it. A caret on an empty line
+/// takes the paragraph before it, where one has just been finished.
+pub fn paragraph_at(text: &str, caret: usize) -> std::ops::Range<usize> {
+    let caret = text.floor_char_boundary(caret.min(text.len()));
+    let line = |at: usize| (text[..at].rfind('\n').map_or(0, |i| i + 1), text[at..].find('\n').map_or(text.len(), |i| at + i));
+    let (mut start, mut end) = line(caret);
+    if text[start..end].trim().is_empty() {
+        let before = text[..start].trim_end();
+        if before.is_empty() { return caret..caret }
+        (start, end) = line(before.len());
+    }
+    let trimmed = text[start..end].trim_start();
+    let start = end - trimmed.len();
+    start..start + trimmed.trim_end().len()
+}
+
+/// A piece of text in a comparison of two versions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Change {
+    Same,
+    /// Only in the first version.
+    Removed,
+    /// Only in the second.
+    Added,
+}
+
+/// The words a comparison goes by: runs of letters and digits, every other
+/// character (a Chinese character, a space, a mark) on its own.
+fn diff_tokens(text: &str) -> Vec<&str> {
+    let mut tokens = vec![];
+    let mut start = None;
+    for (at, c) in text.char_indices() {
+        let wordish = c.is_alphanumeric() && (c as u32) < 0x2E80;
+        match (wordish, start) {
+            (true, None) => start = Some(at),
+            (true, Some(_)) => {}
+            (false, from) => {
+                if let Some(from) = from { tokens.push(&text[from..at]) }
+                start = None;
+                tokens.push(&text[at..at + c.len_utf8()]);
+            }
+        }
+    }
+    if let Some(from) = start { tokens.push(&text[from..]) }
+    tokens
+}
+
+/// The most words of each version a comparison is made for: beyond that the
+/// table would be large, and the texts are shown as they are.
+const DIFF_TOKENS: usize = 1500;
+
+/// Where two versions of a paragraph differ, word by word, as pieces of the
+/// first (`Same`, `Removed`) and of the second (`Same`, `Added`). `None`
+/// when they share too little for marks to help (a translation), or are
+/// too long to compare.
+pub fn word_diff(before: &str, after: &str) -> Option<(Vec<(Change, String)>, Vec<(Change, String)>)> {
+    let (a, b) = (diff_tokens(before), diff_tokens(after));
+    if a.len() > DIFF_TOKENS || b.len() > DIFF_TOKENS || a.is_empty() || b.is_empty() { return None }
+    // Longest common subsequence, from the end.
+    let mut table = vec![vec![0u16; b.len() + 1]; a.len() + 1];
+    for i in (0..a.len()).rev() {
+        for j in (0..b.len()).rev() {
+            table[i][j] = if a[i] == b[j] { table[i + 1][j + 1] + 1 } else { table[i + 1][j].max(table[i][j + 1]) };
+        }
+    }
+    if (table[0][0] as usize) * 2 < a.len().min(b.len()) { return None }
+    let (mut left, mut right): (Vec<(Change, String)>, Vec<(Change, String)>) = (vec![], vec![]);
+    let push = |side: &mut Vec<(Change, String)>, change: Change, token: &str| match side.last_mut() {
+        Some((last, text)) if *last == change => text.push_str(token),
+        _ => side.push((change, token.to_string())),
+    };
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() || j < b.len() {
+        if i < a.len() && j < b.len() && a[i] == b[j] {
+            push(&mut left, Change::Same, a[i]);
+            push(&mut right, Change::Same, b[j]);
+            (i, j) = (i + 1, j + 1);
+        } else if j < b.len() && (i == a.len() || table[i][j + 1] >= table[i + 1][j]) {
+            push(&mut right, Change::Added, b[j]);
+            j += 1;
+        } else {
+            push(&mut left, Change::Removed, a[i]);
+            i += 1;
+        }
+    }
+    Some((left, right))
+}
+
 /// A search the model proposes for one literature database.
 #[derive(Clone, Debug, PartialEq)]
 pub struct QueryIdea {
@@ -1642,6 +1846,65 @@ mod tests {
         // Nothing to translate, and a text that would have to be cut, are both refused.
         assert!(translate_request(&profile, "", "  ").is_err());
         assert!(translate_request(&profile, "", &"a".repeat(TRANSLATE_LIMIT + 1)).is_err());
+    }
+
+    #[test]
+    fn writing_requests() {
+        let profile = Profile { api_key: "k".into(), model: "claude-opus-5-5".into(), ..Default::default() };
+        let examples = vec![
+            Example { text: "Root growth is limited by soil strength.".into(), cite: "Smith et al., 2020".into(), page: Some(3), heading: "Introduction".into() },
+            Example { text: "Ethylene mediates the response.".into(), cite: "Lee, 2019".into(), page: None, heading: String::new() },
+        ];
+        let paragraph = "  Compacted soil slows roots (Smith et al., 2020).  ";
+        let r = assist_request(&profile, &Assist::Rewrite, "English", paragraph, &examples, &[]).unwrap();
+        let (system, message) = (r.body["system"].as_str().unwrap(), r.body["messages"][0]["content"].as_str().unwrap());
+        // The language, the rule that citations stay, and every candidate with where it is from.
+        assert!(system.contains("稿件语言是英文") && system.contains("保持原样"));
+        assert!(message.contains("[1] (Smith et al., 2020, p. 3, Introduction) Root growth is limited by soil strength."));
+        assert!(message.contains("[2] (Lee, 2019) Ethylene mediates the response."));
+        assert!(message.contains("已有的引用一个都不能删") && message.contains("候选句正文里引用的其他文献") && message.contains("不要照抄") && message.ends_with("要改写的段落：\nCompacted soil slows roots (Smith et al., 2020)."));
+        // Without candidates there is nothing to rewrite after.
+        assert!(assist_request(&profile, &Assist::Rewrite, "English", paragraph, &[], &[]).is_err());
+        let many: Vec<Example> = (0..20).map(|n| Example { text: format!("Sentence {n}."), ..Default::default() }).collect();
+        let message = assist_prompt(&Assist::Rewrite, "en", "x", &many, &[]).unwrap().1;
+        assert!(message.contains("Sentence 11.") && !message.contains("Sentence 12."));
+
+        let (system, message) = assist_prompt(&Assist::Translate, "English", "根系在紧实土壤中生长变慢。", &[], &[]).unwrap();
+        assert!(system.contains("英文") && message.contains("译成英文的学术论文文字") && message.ends_with("根系在紧实土壤中生长变慢。"));
+        assert_eq!(Assist::Translate.title("German"), "译成german");
+        let message = assist_prompt(&Assist::Polish, "", "Roots grows slow.", &[], &[]).unwrap().1;
+        assert!(message.contains("改得越少越好") && message.ends_with("Roots grows slow."));
+
+        // The person's own command: the paragraph where {} stands, else at the end.
+        let own = vec![Command { name: "style".into(), about: String::new(), template: "按本刊格式检查：{}。".into() }, Command { name: "short".into(), about: String::new(), template: "缩短到两句。".into() }];
+        assert_eq!(assist_prompt(&Assist::Own("style".into()), "English", "Roots.", &[], &own).unwrap().1, "按本刊格式检查：Roots.。");
+        assert_eq!(assist_prompt(&Assist::Own("short".into()), "English", "Roots.", &[], &own).unwrap().1, "缩短到两句。\n\nRoots.");
+        assert!(assist_prompt(&Assist::Own("gone".into()), "English", "Roots.", &[], &own).is_err());
+        // Nothing to work on, and too much, are refused before anything is sent.
+        assert!(assist_prompt(&Assist::Polish, "English", " \n ", &[], &[]).is_err());
+        assert!(assist_prompt(&Assist::Polish, "English", &"a".repeat(ASSIST_LIMIT + 1), &[], &[]).is_err());
+    }
+
+    #[test]
+    fn paragraph_under_the_caret() {
+        let text = "First one.\n\n  Second one.  \nThird.";
+        let at = |caret: usize| &text[paragraph_at(text, caret)];
+        assert_eq!((at(0), at(5), at(15), at(text.len())), ("First one.", "First one.", "Second one.", "Third."));
+        // On the empty line after a paragraph: that paragraph.
+        assert_eq!(at(11), "First one.");
+        assert!(paragraph_at("\n\n", 1).is_empty());
+    }
+
+    #[test]
+    fn differences_word_by_word() {
+        let (before, after) = word_diff("Roots grows slow in soil.", "Roots grow slowly in soil.").unwrap();
+        assert_eq!(before, vec![(Change::Same, "Roots ".into()), (Change::Removed, "grows".into()), (Change::Same, " ".into()), (Change::Removed, "slow".into()), (Change::Same, " in soil.".into())]);
+        assert_eq!(after, vec![(Change::Same, "Roots ".into()), (Change::Added, "grow".into()), (Change::Same, " ".into()), (Change::Added, "slowly".into()), (Change::Same, " in soil.".into())]);
+        // Each side put together is its text again.
+        let joined = |pieces: &[(Change, String)]| pieces.iter().map(|(_, text)| text.as_str()).collect::<String>();
+        assert_eq!((joined(&before), joined(&after)), ("Roots grows slow in soil.".to_string(), "Roots grow slowly in soil.".to_string()));
+        // A translation shares nothing worth marking.
+        assert!(word_diff("根系在紧实土壤中生长变慢。", "Roots grow slowly in compacted soil.").is_none());
     }
 
     fn read(protocol: Protocol, lines: &[&str]) -> (String, Turn) {

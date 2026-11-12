@@ -26,6 +26,7 @@ mod theme;
 mod ui;
 mod write;
 mod write_find;
+mod write_assist;
 
 use gpui::*;
 

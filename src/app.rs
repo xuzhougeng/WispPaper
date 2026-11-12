@@ -324,6 +324,10 @@ pub enum Cmd {
     WriteOnly(String, bool),
     /// Show or hide the sentences around a candidate, by its card's id.
     WriteUnfold(String),
+    /// Have the model work on the selected text or the caret's paragraph; stop it; use what it gave.
+    WriteAssist(ai::Assist),
+    WriteAssistStop,
+    WriteAssistUse(crate::write_assist::Use),
     // Dialogs
     CloseModal,
     SubmitModal,
@@ -477,6 +481,8 @@ pub struct Writing {
     pub structures: BTreeMap<String, StructureInfo>,
     pub sorting: Sorting,
     pub scroll: ScrollHandle,
+    /// The model's work on a paragraph (`write_assist.rs`).
+    pub assist: crate::write_assist::Assisting,
 }
 
 /// A run of the screening assistant gives up after this many papers in a
@@ -1576,6 +1582,9 @@ impl Workspace {
             Cmd::WriteUnfold(card) => {
                 if let Some(unfolded) = self.lib.as_mut().map(|lib| &mut lib.writing.search.unfolded) && !unfolded.remove(&card) { unfolded.insert(card); }
             }
+            Cmd::WriteAssist(assist) => self.assist_start(assist, cx),
+            Cmd::WriteAssistStop => self.assist_stop(cx),
+            Cmd::WriteAssistUse(how) => self.assist_use(how, window, cx),
             Cmd::WriteStop => {
                 if let Some(lib) = self.lib.as_mut() {
                     let sorting = &mut lib.writing.sorting;
@@ -2256,7 +2265,7 @@ impl Workspace {
         }));
         // Candidates are asked for: the find box on Enter, the manuscript by the shortcut.
         subscriptions.push(cx.subscribe(&find, |this, _, event: &InputEvent, cx| if *event == InputEvent::Submit { this.write_find(true, cx) }));
-        let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new() };
+        let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new(), assist: Default::default() };
         let citing = crate::cite::Citing::new(&store, &mut subscriptions, cx);
         let mut lib = Library {
             info,
@@ -4249,6 +4258,21 @@ impl Workspace {
                 }
                 // `sort` has the model sort the full texts into parts, `read` has it read the pages of those without text.
                 "sort" => Some(Cmd::WriteRun(false)),
+                // `assist:rewrite|translate|polish|<own command>` asks the model about the caret's paragraph;
+                // `assisted:replace|below|copy|drop` uses the result, `assiststop` stops it; `caret:<byte>` / `pick:<from>;<to>` place the caret / select.
+                "assist" => Some(Cmd::WriteAssist(match arg { "rewrite" => ai::Assist::Rewrite, "translate" => ai::Assist::Translate, "polish" => ai::Assist::Polish, own => ai::Assist::Own(own.to_string()) })),
+                "assiststop" => Some(Cmd::WriteAssistStop),
+                "assisted" => Some(Cmd::WriteAssistUse(match arg { "replace" => crate::write_assist::Use::Replace, "below" => crate::write_assist::Use::Below, "copy" => crate::write_assist::Use::Copy, _ => crate::write_assist::Use::Drop })),
+                "undo" => {
+                    if let Some(lib) = self.lib.as_ref() { lib.writing.editor.update(cx, |input, cx| input.undo_last(cx)) }
+                    return;
+                }
+                "caret" | "pick" => {
+                    let (from, to) = arg.split_once(';').unwrap_or((arg, arg));
+                    let (from, to) = (from.parse().unwrap_or(0), to.parse().unwrap_or(0));
+                    if let Some(lib) = self.lib.as_ref() { lib.writing.editor.update(cx, |input, cx| input.select_range(from..to, cx)) }
+                    return;
+                }
                 "read" => Some(Cmd::WriteRun(true)),
                 // `guide:new` is what a new library shows; `guide:search` goes straight to composing, `guide:go` also generates.
                 "guide" => {

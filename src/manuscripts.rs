@@ -103,6 +103,7 @@ impl Workspace {
         let (body, title) = (section.map(|s| s.body.clone()).unwrap_or_default(), manuscript.title.clone());
         writing.section_id = section.map(|s| s.id.clone()).unwrap_or_default();
         writing.manuscript = manuscript.id.clone();
+        writing.assist.leave();
         writing.editor.update(cx, |input, cx| input.set_text(&body, cx));
         writing.title.update(cx, |input, cx| input.set_text(&title, cx));
         self.write_openers(cx);

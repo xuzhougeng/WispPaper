@@ -62,6 +62,7 @@ impl Workspace {
                         .into_any_element()
                 }),
             )
+            .child(self.render_assist_bar(cx))
             .child(self.render_references(window, cx))
             .child(div().flex().flex_none().items_center().px(px(22.)).pb(px(12.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(if writing.reading {
                 let total: usize = writing.current().map_or(0, |m| m.sections.iter().map(|s| s.body.split_whitespace().filter(|word| word.chars().any(char::is_alphanumeric)).count()).sum());
@@ -163,6 +164,7 @@ impl Workspace {
                     .child(self.render_narrowing(cx))
                     .child(self.render_groundwork(cx)),
             )
+            .children(self.render_assist_card(width, cx))
             .when(!heading.is_empty(), |d| d.child(div().flex_none().px(px(14.)).pb(px(6.)).text_size(px(11.)).text_color(Theme::text_tertiary()).truncate().child(heading)))
             .child(match empty {
                 Some(empty) => div().flex().flex_col().flex_1().min_h_0().px(px(14.)).child(empty).into_any_element(),
