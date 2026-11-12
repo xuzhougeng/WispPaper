@@ -68,6 +68,7 @@ impl Workspace {
         // Asking about a paper: the conversation, and the paper's PDF to its right where the panel has room for both.
         let split = lib.split && tab == Tab::Ask && has_pdf && width >= SPLIT_MIN;
         let body = match tab {
+            Tab::Ask if split && self.settings.floating.on => self.render_floating(width, window, cx),
             Tab::Ask if split => {
                 let chat_width = (width * 0.45).clamp(360., 520.);
                 let chat = self.render_chat(true, window, cx);
@@ -344,7 +345,7 @@ impl Workspace {
             .into_any_element()
     }
 
-    fn render_pdf_tab(&mut self, width: f32, cx: &mut Context<Self>) -> AnyElement {
+    pub fn render_pdf_tab(&mut self, width: f32, cx: &mut Context<Self>) -> AnyElement {
         let lib = self.lib.as_ref().unwrap();
         let Some(p) = lib.selected_paper() else { return div().into_any_element() };
         let Some(file) = lib.pdf_file(&p.id) else {

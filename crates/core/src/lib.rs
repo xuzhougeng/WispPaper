@@ -27,6 +27,7 @@ pub mod cite;
 pub mod complete;
 pub mod export;
 pub mod filter;
+pub mod floating;
 pub mod fulltext;
 pub mod import;
 pub mod libraries;

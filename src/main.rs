@@ -10,6 +10,7 @@ mod chat;
 mod cite;
 mod context;
 mod detail;
+mod floating;
 mod dialogs;
 mod guide;
 mod home;

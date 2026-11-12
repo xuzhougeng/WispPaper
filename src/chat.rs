@@ -136,12 +136,14 @@ impl Workspace {
                                 (false, _) => scope,
                             })),
                     )
+                    .children(self.render_float_switch(about_paper, window, cx))
                     .when(listable, |d| d.child(ui::ghost_button("chat-materials", Some(if chat.materials_open { "chevron-up" } else { "list" }), Some(if chat.materials_open { "收起".into() } else { "文献".into() })).on_click(self.on(Cmd::ToggleMaterials, cx))))
                     .child(ui::ghost_button(SharedString::from(format!("chat-history-{side}")), Some(if listing { "arrow-left" } else { "history" }), Some(if listing { "返回".into() } else { "历史".into() })).on_click(self.on(Cmd::ToggleHistory(about_paper), cx)))
                     .when(!chat.messages.is_empty() && !listing, |d| d.child(ui::ghost_button(SharedString::from(format!("chat-new-{side}")), Some("plus"), Some("新对话".into())).on_click(self.on(Cmd::NewChat(about_paper), cx)))),
             )
             .children(materials)
-            .child(body)
+            // A short panel (the floating window) scrolls what is above the box rather than push the box out of sight.
+            .child(div().id(SharedString::from(format!("chat-body-{side}"))).flex().flex_col().flex_1().min_h_0().overflow_y_scroll().child(body))
             .when(configured, |d| d.child(self.render_composer(about_paper, chat, &model, window, cx)))
             // An old conversation on show without a model: it can be read, and says what asking on needs.
             .when(!configured && !listing && !chat.messages.is_empty(), |d| {
