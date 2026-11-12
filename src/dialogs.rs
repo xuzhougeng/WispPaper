@@ -48,6 +48,7 @@ impl Workspace {
         let card = match modal {
             Modal::Section { .. } => self.render_section_dialog(window, cx)?,
             Modal::History { .. } => self.render_history_dialog(cx)?,
+            Modal::ReviewEvidence(_) => self.render_review_evidence_dialog(window, cx)?,
             Modal::Zotero => ui::dialog(560.)
                 .child(ui::dialog_title("从 Zotero 导入"))
                 .child(body()

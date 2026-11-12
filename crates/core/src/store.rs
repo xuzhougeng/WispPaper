@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 
 pub const DB_FILE: &str = "wisp-paper.sqlite";
 /// Bump when an older build would misread the database.
-pub const SCHEMA_VERSION: i32 = 1;
+// Version 2 adds fields to the saved review JSON. Older builds would discard
+// those fields when rewriting a review, so they must refuse to open the library.
+pub const SCHEMA_VERSION: i32 = 2;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS papers (
@@ -451,6 +453,13 @@ fn to_json(values: &[String]) -> String {
     serde_json::to_string(values).unwrap_or_else(|_| "[]".into())
 }
 
+fn check_schema_version(found: i32, supported: i32) -> Result<()> {
+    if found > supported {
+        bail!("这个文献库由更新版本的 Wisp Paper 创建（数据库版本 {found}），请升级后再打开。");
+    }
+    Ok(())
+}
+
 impl Store {
     /// Open (creating it when new) the library in `root`.
     pub fn open(root: &Path) -> Result<Store> {
@@ -469,15 +478,20 @@ impl Store {
         // WAL keeps a crash from losing the library; ignored for in-memory databases.
         let _ = db.pragma_update(None, "journal_mode", "WAL");
         let version: i32 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > SCHEMA_VERSION {
-            bail!("这个文献库由更新版本的 Wisp Paper 创建（数据库版本 {version}），请升级后再打开。");
-        }
+        check_schema_version(version, SCHEMA_VERSION)?;
         db.execute_batch(SCHEMA)?;
         db.execute_batch(crate::manuscript::SCHEMA)?;
         db.execute_batch(crate::review::SCHEMA)?;
         add_columns(&db)?;
         crate::manuscript::migrate_drafts(&mut db)?;
-        db.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        // Ordinary v1 libraries remain readable by the earlier app until the
+        // user saves evidence. Recover protection for any v1 file that already
+        // contains evidence after an interrupted or mixed-version upgrade.
+        let tx = db.transaction()?;
+        let contains_evidence = if version < SCHEMA_VERSION { crate::review::initialize_legacy_watches(&tx)? } else { false };
+        let target = if version >= 2 || contains_evidence { SCHEMA_VERSION } else { 1 };
+        tx.pragma_update(None, "user_version", target)?;
+        tx.commit()?;
         Ok(Store { root, db })
     }
 
@@ -1284,10 +1298,12 @@ fn write_paper(tx: &Transaction, p: &Paper) -> Result<()> {
         ],
     )
     .with_context(|| format!("保存文献失败：{}", p.title))?;
-    tx.execute("DELETE FROM paper_identifiers WHERE paper_id = ?1", [&p.id])?;
     for (namespace, value) in [("doi", &p.doi), ("pmid", &p.pmid)] {
+        // Keep unchanged identifiers in place so observers can distinguish
+        // a metadata change from edits to notes, tags or screening status.
+        tx.execute("DELETE FROM paper_identifiers WHERE paper_id = ?1 AND namespace = ?2 AND value <> ?3", params![p.id, namespace, value])?;
         if !value.is_empty() {
-            tx.execute("INSERT INTO paper_identifiers(paper_id, namespace, value) VALUES (?1, ?2, ?3)", params![p.id, namespace, value])?;
+            tx.execute("INSERT INTO paper_identifiers(paper_id, namespace, value) SELECT ?1, ?2, ?3 WHERE NOT EXISTS (SELECT 1 FROM paper_identifiers WHERE paper_id = ?1 AND namespace = ?2 AND value = ?3)", params![p.id, namespace, value])?;
         }
     }
     tx.execute("DELETE FROM paper_fields WHERE paper_id = ?1", [&p.id])?;
@@ -1337,6 +1353,14 @@ fn copy_hashed(source: &Path, target: &Path) -> Result<(u64, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn schema_version_guard_rejects_newer_libraries() {
+        assert!(check_schema_version(1, 1).is_ok());
+        assert!(check_schema_version(2, 1).is_err(), "the v1 guard rejects evidence-bearing v2 libraries");
+        assert!(check_schema_version(2, 2).is_ok());
+        assert!(check_schema_version(3, 2).is_err());
+    }
 
     #[test]
     fn cite_keys_are_kept_once() {
