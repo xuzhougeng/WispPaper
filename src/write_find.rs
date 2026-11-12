@@ -50,10 +50,12 @@ pub struct CandidateSearch {
 }
 
 impl Library {
-    /// The language the library's sentences are in, for the model to make
-    /// search words in. The full texts are taken to be English.
+    /// The language the candidates are in, for the model to make search
+    /// words in: the manuscript's, since only sentences written in it are
+    /// asked for (`find_sentences`' `language`).
     pub fn sentences_language(&self) -> &'static str {
-        "英文"
+        let code = self.writing.language();
+        wisp_core::structure::LANGUAGES.iter().find(|(key, _)| *key == code).map_or("英文", |(_, name)| *name)
     }
 }
 
@@ -168,9 +170,12 @@ impl Workspace {
     /// Ask `find_sentences` for the search of `round`, with the groups made for it (none: the words as written).
     fn write_rank(&mut self, round: u64, groups: Vec<Group>, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
+        let language = lib.writing.language().to_string();
         let search = &mut lib.writing.search;
         let Some(asked) = search.asked.clone() else { return };
         let mut args = json!({"section": asked.section, "limit": SHOWN, "context": true});
+        // A manuscript in a language the structuring does not tell apart asks for every sentence.
+        if wisp_core::structure::LANGUAGES.iter().any(|(key, _)| *key == language) { args["language"] = json!(language) }
         if groups.is_empty() { args["query"] = json!(asked.text) } else { args["queries"] = json!(groups.iter().map(|group| group.words.clone()).collect::<Vec<_>>()) }
         if !search.tag.is_empty() { args["tag"] = json!(search.tag) }
         if search.starred { args["starred"] = json!(true) }

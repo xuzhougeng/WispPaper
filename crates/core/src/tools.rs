@@ -114,6 +114,7 @@ pub fn catalog() -> Vec<ToolDef> {
                 "paperId": {"type": "string", "description": "只看这一篇文献。"},
                 "tag": {"type": "string", "description": "只看带有这个标签的文献。"},
                 "starred": {"type": "boolean", "description": "为 true 时只看加了星标的文献。"},
+                "language": {"type": "string", "enum": keys(&crate::structure::LANGUAGES), "description": "只要这种语言写的句子（写英文稿时别的语言的句子当不了范文）；不给时不分语言。认不出语言的文本不会被排除。"},
                 "context": {"type": "boolean", "description": "为 true 时每句另附同一篇文献同一部分里的前一句和后一句（before、after），便于看清上下文。"},
                 "limit": {"type": "integer", "description": "最多返回多少句，默认 20，最大 100。"},
             }),
@@ -498,6 +499,7 @@ fn find_sentences(store: &mut Store, args: &Value) -> Result<Value> {
     let tag = text(args, "tag")?;
     let starred = args["starred"].as_bool().unwrap_or(false);
     let context = args["context"].as_bool().unwrap_or(false);
+    let language = choice(args, "language", &crate::structure::LANGUAGES)?;
     let limit = number(args, "limit", 20, 100)?.max(1);
     extract_missing(store, (!only.is_empty()).then_some(only))?;
     let papers: Vec<Paper> = store.list_papers()?.into_iter().filter(|p| p.screening != "irrelevant" && (only.is_empty() || p.id == only) && (tag.is_empty() || p.tags.iter().any(|t| t == tag)) && (!starred || p.starred)).collect();
@@ -508,12 +510,16 @@ fn find_sentences(store: &mut Store, args: &Value) -> Result<Value> {
             .iter()
             .flat_map(|p| {
                 let kept = crate::structure::split_sentences(&p.abstract_text).into_iter().filter(|s| crate::structure::usable(s)).enumerate();
-                kept.map(|(position, text)| crate::store::PaperSentence { paper_id: p.id.clone(), sentence: crate::structure::Sentence { section: "abstract".into(), position, text, ..Default::default() } }).collect::<Vec<_>>()
+                let written = crate::structure::language(std::slice::from_ref(&p.abstract_text));
+                kept.map(|(position, text)| crate::store::PaperSentence { paper_id: p.id.clone(), sentence: crate::structure::Sentence { section: "abstract".into(), position, text, language: written.to_string(), ..Default::default() } }).collect::<Vec<_>>()
             })
             .collect()
     } else {
         store.section_sentences(section, only)?.into_iter().filter(|s| by_id.contains_key(s.paper_id.as_str())).collect()
     };
+    // A sentence in another language is no model for this one; a text too short to tell stays.
+    let in_all = found.len();
+    let found: Vec<crate::store::PaperSentence> = found.into_iter().filter(|s| language.is_empty() || s.sentence.language.is_empty() || s.sentence.language == language).collect();
     let texts: Vec<&str> = found.iter().map(|s| s.sentence.text.as_str()).collect();
     let owners: Vec<&str> = found.iter().map(|s| s.paper_id.as_str()).collect();
     let picked: Vec<usize> = if queries.is_empty() {
@@ -557,6 +563,8 @@ fn find_sentences(store: &mut Store, args: &Value) -> Result<Value> {
         "sentencesInSection": found.len(),
         "papersWithSection": with_sentences.len(),
         "papersWithout": papers.len() - with_sentences.len(),
+        // Left out for being written in another language than the one asked for.
+        "sentencesInOtherLanguages": in_all - found.len(),
     }))
 }
 
@@ -1237,6 +1245,12 @@ pub(crate) mod tests {
         let abstracts = call(&root, "find_sentences", &json!({"section": "abstract", "query": "cell walls"})).unwrap();
         assert_eq!((abstracts["sentences"][0]["paperId"].as_str(), abstracts["sentences"][0].get("page"), abstracts["papersWithout"].as_u64()), (Some(soil.id.as_str()), None, Some(1)));
         assert!(call(&root, "find_sentences", &json!({"section": "preface"})).is_err());
+        // Asked for one language, sentences of another are left out and counted; a text too short to tell stays.
+        let english = call(&root, "find_sentences", &json!({"section": "introduction", "language": "en"})).unwrap();
+        assert_eq!(english["sentencesInOtherLanguages"].as_u64().unwrap() + english["sentencesInSection"].as_u64().unwrap(), openers["sentencesInSection"].as_u64().unwrap());
+        let chinese = call(&root, "find_sentences", &json!({"section": "introduction", "language": "zh"})).unwrap();
+        assert!(chinese["sentences"].as_array().unwrap().iter().all(|s| !s["text"].as_str().unwrap().is_ascii()) || chinese["sentencesInOtherLanguages"].as_u64() == Some(0));
+        assert!(call(&root, "find_sentences", &json!({"section": "introduction", "language": "xx"})).is_err());
         assert_eq!(describe_call("find_sentences", &json!({"section": "introduction", "query": "soil"})), "查找候选句：soil · introduction");
     }
 

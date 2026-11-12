@@ -102,7 +102,8 @@ impl Workspace {
         };
         let drawn_on = found.map(|value| {
             let (count, papers, without) = (value["sentencesInSection"].as_u64().unwrap_or(0), value["papersWithSection"].as_u64().unwrap_or(0), value["papersWithout"].as_u64().unwrap_or(0));
-            format!("{papers} 篇文献的 {count} 句{}", if without > 0 { format!(" · {without} 篇没有{name}可查") } else { String::new() })
+            let elsewhere = value["sentencesInOtherLanguages"].as_u64().unwrap_or(0);
+            format!("{papers} 篇文献的 {count} 句{}{}", if without > 0 { format!(" · {without} 篇没有{name}可查") } else { String::new() }, if elsewhere > 0 { format!(" · 另有 {elsewhere} 句不是稿件的语言") } else { String::new() })
         });
         let rows: Vec<AnyElement> = sentences.iter().enumerate().map(|(n, sentence)| self.render_candidate(n, sentence, cx)).collect();
         let narrowed = !search.tag.is_empty() || search.starred;
