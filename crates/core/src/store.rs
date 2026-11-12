@@ -216,6 +216,12 @@ CREATE TABLE IF NOT EXISTS drafts (
     body TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL
 );
+-- 引用: the key a citation in a manuscript names a paper by, kept from its first citation (`cite`).
+CREATE TABLE IF NOT EXISTS cite_keys (
+    key TEXT PRIMARY KEY NOT NULL COLLATE NOCASE,
+    paper_id TEXT NOT NULL,
+    made_at TEXT NOT NULL
+);
 
 -- Where a file that was fetched came from: the address, who listed it, which version it is.
 CREATE TABLE IF NOT EXISTS file_origins (
@@ -1114,6 +1120,20 @@ impl Store {
         Ok(())
     }
 
+    // ---- citation keys
+
+    /// The keys papers have been cited by: key → paper id (`cite::Index`).
+    pub fn cite_keys(&self) -> Result<BTreeMap<String, String>> {
+        let mut stmt = self.db.prepare("SELECT key, paper_id FROM cite_keys")?;
+        Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<BTreeMap<_, _>>>()?)
+    }
+
+    /// Keep the key a paper was cited by, so it stays the paper's; a key already kept is left as it is.
+    pub fn keep_cite_key(&mut self, paper_id: &str, key: &str) -> Result<()> {
+        self.db.execute("INSERT OR IGNORE INTO cite_keys(key, paper_id, made_at) VALUES (?1, ?2, ?3)", params![key, paper_id, now_iso()])?;
+        Ok(())
+    }
+
     /// Every extracted full text, by paper id: (file, pages).
     /// The full-text files that gave no text, with why: (file, paper, reason).
     /// A paper that has another file with text is not among them.
@@ -1254,6 +1274,16 @@ fn copy_hashed(source: &Path, target: &Path) -> Result<(u64, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cite_keys_are_kept_once() {
+        let dir = temp_dir("cite-keys");
+        let mut store = Store::in_memory(&dir).unwrap();
+        store.keep_cite_key("P1", "Zhang2024").unwrap();
+        // Another paper cannot take a kept key, whatever its case.
+        store.keep_cite_key("P2", "zhang2024").unwrap();
+        assert_eq!(store.cite_keys().unwrap(), BTreeMap::from([("Zhang2024".to_string(), "P1".to_string())]));
+    }
 
     #[test]
     fn structure_and_drafts() {

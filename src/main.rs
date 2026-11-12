@@ -7,6 +7,7 @@
 mod app;
 mod assets;
 mod chat;
+mod cite;
 mod detail;
 mod dialogs;
 mod guide;

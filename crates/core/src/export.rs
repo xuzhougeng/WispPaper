@@ -8,13 +8,23 @@ use std::collections::HashMap;
 /// "A and B". Keys are author-year-word and get a letter suffix on collision.
 /// Tags and custom field values go into `keywords`.
 pub fn bibtex(papers: &[&Paper]) -> String {
-    let mut out = String::new();
     let mut used: HashMap<String, usize> = HashMap::new();
-    for p in papers {
-        let base = bib_key(p);
-        let n = used.entry(base.clone()).or_default();
-        let key = if *n > 0 { format!("{base}{}", (b'a' + (*n as u8 - 1).min(25)) as char) } else { base };
-        *n += 1;
+    let keys: Vec<String> = papers
+        .iter()
+        .map(|p| {
+            let base = bib_key(p);
+            let n = used.entry(base.clone()).or_default();
+            *n += 1;
+            if *n > 1 { format!("{base}{}", (b'a' + (*n as u8 - 2).min(25)) as char) } else { base }
+        })
+        .collect();
+    bibtex_keyed(&keys.iter().map(String::as_str).zip(papers.iter().copied()).collect::<Vec<_>>())
+}
+
+/// The same with the keys given: those a manuscript cites the papers by (`cite::bibtex`).
+pub fn bibtex_keyed(papers: &[(&str, &Paper)]) -> String {
+    let mut out = String::new();
+    for &(key, p) in papers {
         let year = p.year.map(|y| y.to_string()).unwrap_or_default();
         let mut fields: Vec<(&str, String)> = vec![
             ("title", format!("{{{}}}", bib_escape(&p.title))),

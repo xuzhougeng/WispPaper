@@ -66,6 +66,7 @@ impl Workspace {
                         .child(div().px(px(18.)).py(px(14.)).text_size(px(15.)).line_height(px(26.)).text_color(Theme::text()).child(writing.editor.clone())),
                 ),
             )
+            .child(self.render_references(window, cx))
             .child(div().flex().flex_none().items_center().px(px(22.)).pb(px(12.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(if characters == 0 { "草稿随写随存，留在这个文献库里。".to_string() } else { format!("{words} 词 · {characters} 字符 · 已保存") }));
 
         div().flex().size_full().child(editor).child(self.render_candidates(panel, window, cx)).into_any_element()
@@ -172,7 +173,7 @@ impl Workspace {
                     .items_center()
                     .gap(px(2.))
                     .child(div().flex_1().min_w_0().truncate().text_size(px(11.)).text_color(Theme::text_tertiary()).child(about.join(" · ")))
-                    .child(small(id("cite"), "引用").on_click(self.on(Cmd::WriteCite(cite), cx)))
+                    .child(small(id("cite"), "引用").on_click(self.on(Cmd::WriteCite(paper.clone()), cx)))
                     .child(small(id("copy"), "复制").on_click(self.on(Cmd::CopyText(text.clone()), cx)))
                     // With a page, the sentence is shown where it stands in the PDF; an abstract's opens the record.
                     .child(small(id("source"), if page.is_some() { "原文" } else { "文献" }).on_click(self.on(Cmd::GotoSource(paper.clone(), page, if page.is_some() { text } else { String::new() }), cx))),
