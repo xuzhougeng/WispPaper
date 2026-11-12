@@ -29,6 +29,7 @@ pub mod fulltext;
 pub mod import;
 pub mod libraries;
 pub mod lookup;
+pub mod manuscript;
 pub mod markdown;
 pub mod mcp;
 pub mod model;

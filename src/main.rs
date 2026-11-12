@@ -13,6 +13,7 @@ mod guide;
 mod home;
 mod input;
 mod library;
+mod manuscripts;
 mod markdown;
 mod pdf;
 mod picture;
