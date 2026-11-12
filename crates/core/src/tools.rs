@@ -190,7 +190,7 @@ pub fn catalog() -> Vec<ToolDef> {
         scoped(
             "suggest_screening",
             "提出收录建议",
-            "为一篇文献提出收录判断的建议，供用户在筛选页确认。这不会改变文献的收录判断：判断只由用户本人做出。同一篇文献的新建议会替换旧的。建议前先读这篇文献的记录（get_paper），有全文时读全文（read_fulltext）。",
+            "为一篇文献提出收录判断的建议，供用户在筛选页确认。这不会改变文献的收录判断：判断只由用户本人做出。同一篇文献的新建议会替换旧的。按文献库的筛选目标判断（library_status 的 screeningGoal；为空时按主题 topic）。建议前先读这篇文献的记录（get_paper），有全文时读全文（read_fulltext）。",
             json!({
                 "id": {"type": "string", "description": "文献 ID。"},
                 "verdict": {"type": "string", "enum": ["included", "excluded", "irrelevant", "uncertain"], "description": "included：符合文献库的主题，应当收录；excluded：不完全符合但相关、值得留着备查（界面上显示为「相关」）；irrelevant：与主题无关；uncertain：信息不足，无法判断。"},
@@ -311,7 +311,7 @@ fn dispatch(store: &mut Store, info: &LibraryInfo, name: &str, args: &Value, fet
         "run_search" => run_search(store, text(args, "id")?, fetch),
         "list_imports" => Ok(json!({"imports": store.list_batches(number(args, "limit", 20, 200)?)?})),
         "undo_import" => undo_import(store, args),
-        "suggest_screening" => suggest_screening(store, args),
+        "suggest_screening" => suggest_screening(store, info, args),
         "library_status" => library_status(store, info),
         "list_papers" => list_papers(store, info, args),
         "get_paper" => get_paper(store, args),
@@ -379,6 +379,8 @@ fn library_status(store: &mut Store, info: &LibraryInfo) -> Result<Value> {
         "id": info.id,
         "name": info.name,
         "topic": info.topic,
+        // What screening suggestions judge against; empty means by the topic.
+        "screeningGoal": info.criteria,
         "folder": info.dir.display().to_string(),
         "papers": papers.len(),
         "inTrash": store.list_trash()?.len(),
@@ -903,7 +905,7 @@ fn sync_searches(root: &Path, args: &Value, fetch: Fetch, now_ms: i64) -> Result
 /// Record what an agent thinks the screening decision should be. The
 /// decision itself is the person's and is not touched here; a quotation the
 /// paper's text does not hold is not kept as evidence.
-fn suggest_screening(store: &mut Store, args: &Value) -> Result<Value> {
+fn suggest_screening(store: &mut Store, info: &LibraryInfo, args: &Value) -> Result<Value> {
     let paper = store.get_paper(text(args, "id")?)?;
     extract_missing(store, Some(&paper.id))?;
     let pages = store.paper_pages(&paper.id)?;
@@ -923,6 +925,8 @@ fn suggest_screening(store: &mut Store, args: &Value) -> Result<Value> {
         basis: if pages.is_some() { "fulltext" } else if paper.abstract_text.is_empty() { "none" } else { "abstract" }.into(),
         confidence,
         author: if author.is_empty() { "agent".into() } else { author.into() },
+        // An agent is told the goal by library_status; its suggestion is taken as made for it.
+        criteria: Some(info.criteria.clone()),
         ..Default::default()
     };
     store.save_suggestion(&mut suggestion)?;

@@ -257,6 +257,8 @@ pub enum Cmd {
     // Screening
     /// Ask the assistant about the pending papers it has not judged yet.
     ScreenStart,
+    /// The assistant asked again about the papers already decided, against the goal as it is now.
+    ScreenRecheck,
     ScreenStop,
     /// The person's decision on a paper, made on the screening page.
     ScreenDecide(String, String),
@@ -358,7 +360,7 @@ pub struct Screen {
 
 impl Screen {
     fn new(criteria: &str, cx: &mut App) -> Screen {
-        let criteria = cx.new(|cx| TextInput::new("筛选标准：什么样的文献应当收进这个文献库。留空则按文献库的主题判断。", cx).multiline(2).with_text(criteria));
+        let criteria = cx.new(|cx| TextInput::new("例如：只收以人类样本做单细胞测序的原始研究；综述、方法学文章不收。留空则按文献库的主题判断。", cx).multiline(3).with_text(criteria));
         Screen { criteria, todo: vec![], reading: vec![], total: 0, done: 0, failed: 0, streak: 0, model: String::new(), filter: String::new(), error: String::new(), run: 0 }
     }
 
@@ -994,23 +996,51 @@ impl Library {
         files.iter().find(|f| f.kind == "fulltext" && f.format == "pdf").or(files.iter().find(|f| f.format == "pdf")).copied()
     }
 
-    /// The papers waiting for a decision, as the screening page lists them:
-    /// those with a suggestion first (to include, related, uncertain,
-    /// irrelevant; the surer ones first), then the rest, newest first.
+    /// The suggestion that counts for a paper: one made against the
+    /// screening goal as it is now. An older one is shown, but not acted on.
+    pub fn current_suggestion(&self, paper_id: &str) -> Option<&Suggestion> {
+        self.suggestions.get(paper_id).filter(|s| s.made_for(&self.info.criteria))
+    }
+
+    /// Whether a decided paper is back for another look: asked again
+    /// against the goal as it is now, the assistant suggested otherwise,
+    /// and the person has not looked at it since.
+    fn rechecking(&self, paper: &Paper) -> bool {
+        paper.screening != "pending" && self.current_suggestion(&paper.id).is_some_and(|s| s.verdict != paper.screening && s.created_at > paper.reviewed_at)
+    }
+
+    /// The papers waiting for a decision, and the decided ones back for
+    /// another look: the suggested ones first, by verdict and then by how
+    /// sure the assistant was, then those it disagreed with the person on,
+    /// those suggested for an earlier goal, and the ones without a suggestion.
     pub fn screen_queue(&self) -> Vec<&Paper> {
-        let rank = |p: &Paper| match self.suggestions.get(&p.id) {
-            Some(s) => (SCREENINGS.iter().position(|(key, _)| *key == s.verdict).unwrap_or(9), -s.confidence.unwrap_or(0.)),
-            None => (99, 0.),
+        let rank = |p: &Paper| match self.screen_group(&p.id) {
+            "differs" => (20, -self.suggestions[&p.id].confidence.unwrap_or(0.)),
+            "stale" => (50, 0.),
+            "none" => (99, 0.),
+            verdict => (SCREENINGS.iter().position(|(key, _)| *key == verdict).unwrap_or(9), -self.suggestions[&p.id].confidence.unwrap_or(0.)),
         };
-        let mut queue: Vec<&Paper> = self.papers.iter().filter(|p| p.screening == "pending").collect();
+        let mut queue: Vec<&Paper> = self.papers.iter().filter(|p| p.screening == "pending" || self.rechecking(p)).collect();
         // Stable: within a group the library's own order holds.
         queue.sort_by(|a, b| rank(a).partial_cmp(&rank(b)).unwrap_or(std::cmp::Ordering::Equal));
         queue
     }
 
-    /// Which part of the queue a paper belongs to: its suggested verdict, or `none`.
+    /// Which part of the queue a paper belongs to: its suggested verdict,
+    /// `differs` for a decided paper the assistant now sees otherwise,
+    /// `stale` for a suggestion made against an earlier goal, or `none`.
     pub fn screen_group(&self, paper_id: &str) -> &str {
-        self.suggestions.get(paper_id).map_or("none", |s| s.verdict.as_str())
+        let Some(s) = self.suggestions.get(paper_id) else { return "none" };
+        if !s.made_for(&self.info.criteria) { return "stale" }
+        if self.paper(paper_id).is_some_and(|p| p.screening != "pending") { return "differs" }
+        s.verdict.as_str()
+    }
+
+    /// The papers the assistant is still to be asked about against the
+    /// goal as it is now: those waiting for a decision, or, with `decided`,
+    /// those the person has decided.
+    pub fn screen_unasked(&self, decided: bool) -> Vec<&Paper> {
+        self.papers.iter().filter(|p| (p.screening != "pending") == decided && self.current_suggestion(&p.id).is_none()).collect()
     }
 
     /// The part of the queue on show, and its filter. A part that has
@@ -1865,7 +1895,8 @@ impl Workspace {
                     lib.store.save_search(&mut search)
                 });
             }
-            Cmd::ScreenStart => self.screen_start(cx),
+            Cmd::ScreenStart => self.screen_start(false, cx),
+            Cmd::ScreenRecheck => self.screen_start(true, cx),
             Cmd::ScreenStop => {
                 if let Some(lib) = self.lib.as_mut() {
                     // Answers still on their way belong to a run that is over.
@@ -1879,8 +1910,9 @@ impl Workspace {
                 // The paper after this one in the queue on show comes up next; the one before when it was the last.
                 let queue: Vec<&str> = lib.screen_view().0.iter().map(|p| p.id.as_str()).collect();
                 let next = queue.iter().position(|p| *p == id).and_then(|at| queue.get(at + 1).or(at.checked_sub(1).and_then(|before| queue.get(before)))).map(|p| p.to_string());
-                // Agreeing with the assistant takes its reason along; deciding otherwise leaves the reason to the person.
-                let reason = lib.suggestions.get(&id).filter(|s| s.verdict == verdict).map(|s| s.reason.clone()).unwrap_or_default();
+                // Agreeing with the assistant takes its reason along; keeping one's own decision keeps its reason; deciding otherwise leaves the reason to the person.
+                let kept = lib.paper(&id).filter(|p| p.screening == verdict).map(|p| p.screening_reason.clone());
+                let reason = lib.current_suggestion(&id).filter(|s| s.verdict == verdict).map(|s| s.reason.clone()).or(kept).unwrap_or_default();
                 if self.edit_paper(&id, cx, |p| p.decide(&verdict, &reason)) { self.select(next, window, cx) }
             }
             Cmd::ScreenFilter(filter) => {
@@ -2078,6 +2110,14 @@ impl Workspace {
         }
         let guide = Guide::new(&info.topic, cx);
         let screen = Screen::new(&info.criteria, cx);
+        // The goal is the library's, kept with it as it is typed; suggestions made against another one stop counting.
+        subscriptions.push(cx.subscribe(&screen.criteria, |this, input, event: &InputEvent, cx| {
+            if *event != InputEvent::Changed { return }
+            let goal = input.read(cx).text().trim().to_string();
+            let Some(lib) = this.lib.as_mut().filter(|l| l.info.criteria != goal) else { return };
+            lib.info.criteria = goal;
+            if let Err(err) = libraries::save(&lib.info) { this.fail(format!("筛选目标没有保存：{err:#}"), cx) }
+        }));
         let section = "introduction".to_string();
         let draft = store.drafts().ok().and_then(|mut drafts| drafts.remove(&section)).unwrap_or_default();
         let editor = cx.new(|cx| TextInput::new("在这里写。右边会列出文献库里的文献在同一部分是怎么写的；中文也可以，先写下想表达的意思。", cx).multiline(14).with_text(&draft));
@@ -3281,10 +3321,11 @@ impl Workspace {
     }
 
     /// Start asking the assistant about the pending papers it has not judged
-    /// yet, several at a time (设置 › AI says how many, and with which
-    /// model). What it says is saved as a suggestion; the decision stays
-    /// with the person.
-    fn screen_start(&mut self, cx: &mut Context<Self>) {
+    /// against the goal as it is now (with `decided`, the decided ones),
+    /// several at a time (设置 › AI says how many, and with which model).
+    /// What it says is saved as a suggestion; the decision stays with the
+    /// person, and a decided paper it sees otherwise comes back to the queue.
+    fn screen_start(&mut self, decided: bool, cx: &mut Context<Self>) {
         let profile = self.settings.profile_for_or_default(Task::Screen);
         let workers = self.settings.screen_workers;
         let Some(lib) = self.lib.as_mut() else { return };
@@ -3295,18 +3336,9 @@ impl Workspace {
             lib.screen.error = err;
             return cx.notify();
         }
-        // The criteria are the library's: they are kept with it.
-        let criteria = lib.screen.criteria.read(cx).text().trim().to_string();
-        if criteria != lib.info.criteria {
-            lib.info.criteria = criteria;
-            if let Err(err) = libraries::save(&lib.info) {
-                lib.screen.error = format!("{err:#}");
-                return cx.notify();
-            }
-        }
-        let mut todo: Vec<String> = lib.screen_queue().iter().filter(|p| !lib.suggestions.contains_key(&p.id)).map(|p| p.id.clone()).collect();
+        let mut todo: Vec<String> = lib.screen_unasked(decided).iter().map(|p| p.id.clone()).collect();
         if todo.is_empty() {
-            lib.screen.error = "待判断的文献都已经有建议了。".into();
+            lib.screen.error = if decided { "已判断的文献都有按当前目标的建议了。" } else { "待判断的文献都已经有按当前目标的建议了。" }.into();
             return cx.notify();
         }
         todo.reverse();
@@ -3333,9 +3365,11 @@ impl Workspace {
         let pages = lib.store.paper_pages(&id).ok().flatten();
         let (system, prompt, basis) = ai::screen_prompt(&lib.info.topic, &lib.info.criteria, &paper, pages.as_deref());
         let author = format!("{} · {}", profile.title(), profile.model);
+        // What it is judged against, kept with the answer: the goal may change while it is read.
+        let criteria = Some(lib.info.criteria.clone());
         // Nothing to read: say so without asking, rather than have the model guess from a title.
         if basis == "none" {
-            let mut suggestion = Suggestion { paper_id: id, verdict: "uncertain".into(), reason: "这篇文献没有摘要，也没有保存全文，无法判断。".into(), basis: basis.into(), author, ..Default::default() };
+            let mut suggestion = Suggestion { paper_id: id, verdict: "uncertain".into(), reason: "这篇文献没有摘要，也没有保存全文，无法判断。".into(), basis: basis.into(), author, criteria, ..Default::default() };
             let saved = lib.store.save_suggestion(&mut suggestion);
             lib.screen.done += 1;
             if saved.is_ok() { lib.suggestions.insert(suggestion.paper_id.clone(), suggestion); }
@@ -3362,7 +3396,7 @@ impl Workspace {
                 lib.screen.reading.retain(|reading| *reading != paper.id);
                 lib.screen.done += 1;
                 let saved = judged.and_then(|j| {
-                    let mut suggestion = Suggestion { paper_id: paper.id.clone(), verdict: j.verdict, reason: j.reason, excerpt: j.excerpt, page: j.page, basis: basis.into(), confidence: j.confidence, author, ..Default::default() };
+                    let mut suggestion = Suggestion { paper_id: paper.id.clone(), verdict: j.verdict, reason: j.reason, excerpt: j.excerpt, page: j.page, basis: basis.into(), confidence: j.confidence, author, criteria, ..Default::default() };
                     lib.store.save_suggestion(&mut suggestion).map(|()| suggestion).map_err(|e| format!("{e:#}"))
                 });
                 match saved {
@@ -3983,7 +4017,17 @@ impl Workspace {
                     None
                 }
                 "zotero-report" => Some(Cmd::ShowZotero),
-                "screen" => Some(Cmd::ScreenStart),
+                // `screen` starts the assistant on the pending papers, `screen:decided` on the decided ones.
+                "screen" => Some(if arg == "decided" { Cmd::ScreenRecheck } else { Cmd::ScreenStart }),
+                // `goal:<text>` writes the screening goal, as if typed.
+                "goal" => {
+                    if let Some(lib) = self.lib.as_mut() {
+                        lib.screen.criteria.update(cx, |input, cx| input.set_text(arg, cx));
+                        lib.info.criteria = arg.trim().to_string();
+                        libraries::save(&lib.info).ok();
+                    }
+                    None
+                }
                 // `sort` has the model sort the full texts into parts, `read` has it read the pages of those without text.
                 "sort" => Some(Cmd::WriteRun(false)),
                 "read" => Some(Cmd::WriteRun(true)),
