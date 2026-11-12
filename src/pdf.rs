@@ -166,10 +166,11 @@ mod device {
     }
 }
 
-/// The first pages of a PDF as PNG pictures, for a model to read a file
-/// that gives no text of its own. One and a half pixels per point: enough
+/// The pages of a PDF from `skip` on, at most `limit` of them, as PNG
+/// pictures for a model to read a file that gives no text of its own, and
+/// how many pages the file has. One and a half pixels per point: enough
 /// to read print by, and small enough to send.
-pub fn page_pictures(path: &Path, limit: usize) -> Result<Vec<Vec<u8>>, String> {
+pub fn page_pictures(path: &Path, skip: usize, limit: usize) -> Result<(Vec<Vec<u8>>, usize), String> {
     use hayro::hayro_interpret::InterpreterSettings;
     use hayro::hayro_syntax::Pdf;
     use hayro::vello_cpu::color::palette::css::WHITE;
@@ -178,7 +179,8 @@ pub fn page_pictures(path: &Path, limit: usize) -> Result<Vec<Vec<u8>>, String> 
     let pdf = Pdf::new(data).map_err(|err| format!("无法解析这个 PDF（{err:?}）。"))?;
     let (cache, interpreter, settings) = (RenderCache::new(), InterpreterSettings::default(), RenderSettings::default());
     let mut out = vec![];
-    for page in pdf.pages().iter().take(limit) {
+    let count = pdf.pages().len();
+    for page in pdf.pages().iter().skip(skip).take(limit) {
         let (w, h) = page.render_dimensions();
         let scale = 1.5_f32.min(2000. / w.max(h).max(1.));
         let pixmap = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render(page, &cache, &interpreter, &settings, &PixmapSettings { x_scale: scale, y_scale: scale, bg_color: WHITE }))).map_err(|_| "这个 PDF 的页面画不出来。".to_string())?;
@@ -189,7 +191,7 @@ pub fn page_pictures(path: &Path, limit: usize) -> Result<Vec<Vec<u8>>, String> 
         out.push(png);
     }
     if out.is_empty() { return Err("这个 PDF 没有页面。".into()) }
-    Ok(out)
+    Ok((out, count))
 }
 
 fn worker(path: PathBuf, requests: mpsc::Receiver<Request>, replies: async_channel::Sender<Reply>) {

@@ -189,13 +189,27 @@ impl Workspace {
         let count = |method: &str| writing.structures.values().filter(|info| info.method == method).count();
         let (by_model, by_rule, unread) = (count("model"), count("rules"), count("none"));
         // The texts with paragraphs no heading names the part of: a model may sort those better.
-        let open = writing.structures.values().filter(|info| info.method == "rules" && info.open >= wisp_core::structure::OPEN_ENOUGH).count();
+        let open = writing.structures.values().filter(|info| info.worth_asking()).count();
+        // Files longer than one run of reading reads: the rest of their pages are still to be read.
+        let in_part = writing.structures.values().filter(|info| info.read_in_part()).count();
         let reading_now = lib.extracting.len();
         let mut facts = vec![format!("全文 {} 篇", writing.structures.len() + reading_now)];
         if by_rule > 0 { facts.push(format!("按标题分节 {by_rule}")) }
         if by_model > 0 { facts.push(format!("模型协助 {by_model}")) }
         if open > 0 { facts.push(format!("{open} 篇有段落没有标题可依")) }
         if unread > 0 { facts.push(format!("读不出文字 {unread}")) }
+        if in_part > 0 { facts.push(format!("{in_part} 篇的页面只读了一部分")) }
+        // Which languages the texts are in, once there is more than one.
+        let mut languages: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+        for info in writing.structures.values().filter(|info| info.method != "none") {
+            *languages.entry(info.language.as_str()).or_default() += 1;
+        }
+        if languages.len() > 1 {
+            let mut shown: Vec<(&str, usize)> = languages.into_iter().collect();
+            shown.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+            facts.push(shown.iter().map(|(code, n)| format!("{}{n}", wisp_core::structure::LANGUAGES.iter().find(|(key, _)| key == code).map_or("语言不明", |(_, name)| *name))).collect::<Vec<_>>().join(" "));
+        }
+        let unread = unread + in_part;
         if reading_now > 0 { facts.push(format!("正在读取 {reading_now}")) }
         let configured = !self.settings.profile_for_or_default(Task::Structure).key().is_empty();
         let button = |id: &'static str, text: String| ui::secondary_button(id, text).h(px(24.)).px(px(8.)).text_size(px(12.));
@@ -245,6 +259,12 @@ impl Workspace {
                                 .child(div().flex_1().min_w_0().truncate().text_right().text_size(px(11.)).text_color(Theme::text_tertiary()).child(sorting.model.clone())),
                         )
                         .child(crate::screen::progress_bar(sorting.done, sorting.total))
+                        // A file longer than one run reads: how far it got, and that the next run goes on from there.
+                        .when(!sorting.cut.is_empty(), |d| {
+                            let first = &sorting.cut[0];
+                            let more = if sorting.cut.len() > 1 { format!("等 {} 篇", sorting.cut.len()) } else { String::new() };
+                            d.child(div().text_size(px(11.)).text_color(Theme::text_secondary()).child(format!("「{}」{more}页数较多，这次只读了 {} / {} 页；再点「让模型读页面」从第 {} 页接着读。", first.0, first.1, first.2, first.1 + 1)))
+                        })
                         .children(titles.iter().enumerate().map(|(n, title)| {
                             let line = div().flex().items_center().gap(px(6.)).text_size(px(11.)).text_color(Theme::text_secondary()).child(ui::spinner(("write-working", n), 11., Theme::accent())).child(div().flex_1().min_w_0().truncate().child(title.clone()));
                             ui::fade_in(SharedString::from(format!("write-working-{title}")), line)
