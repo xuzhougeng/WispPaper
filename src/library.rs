@@ -473,7 +473,7 @@ impl Workspace {
         let lookable = if lib.filters.view == View::NoPdf { lib.shown.iter().filter(|&&i| wisp_core::openaccess::lookable(&lib.papers[i])).count() } else { 0 };
         let body = if shown == 0 {
             if lib.papers.is_empty() {
-                ui::empty_state("library", "这个文献库还是空的", "点击左侧「添加文献」：粘贴 DOI 或 PMID、导入 BibTeX / RIS，或者直接把 PDF 拖进窗口。").into_any_element()
+                ui::empty_state("library", "这个文献库还是空的", "点击左侧「添加文献」：粘贴 DOI 或 PMID、导入 BibTeX / RIS，或者直接把 PDF 或整个文件夹拖进窗口（子文件夹的名字会成为标签）。").into_any_element()
             } else {
                 ui::empty_state("search", "没有匹配的文献", "调整搜索词或筛选条件。").child(ui::secondary_button("empty-clear", "清空筛选").on_click(self.on(Cmd::ClearFilters, cx))).into_any_element()
             }
@@ -485,7 +485,7 @@ impl Workspace {
         } else if !lib.extracting.is_empty() {
             format!("正在提取 {} 篇全文的文字，用于提问…", lib.extracting.len())
         } else {
-            "拖入 PDF 即可添加 · Ctrl+F 搜索 · Esc 关闭详情".to_string()
+            "拖入 PDF 或文件夹即可添加 · Ctrl+F 搜索 · Esc 关闭详情".to_string()
         };
         div()
             .flex()

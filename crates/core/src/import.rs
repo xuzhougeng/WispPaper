@@ -289,9 +289,59 @@ pub fn parse_ris(text: &str) -> Vec<Paper> {
     papers
 }
 
+/// The PDFs under a folder, at any depth, each with the folders between the
+/// one picked and the file as its tags: `Root/植物/光合/a.pdf` is tagged
+/// 「植物」 and 「光合」, a PDF lying in `Root` itself none. The picked folder's
+/// own name is left out, being as often 「下载」 as a topic. Hidden files and
+/// folders are skipped, and a linked folder is not followed (it may lead back
+/// up). Sorted by path, so a folder is imported in the order it shows.
+pub fn folder_pdfs(root: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<String>)> {
+    fn walk(dir: &std::path::Path, tags: &[String], out: &mut Vec<(std::path::PathBuf, Vec<String>)>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') { continue }
+            let Ok(kind) = entry.file_type() else { continue };
+            let path = entry.path();
+            if kind.is_dir() {
+                let mut inner = tags.to_vec();
+                inner.push(name);
+                walk(&path, &clean_strings(inner), out);
+            } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) && (kind.is_file() || path.is_file()) {
+                out.push((path, tags.to_vec()));
+            }
+        }
+    }
+    let mut out = vec![];
+    walk(root, &[], &mut out);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn folder_levels_become_tags() {
+        let root = std::env::temp_dir().join(format!("wisp-folder-{}", crate::model::new_id("T")));
+        for dir in ["植物/光合", "植物/.cache", ".hidden", "空的", "Methods/Methods"] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        for file in ["top.PDF", "notes.txt", "植物/a.pdf", "植物/光合/b.pdf", "植物/光合/c.txt", "植物/.cache/d.pdf", ".hidden/e.pdf", "Methods/Methods/f.pdf", "植物/.g.pdf"] {
+            std::fs::write(root.join(file), b"%PDF-1.4").unwrap();
+        }
+        let found: Vec<(String, Vec<String>)> = folder_pdfs(&root).into_iter().map(|(path, tags)| (path.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/"), tags)).collect();
+        let tags = |list: &[&str]| list.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+        assert_eq!(found, vec![
+            ("Methods/Methods/f.pdf".to_string(), tags(&["Methods"])),
+            ("top.PDF".to_string(), tags(&[])),
+            ("植物/a.pdf".to_string(), tags(&["植物"])),
+            ("植物/光合/b.pdf".to_string(), tags(&["植物", "光合"])),
+        ]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn bibtex_entries() {

@@ -52,7 +52,7 @@ impl Workspace {
                 .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).child(format!("「{}」建好了，从哪里开始？", lib.info.name)))
                 .child(div().pb(px(8.)).text_size(px(12.)).text_color(Theme::text_tertiary()).child("之后随时可以用其他方式继续添加。"))
                 .child(choice("guide-search", "search", "从检索文献开始", "写下主题或关键词，助手为 PubMed 等数据库拟出几条检索式并逐条试检索；你挑出靠谱的，一次导入，之后还能定期运行。", true).on_click(self.on(Cmd::GuideSearch, cx)))
-                .child(choice("guide-import", "folder-open", "导入已有的文献", "从 Zotero、EndNote 等导出的 BibTeX / RIS 文件，或者一批 PDF。", false).on_click(self.on(Cmd::ImportReferences, cx)))
+                .child(choice("guide-import", "folder-open", "导入已有的文献", "从 Zotero、EndNote 等导出的 BibTeX / RIS 文件，一批 PDF，或整个文件夹（子文件夹的名字成为标签）。", false).on_click(self.on(Cmd::ImportReferences, cx)))
                 .child(choice("guide-zotero", "folder-open", "从 Zotero 导入", "读取本机 Zotero 数据库，带入文献信息、标签、笔记和已下载的 PDF。", false).on_click(self.on(Cmd::ImportZotero, cx)))
                 .child(choice("guide-empty", "plus", "先空着，自己添加", "通过 DOI / PMID 逐篇添加，或者手动录入。", false).on_click(self.on(Cmd::SetPage(Page::Papers), cx)))
                 .into_any_element();
