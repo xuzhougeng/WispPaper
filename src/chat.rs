@@ -7,7 +7,7 @@
 //! command is being typed, the commands that match. The history lists the
 //! library's past conversations in place of the one in hand.
 
-use crate::app::{Chat, ChatImage, ChatItem, Cmd, Consent, Workspace};
+use crate::app::{Chat, ChatImage, ChatItem, Cmd, Consent, MenuKind, Workspace};
 use crate::settings::SettingsPage;
 use crate::theme::{self, Theme};
 use crate::ui;
@@ -266,7 +266,7 @@ impl Workspace {
                             .items_end()
                             .gap(px(6.))
                             .when(!images.is_empty(), |d| d.child(div().flex().flex_wrap().justify_end().gap(px(6.)).max_w(relative(0.85)).children(images.iter().map(|picture| thumbnail(picture, 96.)))))
-                            .when(!text.is_empty(), |d| d.child(div().max_w(relative(0.85)).px(px(14.)).py(px(9.)).rounded(px(16.)).bg(Theme::groove()).line_height(px(21.)).child(text.clone())))
+                            .when(!text.is_empty(), |d| d.child(self.selectable(format!("asked-{side}-{i}"), text.clone(), cx).max_w(relative(0.85)).px(px(14.)).py(px(9.)).rounded(px(16.)).bg(Theme::groove()).line_height(px(21.))))
                             .into_any_element(),
                     );
                     i += 1;
@@ -375,7 +375,7 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .gap(px(8.))
-                    .child(crate::markdown::render(&format!("answer-{side}-{i}"), content, Some(cite.clone()), Some(selecting)))
+                    .child(crate::markdown::render(&format!("answer-{side}-{i}"), content, Some(cite.clone()), Some(selecting)).on_mouse_down(MouseButton::Right, self.on_context(MenuKind::Answer(about_paper, content.to_string()), cx)))
                     // What is selected in this answer: copied, or taken into the box as a quotation to ask about.
                     .when(picked.is_some() && !holding, |d| {
                         d.child(
@@ -530,6 +530,7 @@ impl Workspace {
                     .pr(px(4.))
                     .rounded(px(8.))
                     .hover(|s| s.bg(Theme::hover()))
+                    .on_mouse_down(MouseButton::Right, self.on_context(MenuKind::Conversation(about_paper, conversation.id.clone()), cx))
                     .child(
                         div()
                             .id(SharedString::from(format!("history-{side}-{}", conversation.id)))

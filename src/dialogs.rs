@@ -214,6 +214,14 @@ impl Workspace {
                         .child(ui::primary_button("modal-cancel", if run.running() { "收起" } else { "关闭" }).on_click(self.on(Cmd::CloseModal, cx))))
             }
 
+            Modal::Tag { tag, name } => {
+                let count = self.lib.as_ref().map_or(0, |lib| lib.papers.iter().filter(|p| p.tags.contains(tag)).count());
+                ui::dialog(420.)
+                    .child(ui::dialog_title("重命名标签"))
+                    .child(body().child(div().text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_tertiary()).child(format!("「{tag}」在 {count} 篇文献上，都会改成新的名字。改成一个已有的标签，两个就合成一个。"))).child(ui::field(name, window, cx)).child(error))
+                    .child(footer("改名", false, self, cx))
+            }
+
             Modal::Note { paper_id, text } => {
                 let title = self.lib.as_ref().and_then(|lib| lib.paper(paper_id)).map(|paper| paper.title.clone()).unwrap_or_default();
                 ui::dialog(620.)

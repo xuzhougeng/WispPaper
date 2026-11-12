@@ -408,11 +408,14 @@ impl TextInput {
 
     fn up(&mut self, _: &Up, _: &mut Window, cx: &mut Context<Self>) {
         if self.choosing { return cx.emit(InputEvent::Up) }
+        // Nowhere to go in one line or in an empty field: the key is the window's, which moves in its list.
+        if !self.multiline || self.text.is_empty() { return cx.propagate() }
         self.move_line(-1., cx);
     }
 
     fn down(&mut self, _: &Down, _: &mut Window, cx: &mut Context<Self>) {
         if self.choosing { return cx.emit(InputEvent::Down) }
+        if !self.multiline || self.text.is_empty() { return cx.propagate() }
         self.move_line(1., cx);
     }
 

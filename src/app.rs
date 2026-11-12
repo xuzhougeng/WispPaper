@@ -94,6 +94,16 @@ pub enum MenuKind {
     Section(String),
     ManuscriptExport,
     WriteLanguage,
+    /// The menus a right click opens (`src/context.rs`): on a paper of a list, a paper in the trash, a file
+    /// of the selected paper, a tag of the sidebar, a past conversation (of the paper or the library), a
+    /// text that can be selected (the whole of it), an answer (of which conversation, and its text).
+    Paper(String),
+    Trashed(String),
+    File(String),
+    Tag(String),
+    Conversation(bool, String),
+    Text(String),
+    Answer(bool, String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -168,6 +178,8 @@ pub enum Cmd {
     ClearFilters,
     SetSort(String),
     Select(String),
+    /// Open a paper on one page of the detail panel.
+    OpenPaper(String, Tab),
     CloseDetail,
     ToggleStar(String),
     Export(ExportKind),
@@ -182,6 +194,8 @@ pub enum Cmd {
     OpenLink(String),
     AttachPdf(String),
     OpenFile(String),
+    /// Show a stored file in the file manager.
+    RevealFile(String),
     RemoveFile(String),
     /// Try once more to get the text of a stored file.
     RereadFile(String),
@@ -232,6 +246,12 @@ pub enum Cmd {
     /// Unfold or fold the tool calls that start at this place in the conversation.
     ToggleTools(bool, usize),
     CopyText(String),
+    /// Copy what is selected in a text of the window that is not an answer (`src/select.rs`).
+    CopySelected,
+    /// A tag of the library under another name (the dialog), or taken off every paper (after asking).
+    RenameTag(String),
+    AskRemoveTag(String),
+    RemoveTag(String),
     /// The pointer over the text of an answer (by its place in the conversation): selecting it.
     PickText(bool, usize, crate::markdown::Pointer, crate::markdown::Place),
     /// Copy what is selected in an answer; or put it into the question box as a quotation.
@@ -353,6 +373,12 @@ pub struct MenuItem {
 pub struct Menu {
     pub at: Point<Pixels>,
     pub items: Vec<MenuItem>,
+    /// The items a line is drawn above.
+    pub breaks: Vec<usize>,
+    /// The item the arrow keys are on; Enter takes it.
+    pub active: Option<usize>,
+    /// The paper the menu is about, marked in its list while the menu is open.
+    pub paper: Option<String>,
 }
 
 pub struct Toast {
@@ -832,6 +858,8 @@ pub enum Modal {
     Fields { editing: Option<String>, name: Entity<TextInput>, options: Entity<TextInput>, kind: FieldKind, in_table: bool },
     Search { editing: Option<String>, kind: String, name: Entity<TextInput>, query: Entity<TextInput>, max: Entity<TextInput> },
     Confirm { title: String, message: String, action: String, cmd: Cmd },
+    /// Another name for a tag, on every paper that has it.
+    Tag { tag: String, name: Entity<TextInput> },
     /// What came of each PDF of the last import (`Library::import`).
     ImportReport,
     Zotero,
@@ -923,6 +951,8 @@ pub struct Workspace {
     pub home_scroll: ScrollHandle,
     /// The edge being dragged: the sidebar's, or the detail panel's.
     pub resizing: Option<Edge>,
+    /// What is selected in a text of the window that is not an answer or a text field.
+    pub picked: Option<crate::select::Picked>,
 }
 
 impl Chat {
@@ -1237,7 +1267,7 @@ impl Workspace {
         theme::set_accent("blue");
         shortcuts::rebuild(&settings.shortcuts, cx);
         let libraries = libraries::list(&root);
-        let mut this = Workspace { focus, settings, settings_path, root, libraries, lib: None, settings_view: None, update: UpdateState::Idle, update_told: None, modal: None, modal_error: String::new(), modal_subscriptions: vec![], menu: None, toast, home_scroll: ScrollHandle::new(), resizing: None };
+        let mut this = Workspace { focus, settings, settings_path, root, libraries, lib: None, settings_view: None, update: UpdateState::Idle, update_told: None, modal: None, modal_error: String::new(), modal_subscriptions: vec![], menu: None, toast, home_scroll: ScrollHandle::new(), resizing: None, picked: None };
         this.apply_appearance(window);
         cx.observe_window_appearance(window, |this, window, _| this.apply_appearance(window)).detach();
         this.watch_updates(cx);
@@ -1302,10 +1332,16 @@ impl Workspace {
 
     // ---- menus
 
-    fn open_menu(&mut self, kind: MenuKind, at: Point<Pixels>, cx: &mut Context<Self>) {
+    pub(crate) fn open_menu(&mut self, kind: MenuKind, at: Point<Pixels>, cx: &mut Context<Self>) {
         let item = |label: &str, cmd: Cmd| MenuItem { label: label.to_string().into(), checked: false, note: None, cmd };
         let mut items = vec![];
+        let mut breaks = vec![];
+        let paper = match &kind {
+            MenuKind::Paper(id) => Some(id.clone()),
+            _ => None,
+        };
         match kind {
+            MenuKind::Paper(_) | MenuKind::Trashed(_) | MenuKind::File(_) | MenuKind::Tag(_) | MenuKind::Conversation(..) | MenuKind::Text(_) | MenuKind::Answer(..) => (items, breaks) = self.context_menu(&kind),
             MenuKind::Add => {
                 items.push(item("通过 DOI / PMID 添加…", Cmd::AddById));
                 items.push(item("导入 PDF 文件…", Cmd::ImportPdfs));
@@ -1383,7 +1419,8 @@ impl Workspace {
                 }
             }
         }
-        self.menu = Some(Menu { at, items });
+        if items.is_empty() { return }
+        self.menu = Some(Menu { at, items, breaks, active: None, paper });
         cx.notify();
     }
 
@@ -1636,6 +1673,10 @@ impl Workspace {
                 }
             }
             Cmd::Select(id) => self.select(Some(id), window, cx),
+            Cmd::OpenPaper(id, tab) => {
+                self.select(Some(id), window, cx);
+                self.run(Cmd::SetTab(tab), window, cx);
+            }
             Cmd::CloseDetail => self.select(None, window, cx),
             Cmd::ToggleStar(id) => {
                 self.edit_paper(&id, cx, |p| p.starred = !p.starred);
@@ -1649,7 +1690,13 @@ impl Workspace {
                 self.edit_paper(&id, cx, |p| p.decide(&value, ""));
             }
             Cmd::TrashPaper(id) => {
-                if self.change(cx, |lib| lib.store.trash_paper(&id)) { self.say("已移到回收站。", cx) }
+                // The paper on show goes: the one that takes its row is shown next, so a list can be gone through.
+                let row = self.lib.as_ref().filter(|lib| lib.selected.as_deref() == Some(id.as_str())).and_then(|lib| lib.shown.iter().position(|&i| lib.papers[i].id == id));
+                if self.change(cx, |lib| lib.store.trash_paper(&id)) {
+                    let next = row.and_then(|row| self.lib.as_ref().and_then(|lib| lib.shown.get(row).or(lib.shown.last()).map(|&i| lib.papers[i].id.clone())));
+                    if next.is_some() { self.select(next, window, cx) }
+                    self.say("已移到回收站。", cx)
+                }
             }
             Cmd::RestorePaper(id) => {
                 if self.change(cx, |lib| lib.store.restore_paper(&id)) { self.say("已恢复。", cx) }
@@ -1672,6 +1719,11 @@ impl Workspace {
             Cmd::OpenFile(id) => {
                 if let Some(lib) = &self.lib && let Some(file) = lib.files.iter().find(|f| f.id == id) {
                     cx.open_with_system(&lib.store.file_path(file));
+                }
+            }
+            Cmd::RevealFile(id) => {
+                if let Some(lib) = &self.lib && let Some(file) = lib.files.iter().find(|f| f.id == id) {
+                    cx.reveal_path(&lib.store.file_path(file));
                 }
             }
             Cmd::RemoveFile(id) => {
@@ -1848,6 +1900,28 @@ impl Workspace {
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
                 self.say("已复制", cx);
             }
+            Cmd::CopySelected => {
+                if let Some(text) = self.picked.as_ref().map(|picked| picked.chosen().to_string()).filter(|text| !text.is_empty()) {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    self.say("已复制", cx);
+                }
+            }
+            Cmd::RenameTag(tag) => {
+                self.modal_subscriptions.clear();
+                self.modal_error.clear();
+                let name = self.modal_input("标签的新名字", &tag, false, window, cx);
+                name.read(cx).focus(window);
+                self.modal = Some(Modal::Tag { tag, name });
+            }
+            Cmd::AskRemoveTag(tag) => {
+                let count = self.lib.as_ref().map_or(0, |lib| lib.papers.iter().filter(|p| p.tags.contains(&tag)).count());
+                self.modal_error.clear();
+                self.modal = Some(Modal::Confirm { title: format!("去掉标签「{tag}」？"), message: format!("它会从 {count} 篇文献上去掉。文献本身不动。"), action: "去掉标签".into(), cmd: Cmd::RemoveTag(tag) });
+            }
+            Cmd::RemoveTag(tag) => {
+                self.modal = None;
+                if self.retag(&tag, None, cx) { self.say("标签已去掉。", cx) }
+            }
             Cmd::AnswerToNote(question, answer) => {
                 let Some(lib) = self.lib.as_ref() else { return };
                 let Some(paper_id) = lib.selected.clone() else { return };
@@ -1862,7 +1936,10 @@ impl Workspace {
                 use crate::markdown::Pointer;
                 let Some(lib) = self.lib.as_mut() else { return };
                 // The keyboard goes to the window, so that copying finds the selection and not a text box.
-                if pointer == Pointer::Down { window.focus(&self.focus) }
+                if pointer == Pointer::Down {
+                    window.focus(&self.focus);
+                    self.picked = None;
+                }
                 // One selection at a time: starting one in a conversation ends the other's.
                 if pointer == Pointer::Down { lib.chat_mut(!paper).picked = None }
                 let chat = lib.chat_mut(paper);
@@ -2163,6 +2240,7 @@ impl Workspace {
             self.run(Cmd::CloseModal, window, cx);
         } else if self.settings_view.is_some() {
             self.close_settings(window, cx);
+        } else if self.picked.take().is_some() {
         } else if self.lib.as_ref().is_some_and(|l| l.selected.is_some()) {
             self.select(None, window, cx);
         }
@@ -2199,6 +2277,7 @@ impl Workspace {
             "zoom-fit" => Cmd::PdfZoom(ZoomTo::Set(Zoom::FitWidth)),
             "write-find" if self.lib.as_ref().is_some_and(|l| l.page == Page::Write) => Cmd::WriteFind,
             // What is selected in an answer: the paper's conversation first, when both have something.
+            "copy-picked" if self.picked.is_some() => Cmd::CopySelected,
             "copy-picked" => match self.lib.as_ref().map(|lib| (lib.paper_chat.picked.is_some(), lib.library_chat.picked.is_some())) {
                 Some((true, _)) => Cmd::CopyPicked(true),
                 Some((false, true)) => Cmd::CopyPicked(false),
@@ -2328,9 +2407,10 @@ impl Workspace {
 
     // ---- one paper
 
-    fn select(&mut self, id: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn select(&mut self, id: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_ref() else { return };
         if lib.selected == id { return }
+        self.picked = None;
         // The conversation with the paper being left is kept as far as it got.
         self.stop_chat(true, cx);
         let Some(lib) = self.lib.as_mut() else { return };
@@ -2461,6 +2541,26 @@ impl Workspace {
     }
 
     /// Change one paper and save it.
+    /// A tag under another name on every paper that has it (one that has both keeps one), or taken off
+    /// them. The list stays on the same papers when it is narrowed to that tag.
+    fn retag(&mut self, tag: &str, name: Option<&str>, cx: &mut Context<Self>) -> bool {
+        self.change(cx, |lib| {
+            let ids: Vec<String> = lib.papers.iter().filter(|p| p.tags.iter().any(|t| t == tag)).map(|p| p.id.clone()).collect();
+            for id in ids {
+                let mut paper = lib.store.get_paper(&id)?;
+                let mut tags: Vec<String> = vec![];
+                for old in &paper.tags {
+                    let kept = if old == tag { name.map(str::to_string) } else { Some(old.clone()) };
+                    if let Some(kept) = kept && !tags.contains(&kept) { tags.push(kept) }
+                }
+                paper.tags = tags;
+                lib.store.save_paper(&mut paper)?;
+            }
+            if lib.filters.tag == tag { lib.filters.tag = name.unwrap_or("").to_string() }
+            Ok(())
+        })
+    }
+
     fn edit_paper(&mut self, id: &str, cx: &mut Context<Self>, edit: impl FnOnce(&mut Paper)) -> bool {
         self.change(cx, |lib| {
             let mut paper = lib.store.get_paper(id)?;
@@ -3974,6 +4074,14 @@ impl Workspace {
                     Err(err) => self.modal_error = format!("{err:#}"),
                 }
             }
+            Modal::Tag { tag, name } => {
+                let (tag, name) = (tag.clone(), text(name, cx));
+                if name.is_empty() {
+                    self.modal_error = "标签不能没有名字。要去掉它，在标签上点右键选「去掉这个标签」。".into();
+                    return;
+                }
+                if name == tag || self.retag(&tag, Some(&name), cx) { self.run(Cmd::CloseModal, window, cx) }
+            }
             Modal::Note { paper_id, text: input } => {
                 let (paper_id, note) = (paper_id.clone(), text(input, cx));
                 if note.is_empty() {
@@ -4203,7 +4311,12 @@ impl Workspace {
                 // The pointer, as the window hears of it: `press:x;y`, `move:x;y` (the button held), `release:x;y`,
                 // `click:x;y`, `click2:x;y` (the second click of a double click), and `wheel:x;y;dy;cmd` (dy in pixels;
                 // `cmd` or `shift` held, or nothing).
-                "press" | "move" | "release" | "click" | "click2" | "wheel" => {
+                // A key as the window hears it (`key:down`, `key:cmd-backspace`).
+                "key" => {
+                    if let Ok(stroke) = Keystroke::parse(arg) { window.defer(cx, move |window, cx| { window.dispatch_keystroke(stroke, cx); }) }
+                    return;
+                }
+                "press" | "move" | "release" | "click" | "click2" | "rclick" | "wheel" => {
                     let mut numbers = arg.split(';');
                     let mut number = || numbers.next().and_then(|n| n.parse::<f32>().ok()).unwrap_or(0.);
                     let position = point(px(number()), px(number()));
@@ -4215,6 +4328,7 @@ impl Workspace {
                         "press" => vec![PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Left, position, modifiers, click_count: 1, first_mouse: false })],
                         "move" => vec![PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: Some(MouseButton::Left), modifiers })],
                         "release" => vec![PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Left, position, modifiers, click_count: 1 })],
+                        "rclick" => vec![PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: None, modifiers }), PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Right, position, modifiers, click_count: 1, first_mouse: false }), PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Right, position, modifiers, click_count: 1 })],
                         "wheel" => vec![PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: None, modifiers }), PlatformInput::ScrollWheel(ScrollWheelEvent { position, delta: ScrollDelta::Pixels(point(px(0.), px(turned))), modifiers, touch_phase: TouchPhase::Moved })],
                         _ => vec![
                             PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: None, modifiers }),
