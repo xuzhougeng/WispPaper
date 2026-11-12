@@ -49,6 +49,70 @@ fn tools_summary(calls: &[&str]) -> String {
 }
 
 impl Workspace {
+    pub(crate) fn start_review(&mut self, cx: &mut Context<Self>) {
+        let Some(lib) = self.lib.as_mut() else { return };
+        let chat = &lib.library_chat;
+        if chat.id.is_empty() { return }
+        let conversation = chat.id.clone();
+        let title = chat.messages.iter().rev().find_map(|item| match item {
+            ChatItem::User { text, .. } if !text.trim().is_empty() => Some(text.trim().strip_prefix("/review").unwrap_or(text.trim()).trim().chars().take(80).collect::<String>()),
+            _ => None,
+        }).filter(|title| !title.is_empty()).unwrap_or_else(|| "综述".into());
+        let result = (|| -> anyhow::Result<()> {
+            if lib.store.review_for_conversation(&conversation)?.is_some() { return Ok(()) }
+            lib.store.create_review_for_conversation(&title, &conversation)?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => self.say("综述流程已开始。请在回答下记录写作要求，检查后确认。", cx),
+            Err(err) => self.fail(format!("无法开始综述流程：{err:#}"), cx),
+        }
+    }
+
+    pub(crate) fn review_action(&mut self, action: &str, text: String, cx: &mut Context<Self>) {
+        use wisp_core::review::ReviewAction;
+        let Some(lib) = self.lib.as_mut() else { return };
+        if lib.library_chat.busy { return self.fail("请先等回答结束。", cx) }
+        let id = lib.library_chat.id.clone();
+        let result = (|| -> anyhow::Result<()> {
+            let review = lib.store.review_for_conversation(&id)?.ok_or_else(|| anyhow::anyhow!("请先开始综述流程"))?;
+            let operation = match action {
+                "requirements" => ReviewAction::SetRequirements(text),
+                "confirm_requirements" => ReviewAction::ConfirmRequirements,
+                "outline" => ReviewAction::SetOutline(text),
+                "confirm_outline" => ReviewAction::ConfirmOutline,
+                "evidence" => ReviewAction::SetEvidence(if review.evidence.is_empty() { text } else { format!("{}\n\n{}", review.evidence, text) }),
+                "section" => {
+                    // Always add: a repeated click never overwrites earlier work.
+                    let trimmed = text.trim_start();
+                    let (heading, body) = match trimmed.split_once('\n') {
+                        Some((line, rest)) if line.trim_start().starts_with('#') && !rest.trim().is_empty() => {
+                            let heading = line.trim().trim_start_matches('#').trim();
+                            if heading.is_empty() { (String::new(), text.clone()) } else { (heading.chars().take(60).collect(), rest.trim_start().to_string()) }
+                        }
+                        _ => (String::new(), text.clone()),
+                    };
+                    let base = if heading.is_empty() { format!("正文 {}", review.sections.len() + 1) } else { heading };
+                    let mut name = base.clone();
+                    let mut number = 2;
+                    while review.sections.iter().any(|section| section.name == name) { name = format!("{base} ({number})"); number += 1; }
+                    ReviewAction::SaveSection { name, body }
+                }
+                "remove_section" => ReviewAction::RemoveSection { name: text },
+                "checks" => ReviewAction::SetChecks(text),
+                "complete" => ReviewAction::Complete,
+                _ => anyhow::bail!("不认识这个综述操作"),
+            };
+            lib.store.apply_review(&review.id, review.revision, operation)?;
+            lib.library_chat.review_open = true;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => self.say("综述记录已保存。确认不会自动发送消息；请继续提问。", cx),
+            Err(err) => self.fail(format!("综述记录未保存：{err:#}"), cx),
+        }
+    }
+
     pub fn render_chat(&mut self, about_paper: bool, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if let Some(lib) = self.lib.as_mut() { lib.check_quotes(about_paper) }
         let lib = self.lib.as_ref().unwrap();
@@ -106,6 +170,9 @@ impl Workspace {
         };
 
         let listing = chat.history.is_some();
+        let (review, review_error) = if !about_paper && !listing && !chat.id.is_empty() {
+            match lib.store.review_for_conversation(&chat.id) { Ok(review) => (review, None), Err(err) => (None, Some(format!("无法读取综述记录：{err:#}"))) }
+        } else { (None, None) };
         // The papers behind the scope line can be looked through: in a conversation whose material was built, or before the first question.
         let listable = !about_paper && !listing && (chat.ctx.is_some() || chat.messages.is_empty());
         let materials = (listable && chat.materials_open).then(|| self.render_materials(chat, cx));
@@ -143,6 +210,36 @@ impl Workspace {
                     .when(!chat.messages.is_empty() && !listing, |d| d.child(ui::ghost_button(SharedString::from(format!("chat-new-{side}")), Some("plus"), Some("新对话".into())).on_click(self.on(Cmd::NewChat(about_paper), cx)))),
             )
             .children(materials)
+            .when(!about_paper && !listing && !chat.id.is_empty(), |d| {
+                if let Some(error) = &review_error {
+                    d.child(div().px(px(16.)).py(px(5.)).child(ui::error_line(error)))
+                } else if let Some(review) = &review {
+                    let status = if !review.requirements_confirmed { "第 1 步：记录并确认写作要求" } else if !review.outline_confirmed { "第 2 步：记录并确认大纲" } else if review.completed { "综述已标为完成" } else { "第 3 步：补充证据、保存正文并记录检查" };
+                    let summary = format!("{status} · 正文 {} 节{}{}", review.sections.len(), if review.checks_current { " · 已记录当前检查" } else { "" }, if review.sections.is_empty() { "" } else { " · 修改要求或大纲后请检查保留的正文" });
+                    d.child(div().flex().flex_wrap().items_center().gap(px(6.)).px(px(16.)).py(px(6.)).bg(Theme::bg_sunken()).text_size(px(12.))
+                        .child(div().flex_1().min_w_0().child(summary))
+                        .child(ui::secondary_button("review-toggle", if chat.review_open { "收起记录" } else { "查看记录" }).h(px(26.)).on_click(self.on(Cmd::ToggleReview, cx)))
+                        .when(review.outline_confirmed && !review.sections.is_empty(), |d| d.child(ui::secondary_button("review-manuscript", "正文存为新稿件").h(px(26.)).on_click(self.on(Cmd::ReviewToManuscript, cx))))
+                        .when(!review.requirements_confirmed && !review.requirements.is_empty(), |d| d.child(ui::secondary_button("review-confirm-requirements", "确认要求").h(px(26.)).on_click(self.on(Cmd::ReviewAction("confirm_requirements".into(), String::new()), cx))))
+                        .when(review.requirements_confirmed && !review.outline_confirmed && !review.outline.is_empty(), |d| d.child(ui::secondary_button("review-confirm-outline", "确认大纲").h(px(26.)).on_click(self.on(Cmd::ReviewAction("confirm_outline".into(), String::new()), cx))))
+                        .when(review.outline_confirmed && !review.sections.is_empty() && review.checks_current && !review.completed, |d| d.child(ui::secondary_button("review-complete", "标为完成").h(px(26.)).on_click(self.on(Cmd::ReviewAction("complete".into(), String::new()), cx))))
+                    )
+                } else if !chat.busy {
+                    d.child(div().px(px(16.)).py(px(5.)).child(ui::secondary_button("review-start", "开始综述流程").h(px(26.)).on_click(self.on(Cmd::StartReview, cx))))
+                } else { d }
+            })
+            .when_some(review.as_ref().filter(|_| chat.review_open), |d, review| {
+                let row = |title: &str, text: &str| div().flex().flex_col().gap(px(3.)).child(div().font_weight(FontWeight::MEDIUM).child(title.to_string())).child(div().text_color(Theme::text_secondary()).child(if text.is_empty() { "（未记录）".to_string() } else { text.to_string() }));
+                d.child(div().id("review-record-details").flex().flex_col().gap(px(10.)).max_h(px(240.)).overflow_y_scroll().px(px(16.)).py(px(8.)).border_b_1().border_color(Theme::line()).text_size(px(12.))
+                    .child(row("写作要求", &review.requirements))
+                    .child(row("大纲", &review.outline))
+                    .child(row("证据记录", &review.evidence))
+                    .when(!review.sections.is_empty(), |d| d.child(div().text_color(Theme::text_secondary()).child("修改要求或大纲后，请检查保留的正文是否仍然适用。")))
+                    .children(review.sections.iter().enumerate().map(|(n, section)| div().flex().flex_col().gap(px(3.))
+                        .child(div().flex().items_center().gap(px(6.)).child(div().flex_1().child(format!("正文 {} · {}", n + 1, section.name))).child(ui::ghost_button(SharedString::from(format!("review-remove-section-{n}")), Some("bin"), Some("删除".into())).h(px(24.)).on_click(self.on(Cmd::AskRemoveReviewSection(section.name.clone()), cx))))
+                        .child(div().text_color(Theme::text_secondary()).child(section.body.clone()))))
+                    .child(row("检查记录（需人工核实）", &review.checks)))
+            })
             .child(body)
             .when(configured, |d| d.child(self.render_composer(about_paper, chat, &model, window, cx)))
             // An old conversation on show without a model: it can be read, and says what asking on needs.
@@ -250,6 +347,7 @@ impl Workspace {
     /// folded by run, the pieces of its answers with their sources.
     fn render_messages(&self, about_paper: bool, chat: &Chat, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let side = if about_paper { "paper" } else { "library" };
+        let review = if !about_paper && !chat.id.is_empty() { self.lib.as_ref().and_then(|lib| lib.store.review_for_conversation(&chat.id).ok().flatten()) } else { None };
         let mut items: Vec<AnyElement> = vec![];
         // A citation clicked where it stands in the text.
         let workspace = cx.entity().downgrade();
@@ -395,8 +493,18 @@ impl Workspace {
                             div()
                                 .flex()
                                 .items_center()
+                                .flex_wrap()
                                 .gap(px(2.))
                                 .child(ui::ghost_button(SharedString::from(format!("copy-{side}-{i}")), Some("copy"), None).h(px(24.)).min_w(px(24.)).opacity(0.7).on_click(self.on(Cmd::CopyText(whole.clone()), cx)))
+                                .when(!about_paper && !whole.trim().is_empty() && review.as_ref().is_none_or(|r| r.outline_confirmed), |d| d.child(ui::ghost_button(SharedString::from(format!("manuscript-{side}-{i}")), Some("pen-line"), Some("保存为新稿件".into())).h(px(24.)).text_size(px(12.)).opacity(0.7).on_click(self.on(Cmd::AnswerToManuscript(question.clone(), whole.clone()), cx))))
+                                .when_some(review.as_ref(), |d, review| {
+                                    let mut button = |key: &'static str, label: &'static str| ui::ghost_button(SharedString::from(format!("review-{key}-{side}-{i}")), None, Some(label.into())).h(px(24.)).text_size(px(12.)).on_click(self.on(Cmd::ReviewAction(key.into(), whole.clone()), cx));
+                                    d.child(button("requirements", "记为要求"))
+                                        .when(review.requirements_confirmed, |d| d.child(button("outline", "记为大纲")))
+                                        .when(review.requirements_confirmed, |d| d.child(button("evidence", "记为证据")))
+                                        .when(review.outline_confirmed, |d| d.child(button("section", "保存正文")))
+                                        .when(review.outline_confirmed && !review.sections.is_empty(), |d| d.child(button("checks", "记录检查")))
+                                })
                                 // An answer about one paper can join that paper's notes; one about the library names many.
                                 .when(about_paper, |d| d.child(ui::ghost_button(SharedString::from(format!("note-{side}-{i}")), Some("pen-line"), Some("存为笔记".into())).h(px(24.)).text_size(px(12.)).opacity(0.7).on_click(self.on(Cmd::AnswerToNote(question, whole), cx)))),
                         )

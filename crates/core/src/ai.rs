@@ -1025,9 +1025,9 @@ pub const SLASH: [Slash; 7] = [
     },
     Slash {
         name: "review",
-        about: "先拟大纲确认，再写带引用的综述",
+        about: "确认要求和大纲，分阶段撰写带引用的综述",
         hint: "主题",
-        template: "依据文献库里的文献，围绕下面的主题写一段综述：{}\n\n先出大纲：用 list_papers 和 search_fulltext 找出相关文献，然后给出大纲——整段回答什么问题、分几个方面、每个方面依据哪些文献、哪里证据还缺——请用户确认或调整后再动笔；用户没有要调整的，按大纲写。\n\n写正文时：\n1. 按观点组织，不逐篇罗列。每段先给中心判断，再把回答同一问题的文献放在一起比较：一致的说成共识，分歧的指出分歧、说明它可能来自什么（对象、方法、统计口径不同），不替文献取舍。\n2. 每个论断后给出引用标签，依据全文的写上页码。关键的数字、比较和有争议的结论，动笔前用 read_fulltext 核对原文；只有摘要可依据的文献，写明依据是摘要。\n3. 区分文献的发现与你的综合判断；文献库里证据不足的部分直接说明，不要用常识补齐。",
+        template: "围绕下面的主题，依据可核实的文献撰写综述：{}\n\n按以下步骤进行；用户只要求大纲或某一部分时，按其指定范围交付。\n\n1. 确认写作要求：整理用户已给出的核心问题、范围、读者、语言、综述类型、篇幅、文献时间范围与引用要求；其他影响任务的要求（如图表）也列出。未给出的标为待定或提出建议，不能当作用户已经确认。集中询问会影响写作的缺项，等待用户确认或调整；用户已明确授权按建议继续时，记录采用的要求即可。不要虚构约束。\n\n2. 检索与大纲：用 list_papers 和 search_fulltext 检索文献库，必要时用 get_paper 读取记录；如需扩展，可用 search_online 试查文献数据库，并说明它返回的是候选记录，不等于已阅读全文。按确认的范围给出全文主线、各节要回答的问题、代表文献、预计篇幅和证据缺口。列明每个来源实际读到全文、摘要还是仅有题录；需要补查的地方单独列出。展示大纲后结束本轮，等待用户明确确认；用户提出调整时更新大纲并再次确认，再继续写正文。\n\n3. 确认大纲后补充证据：按章节针对缺口和分歧检索，必要时用 search_fulltext 定位并用 read_fulltext 阅读相关页及上下文，核对对象、方法、单位、统计口径和局限。关键数字、研究间比较和有争议的结论动笔前核对原文；不能取得或读懂原文时如实标记，不能把摘要、检索片段或题录当成全文。需要补充文献时说明缺口；取得开放全文或导入记录须按工具能力和用户意愿进行。\n\n4. 分节写作：按已确认的大纲和篇幅要求组织引言、主题章节及结论；不要逐篇罗列。每段围绕一个中心判断比较回答同一问题的研究，说明一致、分歧及可能的原因，不把推测当作事实。区分原文发现与综合判断、相关性与因果；叙述强度与证据相称。每个有依据的论断给引用标签，依据全文的写上实际页码；库外候选没有文献库标签时写明可核实的来源，不要编造标签；只有摘要可依据的明确标为摘要，不编造页码、来源或结论。证据不足时说明其影响，不用常识补齐。\n\n5. 核对与交付：逐项检查重要论断与引用是否相符、数字和适用条件是否一致，复核引言、正文与结论，说明未能核对的内容和剩余证据缺口。按实际完成情况报告篇幅和使用的独立文献数量，不确定时说明未统计。输出可供用户保存到写作页的完整内容；未实际保存时不得声称已经保存。",
         alone: "",
     },
     Slash {
@@ -2182,9 +2182,9 @@ mod tests {
         assert_eq!(expand_slash("/dance now"), "/dance now");
         // Every command that stands for a request says what to write after it.
         assert!(SLASH.iter().all(|command| command.template.is_empty() == command.hint.is_empty() && command.template.contains("{}") != command.template.is_empty()));
-        // /review shows its outline for confirmation before the prose, so the structure can be steered before it is written.
+        // Expanding /review preserves the topic and asks for both decisions before drafting.
         let review = expand_slash("/review 根系如何感知土壤紧实");
-        assert!(review.contains("确认或调整后再动笔") && review.contains("动笔前用 read_fulltext 核对原文"));
+        assert!(review.contains("根系如何感知土壤紧实") && review.contains("等待用户确认或调整") && review.contains("等待用户明确确认"));
     }
 
     #[test]

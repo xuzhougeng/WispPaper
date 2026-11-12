@@ -4,7 +4,7 @@
 //! The rules (what a new manuscript holds, when a snapshot is worth keeping,
 //! what an export looks like) are `wisp_core::manuscript`'s.
 
-use crate::app::{Cmd, MenuItem, MenuKind, Modal, Workspace, Writing};
+use crate::app::{Cmd, MenuItem, MenuKind, Modal, Page, Workspace, Writing};
 use crate::input::TextInput;
 use crate::theme::Theme;
 use crate::ui;
@@ -68,7 +68,86 @@ fn file_name(title: &str) -> String {
     if name.is_empty() { manuscript::UNTITLED.to_string() } else { name }
 }
 
+/// Preserve the conversation-local labels as an explicit lookup beside the
+/// imported answer. These are not verified citations or a formatted bibliography.
+fn answer_source_labels(answer: &str, sources: &[wisp_core::ai::Source], papers: &[wisp_core::model::Paper]) -> String {
+    let mut labels: Vec<String> = Vec::new();
+    for citation in wisp_core::ai::citations(answer) {
+        if !labels.contains(&citation.label) { labels.push(citation.label) }
+    }
+    labels.into_iter().map(|label| {
+        let matching: Vec<_> = sources.iter().filter(|source| source.label == label).collect();
+        let [source] = matching.as_slice() else {
+            return if matching.is_empty() { format!("[{label}] 无法解析：对话中没有该标签，请核对。") }
+                else { format!("[{label}] 标签对应多个来源，请核对。") }
+        };
+        let mut line = format!("[{label}] {} (文献 ID: {})", source.title, source.paper_id);
+        if let Some(paper) = papers.iter().find(|paper| paper.id == source.paper_id) {
+            if !paper.authors.trim().is_empty() { line.push_str(&format!("; {}", paper.authors.trim())) }
+            if let Some(year) = paper.year { line.push_str(&format!("; {year}")) }
+            if !paper.doi.trim().is_empty() { line.push_str(&format!("; DOI: {}", paper.doi.trim())) }
+        }
+        line
+    }).collect::<Vec<_>>().join("\n\n")
+}
+
 impl Workspace {
+    /// Save a finished chat answer in its own manuscript, never replacing an
+    /// existing draft. Conversation-local citation labels travel with it.
+    pub(crate) fn answer_to_manuscript(&mut self, question: String, answer: String, window: &mut Window, cx: &mut Context<Self>) {
+        let title: String = question.trim().strip_prefix("/review").unwrap_or(question.trim()).trim().chars().take(80).collect();
+        self.draft_to_manuscript(title, vec![("正文".into(), answer)], window, cx);
+    }
+
+    /// Assemble every recorded section in its saved order into a new manuscript.
+    pub(crate) fn review_to_manuscript(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(lib) = self.lib.as_ref() else { return };
+        let review = match lib.store.review_for_conversation(&lib.library_chat.id) {
+            Ok(Some(review)) if review.outline_confirmed && !review.sections.is_empty() => review,
+            Ok(_) => return self.fail("请先确认大纲并保存正文。", cx),
+            Err(err) => return self.fail(format!("无法读取综述记录：{err:#}"), cx),
+        };
+        self.draft_to_manuscript(review.title, review.sections.into_iter().map(|s| (s.name, s.body)).collect(), window, cx);
+    }
+
+    fn draft_to_manuscript(&mut self, title: String, sections: Vec<(String, String)>, window: &mut Window, cx: &mut Context<Self>) {
+        if sections.is_empty() || sections.iter().all(|(_, body)| body.trim().is_empty()) { return }
+        let Some(lib) = self.lib.as_mut() else { return };
+        // Resolve only unambiguous labels using the same citation keys as the
+        // writing page. Unknown or quoted labels remain literal and get a
+        // lookup below; conversion does not verify a claim or page.
+        let known = match lib.store.cite_keys() { Ok(keys) => keys, Err(err) => return self.fail(format!("无法读取引用记录：{err:#}"), cx) };
+        let converted = {
+            let index = wisp_core::cite::Index::new(&lib.papers, lib.trash.iter().map(|entry| &entry.paper), &known);
+            sections.iter().map(|(name, body)| (name.clone(), wisp_core::cite::convert_ai_citations(body, lib.library_chat.sources(), &index))).collect::<Vec<_>>()
+        };
+        let keys: Vec<(String, String)> = converted.iter().flat_map(|(_, part)| part.keys.clone()).collect();
+        let mut sections: Vec<(String, String)> = converted.into_iter().map(|(name, part)| (name, part.text)).collect();
+        let answer = sections.iter().map(|(_, body)| body.as_str()).collect::<Vec<_>>().join("\n\n");
+        let labels = answer_source_labels(&answer, lib.library_chat.sources(), &lib.papers);
+        if !labels.is_empty() { sections.push(("来源标签（请核对）".into(), labels)) }
+        let language = lib.writing.language().to_string();
+        // Creating all sections and pinning keys are a single database transaction.
+        let made = match lib.store.create_manuscript_from_sections(&title, &language, &sections, &keys) {
+            Ok(made) => made,
+            Err(err) => return self.fail(format!("稿件没有保存：{err:#}"), cx),
+        };
+        let id = made.id.clone();
+        let section = made.sections.first().map(|section| section.id.clone()).unwrap_or_default();
+        lib.citing.kept = match lib.store.cite_keys() {
+            Ok(kept) => kept,
+            Err(err) => return self.fail(format!("新稿件 {id} 已保存，但无法重新读取引用键：{err:#}"), cx),
+        };
+        lib.writing.manuscripts.push(made);
+        lib.writing.reading = false;
+        lib.writing.structures = lib.store.structures().unwrap_or_default();
+        lib.page = Page::Write;
+        self.write_show(id, section, cx);
+        self.write_texts_changed(cx);
+        if let Some(lib) = self.lib.as_ref() { lib.writing.editor.read(cx).focus(window) }
+        self.say("已保存为新稿件；请核对引用与原文。", cx);
+    }
+
     // ---- which manuscript and section
 
     /// Make sure the library has a manuscript to write in.
@@ -615,3 +694,22 @@ impl Workspace {
     }
 }
 
+
+#[cfg(test)]
+mod answer_import_tests {
+    use super::answer_source_labels;
+    use wisp_core::{ai::Source, model::Paper};
+
+    #[test]
+    fn carries_known_and_unresolved_conversation_labels_into_new_draft() {
+        let sources = vec![Source { label: "P1".into(), paper_id: "paper-id".into(), title: "A study".into() }];
+        let papers = vec![Paper { id: "paper-id".into(), authors: "A Author".into(), year: Some(2020), doi: "10.1/example".into(), ..Default::default() }];
+        let lookup = answer_source_labels("Result [P1 p.2], again [P1 p.3], unknown [P9].", &sources, &papers);
+        assert_eq!(lookup.matches("[P1]").count(), 1);
+        assert!(lookup.contains("A study") && lookup.contains("paper-id") && lookup.contains("10.1/example"));
+        assert!(lookup.contains("[P9] 无法解析"));
+        assert!(answer_source_labels("No citations", &sources, &papers).is_empty());
+        let ambiguous = vec![sources[0].clone(), Source { label: "P1".into(), paper_id: "other".into(), title: "Other".into() }];
+        assert!(answer_source_labels("[P1]", &ambiguous, &papers).contains("多个来源"));
+    }
+}

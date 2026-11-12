@@ -474,6 +474,7 @@ impl Store {
         }
         db.execute_batch(SCHEMA)?;
         db.execute_batch(crate::manuscript::SCHEMA)?;
+        db.execute_batch(crate::review::SCHEMA)?;
         add_columns(&db)?;
         crate::manuscript::migrate_drafts(&mut db)?;
         db.pragma_update(None, "user_version", SCHEMA_VERSION)?;
