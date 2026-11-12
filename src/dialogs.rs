@@ -6,7 +6,8 @@ use crate::app::{Cmd, ImportRow, Imported, Modal, Workspace};
 use crate::theme::{self, Theme};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
-use wisp_core::model::FieldKind;
+use wisp_core::complete;
+use wisp_core::model::{FieldKind, PUBLICATION_STATUSES, label};
 use wisp_core::sources;
 
 /// A choice among a few: the chosen one filled with the accent.
@@ -88,7 +89,7 @@ impl Workspace {
                             Imported::Failed(err) => (format!("没有导入：{err}"), Theme::danger()),
                             Imported::InTrash => ("它的文献在回收站里，没有导入".to_string(), Theme::warning()),
                             Imported::Attached => ("文献库里已有这篇，PDF 附到了原条目".to_string(), Theme::text_tertiary()),
-                            Imported::Added if row.unrecognised => ("已添加 · 没认出 DOI，待补全题目和作者".to_string(), Theme::warning()),
+                            Imported::Added if row.unrecognised => ("已添加 · 没认出 DOI，可在文献详情里按题目补全".to_string(), Theme::warning()),
                             Imported::Added => ("已添加".to_string(), Theme::text_tertiary()),
                         };
                         let title = row.paper_id.as_deref().and_then(|id| lib.paper(id)).map(|paper| paper.title.clone()).filter(|title| !row.unrecognised && !title.is_empty());
@@ -217,6 +218,133 @@ impl Workspace {
                         .child(error),
                 )
                 .child(footer(if *busy { "正在查询…" } else { "查询并添加" }, false, self, cx)),
+
+            Modal::Complete(form) => {
+                let lib = self.lib.as_ref()?;
+                let paper = lib.paper(&form.paper_id)?;
+                let small = |text: String, color: Hsla| div().text_size(px(12.)).line_height(px(18.)).text_color(color).child(text);
+                // What a record is, in two lines.
+                let summary = |record: &wisp_core::model::Paper| {
+                    let mut line = vec![];
+                    if !record.authors.is_empty() { line.push(record.short_authors()) }
+                    if let Some(year) = record.year { line.push(year.to_string()) }
+                    if !record.journal.is_empty() { line.push(record.journal.clone()) }
+                    if record.publication_status != "unknown" { line.push(label(&PUBLICATION_STATUSES, &record.publication_status).to_string()) }
+                    let numbers = [("DOI", &record.doi), ("PMID", &record.pmid)].into_iter().filter(|(_, value)| !value.is_empty()).map(|(name, value)| format!("{name} {value}")).collect::<Vec<_>>().join(" · ");
+                    div().flex().flex_col().gap(px(2.)).min_w_0().child(div().font_weight(FontWeight::MEDIUM).line_height(px(19.)).child(record.title.clone())).child(small(line.join(" · "), Theme::text_secondary())).when(!numbers.is_empty(), |d| d.child(small(numbers, Theme::text_tertiary())))
+                };
+                let held_line = |held: &Option<(String, String)>| held.as_ref().map(|(_, title)| small(format!("文献库里已经有这条记录：「{title}」。它不能再写进这一篇；多半是同一篇文献导入了两次。"), Theme::danger()));
+                match form.chosen.and_then(|at| Some((at, form.found.as_ref()?.candidates.get(at)?))) {
+                    // The record looked at, field by field.
+                    Some((at, candidate)) => {
+                        let record = &candidate.paper;
+                        let link = record.link();
+                        let (ok, _) = theme::status_colors("included");
+                        let rows: Vec<AnyElement> = complete::offered(paper, record)
+                            .into_iter()
+                            .map(|key| {
+                                let name = complete::FIELDS.iter().find(|(field, _)| *field == key).map_or(key, |(_, name)| name);
+                                let taken = form.fields.contains(&key);
+                                let brief = |text: String| if text.chars().count() > 220 { format!("{}…", text.chars().take(220).collect::<String>()) } else { text };
+                                let now = complete::shown(paper, key);
+                                let now_line = if now.is_empty() { "现在：空着".to_string() } else if key == "title" && form.placeholder { format!("现在：{now}（文件名）") } else { format!("现在：{}", brief(now)) };
+                                div()
+                                    .id(SharedString::from(format!("complete-field-{key}")))
+                                    .flex()
+                                    .items_start()
+                                    .gap(px(10.))
+                                    .px(px(10.))
+                                    .py(px(8.))
+                                    .rounded(px(8.))
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(Theme::hover()))
+                                    .on_click(self.on(Cmd::CompleteField(key), cx))
+                                    .child(div().flex().flex_none().items_center().justify_center().size(px(16.)).mt(px(2.)).rounded(px(4.)).border_1().when(taken, |d| d.bg(Theme::accent()).border_color(Theme::accent()).child(ui::icon("check", 12., Theme::on_accent()))).when(!taken, |d| d.border_color(Theme::line_strong())))
+                                    .child(div().flex_none().w(px(64.)).text_color(Theme::text_secondary()).child(name))
+                                    .child(div().flex().flex_col().flex_1().min_w_0().gap(px(2.)).child(div().line_height(px(19.)).child(brief(complete::shown(record, key)))).child(small(now_line, Theme::text_tertiary())))
+                                    .into_any_element()
+                            })
+                            .collect();
+                        let nothing = rows.is_empty();
+                        ui::dialog(640.)
+                            .child(ui::dialog_title("按题目补全 · 核对这条记录"))
+                            .child(
+                                body()
+                                    .child(div().flex().items_start().gap(px(10.)).p(px(12.)).rounded(px(10.)).bg(Theme::bg_sunken()).child(div().flex().flex_col().flex_1().min_w_0().gap(px(4.)).child(summary(record)).child(small(format!("来自 {}", candidate.sources.join("、")), Theme::text_tertiary()))).when(!link.is_empty(), |d| d.child(ui::secondary_button("complete-open", "打开网页").h(px(28.)).on_click(self.on(Cmd::OpenUrl(link.clone()), cx)))))
+                                    .when(!candidate.same.is_empty(), |d| d.child(small(format!("与所查一致：{}", candidate.same.join("，")), ok)))
+                                    .when(!candidate.differs.is_empty(), |d| d.child(small(format!("不一致：{}", candidate.differs.join("，")), Theme::warning())))
+                                    .when(candidate.similarity < complete::ALIKE_ENOUGH, |d| d.child(small("这条记录的题目和所查的不一样，很可能是另一篇文献，所以没有预先勾选任何字段。".into(), Theme::warning())))
+                                    .when(candidate.partial_authors, |d| d.child(small("这个来源只给了部分作者，名单不完整：写入后请对照原文补齐。".into(), Theme::warning())))
+                                    .children(held_line(form.held.get(at).unwrap_or(&None)))
+                                    .child(div().flex().flex_col().gap(px(2.)).children(rows))
+                                    .when(nothing, |d| d.child(small("这条记录没有比现有内容多出什么。".into(), Theme::text_tertiary())))
+                                    .child(small("默认只勾选现在空着的字段，以及只是文件名的题目；已有的内容，勾选后才会被替换。题目相近不等于同一篇：拿不准时打开网页对照，或返回看别的候选。".into(), Theme::text_tertiary()))
+                                    .child(error),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_none()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .px(px(20.))
+                                    .py(px(14.))
+                                    .child(ui::ghost_button("complete-back", Some("arrow-left"), Some("返回候选".into())).h(px(32.)).on_click(self.on(Cmd::CompleteChoose(None), cx)))
+                                    .child(div().flex_1())
+                                    .child(ui::secondary_button("modal-cancel", "取消").on_click(self.on(Cmd::CloseModal, cx)))
+                                    .child(ui::primary_button("modal-ok", format!("写入 {} 个字段", form.fields.len())).on_click(self.on(Cmd::SubmitModal, cx))),
+                            )
+                    }
+                    // What to look for, and the records found.
+                    None => {
+                        let about_title = if form.guessed {
+                            "题目读自 PDF 首页，可能不全或有错：查找前请核对。"
+                        } else if form.placeholder {
+                            "这篇文献现在的题目只是文件名，不会拿它去查：请写上或粘贴题目。"
+                        } else {
+                            "可以修改用来查找的题目；文献本身的题目不会因此改变。"
+                        };
+                        let asked: Vec<AnyElement> = form.found.iter().flat_map(|found| found.asked.iter()).map(|asked| {
+                            let (text, color) = if !asked.error.is_empty() { (format!("{}：没有查成（{}）", asked.source, asked.error), Theme::warning()) } else if asked.found == 0 { (format!("{}：没有查到", asked.source), Theme::text_tertiary()) } else { (format!("{}：{} 条", asked.source, asked.found), Theme::text_tertiary()) };
+                            small(text, color).into_any_element()
+                        }).collect();
+                        let records: Vec<AnyElement> = form.found.iter().flat_map(|found| found.candidates.iter().enumerate()).map(|(i, candidate)| {
+                            let (ok, ok_fill) = theme::status_colors("included");
+                            let (warn, warn_fill) = theme::status_colors("uncertain");
+                            div()
+                                .id(("complete-candidate", i))
+                                .flex()
+                                .flex_col()
+                                .gap(px(6.))
+                                .p(px(12.))
+                                .rounded(px(10.))
+                                .border_1()
+                                .border_color(Theme::line())
+                                .cursor_pointer()
+                                .hover(|s| s.bg(Theme::hover()))
+                                .on_click(self.on(Cmd::CompleteChoose(Some(i)), cx))
+                                .child(summary(&candidate.paper))
+                                .child(div().flex().flex_wrap().items_center().gap(px(4.)).children(candidate.same.iter().map(|note| ui::chip(note.clone(), ok, ok_fill))).children(candidate.differs.iter().map(|note| ui::chip(note.clone(), warn, warn_fill))).child(div().pl(px(4.)).text_size(px(12.)).text_color(Theme::text_tertiary()).child(candidate.sources.join("、"))))
+                                .children(held_line(form.held.get(i).unwrap_or(&None)))
+                                .into_any_element()
+                        }).collect();
+                        let searched = form.found.is_some();
+                        let none = searched && records.is_empty();
+                        ui::dialog(640.)
+                            .child(ui::dialog_title("按题目补全"))
+                            .child(
+                                body()
+                                    .child(ui::form_row("题目", ui::field(&form.title, window, cx)).child(small(about_title.into(), if form.guessed { Theme::warning() } else { Theme::text_tertiary() })))
+                                    .child(div().flex().gap(px(12.)).child(div().flex_1().min_w_0().child(ui::form_row("作者", ui::field(&form.author, window, cx)))).child(div().w(px(160.)).child(ui::form_row("年份", ui::field(&form.year, window, cx)))))
+                                    .child(small("到 Crossref、Europe PMC 和 arXiv 按题目查找，每个来源取最相近的几条。发出去的只有题目、作者和年份，不上传 PDF。".into(), Theme::text_tertiary()))
+                                    .when(searched, |d| d.child(div().flex().flex_col().gap(px(8.)).pt(px(4.)).child(div().flex().flex_wrap().gap(px(12.)).children(asked)).when(!none, |d| d.child(small("点一条记录核对它的字段。排在前面只说明题目更像，是不是这一篇由你判断；预印本和正式发表的版本是两条记录。".into(), Theme::text_secondary()))).children(records)))
+                                    .when(none, |d| d.child(small("没有找到相近的记录。改一改题目再查，或者关掉这里，用「编辑信息与词条」手动填写：一篇文献可以一直没有 DOI。".into(), Theme::text_secondary())))
+                                    .child(error),
+                            )
+                            .child(footer(if form.busy { "正在查找…" } else if searched { "重新查找" } else { "查找" }, false, self, cx))
+                    }
+                }
+            }
 
             Modal::Paper(form) => {
                 let lib = self.lib.as_ref()?;

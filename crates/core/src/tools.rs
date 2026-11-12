@@ -6,11 +6,13 @@
 //! Every tool here only reads. Extracting the page text of a stored PDF the
 //! first time it is searched fills a cache; it changes nothing a person sees.
 
+use crate::complete;
 use crate::filter::{Filters, filter_papers};
 use crate::fulltext::{self, terms};
 use crate::libraries::{self, LibraryInfo};
 use crate::model::{FULLTEXTS, Paper, READINGS, SCREENINGS, one_of};
 use crate::openaccess;
+use crate::pdftext;
 use crate::sources::{self, Download, Fetch};
 use crate::store::{SavedSearch, Store, Suggestion};
 use anyhow::{Result, anyhow, bail};
@@ -135,6 +137,18 @@ pub fn catalog() -> Vec<ToolDef> {
             &["text"],
         ),
         scoped(
+            "find_metadata",
+            "按题目查找记录",
+            "为一篇缺 DOI、题目或作者的文献，按题目到 Crossref、Europe PMC 和 arXiv 查找可能对应的记录，不向文献库写入任何内容。返回每个来源的情况（命中条数，或没查成的原因）和候选记录：题目、作者、年份、期刊、DOI、PMID、与所查题目的相似度、一致和不一致的地方、是否已是库里的另一篇文献。候选只是候选：题目相近不等于同一篇，预印本和正式版是两条记录。把候选和差异告诉用户，由用户在窗口里（文献详情的「按题目补全」）选定并确认写入的字段；这个工具和其他工具都不会替用户写入。不给 title 时用文献现有的题目；题目还是文件名时，用 PDF 首页读出的题目。",
+            json!({
+                "paperId": {"type": "string", "description": "要补全的文献的 ID。"},
+                "title": {"type": "string", "description": "用来查找的题目；不写则用文献现有的题目或 PDF 首页的题目。"},
+                "author": {"type": "string", "description": "已知的一位作者的姓名，用来缩小范围。"},
+                "year": {"type": "integer", "description": "已知的发表年份，用来比对。"},
+            }),
+            &["paperId"],
+        ),
+        scoped(
             "search_online",
             "试检索",
             "在文献数据库里试运行一个检索式，不向文献库写入任何内容。返回数据库的命中总数和最新的若干条记录，并标出每条是否已在文献库中、用户对它的收录判断，用来判断检索式是否靠谱。各来源的检索语法不同：pubmed 和 europepmc 支持布尔运算符和字段，arxiv 用 ti: / abs: / cat: 前缀，crossref 只按词语匹配。",
@@ -190,7 +204,7 @@ pub fn catalog() -> Vec<ToolDef> {
         scoped(
             "suggest_screening",
             "提出收录建议",
-            "为一篇文献提出收录判断的建议，供用户在筛选页确认。这不会改变文献的收录判断：判断只由用户本人做出。同一篇文献的新建议会替换旧的。建议前先读这篇文献的记录（get_paper），有全文时读全文（read_fulltext）。",
+            "为一篇文献提出收录判断的建议，供用户在筛选页确认。这不会改变文献的收录判断：判断只由用户本人做出。同一篇文献的新建议会替换旧的。按文献库的筛选目标判断（library_status 的 screeningGoal；为空时按主题 topic）。建议前先读这篇文献的记录（get_paper），有全文时读全文（read_fulltext）。",
             json!({
                 "id": {"type": "string", "description": "文献 ID。"},
                 "verdict": {"type": "string", "enum": ["included", "excluded", "irrelevant", "uncertain"], "description": "included：符合文献库的主题，应当收录；excluded：不完全符合但相关、值得留着备查（界面上显示为「相关」）；irrelevant：与主题无关；uncertain：信息不足，无法判断。"},
@@ -303,6 +317,7 @@ fn dispatch(store: &mut Store, info: &LibraryInfo, name: &str, args: &Value, fet
         "find_pdf" => find_pdf(store, args, fetch, download),
         "find_citations" => find_citations(store, args),
         "find_sentences" => find_sentences(store, args),
+        "find_metadata" => find_metadata(store, args, fetch),
         "search_online" => search_online(store, args, fetch),
         // With how each database wants its queries written, for whoever composes the next one.
         "list_searches" => Ok(json!({"searches": store.list_searches()?, "syntax": sources::KINDS.iter().map(|(key, _)| (key.to_string(), json!(sources::syntax(key)))).collect::<Map<String, Value>>()})),
@@ -311,7 +326,7 @@ fn dispatch(store: &mut Store, info: &LibraryInfo, name: &str, args: &Value, fet
         "run_search" => run_search(store, text(args, "id")?, fetch),
         "list_imports" => Ok(json!({"imports": store.list_batches(number(args, "limit", 20, 200)?)?})),
         "undo_import" => undo_import(store, args),
-        "suggest_screening" => suggest_screening(store, args),
+        "suggest_screening" => suggest_screening(store, info, args),
         "library_status" => library_status(store, info),
         "list_papers" => list_papers(store, info, args),
         "get_paper" => get_paper(store, args),
@@ -379,6 +394,8 @@ fn library_status(store: &mut Store, info: &LibraryInfo) -> Result<Value> {
         "id": info.id,
         "name": info.name,
         "topic": info.topic,
+        // What screening suggestions judge against; empty means by the topic.
+        "screeningGoal": info.criteria,
         "folder": info.dir.display().to_string(),
         "papers": papers.len(),
         "inTrash": store.list_trash()?.len(),
@@ -786,6 +803,51 @@ fn truth(args: &Value, key: &str, default: bool) -> Result<bool> {
     }
 }
 
+/// The title to look a paper up by, and where it is from: the paper's own,
+/// or, while that is still the name of its file, the one its PDF shows.
+pub fn lookup_title(store: &Store, paper: &Paper) -> Result<(String, &'static str)> {
+    let files = store.paper_files(&paper.id)?;
+    if !complete::placeholder_title(paper, &files) { return Ok((paper.title.clone(), "record")) }
+    let shown = files.iter().filter(|file| file.format == "pdf").find_map(|file| pdftext::title_guess(std::fs::read(store.file_path(file)).ok()?));
+    Ok(shown.map_or((String::new(), "none"), |title| (title, "pdf")))
+}
+
+fn find_metadata(store: &mut Store, args: &Value, fetch: Fetch) -> Result<Value> {
+    let paper = store.get_paper(text(args, "paperId")?)?;
+    let files = store.paper_files(&paper.id)?;
+    let (title, from) = match text(args, "title")? {
+        "" => lookup_title(store, &paper)?,
+        given => (given.to_string(), "given"),
+    };
+    if title.trim().is_empty() { bail!("「{}」的题目还是文件名，PDF 首页也没有读出题目。用 title 参数给出题目再查。", paper.title) }
+    let year = match &args["year"] {
+        Value::Null => None,
+        value => Some(value.as_i64().filter(|y| (1800..=2200).contains(y)).ok_or_else(|| anyhow!("参数 year 应为年份，例如 2019。"))? as i32),
+    };
+    let query = complete::Query { title: title.trim().to_string(), author: text(args, "author")?.to_string(), year };
+    let found = complete::find(&query, fetch);
+    // No source could be asked: there is nothing to tell candidates from.
+    if found.asked.iter().all(|asked| !asked.error.is_empty()) { bail!("{}", found.asked.iter().map(|asked| format!("{}：{}", asked.source, asked.error)).collect::<Vec<_>>().join("；")) }
+    let placeholder = complete::placeholder_title(&paper, &files);
+    let mut candidates = vec![];
+    for candidate in &found.candidates {
+        let record = &candidate.paper;
+        let held = store.existing_paper(record)?.filter(|id| *id != paper.id);
+        candidates.push(json!({
+            "title": record.title, "authors": record.authors, "year": record.year, "journal": record.journal, "status": record.publication_status, "doi": record.doi, "pmid": record.pmid,
+            "sources": candidate.sources, "similarity": (candidate.similarity * 100.).round() / 100., "matches": candidate.same, "differences": candidate.differs, "partialAuthors": candidate.partial_authors,
+            "link": record.link(), "inLibrary": held, "wouldFill": if candidate.similarity >= complete::ALIKE_ENOUGH { complete::suggested(&paper, record, placeholder) } else { vec![] },
+        }));
+    }
+    Ok(json!({
+        "paper": {"id": paper.id, "title": paper.title, "titleIsFileName": placeholder},
+        "query": {"title": query.title, "titleFrom": from, "author": query.author, "year": query.year},
+        "sources": found.asked.iter().map(|asked| json!({"source": asked.source, "found": asked.found, "error": asked.error})).collect::<Vec<_>>(),
+        "candidates": candidates,
+        "note": "候选需要人核对：在窗口里打开这篇文献，用「按题目补全」选定记录和要写入的字段。",
+    }))
+}
+
 fn search_online(store: &mut Store, args: &Value, fetch: Fetch) -> Result<Value> {
     let (kind, query) = (text(args, "source")?, text(args, "query")?);
     let found = sources::search(kind, query, number(args, "limit", 20, 100)?.max(1), fetch).map_err(|e| anyhow!(e))?;
@@ -903,7 +965,7 @@ fn sync_searches(root: &Path, args: &Value, fetch: Fetch, now_ms: i64) -> Result
 /// Record what an agent thinks the screening decision should be. The
 /// decision itself is the person's and is not touched here; a quotation the
 /// paper's text does not hold is not kept as evidence.
-fn suggest_screening(store: &mut Store, args: &Value) -> Result<Value> {
+fn suggest_screening(store: &mut Store, info: &LibraryInfo, args: &Value) -> Result<Value> {
     let paper = store.get_paper(text(args, "id")?)?;
     extract_missing(store, Some(&paper.id))?;
     let pages = store.paper_pages(&paper.id)?;
@@ -923,6 +985,8 @@ fn suggest_screening(store: &mut Store, args: &Value) -> Result<Value> {
         basis: if pages.is_some() { "fulltext" } else if paper.abstract_text.is_empty() { "none" } else { "abstract" }.into(),
         confidence,
         author: if author.is_empty() { "agent".into() } else { author.into() },
+        // An agent is told the goal by library_status; its suggestion is taken as made for it.
+        criteria: Some(info.criteria.clone()),
         ..Default::default()
     };
     store.save_suggestion(&mut suggestion)?;
@@ -1242,6 +1306,44 @@ pub(crate) mod tests {
     }
 
     /// A PubMed that knows two records, one of which the sample library holds by title.
+    #[test]
+    fn records_by_title() {
+        let (root, atlas) = sample();
+        let info = find_library(&root, "").unwrap();
+        let mut store = Store::open(&info.dir).unwrap();
+        // A PDF taken in without a DOI: its title is the name of its file.
+        let bare = store.add_paper(Paper { title: "zhang2019".into(), source: "PDF 导入".into(), ..Default::default() }).unwrap();
+        let source = root.join("zhang2019.txt");
+        std::fs::write(&source, "text").unwrap();
+        store.import_file(&bare.id, &source, "fulltext").unwrap();
+        let records = |url: &str| -> Result<String, String> {
+            if url.contains("crossref") {
+                Ok(r#"{"message":{"items":[{"DOI":"10.1000/ROOT","title":["Root stem-cell niche"],"author":[{"family":"Zhang","given":"Wei"}],"issued":{"date-parts":[[2021]]},"container-title":["Plant Cell"],"type":"journal-article"},{"DOI":"10.1000/other","title":["Root stem cell niches of rice"],"type":"journal-article"}]}}"#.into())
+            } else if url.contains("arxiv") {
+                Ok("<feed></feed>".into())
+            } else {
+                Err("连接超时".into())
+            }
+        };
+        let online = |args: Value| super::call(&root, "find_metadata", &args, &records, &no_download);
+        // Nothing to look for: the file name is not a title, and a text file shows none.
+        assert!(online(json!({"paperId": bare.id})).unwrap_err().contains("题目还是文件名"));
+        let found = online(json!({"paperId": bare.id, "title": "Root stem cell niche", "year": 2021})).unwrap();
+        assert_eq!((found["query"]["titleFrom"].as_str(), found["paper"]["titleIsFileName"].as_bool()), (Some("given"), Some(true)));
+        assert_eq!((found["sources"][0]["found"].as_u64(), found["sources"][1]["error"].as_str()), (Some(2), Some("连接超时")));
+        // The record the library already holds as another paper is said to be that; nothing is written.
+        let first = &found["candidates"][0];
+        assert_eq!((first["doi"].as_str(), first["similarity"].as_f64(), first["inLibrary"].as_str(), first["matches"][1].as_str()), (Some("10.1000/root"), Some(1.0), Some(atlas.as_str()), Some("年份 2021")));
+        assert_eq!(first["wouldFill"], json!(["title", "authors", "year", "journal", "status", "doi"]));
+        assert_eq!((found["candidates"][1]["inLibrary"].clone(), found["candidates"].as_array().unwrap().len()), (Value::Null, 2));
+        assert_eq!(store.get_paper(&bare.id).unwrap().title, "zhang2019");
+        // A paper with a title of its own is looked up by it.
+        assert_eq!(online(json!({"paperId": atlas})).unwrap()["query"]["titleFrom"], "record");
+        assert!(online(json!({"paperId": atlas, "year": 12})).unwrap_err().contains("year"));
+        assert!(call(&root, "find_metadata", &json!({"paperId": atlas})).unwrap_err().contains("不应联网"));
+        std::fs::remove_dir_all(root).ok();
+    }
+
     fn pubmed(url: &str) -> Result<String, String> {
         if url.contains("esearch") { return Ok(r#"{"esearchresult":{"count":"88","idlist":["1","2"]}}"#.into()) }
         Ok("<PubmedArticleSet>\

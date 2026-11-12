@@ -314,6 +314,8 @@ impl Workspace {
                     .flex_wrap()
                     .gap(px(8.))
                     .child(ui::secondary_button("detail-edit", "编辑信息与词条").on_click(self.on(Cmd::EditPaper(id.clone()), cx)))
+                    // A record without a number of its own can be looked for by its title.
+                    .when(p.doi.is_empty() && p.pmid.is_empty(), |d| d.child(ui::secondary_button("detail-complete", "按题目补全").on_click(self.on(Cmd::CompletePaper(id.clone()), cx))))
                     .when(!link.is_empty(), |d| d.child(ui::secondary_button("detail-link", "打开网页").on_click(self.on(Cmd::OpenLink(id.clone()), cx))))
                     .child(ui::ghost_button("detail-trash", Some("bin"), Some("移到回收站".into())).h(px(32.)).on_click(self.on(Cmd::TrashPaper(id.clone()), cx))),
             )

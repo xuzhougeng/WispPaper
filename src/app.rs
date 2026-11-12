@@ -21,7 +21,7 @@ use wisp_core::model::*;
 pub(crate) use wisp_core::settings::default_root;
 use wisp_core::settings::{Settings, Task, settings_file};
 use wisp_core::store::{Conversation, ConversationInfo, ImportBatch, SavedSearch, Store, StructureInfo, Suggestion, TrashEntry, translation_key};
-use wisp_core::{export, fulltext, import, structure, time, tools, zotero};
+use wisp_core::{complete, export, fulltext, import, pdftext, structure, time, tools, zotero};
 
 /// What the middle of an open library shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,6 +126,12 @@ pub enum Cmd {
     SetTaskModel(Task, String),
     SetScreenWorkers(usize),
     ResetTranslationPrompt,
+    /// One more slash command of the person's own, on 设置 › 命令.
+    AddCommand,
+    /// Show or fold up the fields of the n-th.
+    SelectCommand(usize),
+    AskRemoveCommand(usize),
+    RemoveCommand(usize),
     // Collect
     AddById,
     AddManual,
@@ -258,6 +264,8 @@ pub enum Cmd {
     // Screening
     /// Ask the assistant about the pending papers it has not judged yet.
     ScreenStart,
+    /// The assistant asked again about the papers already decided, against the goal as it is now.
+    ScreenRecheck,
     ScreenStop,
     /// The person's decision on a paper, made on the screening page.
     ScreenDecide(String, String),
@@ -280,6 +288,12 @@ pub enum Cmd {
     // Dialogs
     CloseModal,
     SubmitModal,
+    /// 按题目补全: look for the records a paper without its metadata may be.
+    CompletePaper(String),
+    /// Look at one of the records found, or (`None`) go back to all of them.
+    CompleteChoose(Option<usize>),
+    /// Take or leave one field of the record looked at.
+    CompleteField(&'static str),
     PickColor(String),
     PickKind(FieldKind),
     PickOption(String, String),
@@ -359,7 +373,7 @@ pub struct Screen {
 
 impl Screen {
     fn new(criteria: &str, cx: &mut App) -> Screen {
-        let criteria = cx.new(|cx| TextInput::new("筛选标准：什么样的文献应当收进这个文献库。留空则按文献库的主题判断。", cx).multiline(2).with_text(criteria));
+        let criteria = cx.new(|cx| TextInput::new("例如：只收以人类样本做单细胞测序的原始研究；综述、方法学文章不收。留空则按文献库的主题判断。", cx).multiline(3).with_text(criteria));
         Screen { criteria, todo: vec![], reading: vec![], total: 0, done: 0, failed: 0, streak: 0, model: String::new(), filter: String::new(), error: String::new(), run: 0 }
     }
 
@@ -464,8 +478,10 @@ pub enum Picture {
 
 /// What a conversation shows, in order.
 pub enum ChatItem {
-    /// A question, as typed, with the pictures that went with it.
-    User { text: String, images: Vec<ChatImage> },
+    /// A question, as typed, with the pictures that went with it, and
+    /// what went to the model where that is not the text (a slash command
+    /// written out, passages from a PDF put before it).
+    User { text: String, images: Vec<ChatImage>, prompt: String },
     /// Text of the model; one answer may come in several pieces with tool calls between them.
     Answer(String),
     /// A tool the model called, and what came back (summary, failed) once it has run.
@@ -706,6 +722,28 @@ pub struct Chat {
     pub started: Option<Instant>,
 }
 
+/// 按题目补全: what is asked, the records found, and the one being
+/// looked at with the fields to take from it. Nothing is written before
+/// the person has picked a record and said which fields.
+pub struct CompleteForm {
+    pub paper_id: String,
+    /// When the paper was last changed as the dialog opened: a change made meanwhile stops the writing.
+    seen: String,
+    pub title: Entity<TextInput>,
+    pub author: Entity<TextInput>,
+    pub year: Entity<TextInput>,
+    /// The paper's title is the name of its file: not something to look for.
+    pub placeholder: bool,
+    /// The title in the box was read off the first page of the PDF.
+    pub guessed: bool,
+    pub busy: bool,
+    pub found: Option<complete::Found>,
+    /// For each record found, the other paper of the library that it is, if any: (id, title).
+    pub held: Vec<Option<(String, String)>>,
+    pub chosen: Option<usize>,
+    pub fields: Vec<&'static str>,
+}
+
 pub struct PaperForm {
     /// The paper being edited; `None` adds a new one.
     pub id: Option<String>,
@@ -728,6 +766,7 @@ pub enum Modal {
     Library { editing: Option<String>, name: Entity<TextInput>, topic: Entity<TextInput>, color: String },
     AddById { input: Entity<TextInput>, busy: bool },
     Paper(Box<PaperForm>),
+    Complete(Box<CompleteForm>),
     Fields { editing: Option<String>, name: Entity<TextInput>, options: Entity<TextInput>, kind: FieldKind, in_table: bool },
     Search { editing: Option<String>, kind: String, name: Entity<TextInput>, query: Entity<TextInput>, max: Entity<TextInput> },
     Confirm { title: String, message: String, action: String, cmd: Cmd },
@@ -882,8 +921,9 @@ impl Chat {
     }
 
     /// The slash commands to offer for what is in the box right now.
-    pub fn slash_list(&self, cx: &App) -> Vec<&'static ai::Slash> {
-        if self.slash_closed { vec![] } else { ai::slash_matches(self.input.read(cx).text()) }
+    /// `own` are the person's commands from the settings.
+    pub fn slash_list(&self, own: &[ai::Command], cx: &App) -> Vec<ai::Offer> {
+        if self.slash_closed { vec![] } else { ai::slash_matches(self.input.read(cx).text(), own) }
     }
 
     /// Have the context built again with the next question. The labels
@@ -917,7 +957,7 @@ impl Chat {
             .messages
             .iter()
             .filter_map(|item| match item {
-                ChatItem::User { text, images } => Some(ai::Said::User { text: text.clone(), images: images.iter().map(|picture| picture.id.clone()).collect() }),
+                ChatItem::User { text, images, prompt } => Some(ai::Said::User { text: text.clone(), images: images.iter().map(|picture| picture.id.clone()).collect(), prompt: prompt.clone() }),
                 ChatItem::Answer(text) if !text.is_empty() => {
                     cited.extend(ai::citations(text).into_iter().map(|citation| citation.label));
                     Some(ai::Said::Answer { text: text.clone() })
@@ -995,23 +1035,51 @@ impl Library {
         files.iter().find(|f| f.kind == "fulltext" && f.format == "pdf").or(files.iter().find(|f| f.format == "pdf")).copied()
     }
 
-    /// The papers waiting for a decision, as the screening page lists them:
-    /// those with a suggestion first (to include, related, uncertain,
-    /// irrelevant; the surer ones first), then the rest, newest first.
+    /// The suggestion that counts for a paper: one made against the
+    /// screening goal as it is now. An older one is shown, but not acted on.
+    pub fn current_suggestion(&self, paper_id: &str) -> Option<&Suggestion> {
+        self.suggestions.get(paper_id).filter(|s| s.made_for(&self.info.criteria))
+    }
+
+    /// Whether a decided paper is back for another look: asked again
+    /// against the goal as it is now, the assistant suggested otherwise,
+    /// and the person has not looked at it since.
+    fn rechecking(&self, paper: &Paper) -> bool {
+        paper.screening != "pending" && self.current_suggestion(&paper.id).is_some_and(|s| s.verdict != paper.screening && s.created_at > paper.reviewed_at)
+    }
+
+    /// The papers waiting for a decision, and the decided ones back for
+    /// another look: the suggested ones first, by verdict and then by how
+    /// sure the assistant was, then those it disagreed with the person on,
+    /// those suggested for an earlier goal, and the ones without a suggestion.
     pub fn screen_queue(&self) -> Vec<&Paper> {
-        let rank = |p: &Paper| match self.suggestions.get(&p.id) {
-            Some(s) => (SCREENINGS.iter().position(|(key, _)| *key == s.verdict).unwrap_or(9), -s.confidence.unwrap_or(0.)),
-            None => (99, 0.),
+        let rank = |p: &Paper| match self.screen_group(&p.id) {
+            "differs" => (20, -self.suggestions[&p.id].confidence.unwrap_or(0.)),
+            "stale" => (50, 0.),
+            "none" => (99, 0.),
+            verdict => (SCREENINGS.iter().position(|(key, _)| *key == verdict).unwrap_or(9), -self.suggestions[&p.id].confidence.unwrap_or(0.)),
         };
-        let mut queue: Vec<&Paper> = self.papers.iter().filter(|p| p.screening == "pending").collect();
+        let mut queue: Vec<&Paper> = self.papers.iter().filter(|p| p.screening == "pending" || self.rechecking(p)).collect();
         // Stable: within a group the library's own order holds.
         queue.sort_by(|a, b| rank(a).partial_cmp(&rank(b)).unwrap_or(std::cmp::Ordering::Equal));
         queue
     }
 
-    /// Which part of the queue a paper belongs to: its suggested verdict, or `none`.
+    /// Which part of the queue a paper belongs to: its suggested verdict,
+    /// `differs` for a decided paper the assistant now sees otherwise,
+    /// `stale` for a suggestion made against an earlier goal, or `none`.
     pub fn screen_group(&self, paper_id: &str) -> &str {
-        self.suggestions.get(paper_id).map_or("none", |s| s.verdict.as_str())
+        let Some(s) = self.suggestions.get(paper_id) else { return "none" };
+        if !s.made_for(&self.info.criteria) { return "stale" }
+        if self.paper(paper_id).is_some_and(|p| p.screening != "pending") { return "differs" }
+        s.verdict.as_str()
+    }
+
+    /// The papers the assistant is still to be asked about against the
+    /// goal as it is now: those waiting for a decision, or, with `decided`,
+    /// those the person has decided.
+    pub fn screen_unasked(&self, decided: bool) -> Vec<&Paper> {
+        self.papers.iter().filter(|p| (p.screening != "pending") == decided && self.current_suggestion(&p.id).is_none()).collect()
     }
 
     /// The part of the queue on show, and its filter. A part that has
@@ -1346,6 +1414,17 @@ impl Workspace {
                 self.save_settings(cx);
             }
             Cmd::ResetTranslationPrompt => self.reset_translation_prompt(cx),
+            Cmd::AddCommand => self.add_command(cx),
+            Cmd::SelectCommand(index) => self.select_command(index, cx),
+            Cmd::AskRemoveCommand(index) => {
+                let Some(command) = self.settings.commands.get(index) else { return };
+                self.modal_error.clear();
+                self.modal = Some(Modal::Confirm { title: format!("删除命令 /{}？", command.name), message: "它的模板会从 settings.json 里删除。用过它的对话不受影响：对话里保存着当时发出的内容。".into(), action: "删除".into(), cmd: Cmd::RemoveCommand(index) });
+            }
+            Cmd::RemoveCommand(index) => {
+                self.run(Cmd::CloseModal, window, cx);
+                self.remove_command(index, cx);
+            }
 
             Cmd::AddById => {
                 let input = self.modal_input("10.1038/s41586-020-2649-2、PMID 或它们的链接", "", false, window, cx);
@@ -1868,7 +1947,8 @@ impl Workspace {
                     lib.store.save_search(&mut search)
                 });
             }
-            Cmd::ScreenStart => self.screen_start(cx),
+            Cmd::ScreenStart => self.screen_start(false, cx),
+            Cmd::ScreenRecheck => self.screen_start(true, cx),
             Cmd::ScreenStop => {
                 if let Some(lib) = self.lib.as_mut() {
                     // Answers still on their way belong to a run that is over.
@@ -1882,8 +1962,9 @@ impl Workspace {
                 // The paper after this one in the queue on show comes up next; the one before when it was the last.
                 let queue: Vec<&str> = lib.screen_view().0.iter().map(|p| p.id.as_str()).collect();
                 let next = queue.iter().position(|p| *p == id).and_then(|at| queue.get(at + 1).or(at.checked_sub(1).and_then(|before| queue.get(before)))).map(|p| p.to_string());
-                // Agreeing with the assistant takes its reason along; deciding otherwise leaves the reason to the person.
-                let reason = lib.suggestions.get(&id).filter(|s| s.verdict == verdict).map(|s| s.reason.clone()).unwrap_or_default();
+                // Agreeing with the assistant takes its reason along; keeping one's own decision keeps its reason; deciding otherwise leaves the reason to the person.
+                let kept = lib.paper(&id).filter(|p| p.screening == verdict).map(|p| p.screening_reason.clone());
+                let reason = lib.current_suggestion(&id).filter(|s| s.verdict == verdict).map(|s| s.reason.clone()).or(kept).unwrap_or_default();
                 if self.edit_paper(&id, cx, |p| p.decide(&verdict, &reason)) { self.select(next, window, cx) }
             }
             Cmd::ScreenFilter(filter) => {
@@ -1973,6 +2054,26 @@ impl Workspace {
                 window.focus(&self.focus);
             }
             Cmd::SubmitModal => self.submit_modal(window, cx),
+            Cmd::CompletePaper(id) => self.complete_dialog(id, window, cx),
+            Cmd::CompleteChoose(at) => {
+                self.modal_error.clear();
+                let Some(Modal::Complete(form)) = self.modal.as_mut() else { return };
+                form.chosen = at.filter(|at| form.found.as_ref().is_some_and(|found| *at < found.candidates.len()));
+                form.fields = match (form.chosen, self.lib.as_ref().and_then(|lib| lib.paper(&form.paper_id))) {
+                    (Some(at), Some(paper)) => match &form.found.as_ref().unwrap().candidates[at] {
+                        candidate if candidate.similarity >= complete::ALIKE_ENOUGH => complete::suggested(paper, &candidate.paper, form.placeholder),
+                        _ => vec![],
+                    },
+                    _ => vec![],
+                };
+            }
+            Cmd::CompleteField(key) => {
+                let Some(Modal::Complete(form)) = self.modal.as_mut() else { return };
+                match form.fields.iter().position(|taken| *taken == key) {
+                    Some(at) => { form.fields.remove(at); }
+                    None => form.fields.push(key),
+                }
+            }
             Cmd::PickColor(value) => {
                 if let Some(Modal::Library { color, .. }) = self.modal.as_mut() { *color = value }
             }
@@ -2081,6 +2182,14 @@ impl Workspace {
         }
         let guide = Guide::new(&info.topic, cx);
         let screen = Screen::new(&info.criteria, cx);
+        // The goal is the library's, kept with it as it is typed; suggestions made against another one stop counting.
+        subscriptions.push(cx.subscribe(&screen.criteria, |this, input, event: &InputEvent, cx| {
+            if *event != InputEvent::Changed { return }
+            let goal = input.read(cx).text().trim().to_string();
+            let Some(lib) = this.lib.as_mut().filter(|l| l.info.criteria != goal) else { return };
+            lib.info.criteria = goal;
+            if let Err(err) = libraries::save(&lib.info) { this.fail(format!("筛选目标没有保存：{err:#}"), cx) }
+        }));
         let section = "introduction".to_string();
         let draft = store.drafts().ok().and_then(|mut drafts| drafts.remove(&section)).unwrap_or_default();
         let editor = cx.new(|cx| TextInput::new("在这里写。右边会列出文献库里的文献在同一部分是怎么写的；中文也可以，先写下想表达的意思。", cx).multiline(14).with_text(&draft));
@@ -2564,7 +2673,7 @@ impl Workspace {
         if let Err(err) = stored { row.outcome = Imported::Failed(format!("{err:#}")) }
         let title = row.paper_id.as_deref().and_then(|id| lib.paper(id)).map(|p| p.title.clone()).unwrap_or_default();
         let said = match &row.outcome {
-            Imported::Added if row.unrecognised => format!("已添加「{stem}」。没有识别出 DOI，请补全题目和作者。"),
+            Imported::Added if row.unrecognised => format!("已添加「{stem}」。没有识别出 DOI：可以在文献详情里「按题目补全」。"),
             Imported::Added => format!("已添加：{title}"),
             Imported::Attached => format!("「{stem}」已在文献库中，PDF 已附到原条目。"),
             Imported::InTrash => format!("「{stem}」对应的文献在回收站中，未导入。"),
@@ -2694,7 +2803,7 @@ impl Workspace {
     fn chat_input(&mut self, about_paper: bool, event: InputEvent, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
         let chat = lib.chat_mut(about_paper);
-        let (offered, picked) = (chat.slash_list(cx).len(), chat.slash);
+        let (offered, picked) = (chat.slash_list(&self.settings.commands, cx).len(), chat.slash);
         match event {
             // Enter on a command in the list takes it; otherwise the message goes.
             InputEvent::Submit if offered > 0 => return self.pick_slash(about_paper, picked, cx),
@@ -2714,18 +2823,19 @@ impl Workspace {
             _ => {}
         }
         // While the list is on show the arrow keys and Tab are its keys.
-        let choosing = !chat.slash_list(cx).is_empty();
+        let choosing = !chat.slash_list(&self.settings.commands, cx).is_empty();
         chat.input.update(cx, |input, _| input.choosing = choosing);
         cx.notify();
     }
 
-    /// Take one of the slash commands on offer: a command that stands
-    /// alone runs, the others are written out for their subject to follow.
+    /// Take one of the slash commands on offer: one the window carries out
+    /// runs, the others are written out for their subject to follow, or
+    /// to be sent as they are.
     fn pick_slash(&mut self, about_paper: bool, at: usize, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
         let chat = lib.chat_mut(about_paper);
-        let Some(command) = chat.slash_list(cx).get(at).copied() else { return };
-        let alone = command.hint.is_empty();
+        let Some(command) = chat.slash_list(&self.settings.commands, cx).into_iter().nth(at) else { return };
+        let alone = command.runs;
         chat.slash = 0;
         chat.input.update(cx, |input, cx| {
             input.choosing = false;
@@ -2790,7 +2900,7 @@ impl Workspace {
             return cx.notify();
         }
         // `/search …` and the like stand for a longer request; the bubble shows what was typed.
-        let prompt = match ai::read_input(if question.is_empty() && !chat.quotes.is_empty() { "这段原文说了什么？在这篇文献里起什么作用？" } else { &question }) {
+        let prompt = match ai::read_input(if question.is_empty() && !chat.quotes.is_empty() { "这段原文说了什么？在这篇文献里起什么作用？" } else { &question }, &self.settings.commands) {
             Ok(ai::Input::Ask(prompt)) => prompt,
             Ok(ai::Input::NewChat) => {
                 chat.reset(cx);
@@ -2835,14 +2945,16 @@ impl Workspace {
             chat.ctx = Some(ctx);
         }
         if replay {
-            // Questions with their pictures and what a slash command stood for; the pieces of one answer as one turn.
+            // Questions with their pictures, as they were sent (what a slash command stood for then); the pieces of one answer as one turn.
             let mut wire: Vec<Value> = vec![];
             let mut answer = String::new();
             for item in &chat.messages {
                 match item {
-                    ChatItem::User { text, images } => {
+                    ChatItem::User { text, images, prompt } => {
                         if !answer.is_empty() { wire.push(ai::assistant_message(&std::mem::take(&mut answer))) }
-                        wire.push(ai::user_message_with(profile.protocol, &ai::expand_slash(text), &wire_images(images)));
+                        // A question from before the request was kept is read again as it would be now.
+                        let sent = if prompt.is_empty() { ai::expand_slash(text) } else { prompt.clone() };
+                        wire.push(ai::user_message_with(profile.protocol, &sent, &wire_images(images)));
                     }
                     ChatItem::Answer(text) if !text.is_empty() => {
                         if !answer.is_empty() { answer.push_str("\n\n") }
@@ -2865,7 +2977,9 @@ impl Workspace {
         };
         let images = std::mem::take(&mut chat.attachments);
         chat.wire.push(ai::user_message_with(profile.protocol, &prompt, &wire_images(&images)));
-        chat.messages.push(ChatItem::User { text: question, images });
+        // Kept with the question, so the conversation taken up later asks what was asked now, whatever the command says by then.
+        let sent = if prompt == question { String::new() } else { prompt };
+        chat.messages.push(ChatItem::User { text: question, images, prompt: sent });
         chat.steps = 0;
         chat.started = Some(Instant::now());
         let sent = self.chat_step(about_paper, cx);
@@ -3133,7 +3247,7 @@ impl Workspace {
         chat.reset(cx);
         for item in conversation.transcript.items {
             chat.messages.push(match item {
-                ai::Said::User { text, images } => {
+                ai::Said::User { text, images, prompt } => {
                     let mut pictures = vec![];
                     for image_id in images {
                         // A picture that cannot be read back is left out; the question stays.
@@ -3142,7 +3256,7 @@ impl Workspace {
                         chat.stored_images.insert(image_id.clone());
                         pictures.push(ChatImage { id: image_id, image: Arc::new(Image::from_bytes(format, data)) });
                     }
-                    ChatItem::User { text, images: pictures }
+                    ChatItem::User { text, images: pictures, prompt }
                 }
                 ai::Said::Answer { text } => ChatItem::Answer(text),
                 ai::Said::Tool { call, result, failed } => ChatItem::Tool { call, result: Some((result, failed)) },
@@ -3170,6 +3284,109 @@ impl Workspace {
             self.modal_subscriptions.push(subscription);
         }
         input
+    }
+
+    /// Open 按题目补全 for a paper. Its title goes into the box unless it is
+    /// only the name of its file; then the first page of its PDF is read
+    /// for one, which the person looks over before anything is asked.
+    fn complete_dialog(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.modal_subscriptions.clear();
+        self.modal_error.clear();
+        let Some(lib) = &self.lib else { return };
+        let Some(paper) = lib.paper(&id).cloned() else { return };
+        let files: Vec<PaperFile> = lib.paper_files(&id).into_iter().cloned().collect();
+        let placeholder = complete::placeholder_title(&paper, &files);
+        let pdfs: Vec<PathBuf> = files.iter().filter(|file| file.format == "pdf").map(|file| lib.store.file_path(file)).collect();
+        let library = lib.info.id.clone();
+        let title = self.modal_input("文献的题目", if placeholder { "" } else { &paper.title }, true, window, cx);
+        title.update(cx, |input, _| input.min_lines = 2);
+        let first_author = paper.authors.split(';').next().unwrap_or("").trim().to_string();
+        let author = self.modal_input("一位作者的姓名，可不填", &first_author, false, window, cx);
+        let year = self.modal_input("例如 2019，可不填", &paper.year.map(|y| y.to_string()).unwrap_or_default(), false, window, cx);
+        title.read(cx).focus(window);
+        self.modal = Some(Modal::Complete(Box::new(CompleteForm { paper_id: id.clone(), seen: paper.updated_at.clone(), title, author, year, placeholder, guessed: false, busy: false, found: None, held: vec![], chosen: None, fields: vec![] })));
+        cx.notify();
+        if !placeholder || pdfs.is_empty() { return }
+        cx.spawn(async move |this, cx| {
+            let shown = cx.background_executor().spawn(async move { pdfs.into_iter().find_map(|path| pdftext::title_guess(std::fs::read(path).ok()?)) }).await;
+            this.update(cx, |this, cx| {
+                if this.lib.as_ref().is_none_or(|l| l.info.id != library) { return }
+                let (Some(Modal::Complete(form)), Some(shown)) = (this.modal.as_mut(), shown) else { return };
+                // Only into a box the person has not written in meanwhile.
+                if form.paper_id != id || !form.title.read(cx).text().trim().is_empty() { return }
+                form.title.update(cx, |input, cx| input.set_text(&shown, cx));
+                form.guessed = true;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// 按题目补全, the first step: ask the sources about the title in the box.
+    fn complete_find(&mut self, cx: &mut Context<Self>) {
+        let Some(Modal::Complete(form)) = self.modal.as_mut() else { return };
+        if form.busy { return }
+        let text = |input: &Entity<TextInput>| input.read(cx).text().trim().to_string();
+        let title = text(&form.title);
+        if title.is_empty() {
+            self.modal_error = "写上题目再查找。".into();
+            return;
+        }
+        let year = match text(&form.year) {
+            year if year.is_empty() => None,
+            year => match year.parse::<i32>().ok().filter(|y| (1800..=2200).contains(y)) {
+                Some(year) => Some(year),
+                None => {
+                    self.modal_error = "年份应为数字，例如 2019；不确定可以留空。".into();
+                    return;
+                }
+            },
+        };
+        let query = complete::Query { title, author: text(&form.author), year };
+        form.busy = true;
+        let paper_id = form.paper_id.clone();
+        let library = self.lib.as_ref().map(|l| l.info.id.clone()).unwrap_or_default();
+        cx.spawn(async move |this, cx| {
+            let found = cx.background_executor().spawn(async move { complete::find(&query, &wisp_net::get_text) }).await;
+            this.update(cx, |this, cx| {
+                let Some(lib) = this.lib.as_ref().filter(|l| l.info.id == library) else { return };
+                let Some(Modal::Complete(form)) = this.modal.as_mut().filter(|modal| matches!(modal, Modal::Complete(form) if form.paper_id == paper_id)) else { return };
+                form.busy = false;
+                // A record the library holds as another paper cannot be written into this one.
+                form.held = found.candidates.iter().map(|candidate| lib.store.existing_paper(&candidate.paper).ok().flatten().filter(|id| *id != paper_id).map(|id| (id.clone(), lib.paper(&id).or_else(|| lib.trash.iter().map(|entry| &entry.paper).find(|paper| paper.id == id)).map(|paper| paper.title.clone()).unwrap_or_default()))).collect();
+                if found.asked.iter().all(|asked| !asked.error.is_empty()) { this.modal_error = "几个来源都没有查成，见下面的原因。检查网络或「设置 › 网络」里的代理后再试。".into() }
+                form.chosen = None;
+                form.found = Some(found);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// 按题目补全, the last step: write the fields taken from the record
+    /// looked at into the paper.
+    fn complete_apply(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Modal::Complete(form)) = self.modal.as_ref() else { return };
+        let (Some(at), Some(found)) = (form.chosen, form.found.as_ref()) else { return };
+        let (id, candidate, fields) = (form.paper_id.clone(), found.candidates[at].clone(), form.fields.clone());
+        let problem = if form.held.get(at).is_some_and(Option::is_some) {
+            Some("文献库里已经有这条记录了，不能再写进这一篇。")
+        } else if fields.is_empty() {
+            Some("没有勾选要写入的字段。")
+        } else if self.lib.as_ref().and_then(|lib| lib.paper(&id)).is_none_or(|paper| paper.updated_at != form.seen) {
+            Some("这篇文献在查找期间被改过。关掉这个窗口重新打开，按它现在的内容再核对。")
+        } else {
+            None
+        };
+        if let Some(problem) = problem {
+            self.modal_error = problem.into();
+            return;
+        }
+        if !self.edit_paper(&id, cx, |paper| complete::apply(paper, &candidate, &fields)) { return }
+        self.run(Cmd::CloseModal, window, cx);
+        self.say(format!("已补全：{}", self.lib.as_ref().and_then(|lib| lib.paper(&id)).map(|paper| paper.title.clone()).unwrap_or_default()), cx);
     }
 
     fn library_dialog(&mut self, editing: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
@@ -3321,10 +3538,11 @@ impl Workspace {
     }
 
     /// Start asking the assistant about the pending papers it has not judged
-    /// yet, several at a time (设置 › AI says how many, and with which
-    /// model). What it says is saved as a suggestion; the decision stays
-    /// with the person.
-    fn screen_start(&mut self, cx: &mut Context<Self>) {
+    /// against the goal as it is now (with `decided`, the decided ones),
+    /// several at a time (设置 › AI says how many, and with which model).
+    /// What it says is saved as a suggestion; the decision stays with the
+    /// person, and a decided paper it sees otherwise comes back to the queue.
+    fn screen_start(&mut self, decided: bool, cx: &mut Context<Self>) {
         let profile = self.settings.profile_for_or_default(Task::Screen);
         let workers = self.settings.screen_workers;
         let Some(lib) = self.lib.as_mut() else { return };
@@ -3335,18 +3553,9 @@ impl Workspace {
             lib.screen.error = err;
             return cx.notify();
         }
-        // The criteria are the library's: they are kept with it.
-        let criteria = lib.screen.criteria.read(cx).text().trim().to_string();
-        if criteria != lib.info.criteria {
-            lib.info.criteria = criteria;
-            if let Err(err) = libraries::save(&lib.info) {
-                lib.screen.error = format!("{err:#}");
-                return cx.notify();
-            }
-        }
-        let mut todo: Vec<String> = lib.screen_queue().iter().filter(|p| !lib.suggestions.contains_key(&p.id)).map(|p| p.id.clone()).collect();
+        let mut todo: Vec<String> = lib.screen_unasked(decided).iter().map(|p| p.id.clone()).collect();
         if todo.is_empty() {
-            lib.screen.error = "待判断的文献都已经有建议了。".into();
+            lib.screen.error = if decided { "已判断的文献都有按当前目标的建议了。" } else { "待判断的文献都已经有按当前目标的建议了。" }.into();
             return cx.notify();
         }
         todo.reverse();
@@ -3373,9 +3582,11 @@ impl Workspace {
         let pages = lib.store.paper_pages(&id).ok().flatten();
         let (system, prompt, basis) = ai::screen_prompt(&lib.info.topic, &lib.info.criteria, &paper, pages.as_deref());
         let author = format!("{} · {}", profile.title(), profile.model);
+        // What it is judged against, kept with the answer: the goal may change while it is read.
+        let criteria = Some(lib.info.criteria.clone());
         // Nothing to read: say so without asking, rather than have the model guess from a title.
         if basis == "none" {
-            let mut suggestion = Suggestion { paper_id: id, verdict: "uncertain".into(), reason: "这篇文献没有摘要，也没有保存全文，无法判断。".into(), basis: basis.into(), author, ..Default::default() };
+            let mut suggestion = Suggestion { paper_id: id, verdict: "uncertain".into(), reason: "这篇文献没有摘要，也没有保存全文，无法判断。".into(), basis: basis.into(), author, criteria, ..Default::default() };
             let saved = lib.store.save_suggestion(&mut suggestion);
             lib.screen.done += 1;
             if saved.is_ok() { lib.suggestions.insert(suggestion.paper_id.clone(), suggestion); }
@@ -3402,7 +3613,7 @@ impl Workspace {
                 lib.screen.reading.retain(|reading| *reading != paper.id);
                 lib.screen.done += 1;
                 let saved = judged.and_then(|j| {
-                    let mut suggestion = Suggestion { paper_id: paper.id.clone(), verdict: j.verdict, reason: j.reason, excerpt: j.excerpt, page: j.page, basis: basis.into(), confidence: j.confidence, author, ..Default::default() };
+                    let mut suggestion = Suggestion { paper_id: paper.id.clone(), verdict: j.verdict, reason: j.reason, excerpt: j.excerpt, page: j.page, basis: basis.into(), confidence: j.confidence, author, criteria, ..Default::default() };
                     lib.store.save_suggestion(&mut suggestion).map(|()| suggestion).map_err(|e| format!("{e:#}"))
                 });
                 match saved {
@@ -3716,6 +3927,9 @@ impl Workspace {
                 self.run(cmd, window, cx);
             }
             Modal::ImportReport => self.run(Cmd::CloseImport, window, cx),
+            Modal::Complete(form) => {
+                if form.chosen.is_some() { self.complete_apply(window, cx) } else { self.complete_find(cx) }
+            }
             Modal::Zotero => self.run(Cmd::PickZotero, window, cx),
             Modal::ZoteroReport => self.run(Cmd::CloseModal, window, cx),
             Modal::FetchReport => self.run(Cmd::CloseFetch, window, cx),
@@ -4022,7 +4236,17 @@ impl Workspace {
                     None
                 }
                 "zotero-report" => Some(Cmd::ShowZotero),
-                "screen" => Some(Cmd::ScreenStart),
+                // `screen` starts the assistant on the pending papers, `screen:decided` on the decided ones.
+                "screen" => Some(if arg == "decided" { Cmd::ScreenRecheck } else { Cmd::ScreenStart }),
+                // `goal:<text>` writes the screening goal, as if typed.
+                "goal" => {
+                    if let Some(lib) = self.lib.as_mut() {
+                        lib.screen.criteria.update(cx, |input, cx| input.set_text(arg, cx));
+                        lib.info.criteria = arg.trim().to_string();
+                        libraries::save(&lib.info).ok();
+                    }
+                    None
+                }
                 // `sort` has the model sort the full texts into parts, `read` has it read the pages of those without text.
                 "sort" => Some(Cmd::WriteRun(false)),
                 "read" => Some(Cmd::WriteRun(true)),
@@ -4093,8 +4317,12 @@ impl Workspace {
                     "ai" => SettingsPage::Ai,
                     "network" => SettingsPage::Network,
                     "about" => SettingsPage::About,
+                    "commands" => SettingsPage::Commands,
                     _ => SettingsPage::General,
                 })),
+                "candidate" => Some(Cmd::CompleteChoose(arg.parse().ok())),
+                // `command:0` opens the first of the person's own commands on 设置 › 命令.
+                "command" => Some(Cmd::SelectCommand(arg.parse().unwrap_or(0))),
                 // Saved like the choice in 设置 › 外观: "light", "dark", or empty for the system's.
                 "theme" => Some(Cmd::SetAppearance(arg.to_string())),
                 "record" => Some(Cmd::RecordShortcut(arg.to_string())),
@@ -4105,6 +4333,8 @@ impl Workspace {
                     "add" => Some(Cmd::AddById),
                     "search" => Some(Cmd::NewSearch),
                     "paper" => self.lib.as_ref().and_then(|l| l.selected.clone()).map(Cmd::EditPaper),
+                    // 按题目补全 for the selected paper; `submit` then looks, `candidate:0` opens the first record found.
+                    "complete" => self.lib.as_ref().and_then(|l| l.selected.clone()).map(Cmd::CompletePaper),
                     _ => None,
                 },
                 _ => None,

@@ -144,7 +144,10 @@ CREATE TABLE IF NOT EXISTS screening_suggestions (
     confidence REAL,
     -- Who suggested it: a model profile, or an outside agent.
     author TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    -- The library's screening goal it was made against; NULL for one made
+    -- before suggestions kept it (added by `add_columns`).
+    criteria TEXT
 );
 
 -- Translations already made, so that a title or an abstract is translated
@@ -322,6 +325,16 @@ pub struct Suggestion {
     pub confidence: Option<f64>,
     pub author: String,
     pub created_at: String,
+    /// The screening goal it was made against; `None` when it was made
+    /// before suggestions kept their goal, and is taken as the current one.
+    pub criteria: Option<String>,
+}
+
+impl Suggestion {
+    /// Whether it was made against `goal`, the library's screening goal now.
+    pub fn made_for(&self, goal: &str) -> bool {
+        self.criteria.as_deref().is_none_or(|criteria| criteria.trim() == goal.trim())
+    }
 }
 
 /// How one full text was sorted into the parts of a paper.
@@ -377,6 +390,20 @@ pub struct Store {
     db: Connection,
 }
 
+/// Table, column and type of each column added after its table was first made.
+const ADDED_COLUMNS: &[(&str, &str, &str)] = &[("screening_suggestions", "criteria", "TEXT")];
+
+/// Add the columns added to a table after it was first made: `CREATE TABLE IF NOT
+/// EXISTS` leaves a table of an earlier build as it is. An older build reads
+/// a database with these columns as before, so the version stays.
+fn add_columns(db: &Connection) -> Result<()> {
+    for (table, column, kind) in ADDED_COLUMNS {
+        let has: bool = db.query_row(&format!("SELECT count(*) FROM pragma_table_info('{table}') WHERE name = ?1"), [column], |r| r.get::<_, i64>(0))? > 0;
+        if !has { db.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind}"))? }
+    }
+    Ok(())
+}
+
 fn json_strings(value: &str) -> Vec<String> {
     serde_json::from_str(value).unwrap_or_default()
 }
@@ -407,6 +434,7 @@ impl Store {
             bail!("这个文献库由更新版本的 Wisp Paper 创建（数据库版本 {version}），请升级后再打开。");
         }
         db.execute_batch(SCHEMA)?;
+        add_columns(&db)?;
         db.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(Store { root, db })
     }
@@ -854,20 +882,20 @@ impl Store {
         suggestion.excerpt = suggestion.excerpt.trim().to_string();
         suggestion.created_at = now_iso();
         self.db.execute(
-            "INSERT INTO screening_suggestions(paper_id, verdict, reason, excerpt, page, basis, confidence, author, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
+            "INSERT INTO screening_suggestions(paper_id, verdict, reason, excerpt, page, basis, confidence, author, created_at, criteria) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
              ON CONFLICT(paper_id) DO UPDATE SET verdict = excluded.verdict, reason = excluded.reason, excerpt = excluded.excerpt, page = excluded.page, basis = excluded.basis, \
-                confidence = excluded.confidence, author = excluded.author, created_at = excluded.created_at",
-            params![suggestion.paper_id, suggestion.verdict, suggestion.reason, suggestion.excerpt, suggestion.page.map(|p| p as i64), suggestion.basis, suggestion.confidence, suggestion.author, suggestion.created_at],
+                confidence = excluded.confidence, author = excluded.author, created_at = excluded.created_at, criteria = excluded.criteria",
+            params![suggestion.paper_id, suggestion.verdict, suggestion.reason, suggestion.excerpt, suggestion.page.map(|p| p as i64), suggestion.basis, suggestion.confidence, suggestion.author, suggestion.created_at, suggestion.criteria.as_deref().map(str::trim)],
         )?;
         Ok(())
     }
 
     /// Every suggestion, for papers in the trash too.
     pub fn list_suggestions(&self) -> Result<Vec<Suggestion>> {
-        let mut stmt = self.db.prepare("SELECT paper_id, verdict, reason, excerpt, page, basis, confidence, author, created_at FROM screening_suggestions")?;
+        let mut stmt = self.db.prepare("SELECT paper_id, verdict, reason, excerpt, page, basis, confidence, author, created_at, criteria FROM screening_suggestions")?;
         Ok(stmt
             .query_map([], |r| {
-                Ok(Suggestion { paper_id: r.get(0)?, verdict: r.get(1)?, reason: r.get(2)?, excerpt: r.get(3)?, page: r.get::<_, Option<i64>>(4)?.map(|p| p as usize), basis: r.get(5)?, confidence: r.get(6)?, author: r.get(7)?, created_at: r.get(8)? })
+                Ok(Suggestion { paper_id: r.get(0)?, verdict: r.get(1)?, reason: r.get(2)?, excerpt: r.get(3)?, page: r.get::<_, Option<i64>>(4)?.map(|p| p as usize), basis: r.get(5)?, confidence: r.get(6)?, author: r.get(7)?, created_at: r.get(8)?, criteria: r.get(9)? })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?)
     }
@@ -1404,6 +1432,19 @@ mod tests {
     }
 
     #[test]
+    fn suggestions_of_an_earlier_build_gain_a_goal() {
+        let dir = temp_dir("goal-column");
+        let db = Connection::open_in_memory().unwrap();
+        // The table as builds before the goal made it.
+        db.execute_batch("CREATE TABLE screening_suggestions (paper_id TEXT PRIMARY KEY NOT NULL, verdict TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', excerpt TEXT NOT NULL DEFAULT '', page INTEGER, basis TEXT NOT NULL DEFAULT '', confidence REAL, author TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);").unwrap();
+        let store = Store::init(dir.clone(), db).unwrap();
+        assert!(store.list_suggestions().unwrap().is_empty());
+        // Opening it again leaves the column alone.
+        add_columns(&store.db).unwrap();
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
     fn suggestions_do_not_decide() {
         let dir = temp_dir("suggest");
         let mut store = Store::in_memory(&dir).unwrap();
@@ -1416,6 +1457,12 @@ mod tests {
         let all = store.list_suggestions().unwrap();
         assert_eq!((all.len(), all[0].verdict.as_str(), all[0].page, all[0].confidence), (1, "included", Some(3), None));
         assert_eq!(store.suggestion(&p.id).unwrap().unwrap().excerpt, "roots");
+        // The goal it was made against is kept; one from before goals were kept counts as made for any.
+        assert!(all[0].criteria.is_none() && all[0].made_for("只收根"));
+        store.save_suggestion(&mut Suggestion { paper_id: p.id.clone(), verdict: "included".into(), criteria: Some(" 只收根 ".into()), ..Default::default() }).unwrap();
+        let kept = store.suggestion(&p.id).unwrap().unwrap();
+        assert_eq!(kept.criteria.as_deref(), Some("只收根"));
+        assert!(kept.made_for("只收根 ") && !kept.made_for("只收叶") && !kept.made_for(""));
         for bad in [Suggestion { paper_id: p.id.clone(), verdict: "pending".into(), ..Default::default() }, Suggestion { paper_id: p.id.clone(), verdict: "maybe".into(), ..Default::default() }, Suggestion { paper_id: "P-none".into(), verdict: "included".into(), ..Default::default() }, Suggestion { paper_id: p.id.clone(), verdict: "included".into(), confidence: Some(1.5), ..Default::default() }] {
             assert!(store.save_suggestion(&mut bad.clone()).is_err(), "{bad:?}");
         }
@@ -1432,10 +1479,10 @@ mod tests {
         let dir = temp_dir("conversations");
         let mut store = Store::in_memory(&dir).unwrap();
         let paper = store.add_paper(Paper { title: "Alpha".into(), ..Default::default() }).unwrap();
-        let transcript = Transcript { items: vec![Said::User { text: "WOX5 做什么？".into(), images: vec!["I-1".into()] }, Said::Answer { text: "见 [P1]。".into() }], sources: vec![Source { label: "P1".into(), paper_id: paper.id.clone(), title: "Alpha".into() }] };
+        let transcript = Transcript { items: vec![Said::User { text: "WOX5 做什么？".into(), images: vec!["I-1".into()], prompt: String::new() }, Said::Answer { text: "见 [P1]。".into() }], sources: vec![Source { label: "P1".into(), paper_id: paper.id.clone(), title: "Alpha".into() }] };
         let mut with_library = Conversation { transcript: transcript.clone(), ..Default::default() };
         store.save_conversation(&mut with_library).unwrap();
-        let mut with_paper = Conversation { paper_id: paper.id.clone(), transcript: Transcript { items: vec![Said::User { text: "总结一下".into(), images: vec![] }], sources: vec![] }, ..Default::default() };
+        let mut with_paper = Conversation { paper_id: paper.id.clone(), transcript: Transcript { items: vec![Said::User { text: "总结一下".into(), images: vec![], prompt: String::new() }], sources: vec![] }, ..Default::default() };
         store.save_conversation(&mut with_paper).unwrap();
         assert!(with_library.id.starts_with("C-") && with_library.id != with_paper.id);
         // Each side lists its own, with a title and the number of questions.
@@ -1445,7 +1492,7 @@ mod tests {
         assert_eq!(store.conversation(&with_library.id).unwrap().unwrap().transcript, transcript);
         // Saved again it is the same conversation, with what was added.
         let created = with_library.created_at.clone();
-        with_library.transcript.items.push(Said::User { text: "再说说 SCR".into(), images: vec![] });
+        with_library.transcript.items.push(Said::User { text: "再说说 SCR".into(), images: vec![], prompt: String::new() });
         store.save_conversation(&mut with_library).unwrap();
         let again = store.conversation(&with_library.id).unwrap().unwrap();
         assert_eq!((store.list_conversations("").unwrap().len(), again.transcript.questions(), again.created_at), (1, 2, created));

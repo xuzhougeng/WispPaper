@@ -39,23 +39,38 @@ impl Workspace {
         let lib = self.lib.as_ref().unwrap();
         let screen = &lib.screen;
         let all = lib.screen_queue();
-        let suggested = all.iter().filter(|p| lib.suggestions.contains_key(&p.id)).count();
-        let waiting = all.len() - suggested;
+        let pending = all.iter().filter(|p| p.screening == "pending").count();
+        let suggested = all.iter().filter(|p| p.screening == "pending" && lib.current_suggestion(&p.id).is_some()).count();
+        let stale = all.iter().filter(|p| lib.screen_group(&p.id) == "stale").count();
+        let differs = all.len() - pending;
+        let waiting = lib.screen_unasked(false).len();
+        let unchecked = lib.screen_unasked(true).len();
         let (queue, filter) = lib.screen_view();
-        // The parts of the queue: one per suggested verdict, and the papers without a suggestion.
-        let parts: Vec<(&str, &str, usize)> = SCREENINGS.iter().filter(|(key, _)| *key != "pending").map(|(key, name)| (*key, *name)).chain([("none", "还没有建议")]).map(|(key, name)| (key, name, all.iter().filter(|p| lib.screen_group(&p.id) == key).count())).filter(|(_, _, count)| *count > 0).collect();
+        // The parts of the queue: one per suggested verdict, the decided papers seen otherwise, the suggestions made for an earlier goal, and the papers without a suggestion.
+        let parts: Vec<(&str, &str, usize)> = SCREENINGS.iter().filter(|(key, _)| *key != "pending").map(|(key, name)| (*key, *name)).chain([("differs", "与你的判断不同"), ("stale", "按旧目标的建议"), ("none", "还没有建议")]).map(|(key, name)| (key, name, all.iter().filter(|p| lib.screen_group(&p.id) == key).count())).filter(|(_, _, count)| *count > 0).collect();
         let part = |n: usize, key: &str, text: String, this: &Self, cx: &mut Context<Self>| {
             let on = filter == key;
-            let (color, fill) = if key.is_empty() || key == "none" { (Theme::text_secondary(), Theme::groove()) } else { crate::theme::status_colors(key) };
+            let (color, fill) = match key {
+                "" | "none" | "stale" => (Theme::text_secondary(), Theme::groove()),
+                "differs" => crate::theme::status_colors("uncertain"),
+                verdict => crate::theme::status_colors(verdict),
+            };
             div().id(("screen-part", n)).flex().flex_none().items_center().h(px(26.)).px(px(10.)).rounded(px(13.)).text_size(px(12.)).cursor_pointer().border_1().when(on, |d| d.bg(fill).text_color(color).border_color(color.opacity(0.35)).font_weight(FontWeight::MEDIUM)).when(!on, |d| d.border_color(Theme::line()).text_color(Theme::text_secondary()).hover(|s| s.bg(Theme::hover()))).on_click(this.on(Cmd::ScreenFilter(key.to_string()), cx)).child(text)
         };
         let mut bar: Vec<AnyElement> = vec![part(0, "", format!("全部 {}", all.len()), self, cx).into_any_element()];
         bar.extend(parts.iter().enumerate().map(|(n, (key, name, count))| part(n + 1, key, format!("{name} {count}"), self, cx).into_any_element()));
         // A whole part can be decided at once, as the assistant suggested, once it has been looked over.
-        let accept = (!filter.is_empty() && filter != "none" && !screen.running()).then(|| ui::secondary_button("screen-accept", format!("全部采纳为「{}」（{} 篇）", label(&SCREENINGS, filter), queue.len())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::AskScreenAccept(filter.to_string()), cx)));
+        let accept = (SCREENINGS.iter().any(|(key, _)| *key == filter) && !screen.running()).then(|| ui::secondary_button("screen-accept", format!("全部采纳为「{}」（{} 篇）", label(&SCREENINGS, filter), queue.len())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::AskScreenAccept(filter.to_string()), cx)));
         let configured = !self.settings.profile_for_or_default(Task::Screen).key().is_empty();
-        let status = if all.is_empty() { "没有待判断的文献。".to_string() } else { format!("待判断 {} 篇，其中 {suggested} 篇已有助手的建议。", all.len()) };
-        let rows: Vec<AnyElement> = queue.iter().take(SHOWN).map(|paper| self.render_screen_row(paper, lib.suggestions.get(&paper.id), lib.selected.as_deref() == Some(paper.id.as_str()), screen.reading.contains(&paper.id), cx)).collect();
+        let mut status = if pending == 0 { "没有待判断的文献。".to_string() } else { format!("待判断 {pending} 篇，其中 {suggested} 篇已有按当前目标的建议。") };
+        if stale > 0 { status.push_str(&format!("{stale} 篇的建议是按旧目标给出的。")) }
+        if differs > 0 { status.push_str(&format!("已判断的文献里，{differs} 篇按当前目标看与你的判断不同。")) }
+        let start = match (waiting, stale) {
+            (0, _) => "让助手判断".to_string(),
+            (_, 0) => format!("让助手判断 {waiting} 篇"),
+            _ => format!("按当前目标判断 {waiting} 篇"),
+        };
+        let rows: Vec<AnyElement> = queue.iter().take(SHOWN).map(|paper| self.render_screen_row(paper, lib.suggestions.get(&paper.id), lib.screen_group(&paper.id), lib.selected.as_deref() == Some(paper.id.as_str()), screen.reading.contains(&paper.id), cx)).collect();
         let titles: Vec<String> = screen.reading.iter().filter_map(|id| lib.paper(id)).map(|p| p.title.clone()).collect();
 
         div()
@@ -73,7 +88,15 @@ impl Workspace {
                     .pb(px(12.))
                     .child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child("筛选"))
                     .child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child("助手阅读待判断的文献（有全文读全文，否则读摘要），几篇同时进行，给出建议、理由和原文依据。建议只是建议：每一篇的收录判断由你确认。"))
-                    .child(ui::field(&screen.criteria, window, cx))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.))
+                            .child(div().flex().items_baseline().gap(px(8.)).child(div().flex_none().text_size(px(13.)).font_weight(FontWeight::MEDIUM).child("筛选目标")).child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(if lib.info.criteria.is_empty() && !lib.info.topic.trim().is_empty() { format!("留空时按主题判断：{}", lib.info.topic.trim()) } else { "什么样的文献应当收进这个文献库".to_string() })))
+                            .child(ui::field(&screen.criteria, window, cx))
+                            .child(div().text_size(px(11.)).text_color(Theme::text_tertiary()).child("随时可以换一个目标：已有的建议会标为「按旧目标」，再让助手按新目标判断一遍；已判断的文献也可以复核，你的判断不会被改动。")),
+                    )
                     .child(
                         div()
                             .flex()
@@ -81,15 +104,17 @@ impl Workspace {
                             .gap(px(10.))
                             .child(div().flex_1().min_w_0().text_size(px(12.)).text_color(Theme::text_secondary()).child(status))
                             .when(!configured, |d| d.child(ui::ghost_button("screen-settings", Some("settings-gear"), Some("先配置模型".into())).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx))))
+                            // The decided papers looked at again against the goal as it is now; only those seen otherwise come back.
+                            .when(!screen.running() && unchecked > 0, |d| d.child(ui::secondary_button("screen-recheck", format!("复核已判断的 {unchecked} 篇")).on_click(self.on(Cmd::ScreenRecheck, cx))))
                             .child(if screen.running() {
                                 ui::secondary_button("screen-stop", "停止").on_click(self.on(Cmd::ScreenStop, cx))
                             } else {
-                                ui::primary_button("screen-start", if waiting == 0 { "让助手判断".to_string() } else { format!("让助手判断 {waiting} 篇") }).when(waiting == 0, |d| d.opacity(0.5)).on_click(self.on(Cmd::ScreenStart, cx))
+                                ui::primary_button("screen-start", start).when(waiting == 0, |d| d.opacity(0.5)).on_click(self.on(Cmd::ScreenStart, cx))
                             }),
                     )
                     .when(screen.total > 0, |d| d.child(self.render_screen_run(screen, &titles)))
                     .when(!screen.error.is_empty(), |d| d.child(ui::error_line(&screen.error)))
-                    .when(suggested > 0, |d| d.child(div().flex().items_center().flex_wrap().gap(px(6.)).pt(px(2.)).children(bar).child(div().flex_1()).children(accept))),
+                    .when(parts.len() > 1 || parts.first().is_some_and(|(key, _, _)| *key != "none"), |d| d.child(div().flex().items_center().flex_wrap().gap(px(6.)).pt(px(2.)).children(bar).child(div().flex_1()).children(accept))),
             )
             .child(if rows.is_empty() {
                 ui::empty_state("check", "都判断过了", "新导入的文献会出现在这里。").into_any_element()
@@ -156,17 +181,22 @@ impl Workspace {
 
     /// One paper of the queue. The selected one opens up: what the
     /// assistant found, and the four decisions.
-    fn render_screen_row(&self, paper: &Paper, suggestion: Option<&Suggestion>, selected: bool, reading: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn render_screen_row(&self, paper: &Paper, suggestion: Option<&Suggestion>, group: &str, selected: bool, reading: bool, cx: &mut Context<Self>) -> AnyElement {
         // Rows are known by their paper, not their place: the queue is sorted anew with every suggestion.
         let id = |part: &str| SharedString::from(format!("screen-{part}-{}", paper.id));
         let mut about: Vec<String> = vec![paper.short_authors(), paper.year.map(|y| y.to_string()).unwrap_or_default(), paper.journal.clone()];
         about.retain(|part| !part.is_empty());
+        let decided = paper.screening != "pending";
         let mark: Option<AnyElement> = match suggestion {
+            _ if reading => Some(div().flex().flex_none().items_center().gap(px(5.)).text_size(px(12.)).text_color(Theme::accent()).child(ui::spinner(id("spin"), 13., Theme::accent())).child("正在阅读…").into_any_element()),
+            // Made against an earlier goal: there, but quieter, and not to be taken at once.
+            Some(s) if group == "stale" => Some(ui::chip(format!("旧目标：{}", label(&SCREENINGS, &s.verdict)), Theme::text_tertiary(), Theme::groove()).into_any_element()),
             Some(s) => {
                 let sure = s.confidence.map(|c| format!(" · 把握 {:.0}%", c * 100.)).unwrap_or_default();
-                Some(ui::fade_in(id("chip"), ui::status_chip(&s.verdict, &format!("建议：{}{sure}", label(&SCREENINGS, &s.verdict)))).into_any_element())
+                let chip = ui::status_chip(&s.verdict, &format!("建议：{}{sure}", label(&SCREENINGS, &s.verdict)));
+                let mine = decided.then(|| ui::status_chip(&paper.screening, &format!("你的判断：{}", label(&SCREENINGS, &paper.screening))));
+                Some(ui::fade_in(id("chip"), div().flex().flex_none().items_center().gap(px(6.)).children(mine).child(chip)).into_any_element())
             }
-            None if reading => Some(div().flex().flex_none().items_center().gap(px(5.)).text_size(px(12.)).text_color(Theme::accent()).child(ui::spinner(id("spin"), 13., Theme::accent())).child("正在阅读…").into_any_element()),
             None => None,
         };
         let head = div()
@@ -205,13 +235,20 @@ impl Workspace {
                 });
             }
             row = row.child(div().text_size(px(11.)).text_color(Theme::text_tertiary()).child(format!("{read} · {}", s.author)));
+            if group == "stale" {
+                let old = s.criteria.as_deref().filter(|c| !c.is_empty()).map_or("按文献库的主题".to_string(), |c| format!("「{c}」"));
+                row = row.child(div().text_size(px(12.)).text_color(Theme::warning()).child(format!("这条建议是按之前的筛选目标 {old} 给出的；让助手按当前目标判断后会被替换。")));
+            }
+            if decided {
+                row = row.child(div().text_size(px(12.)).text_color(Theme::warning()).child(format!("你之前判断为「{}」，按当前的筛选目标，助手的建议不同。选一个，这篇就不再出现在这里。", label(&SCREENINGS, &paper.screening))));
+            }
         } else {
             row = row.child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(if reading { "助手正在读这一篇。" } else { "助手还没有判断这一篇。" }));
         }
         // The decision: every choice is there, the suggested one stands out.
         let buttons = SCREENINGS.iter().filter(|(key, _)| *key != "pending").enumerate().map(|(n, (key, name))| {
-            let agree = suggestion.is_some_and(|s| s.verdict == *key);
-            let button = if agree { ui::primary_button(("decide", n), format!("采纳：{name}")) } else { ui::secondary_button(("decide", n), *name) };
+            let agree = group != "stale" && suggestion.is_some_and(|s| s.verdict == *key);
+            let button = if agree { ui::primary_button(("decide", n), format!("采纳：{name}")) } else if decided && paper.screening == *key { ui::secondary_button(("decide", n), format!("保持：{name}")) } else { ui::secondary_button(("decide", n), *name) };
             button.on_click(self.on(Cmd::ScreenDecide(paper.id.clone(), key.to_string()), cx))
         });
         row.child(div().flex().items_center().gap(px(8.)).pt(px(2.)).children(buttons)).into_any_element()
