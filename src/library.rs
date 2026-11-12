@@ -172,79 +172,17 @@ impl Workspace {
             .child(ui::ghost_button("back-home", Some("arrow-left"), roomy.then(|| "所有文献库".into())).occlude().on_click(self.on(Cmd::GoHome, cx)))
     }
 
-    /// The PDFs being read in, on every page of the library: how far the
-    /// reading is, then what came of them, until the report is put away.
+    /// Each background job stays compact; its dialog owns the live details.
     fn render_import(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let run = self.lib.as_ref()?.import.as_ref()?;
-        let card = div().flex().flex_col().gap(px(5.)).p(px(10.)).rounded(px(8.)).border_1().border_color(Theme::line()).bg(Theme::bg_body()).text_size(px(12.)).line_height(px(17.));
-        if run.running() {
-            let done = run.rows.len();
-            return Some(
-                card.child(div().flex().items_center().gap(px(6.)).child(ui::spinner("import-working", 13., Theme::accent())).child(div().flex_1().min_w_0().font_weight(FontWeight::MEDIUM).child(format!("正在导入 PDF · {done} / {}", run.total))))
-                    .child(div().truncate().text_color(Theme::text_tertiary()).child(if run.current.is_empty() { "正在读取…".to_string() } else { run.current.clone() }))
-                    .child(div().w_full().h(px(4.)).rounded_full().bg(Theme::groove()).overflow_hidden().child(div().h_full().rounded_full().bg(Theme::accent()).w(relative(done as f32 / run.total.max(1) as f32))))
-                    .into_any_element(),
-            );
-        }
-        let (unrecognised, textless) = (run.count(|row| row.unrecognised), run.count(|row| !row.textless.is_empty()));
-        let mut open = vec![];
-        if unrecognised > 0 { open.push(format!("{unrecognised} 篇待补全题目和作者")) }
-        if textless > 0 { open.push(format!("{textless} 篇没读出文字")) }
-        Some(
-            card.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(4.))
-                    .child(ui::icon("check", 13., Theme::success()))
-                    .child(div().flex_1().min_w_0().font_weight(FontWeight::MEDIUM).child(format!("导入完成 · {} 个 PDF", run.total)))
-                    .child(ui::ghost_button("import-close", Some("x"), None).h(px(20.)).min_w(px(20.)).on_click(self.on(Cmd::CloseImport, cx))),
-            )
-            .child(div().text_color(Theme::text_secondary()).child(run.summary()))
-            .when(!open.is_empty(), |d| d.child(div().text_color(Theme::warning()).child(open.join(" · "))))
-            .child(div().flex().child(ui::ghost_button("import-report", None, Some("查看明细".into())).h(px(22.)).px(px(6.)).text_size(px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::ShowImport, cx))))
-            .into_any_element(),
-        )
+        Some(ui::progress_entry("import-progress", if run.running() { "导入 PDF" } else { "PDF 导入完成" }, run.rows.len(), run.total, run.running(), &ui::import_segments(run))
+            .on_click(self.on(Cmd::ShowImport, cx)).into_any_element())
     }
 
-    /// The round of looking for open full texts, beside the import's: how far it is, then what came of it.
     fn render_fetching(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let run = self.lib.as_ref()?.fetching.as_ref()?;
-        let card = div().flex().flex_col().gap(px(5.)).p(px(10.)).rounded(px(8.)).border_1().border_color(Theme::line()).bg(Theme::bg_body()).text_size(px(12.)).line_height(px(17.));
-        let lib = self.lib.as_ref()?;
-        if run.running() {
-            let done = run.rows.len();
-            let current = run.working.first().and_then(|id| lib.paper(id)).map(|paper| paper.title.clone()).unwrap_or_default();
-            return Some(
-                card.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(6.))
-                        .child(ui::spinner("fetch-working", 13., Theme::accent()))
-                        .child(div().flex_1().min_w_0().font_weight(FontWeight::MEDIUM).child(format!("正在查找全文 · {done} / {}", run.total)))
-                        .child(ui::ghost_button("fetch-stop", None, Some("停止".into())).h(px(20.)).px(px(6.)).text_size(px(12.)).on_click(self.on(Cmd::StopFetch, cx))),
-                )
-                .child(div().truncate().text_color(Theme::text_tertiary()).child(current))
-                .child(div().w_full().h(px(4.)).rounded_full().bg(Theme::groove()).overflow_hidden().child(div().h_full().rounded_full().bg(Theme::accent()).w(relative(done as f32 / run.total.max(1) as f32))))
-                .when(done > 0, |d| d.child(div().text_color(Theme::text_secondary()).child(run.summary())))
-                .into_any_element(),
-            );
-        }
-        Some(
-            card.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(4.))
-                    .child(ui::icon("check", 13., Theme::success()))
-                    .child(div().flex_1().min_w_0().font_weight(FontWeight::MEDIUM).child(format!("全文查找完成 · {} 篇", run.rows.len())))
-                    .child(ui::ghost_button("fetch-close", Some("x"), None).h(px(20.)).min_w(px(20.)).on_click(self.on(Cmd::CloseFetch, cx))),
-            )
-            .child(div().text_color(Theme::text_secondary()).child(run.summary()))
-            .child(div().flex().child(ui::ghost_button("fetch-report", None, Some("查看明细".into())).h(px(22.)).px(px(6.)).text_size(px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::ShowFetch, cx))))
-            .into_any_element(),
-        )
+        Some(ui::progress_entry("fetch-progress", if run.running() { "查找全文" } else { run.status() }, run.rows.len(), run.total, run.running(), &ui::fetch_segments(run))
+            .on_click(self.on(Cmd::ShowFetch, cx)).into_any_element())
     }
 
     fn render_sidebar(&mut self, width: f32, cx: &mut Context<Self>) -> AnyElement {
@@ -346,9 +284,8 @@ impl Workspace {
             )
             .children(self.render_import(cx))
             .when_some(lib.zotero.as_ref(), |d, run| d.child(
-                div().id("zotero-progress").p(px(10.)).rounded(px(8.)).bg(Theme::bg_sunken()).cursor_pointer()
+                ui::progress_entry("zotero-progress", if run.running { "导入 Zotero" } else if !run.error.is_empty() { "Zotero 导入失败" } else { "Zotero 导入完成" }, run.rows.len(), run.total, run.running, &ui::zotero_segments(run))
                     .on_click(self.on(Cmd::ShowZotero, cx))
-                    .child(div().text_size(px(12.)).child(if run.running { format!("Zotero 导入 {}/{}", run.rows.len(), run.total) } else { "Zotero 导入结果 · 查看明细".into() }))
             ))
             .children(self.render_fetching(cx))
             .child(

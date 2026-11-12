@@ -59,21 +59,23 @@ impl Workspace {
             Modal::ZoteroReport => {
                 let run = self.lib.as_ref()?.zotero.as_ref()?;
                 let rows = run.rows.iter().enumerate().map(|(i, row)| {
-                    div().id(("zotero-row", i)).flex().flex_col().gap(px(4.)).py(px(8.)).border_b_1().border_color(Theme::line())
+                    div().id(("zotero-row", i)).flex().flex_none().flex_col().gap(px(4.)).py(px(8.)).border_b_1().border_color(Theme::line())
                         .child(div().font_weight(FontWeight::SEMIBOLD).child(if row.title.is_empty() { "（无题目）".into() } else { row.title.clone() }))
                         .child(div().text_size(px(12.)).text_color(Theme::text_secondary()).child(row.summary()))
                         .children(row.problems.iter().map(|problem| div().text_size(px(12.)).text_color(Theme::warning()).child(problem.clone())))
                         .when_some(row.paper_id.clone().filter(|_| !run.running), |d, id| d.cursor_pointer().hover(|s| s.bg(Theme::hover())).on_click(self.on(Cmd::OpenImported(id), cx)))
                 });
-                ui::dialog(680.).child(ui::dialog_title(if run.running { "正在从 Zotero 导入" } else { "Zotero 导入结果" }))
-                    .child(body()
-                        .child(div().line_height(px(21.)).child(run.summary()))
+                ui::dialog(720.).max_w(relative(0.92)).h(px(620.)).child(ui::dialog_title("Zotero 导入"))
+                    .child(ui::progress_overview(run.rows.len(), run.total, if run.running { "正在导入" } else if !run.error.is_empty() { "导入失败" } else { "导入完成" }, run.running, &ui::zotero_segments(run))
+                        .when(run.running && !run.current.is_empty(), |d| d.child(div().p(px(10.)).rounded(px(8.)).bg(theme::accent_of("blue").soft()).line_height(px(20.)).child(run.current.clone()))))
+                    .child(body().border_t_1().border_color(Theme::line())
+                        .when(!run.running, |d| d.child(div().line_height(px(21.)).text_color(Theme::text_secondary()).child(run.summary())))
                         .when(!run.error.is_empty(), |d| d.child(ui::error_line(&run.error)))
                         .when(!run.running && run.total == 0 && run.error.is_empty(), |d| d.child(div().child("没有找到可导入的文献。回收站、订阅源、独立笔记和独立附件不导入。")))
                         .when(run.other_attachments > 0, |d| d.child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(format!("另有 {} 个非 PDF 附件未迁移。", run.other_attachments))))
                         .when(run.running, |d| d.child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child("可以收起此窗口。返回首页或切换文献库会停止后续条目，已导入的保留；重新导入会跳过重复项。")))
                         .children(rows))
-                    .child(div().flex().justify_end().px(px(20.)).py(px(14.)).child(ui::secondary_button("zotero-close", if run.running { "收起" } else { "完成" }).on_click(self.on(Cmd::CloseModal, cx))))
+                    .child(div().flex().flex_none().items_center().gap(px(8.)).px(px(20.)).py(px(14.)).border_t_1().border_color(Theme::line()).child(div().flex_1().text_size(px(12.)).text_color(Theme::text_tertiary()).child(if run.running { "收起后继续在后台导入" } else { "点击结果可查看文献" })).child(ui::primary_button("zotero-close", if run.running { "收起" } else { "关闭" }).on_click(self.on(Cmd::CloseModal, cx))))
             }
             Modal::Confirm { title, message, action, .. } => ui::dialog(440.).child(ui::dialog_title(title.clone())).child(body().child(div().text_color(Theme::text_secondary()).line_height(px(21.)).child(message.clone())).child(error)).child(footer(action, true, self, cx)),
 
@@ -90,13 +92,14 @@ impl Workspace {
                         let (state, color) = match &row.outcome {
                             Imported::Failed(err) => (format!("没有导入：{err}"), Theme::danger()),
                             Imported::InTrash => ("它的文献在回收站里，没有导入".to_string(), Theme::warning()),
-                            Imported::Attached => ("文献库里已有这篇，PDF 附到了原条目".to_string(), Theme::text_tertiary()),
+                            Imported::Attached => ("文献库里已有这篇，PDF 附到了原条目".to_string(), Theme::success()),
                             Imported::Added if row.unrecognised => ("已添加 · 没认出 DOI，可在文献详情里按题目补全".to_string(), Theme::warning()),
-                            Imported::Added => ("已添加".to_string(), Theme::text_tertiary()),
+                            Imported::Added => ("已添加".to_string(), Theme::success()),
                         };
                         let title = row.paper_id.as_deref().and_then(|id| lib.paper(id)).map(|paper| paper.title.clone()).filter(|title| !row.unrecognised && !title.is_empty());
                         div()
                             .id(("imported", i))
+                            .flex_none()
                             .flex()
                             .flex_col()
                             .gap(px(1.))
@@ -104,15 +107,23 @@ impl Workspace {
                             .py(px(6.))
                             .rounded(px(8.))
                             .when_some(row.paper_id.clone(), |d, id| d.cursor_pointer().hover(|s| s.bg(Theme::hover())).on_click(self.on(Cmd::OpenImported(id), cx)))
-                            .child(div().truncate().child(title.unwrap_or_else(|| row.name.clone())))
+                            .child(div().line_height(px(20.)).child(title.unwrap_or_else(|| row.name.clone())))
                             .child(div().text_size(px(12.)).line_height(px(17.)).text_color(color).child(state))
                             .when(!row.textless.is_empty(), |d| d.child(div().text_size(px(12.)).line_height(px(17.)).text_color(Theme::warning()).child(format!("没读出文字，全文暂时不能用于提问：{}", row.textless))))
                             .into_any_element()
                     })
                     .collect();
-                ui::dialog(600.)
-                    .child(ui::dialog_title(format!("导入结果 · {} 个 PDF", run.total)))
-                    .child(body().gap(px(2.)).child(div().pb(px(6.)).text_color(Theme::text_secondary()).child(format!("{}。点一行打开那篇文献。", run.summary()))).children(listed))
+                ui::dialog(720.).max_w(relative(0.92)).h(px(620.))
+                    .child(ui::dialog_title("PDF 导入"))
+                    .child(ui::progress_overview(run.rows.len(), run.total, if run.running() { "正在导入" } else { "导入完成" }, run.running(), &ui::import_segments(run))
+                        .when(!run.working.is_empty(), |d| d.child(div().flex().flex_col().gap(px(6.)).p(px(10.)).rounded(px(8.)).bg(theme::accent_of("blue").soft())
+                            .child(div().text_size(px(12.)).text_color(theme::accent_of("blue").strong()).child("正在读取"))
+                            .children(run.working.iter().map(|name| div().line_height(px(19.)).child(name.clone()))))))
+                    .child(body().gap(px(4.)).border_t_1().border_color(Theme::line())
+                        .child(ui::caption(format!("处理结果 · {} 个 PDF", run.rows.len())))
+                        .when(!run.rows.is_empty(), |d| d.child(div().text_size(px(12.)).text_color(Theme::text_secondary()).child(run.summary())))
+                        .when(run.rows.is_empty(), |d| d.child(div().py(px(24.)).text_color(Theme::text_tertiary()).child("正在读取第一批文件，结果会实时出现在这里。")))
+                        .children(listed))
                     .child(
                         div()
                             .flex()
@@ -123,13 +134,14 @@ impl Workspace {
                             .py(px(14.))
                             .when(textless > 0, |d| d.child(ui::secondary_button("import-textless", format!("在列表里看没读出文字的 {textless} 篇")).on_click(self.on(Cmd::ShowTextless, cx))))
                             .child(div().flex_1())
-                            .child(ui::secondary_button("modal-cancel", "稍后再看").on_click(self.on(Cmd::CloseModal, cx)))
-                            .child(ui::primary_button("modal-ok", "知道了").on_click(self.on(Cmd::SubmitModal, cx))),
+                            .when(!run.running(), |d| d.child(ui::ghost_button("import-clear", None, Some("清除记录".into())).on_click(self.on(Cmd::CloseImport, cx))))
+                            .child(ui::primary_button("modal-cancel", if run.running() { "收起" } else { "关闭" }).on_click(self.on(Cmd::CloseModal, cx))),
                     )
             }
 
             Modal::FetchReport => {
-                let run = self.lib.as_ref()?.fetching.as_ref()?;
+                let lib = self.lib.as_ref()?;
+                let run = lib.fetching.as_ref()?;
                 // What was not had comes first: that is where something is left to do.
                 let mut rows: Vec<(usize, &crate::app::FetchRow)> = run.rows.iter().enumerate().collect();
                 rows.sort_by_key(|(_, row)| match row.outcome.as_str() {
@@ -143,30 +155,63 @@ impl Workspace {
                         let (state, color) = match row.outcome.as_str() {
                             "saved" if row.textless => ("已保存 PDF，但没读出文字", Theme::warning()),
                             "saved" => ("已保存 PDF", Theme::success()),
-                            "not_found" => ("没有找到开放获取的全文", Theme::text_tertiary()),
-                            _ => ("找到了地址，没有取到文件", Theme::warning()),
+                            "not_found" => ("未找到可下载地址", Theme::warning()),
+                            _ => ("下载失败", Theme::danger()),
                         };
                         div()
                             .id(("fetched", i))
                             .flex()
                             .flex_col()
-                            .gap(px(1.))
-                            .px(px(8.))
-                            .py(px(6.))
+                            .flex_none()
+                            .gap(px(4.))
+                            .px(px(10.))
+                            .py(px(10.))
                             .rounded(px(8.))
                             .cursor_pointer()
                             .hover(|s| s.bg(Theme::hover()))
                             .on_click(self.on(Cmd::OpenImported(row.paper_id.clone()), cx))
-                            .child(div().truncate().child(row.title.clone()))
-                            .child(div().text_size(px(12.)).line_height(px(17.)).text_color(color).child(state))
+                            .child(div().line_height(px(20.)).child(row.title.clone()))
+                            .child(div().flex().items_center().gap(px(5.)).text_size(px(12.)).line_height(px(17.)).text_color(color)
+                                .child(ui::icon(if row.outcome == "saved" { "check" } else { "info" }, 12., color)).child(state))
                             .when(!row.detail.is_empty(), |d| d.child(div().text_size(px(12.)).line_height(px(17.)).text_color(Theme::text_tertiary()).child(row.detail.clone())))
                             .into_any_element()
                     })
                     .collect();
-                ui::dialog(620.)
-                    .child(ui::dialog_title(format!("查找开放全文 · {} 篇", run.rows.len())))
-                    .child(body().gap(px(2.)).child(div().pb(px(6.)).text_color(Theme::text_secondary()).child(format!("{}。没有取到的，可以打开文献的链接自己下载，再把 PDF 拖进窗口：它会附到原来的条目上。点一行打开那篇文献。", run.summary()))).children(listed))
-                    .child(div().flex().flex_none().justify_end().gap(px(8.)).px(px(20.)).py(px(14.)).child(ui::secondary_button("modal-cancel", "稍后再看").on_click(self.on(Cmd::CloseModal, cx))).child(ui::primary_button("modal-ok", "知道了").on_click(self.on(Cmd::SubmitModal, cx))))
+                let blue = theme::accent_of("blue").strong();
+                let state_color = if run.running() { blue } else { Theme::text_secondary() };
+                ui::dialog(720.).max_w(relative(0.92)).h(px(620.))
+                    .child(div().flex().flex_none().items_center()
+                        .child(ui::dialog_title("全文查找").flex_1())
+                        .child(ui::ghost_button("fetch-dismiss", Some("x"), None).mt(px(10.)).mr(px(16.)).on_click(self.on(Cmd::CloseModal, cx))))
+                    .child(div().flex().flex_none().flex_col().gap(px(12.)).px(px(20.)).py(px(14.))
+                        .child(div().flex().items_center().gap(px(8.))
+                            .child(div().text_size(px(20.)).font_weight(FontWeight::SEMIBOLD).child(format!("{} / {}", run.rows.len(), run.total)))
+                            .child(div().text_color(Theme::text_tertiary()).child("篇已处理"))
+                            .child(div().flex_1())
+                            .when(run.running(), |d| d.child(ui::spinner("fetch-modal-working", 13., state_color)))
+                            .child(div().text_color(state_color).child(run.status())))
+                        .child(ui::fetch_progress(run).h(px(9.)))
+                        .child(div().flex().flex_wrap().gap(px(14.)).children(ui::fetch_segments(run).into_iter().map(|(count, label, color)| {
+                            div().flex().items_center().gap(px(5.)).text_size(px(12.))
+                                .child(div().flex_none().size(px(7.)).rounded_full().bg(color))
+                                .child(div().text_color(Theme::text_secondary()).child(format!("{label} {count}")))
+                        })))
+                        .when(!run.working.is_empty(), |d| d.child(div().flex().flex_col().gap(px(6.)).p(px(10.)).rounded(px(8.)).bg(theme::accent_of("blue").soft())
+                            .child(div().text_size(px(12.)).font_weight(FontWeight::MEDIUM).text_color(blue).child(if run.stopped { "正在结束当前请求" } else { "正在处理" }))
+                            .children(run.working.iter().map(|id| {
+                                let title = lib.paper(id).map(|paper| paper.title.clone()).unwrap_or_else(|| id.clone());
+                                div().line_height(px(19.)).child(title)
+                            }))))
+                        .child(div().text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_tertiary()).child("未找到地址：本次未检索到可下载地址；下载失败：找到了地址，但未能保存 PDF。")))
+                    .child(body().gap(px(4.)).border_t_1().border_color(Theme::line())
+                        .child(ui::caption(format!("处理结果 · {} 篇", run.rows.len())))
+                        .when(run.rows.is_empty(), |d| d.child(div().py(px(24.)).text_color(Theme::text_tertiary()).child(if run.running() { "正在查找第一批文献，结果会实时出现在这里。" } else { "本次没有已处理的文献。" })))
+                        .children(listed))
+                    .child(div().flex().flex_none().items_center().gap(px(8.)).px(px(20.)).py(px(14.)).border_t_1().border_color(Theme::line())
+                        .child(div().flex_1().min_w_0().text_size(px(12.)).text_color(Theme::text_tertiary()).child(if run.running() && !run.stopped { "收起后继续在后台查找" } else { "点击结果可查看文献" }))
+                        .when(run.running() && !run.stopped, |d| d.child(ui::secondary_button("fetch-stop", "停止查找").text_color(Theme::danger()).on_click(self.on(Cmd::StopFetch, cx))))
+                        .when(!run.running(), |d| d.child(ui::ghost_button("fetch-clear", None, Some("清除记录".into())).on_click(self.on(Cmd::CloseFetch, cx))))
+                        .child(ui::primary_button("modal-cancel", if run.running() { "收起" } else { "关闭" }).on_click(self.on(Cmd::CloseModal, cx))))
             }
 
             Modal::Note { paper_id, text } => {
