@@ -49,6 +49,8 @@ pub enum Edge {
     Sidebar,
     /// Between the list and the detail panel.
     Detail,
+    /// Between a paper's conversation and its PDF.
+    Split,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -215,6 +217,8 @@ pub enum Cmd {
     ReadPages(String),
     SetTab(Tab),
     ToggleWide,
+    /// Reading mode: the selected paper has the whole window, or the library is back around it.
+    ToggleReading,
     /// Put the library's sidebar away, or bring it back.
     ToggleSidebar,
     /// Draw the pages of the PDF on show larger, smaller, or at a given size.
@@ -223,6 +227,10 @@ pub enum Cmd {
     PdfCut,
     /// Show the paper's PDF to the right of its conversation, or put it away.
     BesidePdf(bool),
+    /// The paper's conversation floats over its PDF, or stands beside it (`Settings::floating`).
+    FloatChat(bool),
+    /// Fold the floating conversation into its button, or open it again.
+    FoldChat(bool),
     /// Show the selected paper's title and abstract translated, or stop showing it.
     ToggleTranslation,
     RetryTranslation,
@@ -535,6 +543,7 @@ pub struct Writing {
 const SCREEN_GIVE_UP: usize = 3;
 
 /// Where the translation of one text stands.
+#[derive(Clone)]
 pub enum Translated {
     Busy,
     Done(String),
@@ -914,8 +923,14 @@ pub struct Library {
     pub tab: Tab,
     /// The detail panel takes most of the window (reading a PDF).
     pub wide: bool,
+    /// Reading mode: the sidebar and the list are put away and the paper has the whole window.
+    pub reading: bool,
     /// The paper's PDF is shown to the right of its conversation, where the panel has room for both.
     pub split: bool,
+    /// The floating conversation's window or button while the pointer holds it (floating.rs).
+    pub float_drag: Option<crate::floating::Drag>,
+    /// The size of the area the floating conversation keeps within, as last drawn.
+    pub float_area: (f32, f32),
     pub notes: Entity<TextInput>,
     pub pdf: Option<Entity<PdfView>>,
     pdf_events: Option<Subscription>,
@@ -933,6 +948,8 @@ pub struct Library {
     pub suggestions: HashMap<String, Suggestion>,
     /// Translations asked for in this window, by `store::translation_key`.
     pub translations: HashMap<String, Translated>,
+    /// How many requests went out for each of them: the answer to an earlier one, back after a later, is dropped.
+    pub translation_asks: HashMap<String, u64>,
     pub translation_run: Option<crate::translate::TranslationRun>,
     pub translation_session: Arc<()>,
     /// Whether the detail panel shows the selected paper translated. It
@@ -1644,6 +1661,7 @@ impl Workspace {
                 if page == Page::Write { self.write_ensure(cx) }
                 if let Some(lib) = self.lib.as_mut() {
                     lib.page = page;
+                    lib.reading = false;
                     if page == Page::Ask { lib.library_chat.input.read(cx).focus(window) }
                     if page == Page::Write {
                         lib.writing.editor.read(cx).focus(window);
@@ -1776,14 +1794,24 @@ impl Workspace {
             Cmd::RereadFile(id) => self.reread_file(id, cx),
             Cmd::ReadPages(id) => self.write_run_start(true, Some(id), cx),
             Cmd::SetTab(tab) => {
+                // Without a model the question box is not drawn: the keyboard stays with the window, so Esc is still heard.
+                let asking = !self.settings.profile_for_or_default(Task::Chat).key().is_empty();
                 if let Some(lib) = self.lib.as_mut() {
                     lib.tab = tab;
-                    if tab == Tab::Ask { lib.paper_chat.input.read(cx).focus(window) }
+                    if tab == Tab::Ask && asking { lib.paper_chat.input.read(cx).focus(window) } else if tab == Tab::Ask { window.focus(&self.focus) }
                 }
                 self.ensure_pdf(cx);
             }
             Cmd::ToggleWide => {
                 if let Some(lib) = self.lib.as_mut() { lib.wide = !lib.wide }
+            }
+            Cmd::ToggleReading => {
+                if let Some(lib) = self.lib.as_mut().filter(|lib| lib.selected.is_some()) {
+                    lib.reading = !lib.reading;
+                    // Reading starts at the paper itself: the PDF, when there is one and the record was on show.
+                    if lib.reading && lib.tab == Tab::Info && lib.selected.clone().is_some_and(|id| lib.pdf_file(&id).is_some()) { lib.tab = Tab::Pdf }
+                }
+                self.ensure_pdf(cx);
             }
             Cmd::ToggleSidebar => {
                 self.settings.sidebar_hidden = !self.settings.sidebar_hidden;
@@ -1798,6 +1826,8 @@ impl Workspace {
                 if show && self.detail_width(window) < crate::detail::SPLIT_MIN && let Some(lib) = self.lib.as_mut() { lib.wide = true }
                 self.ensure_pdf(cx);
             }
+            Cmd::FloatChat(on) => self.float_chat(on, window, cx),
+            Cmd::FoldChat(fold) => self.fold_chat(fold, window, cx),
             Cmd::PdfZoom(to) => {
                 if let Some(pdf) = self.lib.as_ref().filter(|lib| lib.tab == Tab::Pdf || lib.split).and_then(|lib| lib.pdf.clone()) { pdf.update(cx, |pdf, cx| pdf.zoom_to(to, cx)) }
             }
@@ -2294,6 +2324,9 @@ impl Workspace {
         } else if self.picked.take().is_some() {
         } else if self.lib.as_ref().is_some_and(|l| !l.marked.is_empty()) {
             if let Some(lib) = self.lib.as_mut() { lib.marked.clear() }
+        } else if self.lib.as_ref().is_some_and(|l| l.reading && l.selected.is_some()) {
+            // Out of reading mode first: the paper stays open where it was read.
+            if let Some(lib) = self.lib.as_mut() { lib.reading = false }
         } else if self.lib.as_ref().is_some_and(|l| l.selected.is_some()) {
             self.select(None, window, cx);
         }
@@ -2314,6 +2347,7 @@ impl Workspace {
             "search" => {
                 if let Some(lib) = self.lib.as_mut() {
                     lib.page = Page::Papers;
+                    lib.reading = false;
                     lib.search.read(cx).focus(window);
                     cx.notify();
                 }
@@ -2324,6 +2358,7 @@ impl Workspace {
             "ask" => Cmd::SetPage(Page::Ask),
             "detail" if self.lib.as_ref().is_some_and(|l| l.selected.is_some()) => Cmd::ToggleWide,
             "sidebar" => Cmd::ToggleSidebar,
+            "reading" if self.lib.as_ref().is_some_and(|l| l.selected.is_some()) => Cmd::ToggleReading,
             // The PDF's size, while a PDF is on show.
             "zoom-in" => Cmd::PdfZoom(ZoomTo::In),
             "zoom-out" => Cmd::PdfZoom(ZoomTo::Out),
@@ -2423,7 +2458,10 @@ impl Workspace {
             selected: None,
             tab: Tab::Info,
             wide: false,
+            reading: false,
             split: true,
+            float_drag: None,
+            float_area: (0., 0.),
             notes,
             pdf: None,
             pdf_events: None,
@@ -2441,6 +2479,7 @@ impl Workspace {
             screen,
             suggestions: HashMap::new(),
             translations: HashMap::new(),
+            translation_asks: HashMap::new(),
             translation_run: None,
             translation_session: Arc::new(()),
             show_translation: false,
@@ -2486,6 +2525,7 @@ impl Workspace {
             }
             None => {
                 lib.wide = false;
+                lib.reading = false;
                 lib.tab = Tab::Info;
                 window.focus(&self.focus);
             }
@@ -2493,6 +2533,34 @@ impl Workspace {
         self.ensure_pdf(cx);
         self.translate_selected(false, cx);
         cx.notify();
+    }
+
+    /// Translate a passage selected in the PDF: with the model bound to
+    /// translation from what is kept, or, with `profile`, asked of that model
+    /// for this once (the settings stay as they are) and kept in place of
+    /// the earlier translation.
+    fn translate_passage(&mut self, text: String, profile: Option<String>, cx: &mut Context<Self>) {
+        let chosen = profile.as_deref().and_then(|id| self.settings.profiles.iter().find(|p| p.id == id)).cloned();
+        let again = chosen.is_some();
+        let profile = chosen.unwrap_or_else(|| self.settings.profile_for_or_default(Task::Translate));
+        // A click is a request: what failed before is asked again.
+        let prompt = self.settings.translation_prompt.clone();
+        self.translate_text(&text, &profile, &prompt, true, again, cx);
+        self.sync_pdf_translation(cx);
+    }
+
+    /// Tell the PDF viewer how the translation on its card stands, and which models it may be asked of.
+    pub(crate) fn sync_pdf_translation(&mut self, cx: &mut Context<Self>) {
+        let prompt = ai::translation_prompt(&self.settings.translation_prompt).to_string();
+        let models: Vec<(String, String)> = self.settings.profiles.iter().map(|p| (p.id.clone(), p.title())).collect();
+        let usual = self.settings.profile_for_or_default(Task::Translate);
+        let Some(lib) = self.lib.as_ref() else { return };
+        let Some(pdf) = lib.pdf.clone() else { return };
+        let Some((text, profile)) = pdf.read(cx).translation_asked() else { return };
+        let state = lib.translations.get(&wisp_core::store::translation_key(&text, &prompt)).cloned().unwrap_or(Translated::Busy);
+        let model = profile.and_then(|id| self.settings.profiles.iter().find(|p| p.id == id)).unwrap_or(&usual);
+        let model = (model.id.clone(), model.title());
+        pdf.update(cx, |pdf, cx| pdf.show_translation(state, model, models, cx));
     }
 
     /// Open the PDF viewer when its tab is showing and the paper has a PDF.
@@ -2510,6 +2578,7 @@ impl Workspace {
     fn pdf_event(&mut self, event: &PdfEvent, cx: &mut Context<Self>) {
         match event {
             PdfEvent::Copied => self.say("已复制", cx),
+            PdfEvent::Translate(text, profile) => self.translate_passage(text.clone(), profile.clone(), cx),
             PdfEvent::Picture(png, to_library) => {
                 self.attach_images(!*to_library, vec![Picture::Bytes(png.clone())], cx);
                 if *to_library { self.say("截图已加到文献库对话的输入框上方。", cx) } else { self.show_paper_chat(cx) }
@@ -2538,6 +2607,7 @@ impl Workspace {
     /// conversation, with what was added over its box.
     fn show_paper_chat(&mut self, cx: &mut Context<Self>) {
         let narrow = self.settings.detail_width < crate::detail::SPLIT_MIN;
+        self.unfold_chat(cx);
         let Some(lib) = self.lib.as_mut() else { return };
         if !(lib.split && lib.tab == Tab::Ask) {
             (lib.split, lib.tab) = (true, Tab::Ask);
@@ -4443,6 +4513,13 @@ impl Workspace {
                     cx.notify();
                     return;
                 }
+                // `readmode` gives the selected paper the whole window, or brings the library back; `chatwidth:400` is the conversation's width beside the PDF.
+                "readmode" => Some(Cmd::ToggleReading),
+                "chatwidth" => {
+                    self.settings.chat_width = arg.parse().unwrap_or(0.);
+                    cx.notify();
+                    return;
+                }
                 // `sidebar` puts the sidebar away or brings it back; `sidebar:300` gives it a width.
                 "sidebar" if arg.is_empty() => Some(Cmd::ToggleSidebar),
                 "sidebar" => {
@@ -4493,11 +4570,28 @@ impl Workspace {
                 }
                 // `quote:3|a sentence` opens the selected paper's PDF at page 3 with that sentence highlighted.
                 "quote" => self.lib.as_ref().and_then(|l| l.selected.clone()).zip(arg.split_once('|')).map(|(id, (page, quote))| Cmd::GotoSource(id, page.parse().ok(), quote.to_string())),
+                // `pdfpick:<page>;<from>;<to>` selects glyphs of a 1-based page of the PDF on show (after a `shot:` has drawn it);
+                // `pdftranslate` translates the selection, `pdftranslate:<n>` with the n-th model for this once.
+                "pdfpick" => {
+                    let numbers: Vec<usize> = arg.split(';').filter_map(|n| n.parse().ok()).collect();
+                    if let (Some(pdf), [page, from, to]) = (self.lib.as_ref().and_then(|l| l.pdf.clone()), numbers.as_slice()) && !pdf.update(cx, |pdf, cx| pdf.select_marks(page.saturating_sub(1), *from, *to, cx)) {
+                        eprintln!("pdfpick: the glyphs of page {page} are not at hand yet");
+                    }
+                    return;
+                }
+                "pdftranslate" => {
+                    let profile = arg.parse::<usize>().ok().and_then(|n| self.settings.profiles.get(n)).map(|p| p.id.clone());
+                    if let Some(pdf) = self.lib.as_ref().and_then(|l| l.pdf.clone()) { pdf.update(cx, |pdf, cx| pdf.translate(profile, cx)) }
+                    return;
+                }
                 // `try:0` runs the first saved search as a trial.
                 "try" => self.lib.as_ref().and_then(|l| l.searches.get(arg.parse::<usize>().unwrap_or(0)).map(|s| Cmd::TrySearch(s.id.clone()))),
                 "wide" => Some(Cmd::ToggleWide),
                 "cut" => Some(Cmd::PdfCut),
                 "beside" => Some(Cmd::BesidePdf(arg != "off")),
+                // `float` / `float:off`: the paper's conversation over its PDF, or beside it; `fold` / `fold:off` folds it up or opens it.
+                "float" => Some(Cmd::FloatChat(arg != "off")),
+                "fold" => Some(Cmd::FoldChat(arg != "off")),
                 // `zoom:150`, `zoom:page`, `zoom:width`, `zoom:in`, `zoom:out`
                 "zoom" => Some(Cmd::PdfZoom(match arg {
                     "in" => ZoomTo::In,
