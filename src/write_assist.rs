@@ -121,7 +121,6 @@ impl Workspace {
                 card.note = t("正在文献库里找与这段相近的句子…").into();
                 writing.assist.card = Some(card);
                 writing.assist.awaiting = Some(generation);
-                writing.comments.open = false;
                 return self.write_find(false, cx);
             }
         }

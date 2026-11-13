@@ -8,7 +8,7 @@
 //! pages of files that gave no text.
 
 use crate::i18n::{label, t};
-use crate::app::{Cmd, MenuItem, MenuKind, Workspace};
+use crate::app::{Cmd, MenuItem, MenuKind, Side, Workspace};
 use crate::settings::SettingsPage;
 use crate::theme::Theme;
 use crate::ui;
@@ -104,8 +104,7 @@ impl Workspace {
                 }),
             )
             .when(!writing.reading && writing.editor.read(cx).selection().is_empty(), |d| d.child(self.render_assist_bar(false, cx)))
-            .child(self.render_references(window, cx))
-            // Under the references, the box where the assistant is told what to change in this section.
+            // Under the manuscript, the box where the assistant is told what to change in this section.
             .when(!writing.reading, |d| d.child(self.render_revise(if stacked { width } else { width - panel } - 40., window, cx)))
             .child(div().flex().flex_none().px(px(22.)).pb(px(12.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(div().flex_1().min_w_0().child(if writing.reading {
                 let whole: String = writing.current().map_or(String::new(), |m| m.sections.iter().map(|s| s.body.as_str()).collect::<Vec<_>>().join("\n"));
@@ -181,10 +180,11 @@ impl Workspace {
         let drawn_on = count.zip(drawn_on).map(|(count, text)| div().id("write-drawn-on").flex_none().text_size(px(11.)).text_color(Theme::text_tertiary()).child(tf!("{count} 句", "{count} sentences")).tooltip(move |_, cx| cx.new(|_| crate::write_assist::Tip(text.clone())).into()));
 
         let side = div().flex().flex_col().flex_none().w(px(width)).h_full().border_l_1().border_color(Theme::line()).bg(Theme::bg_sunken()).child(self.render_side_switch(cx));
-        // What an action on the text came to stands over either page of the panel.
-        if writing.comments.open {
+        // What an action on the text came to stands over any page of the panel.
+        if writing.side != Side::Candidates {
             let card = self.render_assist_card(width, cx);
-            return side.when(card.is_some(), |d| d.child(div().flex_none().h(px(10.)))).children(card).child(self.render_comments(width, window, cx));
+            let side = side.when(card.is_some(), |d| d.child(div().flex_none().h(px(10.)))).children(card);
+            return if writing.side == Side::Comments { side.child(self.render_comments(width, window, cx)) } else { side.child(self.render_references(width, window, cx)) };
         }
         side
             .child(

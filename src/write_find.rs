@@ -7,7 +7,7 @@
 //! itself, while nothing has been asked.
 
 use crate::i18n::t;
-use crate::app::{Library, Page, Workspace};
+use crate::app::{Library, Page, Side, Workspace};
 use gpui::*;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -71,6 +71,8 @@ impl Workspace {
     /// paragraph the caret is in. The find box's Enter: its words.
     pub fn write_find(&mut self, from_box: bool, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut().filter(|l| l.page == Page::Write) else { return };
+        // What is found is listed on the candidates' page, whichever was on show.
+        lib.writing.side = Side::Candidates;
         let writing = &lib.writing;
         let text = if from_box {
             writing.find.read(cx).text().trim().to_string()

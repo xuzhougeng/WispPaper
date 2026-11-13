@@ -8,7 +8,7 @@
 //! export to Word shows its reader. The rules are `wisp_core::comment`'s,
 //! the Word file's reading and writing `wisp_core::docx`'s.
 
-use crate::app::{Cmd, Modal, Page, Workspace};
+use crate::app::{Cmd, Modal, Page, Side, Workspace};
 use crate::i18n::t;
 use crate::input::{InputEvent, TextInput};
 use crate::settings::SettingsPage;
@@ -29,8 +29,6 @@ pub struct Commenting {
     pub list: Vec<Comment>,
     /// The file the manuscript on show was started from.
     pub source: Option<Source>,
-    /// The panel beside the manuscript shows the comments, not the candidates.
-    pub open: bool,
     /// What the assistant is to look at; empty for a review of everything.
     pub wish: Entity<TextInput>,
     /// The person's own comment as it is written.
@@ -58,8 +56,6 @@ pub struct Commenting {
 /// What can be done about comments, and with files a manuscript starts from.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Do {
-    /// Show the comments (true) or the candidates beside the manuscript.
-    Panel(bool),
     /// Have the assistant review the section, or what is selected of it; stop it.
     Review,
     Stop,
@@ -103,7 +99,7 @@ impl Commenting {
                 _ => {}
             }),
         ];
-        (Commenting { list, source, open: false, wish, draft, drafting: None, busy: false, error: String::new(), note: String::new(), model: String::new(), generation: 0, show_done: false, focused: None, reveal: None, list_drawn: false, scroll: ScrollHandle::new() }, subscriptions)
+        (Commenting { list, source, wish, draft, drafting: None, busy: false, error: String::new(), note: String::new(), model: String::new(), generation: 0, show_done: false, focused: None, reveal: None, list_drawn: false, scroll: ScrollHandle::new() }, subscriptions)
     }
 
     /// The comments on a section that are still to be dealt with.
@@ -196,8 +192,9 @@ impl Workspace {
     /// The comment's card on show beside the manuscript, standing out, and scrolled to.
     pub(crate) fn comment_point(&mut self, id: &str, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
+        lib.writing.side = Side::Comments;
         let comments = &mut lib.writing.comments;
-        (comments.open, comments.focused, comments.reveal) = (true, Some(id.to_string()), Some(id.to_string()));
+        (comments.focused, comments.reveal) = (Some(id.to_string()), Some(id.to_string()));
         cx.notify();
     }
 
@@ -206,7 +203,7 @@ impl Workspace {
     pub(crate) fn comment_reveal(&mut self, window: &Window, cx: &App) {
         let Some(lib) = self.lib.as_ref() else { return };
         let comments = &lib.writing.comments;
-        let drawn = comments.open && !lib.writing.reading;
+        let drawn = lib.writing.side == Side::Comments && !lib.writing.reading;
         let Some(id) = comments.reveal.clone().filter(|_| drawn) else {
             if let Some(lib) = self.lib.as_mut() { lib.writing.comments.list_drawn = drawn }
             return;
@@ -233,9 +230,6 @@ impl Workspace {
 
     pub(crate) fn run_comment(&mut self, what: Do, window: &mut Window, cx: &mut Context<Self>) {
         match what {
-            Do::Panel(open) => {
-                if let Some(lib) = self.lib.as_mut() { lib.writing.comments.open = open }
-            }
             Do::Review => self.comment_review(cx),
             Do::Stop => {
                 if let Some(comments) = self.lib.as_mut().map(|lib| &mut lib.writing.comments) {
@@ -254,7 +248,7 @@ impl Workspace {
                 // A comment is about words of one paragraph: of a selection over several, the first.
                 let picked = text[selection].lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or("").to_string();
                 writing.comments.drafting = Some(picked);
-                writing.comments.open = true;
+                writing.side = Side::Comments;
                 writing.comments.draft.update(cx, |input, cx| input.set_text("", cx));
                 writing.comments.draft.read(cx).focus(window);
             }
@@ -410,8 +404,9 @@ impl Workspace {
         let wish = writing.comments.wish.read(cx).text().trim().to_string();
         // What others said about this text, for the assistant to answer first.
         let theirs: Vec<(String, String, String)> = writing.comments.list.iter().filter(|comment| comment.origin != comment::ASSISTANT && comment.state == comment::OPEN && comment.section_id == section_id && (comment.quote.is_empty() || comment::locate(&scope, &comment.quote, None).is_some())).map(|comment| (comment.quote.clone(), comment.author.clone(), comment.body.clone())).collect();
+        writing.side = Side::Comments;
         let comments = &mut writing.comments;
-        (comments.open, comments.error, comments.note) = (true, String::new(), String::new());
+        (comments.error, comments.note) = (String::new(), String::new());
         let request = comment::review_prompt(&language, &name, &scope, &wish, &theirs, reply_in).and_then(|(system, message)| ai::plain_request(&profile, &system, &message));
         let request = match request {
             Ok(request) => request,
@@ -545,7 +540,7 @@ impl Workspace {
         if draft.tracked { said.push_str(t("。文件里未接受的修订按接受后的文字读入")) }
         lib.writing.manuscripts.push(made);
         lib.writing.reading = false;
-        lib.writing.comments.open = !draft.comments.is_empty();
+        lib.writing.side = if draft.comments.is_empty() { Side::Candidates } else { Side::Comments };
         lib.writing.structures = lib.store.structures().unwrap_or_default();
         lib.page = Page::Write;
         self.write_show(id, section, cx);
@@ -645,13 +640,16 @@ impl Workspace {
         )
     }
 
-    /// Over the panel beside the manuscript: the candidates, or the comments.
+    /// Over the panel beside the manuscript: the candidates, the comments, or the reference list.
     pub(crate) fn render_side_switch(&self, cx: &mut Context<Self>) -> Div {
         let lib = self.lib.as_ref().unwrap();
-        let comments = &lib.writing.comments;
-        let waiting = comments.open_in(&lib.writing.section_id);
-        let tab = |id: &'static str, name: String, on: bool, cmd: Cmd, this: &Self, cx: &mut Context<Self>| {
-            div().id(id).flex().flex_1().items_center().justify_center().h(px(26.)).rounded(px(6.)).text_size(px(12.)).cursor_pointer().when(on, |d| d.bg(Theme::segment()).text_color(Theme::text()).font_weight(FontWeight::MEDIUM)).when(!on, |d| d.text_color(Theme::text_secondary()).hover(|s| s.text_color(Theme::text()))).on_click(this.on(cmd, cx)).child(name)
+        let shown = lib.writing.side;
+        let waiting = lib.writing.comments.open_in(&lib.writing.section_id);
+        // What the list on that page cites, and whether a citation of it names no paper.
+        let (cited, unresolved) = (lib.citing.listed.shown(lib.citing.whole).len(), lib.citing.listed.issues(lib.citing.whole, &lib.writing.section_id).next().is_some());
+        let tab = |id: &'static str, name: String, side: Side, dot: bool, this: &Self, cx: &mut Context<Self>| {
+            let on = shown == side;
+            div().id(id).flex().flex_1().items_center().justify_center().gap(px(5.)).h(px(26.)).rounded(px(6.)).text_size(px(12.)).cursor_pointer().when(on, |d| d.bg(Theme::segment()).text_color(Theme::text()).font_weight(FontWeight::MEDIUM)).when(!on, |d| d.text_color(Theme::text_secondary()).hover(|s| s.text_color(Theme::text()))).on_click(this.on(Cmd::WriteSide(side), cx)).child(name).when(dot, |d| d.child(div().flex_none().size(px(6.)).rounded(px(3.)).bg(Theme::danger())))
         };
         div()
             .flex()
@@ -662,8 +660,9 @@ impl Workspace {
             .p(px(2.))
             .rounded(px(8.))
             .bg(Theme::groove())
-            .child(tab("write-side-candidates", t("候选句").into(), !comments.open, Cmd::Comment(Do::Panel(false)), self, cx))
-            .child(tab("write-side-comments", if waiting > 0 { tf!("批注 {waiting}", "Comments {waiting}") } else { t("批注").into() }, comments.open, Cmd::Comment(Do::Panel(true)), self, cx))
+            .child(tab("write-side-candidates", t("候选句").into(), Side::Candidates, false, self, cx))
+            .child(tab("write-side-comments", if waiting > 0 { tf!("批注 {waiting}", "Comments {waiting}") } else { t("批注").into() }, Side::Comments, false, self, cx))
+            .child(tab("write-side-references", if cited > 0 { tf!("参考文献 {cited}", "References {cited}") } else { t("参考文献").into() }, Side::References, unresolved, self, cx))
     }
 
     /// The comments on the section being written, beside the manuscript.
