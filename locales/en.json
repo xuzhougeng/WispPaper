@@ -1,4 +1,12 @@
 {
+  "下划线": "Underline",
+  "高亮": "Highlight",
+  "定位": "Locate",
+  "写下这段原文的笔记…": "Write a note about this passage…",
+  "保存笔记": "Save note",
+  "笔记": "Note",
+  "选中 PDF 文字后，可添加下划线或高亮。": "Select text in the PDF to underline or highlight it.",
+  "PDF 标注已保存": "PDF annotations saved",
   "这个 PDF 的页面画不出来。": "Cannot render this PDF's pages.",
   "这个 PDF 没有页面。": "This PDF has no pages.",
   "正在翻译…": "Translating…",

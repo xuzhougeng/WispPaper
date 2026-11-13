@@ -8,7 +8,9 @@ use crate::i18n::t;
 use crate::app::Translated;
 use crate::theme::Theme;
 use crate::ui;
+use crate::input::TextInput;
 use gpui::{prelude::FluentBuilder, *};
+use wisp_core::annotation::{Annotation, Kind};
 use wisp_core::pdftext::{self, Mark};
 
 actions!(pdf, [CopySelection]);
@@ -26,6 +28,10 @@ pub enum PdfEvent {
     /// Translate the selected text: the text, and the model service (its id) asked for this once, else the one translation is bound to.
     /// The answer comes back through `PdfView::show_translation`.
     Translate(String, Option<String>),
+    /// Reading metadata, saved by the owner before the viewer redraws it.
+    Annotate { paper: String, resource: String, page: usize, kind: Kind, quote: String, boxes: Vec<[f32; 4]> },
+    AnnotationNote { resource: String, id: String, note: String },
+    RemoveAnnotation { resource: String, id: String },
 }
 
 /// A piece cut out of a page, for the figure library.
@@ -407,17 +413,23 @@ pub struct PdfView {
     translation: Option<Translation>,
     /// The model services the card offers, by id and name.
     models: Vec<(String, String)>,
+    paper_id: String,
+    resource_id: String,
+    annotations: Vec<Annotation>,
+    annotations_open: bool,
+    annotation_edit: Option<String>,
+    annotation_note: Entity<TextInput>,
     focus: FocusHandle,
 }
 
 impl EventEmitter<PdfEvent> for PdfView {}
 
 impl PdfView {
-    pub fn new(path: &Path, zoom: Zoom, cx: &mut Context<Self>) -> Self {
+    pub fn new(path: &Path, zoom: Zoom, file: &wisp_core::model::PaperFile, annotations: Vec<Annotation>, cx: &mut Context<Self>) -> Self {
         let (requests, request_rx) = mpsc::channel();
         let (reply_tx, replies) = async_channel::unbounded();
-        let file = path.to_path_buf();
-        std::thread::Builder::new().name("pdf".into()).spawn(move || worker(file, request_rx, reply_tx)).ok();
+        let worker_file = path.to_path_buf();
+        std::thread::Builder::new().name("pdf".into()).spawn(move || worker(worker_file, request_rx, reply_tx)).ok();
         cx.spawn(async move |this, cx| {
             while let Ok(reply) = replies.recv().await {
                 if this.update(cx, |this, cx| this.receive(reply, cx)).is_err() { break }
@@ -451,12 +463,36 @@ impl PdfView {
             cut: None,
             translation: None,
             models: vec![],
+            paper_id: file.paper_id.clone(),
+            resource_id: file.id.clone(),
+            annotations,
+            annotations_open: false,
+            annotation_edit: None,
+            annotation_note: cx.new(|cx| TextInput::new("写下这段原文的笔记…", cx).multiline(3)),
             focus: cx.focus_handle(),
         }
     }
 
     pub fn page_count(&self) -> usize {
         self.sizes.len()
+    }
+
+    /// Called only after a successful database write. Failed writes leave the
+    /// selection or draft intact, so the user can retry without losing text.
+    pub fn annotations_saved(&mut self, annotations: Vec<Annotation>, cx: &mut Context<Self>) {
+        self.annotations = annotations;
+        self.selection = None;
+        self.annotation_edit = None;
+        cx.notify();
+    }
+
+    pub fn annotate(&mut self, kind: Kind, cx: &mut Context<Self>) {
+        let Some((page, quote)) = self.selected() else { return };
+        let Some(selection) = self.selection else { return };
+        let Some(marks) = self.marks.get(&selection.page).and_then(|marks| marks.get(selection.anchor.min(selection.focus)..=selection.anchor.max(selection.focus))) else { return };
+        let boxes = pdftext::mark_boxes(marks);
+        if boxes.is_empty() { return }
+        cx.emit(PdfEvent::Annotate { paper: self.paper_id.clone(), resource: self.resource_id.clone(), page, kind, quote, boxes });
     }
 
     /// The page at the top of the view, 1-based.
@@ -664,6 +700,15 @@ impl PdfView {
         // The piece being cut out of this page.
         let cut = self.cut.filter(|(page, _)| *page == index).map(|(_, [x0, y0, x1, y1])| div().absolute().left(px(x0.min(x1) * scale)).top(px(y0.min(y1) * scale)).w(px((x1 - x0).abs() * scale)).h(px((y1 - y0).abs() * scale)).border_2().border_color(Theme::accent()).bg(Theme::selection()));
         let cutting = self.cutting;
+        // Metadata is painted over the current raster at the same scale as
+        // the glyphs, independently of both selection and citation marks.
+        let annotations: Vec<Div> = self.annotations.iter().filter(|a| a.page == index + 1).flat_map(|a| a.boxes.iter().map(move |line| {
+            let (top, height, color) = match a.kind {
+                Kind::Underline => (line[3] * scale - (1.3 * scale).max(1.), (1.3 * scale).max(1.), hsla(215. / 360., 0.85, 0.48, 0.9)),
+                Kind::Highlight => (line[1] * scale, (line[3] - line[1]) * scale, hsla(48. / 360., 1., 0.5, 0.3)),
+            };
+            div().absolute().left(px(line[0] * scale)).top(px(top)).w(px((line[2] - line[0]) * scale)).h(px(height)).bg(color)
+        })).collect();
         // The quotation on this page: a translucent marker over each of its lines.
         let marks: Vec<Div> = self
             .highlight
@@ -674,7 +719,7 @@ impl PdfView {
             .collect();
         let sheet = div().relative().flex_none().ml(px(self.sheet_left(width))).w(px(width)).h(px(height)).bg(gpui::white()).border_1().border_color(Theme::line()).overflow_hidden();
         let sheet = match image {
-            Some((image, _)) => sheet.when(cutting, |d| d.cursor_crosshair()).when(!cutting, |d| d.cursor_text()).child(img(image).w(px(width)).h(px(height))).children(selected).children(marks).children(cut),
+            Some((image, _)) => sheet.when(cutting, |d| d.cursor_crosshair()).when(!cutting, |d| d.cursor_text()).child(img(image).w(px(width)).h(px(height))).children(annotations).children(selected).children(marks).children(cut),
             None => sheet.flex().items_center().justify_center().text_size(px(12.)).text_color(Theme::text_placeholder()).child(if self.broken.contains(&index) { tf!("第 {} 页无法渲染", "Cannot render page {}", index + 1) } else { tf!("第 {} 页", "Page {}", index + 1) }),
         };
         div().w_full().flex().pb(px(PAGE_GAP)).child(sheet).into_any_element()
@@ -1011,9 +1056,14 @@ impl PdfView {
         Some(
             div()
                 .absolute()
-                .left(px(left.clamp(8., (self.width - if !piece { 250. } else if self.library_chat { 440. } else { 290. }).max(8.))))
-                .top(px(top.clamp(8., (self.height - 44.).max(8.))))
+                .left(px(left.clamp(8., (self.width - 520.).max(8.))))
+                .top(px(top.clamp(8., (self.height - 150.).max(8.))))
+                .max_w(px((self.width - 16.).max(0.)))
+                .max_h(px((self.height - 16.).clamp(0., 140.)))
+                .id("pdf-selection-bar")
+                .overflow_y_scroll()
                 .flex()
+                .flex_wrap()
                 .items_center()
                 .gap(px(2.))
                 .p(px(3.))
@@ -1027,6 +1077,7 @@ impl PdfView {
                 // A press on the bar is not a press on the page.
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .when(!piece, |d| d.child(button("pdf-copy", t("复制")).on_click(cx.listener(|this, _, _, cx| this.copy(cx)))))
+                .when(!piece, |d| d.child(button("pdf-underline", t("下划线")).on_click(cx.listener(|this, _, _, cx| this.annotate(Kind::Underline, cx)))).child(button("pdf-highlight", t("高亮")).on_click(cx.listener(|this, _, _, cx| this.annotate(Kind::Highlight, cx)))))
                 .when(!piece && self.library_chat, |d| d.child(button("pdf-quote-library", t("加到文献库对话")).text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.quote(true, cx)))).child(button("pdf-quote-paper", t("加到这篇的对话")).text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.quote(false, cx)))))
                 .when(!piece && !self.library_chat, |d| d.child(button("pdf-quote-paper", t("添加到对话")).text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.quote(false, cx)))))
                 .when(!piece, |d| d.child(button("pdf-translate", t("翻译")).on_click(cx.listener(|this, _, _, cx| this.translate(None, cx)))))
@@ -1037,6 +1088,49 @@ impl PdfView {
                 .when(piece, |d| d.child(button("pdf-cut-cancel", t("取消")).on_click(cx.listener(|this, _, _, cx| this.toggle_cutting(cx)))))
                 .into_any_element(),
         )
+    }
+
+    /// A bounded, scrollable list also lets a mark be found after reopening
+    /// the file, without depending on a hit target over the PDF text.
+    fn annotation_panel(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let button = |id, label: &'static str| div().id(id).px(px(8.)).py(px(4.)).rounded(px(5.)).cursor_pointer().hover(|s| s.bg(Theme::hover())).child(label);
+        let width = (self.width - 16.).clamp(0., 360.);
+        let list = self.annotations_open.then(|| {
+            let rows = self.annotations.iter().map(|annotation| {
+                let (id, edit_id, remove_id) = (annotation.id.clone(), annotation.id.clone(), annotation.id.clone());
+                let (page, top) = (annotation.page, annotation.boxes.first().map(|b| b[1]).unwrap_or(0.));
+                let note = annotation.note.clone();
+                let editing = self.annotation_edit.as_deref() == Some(id.as_str());
+                let kind = match annotation.kind { Kind::Underline => t("下划线"), Kind::Highlight => t("高亮") };
+                div().id(SharedString::from(id)).p(px(10.)).border_b_1().border_color(Theme::line()).flex().flex_col().gap(px(7.))
+                    .child(div().flex().flex_wrap().items_center().gap(px(4.))
+                        .child(div().flex_1().text_color(Theme::text_secondary()).child(tf!("第 {page} 页 · {kind}", "Page {page} · {kind}")))
+                        .child(button("annotation-locate", t("定位")).on_click(cx.listener(move |this, _, _, cx| this.go_to_place(page, top, cx))))
+                        .child(button("annotation-edit", t("笔记")).on_click(cx.listener(move |this, _, _, cx| {
+                            this.annotation_edit = Some(edit_id.clone());
+                            this.annotation_note.update(cx, |input, cx| input.set_text(&note, cx));
+                            cx.notify();
+                        })))
+                        .child(button("annotation-delete", t("删除")).on_click(cx.listener(move |this, _, _, cx| cx.emit(PdfEvent::RemoveAnnotation { resource: this.resource_id.clone(), id: remove_id.clone() })))))
+                    .child(div().max_h(px(100.)).overflow_hidden().child(annotation.quote.clone()))
+                    .when(!editing && !annotation.note.is_empty(), |d| d.child(div().text_color(Theme::text_secondary()).child(annotation.note.clone())))
+                    .when(editing, |d| d.child(ui::field(&self.annotation_note, window, cx)).child(div().flex().gap(px(5.))
+                        .child(button("annotation-save", t("保存笔记")).text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(id) = this.annotation_edit.clone() { cx.emit(PdfEvent::AnnotationNote { resource: this.resource_id.clone(), id, note: this.annotation_note.read(cx).text().to_string() }) }
+                        })))
+                        .child(button("annotation-cancel", t("取消")).on_click(cx.listener(|this, _, _, cx| { this.annotation_edit = None; cx.notify(); })))))
+            });
+            div().id("pdf-annotations-list").w_full().max_h(px((self.height - 70.).max(0.))).overflow_y_scroll().bg(Theme::bg_body()).border_1().border_color(Theme::line_strong()).rounded(px(8.))
+                .when(self.annotations.is_empty(), |d| d.child(div().p(px(12.)).text_color(Theme::text_secondary()).child(t("选中 PDF 文字后，可添加下划线或高亮。"))))
+                .children(rows)
+        });
+        div().absolute().top(px(8.)).right(px(8.)).max_w(px(width)).flex().flex_col().items_end().gap(px(6.)).text_size(px(12.)).line_height(px(18.)).text_color(Theme::text()).occlude()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(div().id("pdf-annotations-toggle").px(px(10.)).py(px(5.)).rounded(px(6.)).bg(Theme::bg_body()).border_1().border_color(Theme::line_strong()).cursor_pointer()
+                .child(tf!("标注 ({})", "Annotations ({})", self.annotations.len()))
+                .on_click(cx.listener(|this, _, _, cx| { this.annotations_open = !this.annotations_open; cx.notify(); })))
+            .children(list.map(|list| div().w(px(width)).child(list)))
+            .into_any_element()
     }
 
     /// The viewer, `width` logical pixels wide.
@@ -1105,6 +1199,7 @@ impl Render for PdfView {
             .children(bar)
             .children(card)
             .children(self.missing.then(|| div().absolute().top(px(8.)).left_0().w_full().flex().justify_center().child(div().px(px(10.)).py(px(5.)).rounded(px(6.)).bg(Theme::bg_body()).border_1().border_color(Theme::line()).text_size(px(12.)).text_color(Theme::text_secondary()).child(t("已跳到引用的页，但没有在 PDF 里找到这句原文。")))))
+            .child(self.annotation_panel(window, cx))
             .into_any_element()
     }
 }

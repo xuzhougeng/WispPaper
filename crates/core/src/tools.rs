@@ -102,6 +102,21 @@ pub fn catalog() -> Vec<ToolDef> {
         },
         scoped("library_status", "文献库概况", "一个文献库的概况：主题、文献数量、收录判断和阅读状态的分布、自定义词条，以及各状态值在界面上的显示名称。", json!({}), &[]),
         scoped(
+            "list_pdf_annotations",
+            "读取 PDF 标注",
+            "读取用户在 PDF 上保存的下划线、高亮及笔记。quote 是选中的原文，note 是用户的笔记，不是论文结论。返回文献和附件 ID、1-based 页码、每行的 boxes（从页面左上角起的 PDF 点坐标 [left, top, right, bottom]）、类型和时间。回收站中的文献不返回。",
+            json!({
+                "paperId": {"type": "string", "description": "只返回这篇文献的标注。"},
+                "resourceId": {"type": "string", "description": "只返回这个 PDF 附件的标注，附件 ID 见 get_paper 的 files。"},
+                "page": {"type": "integer", "minimum": 1, "description": "只返回 PDF 的这一页（从 1 开始）。"},
+                "kind": {"type": "string", "enum": ["underline", "highlight"], "description": "只返回下划线或高亮。"},
+                "query": {"type": "string", "description": "在原文摘录和用户笔记中搜索；空格分开的每个词都必须出现。"},
+                "limit": {"type": "integer", "description": "最多返回多少条，默认 50，最多 500。"},
+                "offset": {"type": "integer", "description": "跳过多少条，用于翻页。"},
+            }),
+            &[],
+        ),
+        scoped(
             "list_figures",
             "查询图片库",
             "查询图片库：从文献 PDF 里截下来收藏的图片，各自的图号、图注、标签、备注，以及它出自哪篇文献的哪一页。file 是图片文件在本机的路径。回收站中文献的图片不返回。",
@@ -438,6 +453,7 @@ fn dispatch(store: &mut Store, info: &LibraryInfo, name: &str, args: &Value, fet
         "library_status" => library_status(store, info),
         "list_papers" => list_papers(store, info, args),
         "list_figures" => list_figures(store, info, args),
+        "list_pdf_annotations" => list_pdf_annotations(store, args),
         "get_paper" => get_paper(store, args),
         "search_fulltext" => search_fulltext(store, args),
         "read_fulltext" => read_fulltext(store, args),
@@ -570,6 +586,23 @@ fn list_figures(store: &mut Store, info: &LibraryInfo, args: &Value) -> Result<V
     Ok(json!({"library": info.name, "total": found.len(), "offset": offset, "figures": page, "tags": crate::figure::tag_counts(&figures).into_iter().map(|(tag, count)| json!({"tag": tag, "count": count})).collect::<Vec<_>>()}))
 }
 
+fn list_pdf_annotations(store: &Store, args: &Value) -> Result<Value> {
+    let (paper, resource, kind) = (text(args, "paperId")?, text(args, "resourceId")?, text(args, "kind")?);
+    if !["", "underline", "highlight"].contains(&kind) { bail!("不支持的标注类型：{kind}") }
+    let page = number(args, "page", 0, usize::MAX)?;
+    if !args["page"].is_null() && page == 0 { bail!("页码从 1 开始。") }
+    let words = crate::figure::search_words(text(args, "query")?);
+    let annotations: Vec<_> = store.pdf_annotations(paper, resource)?.into_iter().filter(|a| {
+        (kind.is_empty() || a.kind.key() == kind) && (page == 0 || a.page == page)
+            && words.iter().all(|word| format!("{}\n{}", a.quote, a.note).to_lowercase().contains(word.as_str()))
+    }).collect();
+    let total = annotations.len();
+    let offset = number(args, "offset", 0, usize::MAX)?;
+    let limit = number(args, "limit", 50, 500)?;
+    let annotations: Vec<_> = annotations.into_iter().skip(offset).take(limit).collect();
+    Ok(json!({"total": total, "offset": offset, "annotations": annotations}))
+}
+
 fn get_paper(store: &mut Store, args: &Value) -> Result<Value> {
     let paper = store.get_paper(text(args, "id")?)?;
     let mut out = serde_json::to_value(&paper)?;
@@ -596,6 +629,7 @@ fn get_paper(store: &mut Store, args: &Value) -> Result<Value> {
         files.push(json!({"id": file.id, "kind": file.kind, "title": file.title, "format": file.format, "sizeBytes": file.size_bytes, "path": store.file_path(&file).display().to_string(), "textPages": pages}));
     }
     out["files"] = json!(files);
+    out["pdfAnnotationCount"] = json!(store.pdf_annotations(&paper.id, "")?.len());
     Ok(out)
 }
 
@@ -1370,6 +1404,45 @@ pub(crate) mod tests {
         let file = store.import_file(&atlas.id, &source, "fulltext").unwrap();
         store.save_fulltext_pages(&file.id, &Ok(vec!["Introduction.\nThe root tip of Arabidopsis.".into(), "Libraries were prepared with\n10x Genomics Chromium. WOX5 marks the quiescent centre.".into()])).unwrap();
         (root, atlas.id)
+    }
+
+    #[test]
+    fn pdf_annotations_are_readable_searchable_and_scoped_through_tools_and_mcp() {
+        use crate::annotation::Kind;
+        let (root, paper) = sample();
+        let info = find_library(&root, "").unwrap();
+        let mut store = Store::open(&info.dir).unwrap();
+        let source = root.join("annotated.pdf");
+        std::fs::write(&source, b"%PDF-1.4 test").unwrap();
+        let file = store.import_file(&paper, &source, "fulltext").unwrap();
+        let first = store.add_pdf_annotation(&paper, &file.id, 1, Kind::Underline, "Root growth", &[[10., 20., 100., 30.]]).unwrap();
+        store.update_pdf_annotation_note(&file.id, &first.id, "Compare WOX5 expression").unwrap();
+        store.add_pdf_annotation(&paper, &file.id, 2, Kind::Highlight, "Cell identity", &[[10., 40., 100., 50.]]).unwrap();
+        let all = call(&root, "list_pdf_annotations", &json!({"paperId": paper})).unwrap();
+        assert_eq!(all["total"], 2);
+        assert_eq!(call(&root, "get_paper", &json!({"id": paper})).unwrap()["pdfAnnotationCount"], 2);
+        let found = call(&root, "list_pdf_annotations", &json!({"query": "growth wox5", "resourceId": file.id})).unwrap();
+        assert_eq!(found["total"], 1);
+        assert_eq!(found["annotations"][0]["note"], "Compare WOX5 expression");
+        assert_eq!(found["annotations"][0]["quote"], "Root growth");
+        assert_eq!(found["annotations"][0]["boxes"], json!([[10., 20., 100., 30.]]));
+        assert_eq!(call(&root, "list_pdf_annotations", &json!({"kind": "highlight", "page": 2})).unwrap()["total"], 1);
+        assert_eq!(call(&root, "list_pdf_annotations", &json!({"offset": 1, "limit": 1})).unwrap()["annotations"][0]["page"], 2);
+        for args in [json!({"paperId": "missing"}), json!({"resourceId": "missing"}), json!({"page": 3})] {
+            assert_eq!(call(&root, "list_pdf_annotations", &args).unwrap()["total"], 0);
+        }
+        assert!(call(&root, "list_pdf_annotations", &json!({"page": 0})).is_err());
+        assert!(call(&root, "list_pdf_annotations", &json!({"kind": "wrong"})).is_err());
+        // The same tool is available to the built-in assistant and a read-only MCP client.
+        assert!(library_catalog().iter().any(|t| t.name == "list_pdf_annotations" && !t.writes));
+        let server = crate::mcp::Server { fetch: &offline, download: &no_download, read_only: true };
+        let response = crate::mcp::handle(&root, &json!({"id": 1, "method": "tools/call", "params": {"name": "list_pdf_annotations", "arguments": {"paperId": paper}}}), &server).unwrap();
+        assert_eq!(response["result"]["isError"], false);
+        assert_eq!(response["result"]["structuredContent"]["total"], 2);
+        store.trash_paper(&paper).unwrap();
+        assert_eq!(call(&root, "list_pdf_annotations", &json!({})).unwrap()["total"], 0);
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
