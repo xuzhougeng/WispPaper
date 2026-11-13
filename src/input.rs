@@ -645,7 +645,7 @@ impl IntoElement for InputElement {
 /// (composing) range underlined.
 fn shape(input: &TextInput, style: &TextStyle, window: &mut Window, wrap: Option<Pixels>) -> Vec<(WrappedLine, usize, Pixels)> {
     let display = input.display_text();
-    let (text, color) = if display.is_empty() { (input.placeholder.to_string(), Theme::text_placeholder()) } else { (display, style.color) };
+    let (text, color) = if display.is_empty() { (crate::i18n::t(&input.placeholder).to_string(), Theme::text_placeholder()) } else { (display, style.color) };
     let run = TextRun { len: text.len(), font: style.font(), color, background_color: None, underline: None, strikethrough: None };
     let marked = input.marked.as_ref().filter(|_| !input.text.is_empty()).map(|m| input.to_display(m.start)..input.to_display(m.end));
     let runs: Vec<TextRun> = match marked {

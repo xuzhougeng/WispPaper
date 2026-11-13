@@ -5,6 +5,7 @@
 //! as beside the PDF; only where it is drawn differs. Where the window may
 //! stand is `wisp_core::floating`.
 
+use crate::i18n::t;
 use crate::app::{Cmd, Tab, Workspace};
 use crate::theme::{self, Theme};
 use crate::ui;
@@ -46,7 +47,7 @@ impl Workspace {
     /// The button in the header of the conversation beside the PDF that lets it float instead.
     pub fn render_float_switch(&self, about_paper: bool, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !about_paper || self.settings.floating.on || !self.paper_beside(window) { return None }
-        Some(ui::ghost_button("chat-float", Some("square"), Some("悬浮".into())).on_click(self.on(Cmd::FloatChat(true), cx)).into_any_element())
+        Some(ui::ghost_button("chat-float", Some("square"), Some(t("悬浮").into())).on_click(self.on(Cmd::FloatChat(true), cx)).into_any_element())
     }
 
     /// The panel asking about a paper, with the conversation floating over the PDF.
@@ -99,7 +100,7 @@ impl Workspace {
             .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _, cx| this.float_press(Hold::Title, event.position, cx)))
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, window, cx| this.float_release(window, cx)))
             .child(ui::icon("sparkle", 14., Theme::accent()))
-            .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text_secondary()).child("就这篇文献提问"))
+            .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text_secondary()).child(t("就这篇文献提问")))
             .child(
                 div()
                     .flex()
@@ -107,7 +108,7 @@ impl Workspace {
                     .items_center()
                     .cursor_default()
                     .on_mouse_down(MouseButton::Left, keep_press)
-                    .child(ui::ghost_button("float-chat-dock", Some("panel-left"), Some("分栏".into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::FloatChat(false), cx)))
+                    .child(ui::ghost_button("float-chat-dock", Some("panel-left"), Some(t("分栏").into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::FloatChat(false), cx)))
                     .child(ui::ghost_button("float-chat-fold", Some("minus"), None).h(px(26.)).min_w(px(26.)).on_click(self.on(Cmd::FoldChat(true), cx))),
             );
         // The corner: two short strokes, as on any window that can be sized.

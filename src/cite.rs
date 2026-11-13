@@ -5,6 +5,7 @@
 //! can be cited by typing part of its author or title; the list can be
 //! copied and the cited papers saved as BibTeX under the same keys.
 
+use crate::i18n::t;
 use crate::app::{Cmd, Library, Workspace};
 use crate::input::{InputEvent, TextInput};
 use crate::theme::Theme;
@@ -54,9 +55,9 @@ impl Workspace {
     /// 引用: the paper's key at the caret, kept so it stays the paper's.
     pub fn cite_paper(&mut self, id: &str, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
-        let Some(key) = index(lib).key(id).map(str::to_string) else { return self.fail("文献库里没有这篇文献。", cx) };
+        let Some(key) = index(lib).key(id).map(str::to_string) else { return self.fail(t("文献库里没有这篇文献。"), cx) };
         if !lib.citing.kept.contains_key(&key) {
-            if let Err(err) = lib.store.keep_cite_key(id, &key) { return self.fail(format!("引用没有记下：{err:#}"), cx) }
+            if let Err(err) = lib.store.keep_cite_key(id, &key) { return self.fail(tf!("引用没有记下：{err:#}", "Citation not saved: {err:#}"), cx) }
             lib.citing.kept.insert(key.clone(), id.to_string());
         }
         lib.writing.editor.update(cx, |input, cx| {
@@ -80,7 +81,7 @@ impl Workspace {
         };
         for (key, id) in written {
             if lib.citing.kept.contains_key(&key) { continue }
-            if let Err(err) = lib.store.keep_cite_key(&id, &key) { return self.fail(format!("引用没有记下：{err:#}"), cx) }
+            if let Err(err) = lib.store.keep_cite_key(&id, &key) { return self.fail(tf!("引用没有记下：{err:#}", "Citation not saved: {err:#}"), cx) }
             lib.citing.kept.insert(key, id);
         }
         lib.writing.editor.update(cx, |input, cx| {
@@ -111,17 +112,17 @@ impl Workspace {
 
     pub fn copy_references(&mut self, cx: &mut Context<Self>) {
         let Some((references, _)) = self.cited_references(cx) else { return };
-        if references.is_empty() { return self.fail("还没有引用文献。", cx) }
+        if references.is_empty() { return self.fail(t("还没有引用文献。"), cx) }
         cx.write_to_clipboard(ClipboardItem::new_string(cite::reference_list(&references)));
-        self.say(format!("已复制 {} 条参考文献", references.len()), cx);
+        self.say(tf!("已复制 {} 条参考文献", "Copied {} references", references.len()), cx);
     }
 
     /// The cited papers as BibTeX, under the keys the manuscript cites them by.
     pub fn export_cited(&mut self, cx: &mut Context<Self>) {
         let Some((references, text)) = self.cited_references(cx) else { return };
-        if references.is_empty() { return self.fail("还没有引用文献。", cx) }
+        if references.is_empty() { return self.fail(t("还没有引用文献。"), cx) }
         let Some(lib) = self.lib.as_ref() else { return };
-        let name = format!("{}-引用.bib", lib.info.name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "-"));
+        let name = tf!("{}-引用.bib", "{}-references.bib", lib.info.name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "-"));
         let directory = dirs::document_dir().or_else(dirs::home_dir).unwrap_or_else(|| self.root.clone());
         let picked = cx.prompt_for_new_path(&directory, Some(&name));
         let count = references.len();
@@ -130,8 +131,8 @@ impl Workspace {
                 if path.extension().is_none() { path.set_extension("bib"); }
                 let result = std::fs::write(&path, text);
                 this.update(cx, |this, cx| match result {
-                    Ok(()) => this.say(format!("已导出 {count} 篇引用文献到 {}", path.display()), cx),
-                    Err(err) => this.fail(format!("无法写入 {}：{err}", path.display()), cx),
+                    Ok(()) => this.say(tf!("已导出 {count} 篇引用文献到 {}", "Exported {count} cited papers to {}", path.display()), cx),
+                    Err(err) => this.fail(tf!("无法写入 {}：{err}", "Cannot write {}: {err}", path.display()), cx),
                 })
                 .ok();
             }
@@ -161,11 +162,11 @@ impl Workspace {
                 let shown = if one.old { format!("（{}）", one.written) } else { format!("[{}]", one.written) };
                 let what = match &one.found {
                     Found::Paper(_) => continue,
-                    Found::Trashed(_) => "这篇文献在回收站里",
-                    Found::Removed => "这篇文献已从库里删除",
-                    Found::Unknown if one.old => "库里没有对得上的文献",
-                    Found::Unknown => "库里没有这个引用键",
-                    Found::Ambiguous(_) => "对得上不止一篇，选一篇：",
+                    Found::Trashed(_) => t("这篇文献在回收站里"),
+                    Found::Removed => t("这篇文献已从库里删除"),
+                    Found::Unknown if one.old => t("库里没有对得上的文献"),
+                    Found::Unknown => t("库里没有这个引用键"),
+                    Found::Ambiguous(_) => t("对得上不止一篇，选一篇："),
                 };
                 let mut line = div().flex().items_center().flex_wrap().gap(px(4.)).text_size(px(12.)).child(div().text_color(if matches!(one.found, Found::Trashed(_)) { Theme::warning() } else { Theme::danger() }).child(format!("{place}{shown} {what}")));
                 if let (Found::Ambiguous(ids), true) = (&one.found, here) {
@@ -237,7 +238,7 @@ impl Workspace {
             div().id(id).flex().items_center().h(px(22.)).px(px(8.)).rounded(px(11.)).text_size(px(12.)).cursor_pointer().when(on, |d| d.bg(Theme::accent_soft()).text_color(Theme::accent())).when(!on, |d| d.text_color(Theme::text_secondary()).hover(|s| s.bg(Theme::hover()))).on_click(self.on(Cmd::WriteCiteScope(whole), cx)).child(name)
         };
         let small = |id: &'static str, name: &'static str| ui::ghost_button(id, None, Some(name.into())).h(px(22.)).px(px(6.)).text_size(px(12.));
-        let count = if references.is_empty() { "还没有引用".to_string() } else { format!("{} 篇", references.len()) };
+        let count = if references.is_empty() { t("还没有引用").to_string() } else { tf!("{} 篇", "{} papers", references.len()) };
 
         div()
             .flex()
@@ -256,20 +257,21 @@ impl Workspace {
                 div()
                     .flex()
                     .items_center()
+                    .flex_wrap()
                     .gap(px(6.))
-                    .child(div().flex_none().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child("参考文献"))
+                    .child(div().flex_none().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child(t("参考文献")))
                     .child(div().flex_none().text_size(px(12.)).text_color(Theme::text_tertiary()).child(count))
                     .child(div().w(px(6.)))
-                    .child(scope("cite-scope-part", "本节", false))
-                    .child(scope("cite-scope-whole", "全文", true))
+                    .child(scope("cite-scope-part", t("本节"), false))
+                    .child(scope("cite-scope-whole", t("全文"), true))
                     .child(div().flex_1())
-                    .when(!upgrades.is_empty(), |d| d.child(small("cite-upgrade", "旧式引用改为引用键").on_click(self.on(Cmd::WriteCiteFix(upgrades.clone()), cx))))
-                    .when(!references.is_empty(), |d| d.child(small("cite-copy", "复制").on_click(self.on(Cmd::WriteCopyReferences, cx))).child(small("cite-bib", "导出 BibTeX").on_click(self.on(Cmd::WriteExportCited, cx)))),
+                    .when(!upgrades.is_empty(), |d| d.child(small("cite-upgrade", t("旧式引用改为引用键")).on_click(self.on(Cmd::WriteCiteFix(upgrades.clone()), cx))))
+                    .when(!references.is_empty(), |d| d.child(small("cite-copy", t("复制")).on_click(self.on(Cmd::WriteCopyReferences, cx))).child(small("cite-bib", t("导出 BibTeX")).on_click(self.on(Cmd::WriteExportCited, cx)))),
             )
             .children(issues)
             .when(!rows.is_empty(), |d| d.child(div().id("cite-references").flex().flex_col().max_h(px(150.)).overflow_y_scroll().children(rows)))
-            .when(references.is_empty() && found.iter().all(|(_, _, cited)| cited.is_empty()), |d| d.child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child("在右边的句子上点「引用」，或在下面找一篇文献。引用写作 [@Zhang2024]，导出的 Markdown 和 BibTeX 可以直接交给 Pandoc。")))
+            .when(references.is_empty() && found.iter().all(|(_, _, cited)| cited.is_empty()), |d| d.child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(t("在右边的句子上点「引用」，或在下面找一篇文献。引用写作 [@Zhang2024]，导出的 Markdown 和 BibTeX 可以直接交给 Pandoc。"))))
             .child(ui::field(&lib.citing.find, window, cx))
-            .when(!query.is_empty(), |d| d.child(if offered.is_empty() { div().px(px(8.)).text_size(px(12.)).text_color(Theme::text_tertiary()).child("没有对得上的文献").into_any_element() } else { div().flex().flex_col().children(offered).into_any_element() }))
+            .when(!query.is_empty(), |d| d.child(if offered.is_empty() { div().px(px(8.)).text_size(px(12.)).text_color(Theme::text_tertiary()).child(t("没有对得上的文献")).into_any_element() } else { div().flex().flex_col().children(offered).into_any_element() }))
     }
 }

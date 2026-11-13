@@ -1,5 +1,6 @@
 //! Single-paper and batch translations share requests and the library cache.
 
+use crate::i18n::t;
 use crate::app::{Cmd, Translated, Workspace};
 use crate::{theme::Theme, ui};
 use gpui::{prelude::FluentBuilder, *};
@@ -47,7 +48,7 @@ impl Workspace {
         let prompt = self.settings.translation_prompt.clone();
         let Some(lib) = self.lib.as_mut() else { return };
         if lib.translation_run.as_ref().is_some_and(|run| run.batch.running()) {
-            return self.say("已有批量翻译正在进行，请等这一轮结束。", cx);
+            return self.say(t("已有批量翻译正在进行，请等这一轮结束。"), cx);
         }
         let batch = Batch::new(ids.iter().filter_map(|id| lib.paper(id)), field, &prompt);
         if batch.total == 0 { return }
@@ -77,7 +78,7 @@ impl Workspace {
                 }
                 Some(Translated::Done(_)) => run.batch.finish(Ok(()), !active),
                 Some(Translated::Failed(error)) => run.batch.finish(Err(error.clone()), false),
-                None => run.batch.finish(Err("没有取得译文，请重试。".into()), false),
+                None => run.batch.finish(Err(t("没有取得译文，请重试。").into()), false),
             }
         }
     }
@@ -98,7 +99,7 @@ impl Workspace {
             }
         }
         let request = if again { ai::translate_request(profile, prompt, text).map(Some) } else {
-            lib.store.translation(&key).map_err(|e| format!("无法读取译文：{e:#}")).and_then(|cached| {
+            lib.store.translation(&key).map_err(|e| tf!("无法读取译文：{e:#}", "Cannot read translation: {e:#}")).and_then(|cached| {
                 if let Some(text) = cached {
                     lib.translations.insert(key.clone(), Translated::Done(text));
                     Ok(None)
@@ -126,7 +127,7 @@ impl Workspace {
                 let Some(lib) = this.lib.as_mut().filter(|lib| Arc::ptr_eq(&lib.translation_session, &session)) else { return };
                 if lib.translation_asks.get(&key) != Some(&ask) { return }
                 let saved = translated.and_then(|text| {
-                    if again { lib.store.replace_translation(&key, &text, &author) } else { lib.store.save_translation(&key, &text, &author) }.map_err(|e| format!("无法保存译文：{e:#}"))?;
+                    if again { lib.store.replace_translation(&key, &text, &author) } else { lib.store.save_translation(&key, &text, &author) }.map_err(|e| tf!("无法保存译文：{e:#}", "Cannot save translation: {e:#}"))?;
                     Ok(text.trim().to_string())
                 });
                 lib.translations.insert(key, match saved { Ok(text) => Translated::Done(text), Err(error) => Translated::Failed(error) });
@@ -141,23 +142,23 @@ impl Workspace {
         let batch = &self.lib.as_ref()?.translation_run.as_ref()?.batch;
         let running = batch.running();
         let status = match (running, batch.stopped) {
-            (true, true) => "正在停止，等待当前请求",
-            (true, false) => "正在翻译",
-            (false, true) => "已停止",
-            (false, false) => "已完成",
+            (true, true) => t("正在停止，等待当前请求"),
+            (true, false) => t("正在翻译"),
+            (false, true) => t("已停止"),
+            (false, false) => t("已完成"),
         };
-        let heading = format!("批量翻译{} · {status} · {} / {} 篇", batch.field.label(), batch.done(), batch.total);
-        let mut summary = format!("新译 {} · 已有译文 {} · 空内容跳过 {} · 失败 {}", batch.translated, batch.cached, batch.skipped, batch.failed);
-        if batch.stopped && !running { summary.push_str(&format!(" · 未处理 {}", batch.total - batch.done())) }
+        let heading = tf!("批量翻译{} · {status} · {} / {} 篇", "Batch translation{} · {status} · {} / {} papers", t(batch.field.label()), batch.done(), batch.total);
+        let mut summary = tf!("新译 {} · 已有译文 {} · 空内容跳过 {} · 失败 {}", "{} translated · {} cached · {} empty skipped · {} failed", batch.translated, batch.cached, batch.skipped, batch.failed);
+        if batch.stopped && !running { summary.push_str(&tf!(" · 未处理 {}", " · {} unprocessed", batch.total - batch.done())) }
         Some(div().flex().flex_col().flex_none().gap(px(6.)).mx(px(16.)).my(px(8.)).p(px(10.)).rounded(px(8.)).bg(Theme::bg_sunken()).border_1().border_color(Theme::line())
             .child(div().flex().items_center().gap(px(8.))
                 .when(running, |d| d.child(ui::spinner("batch-translating", 13., Theme::accent())))
                 .child(div().flex_1().min_w_0().text_size(px(12.)).child(heading))
-                .when(running && !batch.stopped, |d| d.child(ui::ghost_button("translation-stop", None, Some("停止".into())).on_click(self.on(Cmd::StopBatchTranslation, cx))))
+                .when(running && !batch.stopped, |d| d.child(ui::ghost_button("translation-stop", None, Some(t("停止").into())).on_click(self.on(Cmd::StopBatchTranslation, cx))))
                 .when(!running, |d| d.child(ui::ghost_button("translation-dismiss", Some("x"), None).on_click(self.on(Cmd::DismissBatchTranslation, cx)))))
             .child(crate::screen::progress_bar(batch.done(), batch.total))
             .child(div().text_size(px(12.)).text_color(Theme::text_secondary()).child(summary))
-            .when(!batch.error.is_empty(), |d| d.child(ui::error_line(&format!("最近一次失败：{}；可再次选择文献执行批量翻译。", batch.error))))
+            .when(!batch.error.is_empty(), |d| d.child(ui::error_line(&tf!("最近一次失败：{}；可再次选择文献执行批量翻译。", "Latest failure: {}. Select papers again to retry batch translation.", batch.error))))
             .into_any_element())
     }
 }

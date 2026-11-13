@@ -7,6 +7,17 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+/// The desktop interface language. Unknown values fall back to Chinese,
+/// as do settings files written before language switching was available.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Language {
+    #[serde(rename = "en")]
+    En,
+    #[default]
+    #[serde(rename = "zh", other)]
+    Zh,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
@@ -26,6 +37,8 @@ pub struct Settings {
     pub auto_update: bool,
     /// "light" or "dark"; empty follows the system.
     pub appearance: String,
+    /// The interface language; independent of manuscript and translation languages.
+    pub language: Language,
     /// "compact" tightens the paper table; empty is the standard rows.
     pub density: String,
     /// The proxy every request goes through, as a URL (`http://127.0.0.1:7890`,
@@ -49,7 +62,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { data_dir: String::new(), profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translation_prompt: String::new(), commands: vec![], auto_update: true, appearance: String::new(), density: String::new(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., floating: Default::default() }
+        Settings { data_dir: String::new(), profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translation_prompt: String::new(), commands: vec![], auto_update: true, appearance: String::new(), language: Language::default(), density: String::new(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., floating: Default::default() }
     }
 }
 
@@ -240,6 +253,19 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interface_language_is_backward_compatible_and_persisted() {
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.language, Language::Zh);
+        let english: Settings = serde_json::from_str(r#"{"language":"en"}"#).unwrap();
+        assert_eq!(english.language, Language::En);
+        let saved = serde_json::to_string(&english).unwrap();
+        assert_eq!(serde_json::from_str::<Settings>(&saved).unwrap().language, Language::En);
+        let unsupported: Settings = serde_json::from_str(r#"{"language":"fr"}"#).unwrap();
+        assert_eq!(unsupported.language, Language::Zh);
+        assert!(serde_json::from_str::<Settings>(r#"{"language":42}"#).is_err());
+    }
 
     #[test]
     fn load_save() {

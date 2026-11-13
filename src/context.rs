@@ -2,6 +2,7 @@
 //! show (and in an open menu), Enter opens, Delete moves to the trash; and a
 //! right click opens a menu of what can be done with the thing under it.
 
+use crate::i18n::t;
 use crate::app::{Cmd, MenuItem, MenuKind, Page, Tab, Workspace};
 use gpui::*;
 use wisp_core::model::READINGS;
@@ -117,7 +118,7 @@ impl Workspace {
             }
             Cmd::AskTrashPapers(ids) => {
                 self.modal_error.clear();
-                self.modal = Some(crate::app::Modal::Confirm { title: format!("把 {} 篇文献移到回收站？", ids.len()), message: "它们的笔记、词条和 PDF 都留着，可以在回收站里恢复。".into(), action: "移到回收站".into(), cmd: Cmd::TrashPapers(ids) });
+                self.modal = Some(crate::app::Modal::Confirm { title: tf!("把 {} 篇文献移到回收站？", "Move {} papers to trash?", ids.len()), message: t("它们的笔记、词条和 PDF 都留着，可以在回收站里恢复。").into(), action: t("移到回收站").into(), cmd: Cmd::TrashPapers(ids) });
             }
             Cmd::TrashPapers(ids) => {
                 self.modal = None;
@@ -125,7 +126,7 @@ impl Workspace {
                     for id in &ids { lib.store.trash_paper(id)? }
                     Ok(())
                 });
-                if done { self.say(format!("已把 {} 篇文献移到回收站。", ids.len()), cx) }
+                if done { self.say(tf!("已把 {} 篇文献移到回收站。", "Moved {} papers to trash.", ids.len()), cx) }
                 window.focus(&self.focus);
             }
             _ => {}
@@ -141,100 +142,102 @@ impl Workspace {
             MenuKind::Paper(id) => {
                 let Some(p) = lib.paper(id) else { return (items, breaks) };
                 let pdf = lib.pdf_file(id);
-                if pdf.is_some() { items.push(item("打开 PDF", Cmd::OpenPaper(id.clone(), Tab::Pdf))) }
-                items.push(item("查看信息", Cmd::OpenPaper(id.clone(), Tab::Info)));
-                items.push(item("就这篇提问", Cmd::OpenPaper(id.clone(), Tab::Ask)));
+                if pdf.is_some() { items.push(item(t("打开 PDF"), Cmd::OpenPaper(id.clone(), Tab::Pdf))) }
+                items.push(item(t("查看信息"), Cmd::OpenPaper(id.clone(), Tab::Info)));
+                items.push(item(t("就这篇提问"), Cmd::OpenPaper(id.clone(), Tab::Ask)));
 
                 breaks.push(items.len());
-                items.push(item(if p.starred { "取消收藏" } else { "收藏" }, Cmd::ToggleStar(id.clone())));
+                items.push(item(if p.starred { t("取消收藏") } else { t("收藏") }, Cmd::ToggleStar(id.clone())));
                 for (value, label) in READINGS {
-                    items.push(MenuItem { label: format!("标为{label}").into(), checked: p.reading == value, note: None, cmd: Cmd::SetReading(id.clone(), value.into()) });
+                    let label = t(label);
+                    items.push(MenuItem { label: tf!("标为{label}", "Mark as {label}").into(), checked: p.reading == value, note: None, cmd: Cmd::SetReading(id.clone(), value.into()) });
                 }
 
                 breaks.push(items.len());
-                items.push(item("编辑题目、信息与词条…", Cmd::EditPaper(id.clone())));
-                if p.doi.is_empty() && p.pmid.is_empty() { items.push(item("按题目补全…", Cmd::CompletePaper(id.clone()))) }
-                items.push(item(if pdf.is_some() { "再添加一个文件…" } else { "添加 PDF 或附件…" }, Cmd::AttachPdf(id.clone())));
-                if pdf.is_none() && wisp_core::openaccess::lookable(p) { items.push(item("查找开放全文", Cmd::FindPdfs(Some(id.clone())))) }
+                items.push(item(t("编辑题目、信息与词条…"), Cmd::EditPaper(id.clone())));
+                if p.doi.is_empty() && p.pmid.is_empty() { items.push(item(t("按题目补全…"), Cmd::CompletePaper(id.clone()))) }
+                items.push(item(if pdf.is_some() { t("再添加一个文件…") } else { t("添加 PDF 或附件…") }, Cmd::AttachPdf(id.clone())));
+                if pdf.is_none() && wisp_core::openaccess::lookable(p) { items.push(item(t("查找开放全文"), Cmd::FindPdfs(Some(id.clone())))) }
 
                 breaks.push(items.len());
-                items.push(item("复制题目", Cmd::CopyText(p.title.clone())));
-                if !p.doi.is_empty() { items.push(item("复制 DOI", Cmd::CopyText(p.doi.clone()))) }
-                items.push(item("复制 BibTeX", Cmd::CopyText(wisp_core::export::bibtex(&[p]))));
-                if !p.link().is_empty() { items.push(item("打开网页", Cmd::OpenLink(id.clone()))) }
+                items.push(item(t("复制题目"), Cmd::CopyText(p.title.clone())));
+                if !p.doi.is_empty() { items.push(item(t("复制 DOI"), Cmd::CopyText(p.doi.clone()))) }
+                items.push(item(t("复制 BibTeX"), Cmd::CopyText(wisp_core::export::bibtex(&[p]))));
+                if !p.link().is_empty() { items.push(item(t("打开网页"), Cmd::OpenLink(id.clone()))) }
                 if let Some(file) = pdf { items.push(item(reveal_label(), Cmd::RevealFile(file.id.clone()))) }
 
                 breaks.push(items.len());
-                items.push(MenuItem { label: "移到回收站".into(), checked: false, note: Some(crate::shortcuts::pretty("secondary-backspace").into()), cmd: Cmd::TrashPaper(id.clone()) });
+                items.push(MenuItem { label: t("移到回收站").into(), checked: false, note: Some(crate::shortcuts::pretty("secondary-backspace").into()), cmd: Cmd::TrashPaper(id.clone()) });
             }
             MenuKind::Papers(ids) => {
                 let papers: Vec<&wisp_core::model::Paper> = ids.iter().filter_map(|id| lib.paper(id)).collect();
                 if papers.is_empty() { return (items, breaks) }
                 let count = papers.len();
-                items.push(item(&format!("就这 {count} 篇提问"), Cmd::AskPapers(ids.clone())));
+                items.push(item(&tf!("就这 {count} 篇提问", "Ask about these {count} papers"), Cmd::AskPapers(ids.clone())));
 
                 breaks.push(items.len());
                 let starred = papers.iter().all(|p| p.starred);
-                items.push(item(if starred { "取消收藏" } else { "收藏" }, Cmd::StarPapers(ids.clone(), !starred)));
+                items.push(item(if starred { t("取消收藏") } else { t("收藏") }, Cmd::StarPapers(ids.clone(), !starred)));
                 for (value, label) in READINGS {
-                    items.push(MenuItem { label: format!("标为{label}").into(), checked: papers.iter().all(|p| p.reading == value), note: None, cmd: Cmd::ReadPapers(ids.clone(), value.into()) });
+                    let label = t(label);
+                    items.push(MenuItem { label: tf!("标为{label}", "Mark as {label}").into(), checked: papers.iter().all(|p| p.reading == value), note: None, cmd: Cmd::ReadPapers(ids.clone(), value.into()) });
                 }
-                items.push(item("添加标签…", Cmd::TagPapers(ids.clone())));
+                items.push(item(t("添加标签…"), Cmd::TagPapers(ids.clone())));
                 // Those without a PDF that have a number to be looked up by.
                 let lacking: Vec<String> = papers.iter().filter(|p| lib.pdf_file(&p.id).is_none() && wisp_core::openaccess::lookable(p)).map(|p| p.id.clone()).collect();
-                if !lacking.is_empty() { items.push(MenuItem { label: "查找开放全文".into(), checked: false, note: Some(format!("{} 篇缺 PDF", lacking.len()).into()), cmd: Cmd::FindPdfsOf(lacking) }) }
+                if !lacking.is_empty() { items.push(MenuItem { label: t("查找开放全文").into(), checked: false, note: Some(tf!("{} 篇缺 PDF", "{} missing PDFs", lacking.len()).into()), cmd: Cmd::FindPdfsOf(lacking) }) }
 
                 breaks.push(items.len());
-                items.push(item("批量翻译标题", Cmd::TranslatePapers(ids.clone(), wisp_core::translation::Field::Title)));
-                items.push(item("批量翻译摘要", Cmd::TranslatePapers(ids.clone(), wisp_core::translation::Field::Abstract)));
+                items.push(item(t("批量翻译标题"), Cmd::TranslatePapers(ids.clone(), wisp_core::translation::Field::Title)));
+                items.push(item(t("批量翻译摘要"), Cmd::TranslatePapers(ids.clone(), wisp_core::translation::Field::Abstract)));
 
                 breaks.push(items.len());
-                items.push(item("复制题目", Cmd::CopyText(papers.iter().map(|p| p.title.as_str()).collect::<Vec<_>>().join("\n"))));
-                items.push(item("复制 BibTeX", Cmd::CopyText(wisp_core::export::bibtex(&papers))));
+                items.push(item(t("复制题目"), Cmd::CopyText(papers.iter().map(|p| p.title.as_str()).collect::<Vec<_>>().join("\n"))));
+                items.push(item(t("复制 BibTeX"), Cmd::CopyText(wisp_core::export::bibtex(&papers))));
 
                 breaks.push(items.len());
-                items.push(MenuItem { label: format!("把 {count} 篇移到回收站…").into(), checked: false, note: Some(crate::shortcuts::pretty("secondary-backspace").into()), cmd: Cmd::AskTrashPapers(ids.clone()) });
+                items.push(MenuItem { label: tf!("把 {count} 篇移到回收站…", "Move {count} papers to trash…").into(), checked: false, note: Some(crate::shortcuts::pretty("secondary-backspace").into()), cmd: Cmd::AskTrashPapers(ids.clone()) });
             }
             MenuKind::Trashed(id) => {
-                items.push(item("恢复", Cmd::RestorePaper(id.clone())));
-                items.push(item("彻底删除…", Cmd::AskDeletePaper(id.clone())));
+                items.push(item(t("恢复"), Cmd::RestorePaper(id.clone())));
+                items.push(item(t("彻底删除…"), Cmd::AskDeletePaper(id.clone())));
             }
             MenuKind::File(id) => {
                 let Some(file) = lib.files.iter().find(|f| f.id == *id) else { return (items, breaks) };
-                items.push(item("用系统应用打开", Cmd::OpenFile(id.clone())));
+                items.push(item(t("用系统应用打开"), Cmd::OpenFile(id.clone())));
                 items.push(item(reveal_label(), Cmd::RevealFile(id.clone())));
-                items.push(item("复制文件名", Cmd::CopyText(file.title.clone())));
-                if file.kind == "fulltext" { items.push(item("重新读取文字", Cmd::RereadFile(id.clone()))) }
+                items.push(item(t("复制文件名"), Cmd::CopyText(file.title.clone())));
+                if file.kind == "fulltext" { items.push(item(t("重新读取文字"), Cmd::RereadFile(id.clone()))) }
                 breaks.push(items.len());
-                items.push(item("移除附件", Cmd::RemoveFile(id.clone())));
+                items.push(item(t("移除附件"), Cmd::RemoveFile(id.clone())));
             }
             MenuKind::Tag(tag) => {
                 let on = lib.page == Page::Papers && lib.filters.tag == *tag;
-                items.push(item(if on { "不再只看这个标签" } else { "只看这个标签" }, Cmd::SetFilter(crate::app::FilterKey::Tag, if on { String::new() } else { tag.clone() })));
-                items.push(item("重命名…", Cmd::RenameTag(tag.clone())));
-                items.push(item("复制标签名", Cmd::CopyText(tag.clone())));
+                items.push(item(if on { t("不再只看这个标签") } else { t("只看这个标签") }, Cmd::SetFilter(crate::app::FilterKey::Tag, if on { String::new() } else { tag.clone() })));
+                items.push(item(t("重命名…"), Cmd::RenameTag(tag.clone())));
+                items.push(item(t("复制标签名"), Cmd::CopyText(tag.clone())));
                 breaks.push(items.len());
-                items.push(item("去掉这个标签…", Cmd::AskRemoveTag(tag.clone())));
+                items.push(item(t("去掉这个标签…"), Cmd::AskRemoveTag(tag.clone())));
             }
             MenuKind::Conversation(paper, id) => {
-                items.push(item("接着问下去", Cmd::OpenChat(*paper, id.clone())));
-                items.push(item("删除这次对话…", Cmd::AskRemoveChat(*paper, id.clone())));
+                items.push(item(t("接着问下去"), Cmd::OpenChat(*paper, id.clone())));
+                items.push(item(t("删除这次对话…"), Cmd::AskRemoveChat(*paper, id.clone())));
             }
             MenuKind::Text(text) => {
-                if self.picked.as_ref().is_some_and(|picked| picked.text.as_ref() == text.as_str() && !picked.chosen().is_empty()) { items.push(MenuItem { label: "复制".into(), checked: false, note: Some(crate::shortcuts::pretty("secondary-c").into()), cmd: Cmd::CopySelected }) }
-                items.push(item("复制全部", Cmd::CopyText(text.clone())));
+                if self.picked.as_ref().is_some_and(|picked| picked.text.as_ref() == text.as_str() && !picked.chosen().is_empty()) { items.push(MenuItem { label: t("复制").into(), checked: false, note: Some(crate::shortcuts::pretty("secondary-c").into()), cmd: Cmd::CopySelected }) }
+                items.push(item(t("复制全部"), Cmd::CopyText(text.clone())));
             }
             MenuKind::Answer(paper, text) => {
                 if lib.chat(*paper).picked_text().is_some_and(|picked| !picked.is_empty()) {
-                    items.push(MenuItem { label: "复制所选".into(), checked: false, note: Some(crate::shortcuts::pretty("secondary-c").into()), cmd: Cmd::CopyPicked(*paper) });
-                    items.push(item("引用到输入框", Cmd::QuotePicked(*paper)));
+                    items.push(MenuItem { label: t("复制所选").into(), checked: false, note: Some(crate::shortcuts::pretty("secondary-c").into()), cmd: Cmd::CopyPicked(*paper) });
+                    items.push(item(t("引用到输入框"), Cmd::QuotePicked(*paper)));
                     breaks.push(items.len());
                 }
-                items.push(item("复制整段回答", Cmd::CopyText(text.clone())));
+                items.push(item(t("复制整段回答"), Cmd::CopyText(text.clone())));
                 // `/review` starts a review's record by itself; a conversation that began otherwise can be made one here.
                 if !*paper && !lib.library_chat.id.is_empty() && lib.library_chat.review.is_none() && !lib.library_chat.busy {
                     breaks.push(items.len());
-                    items.push(item("把这次对话作为综述来写", Cmd::StartReview));
+                    items.push(item(t("把这次对话作为综述来写"), Cmd::StartReview));
                 }
             }
             _ => {}
@@ -338,5 +341,5 @@ impl Workspace {
 }
 
 fn reveal_label() -> &'static str {
-    if cfg!(target_os = "macos") { "在访达中显示" } else { "在文件夹中显示" }
+    if cfg!(target_os = "macos") { t("在访达中显示") } else { t("在文件夹中显示") }
 }

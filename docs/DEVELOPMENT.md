@@ -30,7 +30,17 @@ WISP_PAPER_HOME=/tmp/wisp-demo cargo run
 | `WISP_PAPER_DEV` | 仅调试构建：让窗口启动后直接进入某个状态，如 `open:0,select:0,tab:pdf`、`settings:ai`、`theme:dark`（步骤见 `src/app.rs` 末尾的 `dev_start`） |
 | `WISP_PAPER_UPDATE_URL` | 把检查更新指向别的地址（测试用） |
 
+## 界面布局检查
+
+修改文案或布局后，分别用中文和英文检查 900×560 与 1360×860 窗口；详情面板打开时也要检查主区域。长说明应换行，操作栏允许换行，较长页面和弹窗应能滚动到所有控件。文献标题、文件名等列表摘要可以省略，但按钮不能越界或遮住相邻内容。写作区不足 680 像素时，编辑器和候选句上下排列。
+
+覆盖首页、文献列表与详情、库内及单篇提问、历史与综述记录、检索与建库向导、三种筛选视图、写作及历史版本、图片库、全部设置页，以及新建/编辑文献库、添加/编辑文献、自定义词条、检索式、Zotero、导入进度、证据和确认弹窗。PDF 另检查长文件名、缩放菜单、截图收藏、图片编辑和悬浮提问。
+
+`WISP_PAPER_DEV` 可用 `size:900;560` 调整窗口，`language:en` 切换语言，`ui:clear` 关闭弹窗与设置；`ui:new-library|edit-library|add|manual|edit-paper|fields|new-search|zotero|delete-paper|guide|guide-search` 打开对应界面（每次选一个动作）。同一时刻有多个依赖步骤时，用 `do:ui:clear|page:papers|select:0|tab:info` 顺序执行，再用 `2@shot:/tmp/layout.png` 保存离屏渲染供检查。始终使用单独的 `WISP_PAPER_HOME`，模型交互使用本地 mock。
+
 ## 代码结构
+
+界面支持 `zh` / `en`，在「设置 › 通用」即时切换；`settings.json` 的 `language` 保存选择，旧配置及未知语言默认中文。静态文案使用 `src/i18n.rs` 的 `t`，英文维护在 `locales/en.json`；带变量的文案使用 `tf!("中文格式", "English format", ...)`，两个格式都由 Rust 检查。共享状态表在显示处翻译，输入框在绘制时翻译占位文字。文献内容、笔记、稿件和模型提示不随界面语言改写。调试脚本支持 `language:en` / `language:zh`。
 
 仓库是一个 Cargo workspace，分四个 crate：core 不依赖其他三个，net 只依赖 core，应用和命令行依赖这两个。
 

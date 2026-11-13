@@ -5,6 +5,7 @@
 //! The layout follows quiet-md's settings (MIT): grouped rows in rounded
 //! cards, the title on the left and the control on the right.
 
+use crate::i18n::t;
 use crate::app::{Cmd, MenuKind, Workspace, default_root};
 use crate::input::{InputEvent, TextInput};
 use crate::shortcuts::{self, GROUPS, SHORTCUTS};
@@ -16,7 +17,7 @@ use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use wisp_core::ai::{self, Profile, Protocol};
 use wisp_core::libraries;
-use wisp_core::settings::Task;
+use wisp_core::settings::{Language, Task};
 use wisp_core::update::{self, Release};
 
 const SIDEBAR_W: f32 = 224.;
@@ -40,13 +41,13 @@ impl SettingsPage {
 
     fn title(self) -> &'static str {
         match self {
-            SettingsPage::General => "通用",
-            SettingsPage::Appearance => "外观",
-            SettingsPage::Shortcuts => "快捷键",
+            SettingsPage::General => t("通用"),
+            SettingsPage::Appearance => t("外观"),
+            SettingsPage::Shortcuts => t("快捷键"),
             SettingsPage::Ai => "AI",
-            SettingsPage::Commands => "命令",
-            SettingsPage::Network => "网络",
-            SettingsPage::About => "关于",
+            SettingsPage::Commands => t("命令"),
+            SettingsPage::Network => t("网络"),
+            SettingsPage::About => t("关于"),
         }
     }
 
@@ -184,6 +185,7 @@ fn group(title: Option<&'static str>, rows: Vec<AnyElement>) -> Div {
 fn row(title: impl Into<SharedString>, detail: Option<SharedString>, control: impl IntoElement) -> Div {
     div()
         .flex()
+        .flex_wrap()
         .items_center()
         .justify_between()
         .gap(px(24.))
@@ -191,8 +193,8 @@ fn row(title: impl Into<SharedString>, detail: Option<SharedString>, control: im
         .min_h(px(48.))
         .px(px(16.))
         .py(px(10.))
-        .child(div().flex().flex_col().flex_1().min_w_0().gap(px(2.)).child(div().child(title.into())).children(detail.map(|d| div().text_size(px(12.)).line_height(px(17.)).text_color(Theme::text_tertiary()).child(d))))
-        .child(div().flex().flex_none().items_center().gap(px(8.)).child(control))
+        .child(div().flex().flex_col().flex_1().min_w(px(120.)).gap(px(2.)).child(div().child(title.into())).children(detail.map(|d| div().text_size(px(12.)).line_height(px(17.)).text_color(Theme::text_tertiary()).child(d))))
+        .child(div().flex().flex_none().max_w_full().items_center().gap(px(8.)).child(control))
 }
 
 /// The small print under a group.
@@ -206,13 +208,13 @@ fn switch(id: &'static str, on: bool) -> Stateful<Div> {
 
 /// A choice among a few: a groove with the chosen one raised.
 pub(crate) fn segmented(id: &'static str, choices: Vec<(&'static str, Cmd)>, chosen: usize, this: &Workspace, cx: &mut Context<Workspace>) -> Div {
-    div().flex().flex_none().gap(px(2.)).h(px(28.)).p(px(2.)).rounded(px(9.)).bg(Theme::groove()).children(choices.into_iter().enumerate().map(|(i, (label, cmd))| {
+    div().flex().flex_none().flex_wrap().max_w_full().gap(px(2.)).min_h(px(28.)).p(px(2.)).rounded(px(9.)).bg(Theme::groove()).children(choices.into_iter().enumerate().map(|(i, (label, cmd))| {
         div()
             .id((id, i))
             .flex()
             .items_center()
             .justify_center()
-            .h_full()
+            .h(px(24.))
             .px(px(12.))
             .rounded(px(7.))
             .cursor_pointer()
@@ -234,7 +236,7 @@ fn link_button(id: impl Into<ElementId>, label: &'static str) -> Stateful<Div> {
 
 /// A shortcut's key; `recording` shows it waiting for the new one.
 fn keycap(id: impl Into<ElementId>, key: &str, recording: bool) -> Stateful<Div> {
-    let text = if recording { "按下新的快捷键…".to_string() } else if key.is_empty() { "未设置".to_string() } else { shortcuts::pretty(key) };
+    let text = if recording { t("按下新的快捷键…").to_string() } else if key.is_empty() { t("未设置").to_string() } else { shortcuts::pretty(key) };
     div()
         .id(id)
         .flex()
@@ -324,7 +326,7 @@ impl Workspace {
     // ---- 通用
 
     pub fn pick_data_dir(&mut self, cx: &mut Context<Self>) {
-        let picked = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some("选择".into()), extensions: None });
+        let picked = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some(t("选择").into()), extensions: None });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = picked.await && let Some(dir) = paths.into_iter().next() {
                 this.update(cx, |this, cx| this.set_data_dir(Some(dir), cx)).ok();
@@ -340,7 +342,7 @@ impl Workspace {
         let root = dir.unwrap_or_else(|| default.clone());
         if root == self.root { return }
         if let Err(err) = std::fs::create_dir_all(&root) {
-            return self.fail(format!("无法使用这个目录：{err}"), cx);
+            return self.fail(tf!("无法使用这个目录：{err}", "Cannot use this folder: {err}"), cx);
         }
         // The default folder is stored as "unset", so it follows the user's Documents folder.
         self.settings.data_dir = if root == default { String::new() } else { root.to_string_lossy().to_string() };
@@ -350,7 +352,7 @@ impl Workspace {
         theme::set_accent("blue");
         self.libraries = libraries::list(&self.root);
         self.save_settings(cx);
-        self.say(format!("数据目录已改为 {}", self.root.display()), cx);
+        self.say(tf!("数据目录已改为 {}", "Data folder changed to {}", self.root.display()), cx);
     }
 
     // ---- 更新
@@ -387,7 +389,7 @@ impl Workspace {
                 match found {
                     Ok(Some(release)) if update::newer(&release.version, env!("CARGO_PKG_VERSION")) => {
                         if !manual && this.update_told.as_ref() != Some(&release.version) {
-                            this.say(format!("Wisp Paper {} 已发布，可在「设置 › 关于」前往下载。", release.version), cx);
+                            this.say(tf!("Wisp Paper {} 已发布，可在「设置 › 关于」前往下载。", "Wisp Paper {} is available. Download it from Settings › About.", release.version), cx);
                         }
                         this.update_told = Some(release.version.clone());
                         this.update = UpdateState::Available(release);
@@ -406,14 +408,14 @@ impl Workspace {
 
     /// Where the check stands and the one next step.
     fn update_row(&self, cx: &mut Context<Self>) -> AnyElement {
-        let current = format!("当前版本 {}", env!("CARGO_PKG_VERSION"));
-        let check = |this: &Self, cx: &mut Context<Self>| Some(button("update-check", "检查更新").on_click(this.on(Cmd::CheckUpdate, cx)));
+        let current = tf!("当前版本 {}", "Current version {}", env!("CARGO_PKG_VERSION"));
+        let check = |this: &Self, cx: &mut Context<Self>| Some(button("update-check", t("检查更新")).on_click(this.on(Cmd::CheckUpdate, cx)));
         let (title, detail, control): (String, Option<String>, Option<Stateful<Div>>) = match &self.update {
-            UpdateState::Idle => ("软件更新".into(), Some(current), check(self, cx)),
-            UpdateState::Checking => ("正在检查更新…".into(), Some(current), None),
-            UpdateState::Current => ("已是最新版本".into(), Some(current), check(self, cx)),
-            UpdateState::Available(release) => (format!("新版本 {} 可用", release.version), Some(format!("{current}。在发布页下载新版本后覆盖安装，文献库和设置不受影响。")), Some(button("update-open", "前往下载").on_click(self.on(Cmd::OpenUrl(release.url.clone()), cx)))),
-            UpdateState::Failed(err) => ("检查更新失败".into(), Some(err.clone()), check(self, cx)),
+            UpdateState::Idle => (t("软件更新").into(), Some(current), check(self, cx)),
+            UpdateState::Checking => (t("正在检查更新…").into(), Some(current), None),
+            UpdateState::Current => (t("已是最新版本").into(), Some(current), check(self, cx)),
+            UpdateState::Available(release) => (tf!("新版本 {} 可用", "Version {} available", release.version), Some(tf!("{current}。在发布页下载新版本后覆盖安装，文献库和设置不受影响。", "{current}. Download and install the new version from the releases page. Libraries and settings are kept.")), Some(button("update-open", t("前往下载")).on_click(self.on(Cmd::OpenUrl(release.url.clone()), cx)))),
+            UpdateState::Failed(err) => (t("检查更新失败").into(), Some(err.clone()), check(self, cx)),
         };
         row(title, detail.map(Into::into), div().children(control)).into_any_element()
     }
@@ -549,7 +551,7 @@ impl Workspace {
     pub fn add_profile(&mut self, cx: &mut Context<Self>) {
         // The built-in default becomes a saved one first, so that it stays beside the new one.
         if self.settings.profiles.is_empty() { self.settings.add_profile(Profile::default()); }
-        let name = format!("模型 {}", self.settings.profiles.len() + 1);
+        let name = tf!("模型 {}", "Model {}", self.settings.profiles.len() + 1);
         let index = self.settings.add_profile(Profile { name, ..Default::default() });
         self.save_settings(cx);
         self.show_profile(index, cx);
@@ -679,10 +681,10 @@ impl Workspace {
             .pt(px(if ui::custom_titlebar() { 4. } else { 10. }))
             .gap(px(2.))
             .child(ui::title_strip())
-            .child(div().px(px(8.)).pt(px(6.)).pb(px(8.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::text_secondary()).child("设置"))
+            .child(div().px(px(8.)).pt(px(6.)).pb(px(8.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::text_secondary()).child(t("设置")))
             .children(pages)
             .child(div().flex_1())
-            .child(nav("settings-back", "arrow-left", "返回", false, Cmd::CloseSettings, self, cx));
+            .child(nav("settings-back", "arrow-left", t("返回"), false, Cmd::CloseSettings, self, cx));
 
         let body = match page {
             SettingsPage::General => self.general_page(cx),
@@ -699,7 +701,7 @@ impl Workspace {
             .items_center()
             .gap(px(16.))
             .child(div().flex_1().min_w_0().px(px(4.)).text_size(px(22.)).line_height(px(28.)).font_weight(FontWeight::SEMIBOLD).child(page.title()))
-            .when(changed, |d| d.child(link_button("shortcuts-reset", "全部恢复默认").on_click(self.on(Cmd::ResetShortcuts, cx))));
+            .when(changed, |d| d.child(link_button("shortcuts-reset", t("全部恢复默认")).on_click(self.on(Cmd::ResetShortcuts, cx))));
         let content = div()
             .flex()
             .flex_col()
@@ -724,27 +726,28 @@ impl Workspace {
 
     fn general_page(&self, cx: &mut Context<Self>) -> AnyElement {
         let custom = !self.settings.data_dir.trim().is_empty();
-        let reveal = if cfg!(target_os = "macos") { "在访达中显示" } else if cfg!(target_os = "windows") { "在资源管理器中显示" } else { "在文件管理器中显示" };
+        let reveal = if cfg!(target_os = "macos") { t("在访达中显示") } else if cfg!(target_os = "windows") { t("在资源管理器中显示") } else { t("在文件管理器中显示") };
         let folder = div()
             .flex()
             .items_center()
             .gap(px(8.))
-            .when(custom, |d| d.child(link_button("data-reset", "恢复默认").on_click(self.on(Cmd::ResetDataDir, cx))))
+            .when(custom, |d| d.child(link_button("data-reset", t("恢复默认")).on_click(self.on(Cmd::ResetDataDir, cx))))
             .child(button("data-reveal", reveal).on_click(self.on(Cmd::RevealDataDir, cx)))
-            .child(button("data-pick", "更改…").on_click(self.on(Cmd::PickDataDir, cx)));
+            .child(button("data-pick", t("更改…")).on_click(self.on(Cmd::PickDataDir, cx)));
         div()
             .flex()
             .flex_col()
             .w_full()
             .gap(px(24.))
+            .child(group(None, vec![row(t("界面语言"), Some(t("立即生效，自动保存。").into()), segmented("language", vec![("中文", Cmd::SetLanguage(Language::Zh)), ("English", Cmd::SetLanguage(Language::En))], usize::from(self.settings.language == Language::En), self, cx)).into_any_element()]))
             .child(
-                group(Some("数据"), vec![row("数据目录", Some(self.root.display().to_string().into()), folder).into_any_element()])
-                    .child(note("所有文献库都在这个文件夹下，每个文献库是其中的一个子文件夹。改到别的目录后，首页显示那个目录里的文献库；原目录里的文献库不会被移动。")),
+                group(Some(t("数据")), vec![row(t("数据目录"), Some(self.root.display().to_string().into()), folder).into_any_element()])
+                    .child(note(t("所有文献库都在这个文件夹下，每个文献库是其中的一个子文件夹。改到别的目录后，首页显示那个目录里的文献库；原目录里的文献库不会被移动。"))),
             )
             .child(group(
-                Some("更新"),
+                Some(t("更新")),
                 vec![
-                    row("自动检查更新", Some("只读取一份版本信息，不发送任何数据；新版本由你决定何时下载安装。".into()), switch("auto-update", self.settings.auto_update).on_click(self.on(Cmd::ToggleAutoUpdate, cx))).into_any_element(),
+                    row(t("自动检查更新"), Some(t("只读取一份版本信息，不发送任何数据；新版本由你决定何时下载安装。").into()), switch("auto-update", self.settings.auto_update).on_click(self.on(Cmd::ToggleAutoUpdate, cx))).into_any_element(),
                     self.update_row(cx),
                 ],
             ))
@@ -763,11 +766,11 @@ impl Workspace {
         group(
             None,
             vec![
-                row("主题", Some("跟随系统时，随系统的浅色 / 深色模式切换。".into()), segmented("appearance", vec![("跟随系统", set("")), ("浅色", set("light")), ("深色", set("dark"))], mode, self, cx)).into_any_element(),
-                row("文献列表", Some("紧凑的行更矮，一屏能看到更多文献。".into()), segmented("density", vec![("标准", density("")), ("紧凑", density("compact"))], compact, self, cx)).into_any_element(),
+                row(crate::i18n::tc("appearance.theme", "主题"), Some(t("跟随系统时，随系统的浅色 / 深色模式切换。").into()), segmented("appearance", vec![(t("跟随系统"), set("")), (t("浅色"), set("light")), (t("深色"), set("dark"))], mode, self, cx)).into_any_element(),
+                row(t("文献列表"), Some(t("紧凑的行更矮，一屏能看到更多文献。").into()), segmented("density", vec![(t("标准"), density("")), (t("紧凑"), density("compact"))], compact, self, cx)).into_any_element(),
             ],
         )
-        .child(note("标识色属于文献库：在文献库的「编辑名称与主题」里选择，打开文献库后界面随之变色。"))
+        .child(note(t("标识色属于文献库：在文献库的「编辑名称与主题」里选择，打开文献库后界面随之变色。")))
         .into_any_element()
     }
 
@@ -786,9 +789,9 @@ impl Workspace {
                 .gap(px(8.))
                 .w_full()
                 .min_h(px(28.))
-                .child(div().flex_1().min_w_0().child(shortcut.label))
-                .when(custom.contains_key(id) && !recording, |d| d.child(link_button(SharedString::from(format!("reset-{id}")), "恢复默认").on_click(self.on(Cmd::ResetShortcut(id.into()), cx))))
-                .when(!key.is_empty() && !recording, |d| d.child(link_button(SharedString::from(format!("clear-{id}")), "移除").invisible().group_hover("shortcut-row", |s| s.visible()).on_click(self.on(Cmd::ClearShortcut(id.into()), cx))))
+                .child(div().flex_1().min_w_0().child(t(shortcut.label)))
+                .when(custom.contains_key(id) && !recording, |d| d.child(link_button(SharedString::from(format!("reset-{id}")), t("恢复默认")).on_click(self.on(Cmd::ResetShortcut(id.into()), cx))))
+                .when(!key.is_empty() && !recording, |d| d.child(link_button(SharedString::from(format!("clear-{id}")), t("移除")).invisible().group_hover("shortcut-row", |s| s.visible()).on_click(self.on(Cmd::ClearShortcut(id.into()), cx))))
                 .child(keycap(SharedString::from(format!("key-{id}")), &key, recording).on_click(self.on(Cmd::RecordShortcut(id.into()), cx)));
             groups[shortcut.group].push(
                 div()
@@ -800,23 +803,23 @@ impl Workspace {
                     .px(px(16.))
                     .py(px(8.))
                     .child(line)
-                    .when(recording, |d| d.child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child("按下新的组合键即可保存 · Esc 取消")))
+                    .when(recording, |d| d.child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(t("按下新的组合键即可保存 · Esc 取消"))))
                     .children(error.map(|why| div().text_size(px(12.)).line_height(px(17.)).text_color(Theme::danger()).child(why)))
                     .into_any_element(),
             );
         }
         // Esc is not for sale: every dialog and menu relies on it.
-        groups[0].push(div().flex().items_center().w_full().px(px(16.)).py(px(8.)).min_h(px(44.)).child(div().flex_1().min_w_0().child("关闭对话框和菜单，返回上一层")).child(div().min_w(px(148.)).text_size(px(12.)).text_color(Theme::text_tertiary()).flex().justify_center().child("Esc")).into_any_element());
+        groups[0].push(div().flex().items_center().w_full().px(px(16.)).py(px(8.)).min_h(px(44.)).child(div().flex_1().min_w_0().child(t("关闭对话框和菜单，返回上一层"))).child(div().min_w(px(148.)).text_size(px(12.)).text_color(Theme::text_tertiary()).flex().justify_center().child("Esc")).into_any_element());
         div()
             .flex()
             .flex_col()
             .w_full()
             .gap(px(24.))
-            .children(GROUPS.iter().zip(groups).map(|(title, rows)| group(Some(*title), rows)))
-            .child(note("点一个快捷键，再按下新的组合键。文本框里的编辑按键（复制、粘贴、全选等）是固定的。"))
+            .children(GROUPS.iter().zip(groups).map(|(title, rows)| group(Some(t(title)), rows)))
+            .child(note(t("点一个快捷键，再按下新的组合键。文本框里的编辑按键（复制、粘贴、全选等）是固定的。")))
             // The keys of 筛选 are bare letters, and fixed: shown so that they can be found.
-            .child(group(Some("筛选"), shortcuts::SCREEN_KEYS.iter().map(|(key, what)| div().flex().items_center().w_full().px(px(16.)).py(px(8.)).min_h(px(44.)).child(div().flex_1().min_w_0().child(*what)).child(div().min_w(px(148.)).text_size(px(12.)).text_color(Theme::text_tertiary()).flex().justify_center().child(*key)).into_any_element()).collect()))
-            .child(note("筛选页里的按键是固定的：在批量的队列里对点开的那一篇、在逐篇里对当前这一篇、在确认建议里对光标所在的一行生效。正在输入文字时它们不起作用。"))
+            .child(group(Some(t("筛选")), shortcuts::SCREEN_KEYS.iter().map(|(key, what)| div().flex().items_center().w_full().px(px(16.)).py(px(8.)).min_h(px(44.)).child(div().flex_1().min_w_0().child(t(what))).child(div().min_w(px(148.)).text_size(px(12.)).text_color(Theme::text_tertiary()).flex().justify_center().child(*key)).into_any_element()).collect()))
+            .child(note(t("筛选页里的按键是固定的：在批量的队列里对点开的那一篇、在逐篇里对当前这一篇、在确认建议里对光标所在的一行生效。正在输入文字时它们不起作用。")))
             .into_any_element()
     }
 
@@ -830,40 +833,40 @@ impl Workspace {
         let editing = view.editing.min(profiles.len() - 1);
         let protocol_name = |protocol: Protocol| match protocol {
             Protocol::Anthropic => "Claude API",
-            Protocol::OpenAI => "OpenAI 兼容",
+            Protocol::OpenAI => t("OpenAI 兼容"),
             Protocol::Responses => "OpenAI Responses",
         };
         let warn = theme::status_colors("uncertain");
 
         // The fields of the model that is open, drawn under its row.
         let (variable, privacy) = match view.protocol {
-            Protocol::Anthropic => ("ANTHROPIC_API_KEY", "用到这个模型时，问题和相关文献的记录、笔记、全文页面（筛选时是待判断的文献，翻译时是题目和摘要）会发送给这个服务。API Key 以明文保存在本机的 settings.json 里。"),
-            Protocol::Responses => ("OPENAI_API_KEY", "OpenAI 的 Responses 接口（/responses），地址写到 /v1。对话不会保存在服务端：每次请求带上完整的对话，模型的推理内容以加密形式随之传回。用到这个模型时，问题和相关文献的内容会发送给这个服务。API Key 以明文保存在本机的 settings.json 里。"),
-            Protocol::OpenAI => ("OPENAI_API_KEY", "适用于任何兼容 chat/completions 的服务，地址写到 /v1。用到这个模型时，问题和相关文献的内容会发送给这个服务。API Key 以明文保存在本机的 settings.json 里。"),
+            Protocol::Anthropic => ("ANTHROPIC_API_KEY", t("用到这个模型时，问题和相关文献的记录、笔记、全文页面（筛选时是待判断的文献，翻译时是题目和摘要）会发送给这个服务。API Key 以明文保存在本机的 settings.json 里。")),
+            Protocol::Responses => ("OPENAI_API_KEY", t("OpenAI 的 Responses 接口（/responses），地址写到 /v1。对话不会保存在服务端：每次请求带上完整的对话，模型的推理内容以加密形式随之传回。用到这个模型时，问题和相关文献的内容会发送给这个服务。API Key 以明文保存在本机的 settings.json 里。")),
+            Protocol::OpenAI => ("OPENAI_API_KEY", t("适用于任何兼容 chat/completions 的服务，地址写到 /v1。用到这个模型时，问题和相关文献的内容会发送给这个服务。API Key 以明文保存在本机的 settings.json 里。")),
         };
         let thinking = match view.protocol {
-            Protocol::Anthropic => "思考：「默认」不发送思考参数，由模型自己决定；其余各档按 effort 发送。「关闭」让模型不思考，适合翻译这样的任务；Claude Opus 5.5 和 Fable 不能关闭思考，对它们改用最低一档。",
-            Protocol::OpenAI => "思考：「默认」不发送思考参数。各档按 reasoning_effort 发送，「极高」「最高」按「高」。「关闭」因服务而异：OpenAI 是 reasoning_effort: none，百炼和硅基流动是 enable_thinking: false，DeepSeek、火山方舟、智谱、Kimi 等是 thinking: disabled。模型不认这个参数时服务会报错，改回「默认」即可。",
-            Protocol::Responses => "思考：「默认」不发送推理参数。各档按 reasoning.effort 发送，「极高」「最高」按「高」，「关闭」是 none。模型不认这个参数时服务会报错，改回「默认」即可。",
+            Protocol::Anthropic => t("思考：「默认」不发送思考参数，由模型自己决定；其余各档按 effort 发送。「关闭」让模型不思考，适合翻译这样的任务；Claude Opus 5.5 和 Fable 不能关闭思考，对它们改用最低一档。"),
+            Protocol::OpenAI => t("思考：「默认」不发送思考参数。各档按 reasoning_effort 发送，「极高」「最高」按「高」。「关闭」因服务而异：OpenAI 是 reasoning_effort: none，百炼和硅基流动是 enable_thinking: false，DeepSeek、火山方舟、智谱、Kimi 等是 thinking: disabled。模型不认这个参数时服务会报错，改回「默认」即可。"),
+            Protocol::Responses => t("思考：「默认」不发送推理参数。各档按 reasoning.effort 发送，「极高」「最高」按「高」，「关闭」是 none。模型不认这个参数时服务会报错，改回「默认」即可。"),
         };
         let fields = &view.fields;
         let field = |input: &Entity<TextInput>| div().w(px(INPUT_W)).child(ui::field(input, window, cx));
         let (name, base_url, model, api_key, profile_proxy) = (field(&fields.name), field(&fields.base_url), field(&fields.model), field(&fields.api_key), field(&fields.proxy));
         // A bad address is said where it is typed; the request would only fail later.
-        let proxy_detail = wisp_core::settings::proxy_problem(fields.proxy.read(cx).text(), true).unwrap_or_else(|| "只用于这个模型服务。留空则使用「网络」页的全局代理；填 direct 表示不走代理。".to_string());
-        let efforts: Vec<(&'static str, Cmd)> = ai::EFFORTS.iter().map(|(key, name)| (*name, Cmd::SetEffort(key.to_string()))).collect();
+        let proxy_detail = wisp_core::settings::proxy_problem(fields.proxy.read(cx).text(), true).unwrap_or_else(|| t("只用于这个模型服务。留空则使用「网络」页的全局代理；填 direct 表示不走代理。").to_string());
+        let efforts: Vec<(&'static str, Cmd)> = ai::EFFORTS.iter().map(|(key, name)| (t(name), Cmd::SetEffort(key.to_string()))).collect();
         let effort = ai::EFFORTS.iter().position(|(key, _)| *key == view.effort).unwrap_or(0);
         let mut service = vec![
-            row("名称", None, name),
-            row("接口", None, segmented("protocol", vec![("Claude API", Cmd::PickProtocol(Protocol::Anthropic)), ("OpenAI 兼容", Cmd::PickProtocol(Protocol::OpenAI)), ("OpenAI Responses", Cmd::PickProtocol(Protocol::Responses))], match view.protocol { Protocol::Anthropic => 0, Protocol::OpenAI => 1, Protocol::Responses => 2 }, self, cx)),
-            row("服务地址", None, base_url),
-            row("模型", None, model),
-            row("API Key", Some(format!("留空则读取环境变量 {variable}。").into()), api_key),
-            row("思考", None, segmented("effort", efforts, effort, self, cx)),
-            row("代理", Some(proxy_detail.into()), profile_proxy),
+            row(t("名称"), None, name),
+            row(t("接口"), None, segmented("protocol", vec![("Claude API", Cmd::PickProtocol(Protocol::Anthropic)), (t("OpenAI 兼容"), Cmd::PickProtocol(Protocol::OpenAI)), ("OpenAI Responses", Cmd::PickProtocol(Protocol::Responses))], match view.protocol { Protocol::Anthropic => 0, Protocol::OpenAI => 1, Protocol::Responses => 2 }, self, cx)),
+            row(t("服务地址"), None, base_url),
+            row(t("模型"), None, model),
+            row("API Key", Some(tf!("留空则读取环境变量 {variable}。", "Leave blank to use environment variable {variable}.").into()), api_key),
+            row(t("思考"), None, segmented("effort", efforts, effort, self, cx)),
+            row(t("代理"), Some(proxy_detail.into()), profile_proxy),
         ];
         if profiles.len() > 1 {
-            service.push(row("删除这个模型", Some("用到它的任务改用默认的模型。".into()), button("model-remove", "删除…").text_color(Theme::danger()).on_click(self.on(Cmd::AskRemoveProfile(editing), cx))));
+            service.push(row(t("删除这个模型"), Some(t("用到它的任务改用默认的模型。").into()), button("model-remove", t("删除…")).text_color(Theme::danger()).on_click(self.on(Cmd::AskRemoveProfile(editing), cx))));
         }
         let small = |text: &'static str| div().text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_tertiary()).child(text);
         let mut open = Some(div().flex().flex_col().w_full().bg(Theme::bg_sunken()).children(service.into_iter().map(|row| row.border_t_1().border_color(Theme::line()))).child(div().flex().flex_col().gap(px(6.)).px(px(16.)).py(px(12.)).border_t_1().border_color(Theme::line()).child(small(thinking)).child(small(privacy))));
@@ -875,8 +878,8 @@ impl Workspace {
             .map(|(i, profile)| {
                 let shown = i == editing && view.expanded;
                 let serves = Task::ALL.into_iter().filter(|task| settings.profile_for(*task).is_none_or(|used| used.id == profile.id));
-                let effort = ai::EFFORTS.iter().find(|(key, _)| *key == profile.effort).map_or("默认", |(_, name)| *name);
-                let about = format!("{} · {} · 思考：{effort}", if profile.model.trim().is_empty() { "未填模型" } else { profile.model.trim() }, protocol_name(profile.protocol));
+                let effort = ai::EFFORTS.iter().find(|(key, _)| *key == profile.effort).map_or(t("默认"), |(_, name)| t(name));
+                let about = tf!("{} · {} · 思考：{effort}", "{} · {} · Thinking: {effort}", if profile.model.trim().is_empty() { t("未填模型") } else { profile.model.trim() }, protocol_name(profile.protocol));
                 let head = div()
                     .id(("model", i))
                     .flex()
@@ -890,18 +893,19 @@ impl Workspace {
                     .hover(|s| s.bg(Theme::hover()))
                     .on_click(self.on(Cmd::SelectProfile(i), cx))
                     .child(div().flex().flex_col().flex_1().min_w_0().gap(px(2.)).child(div().truncate().font_weight(FontWeight::MEDIUM).child(profile.title())).child(div().truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(about)))
-                    .children(serves.map(|task| ui::chip(task.label(), Theme::accent(), Theme::accent_soft())))
-                    .children(profile.missing().map(|what| ui::chip(what, warn.0, warn.1)))
+                    .child(div().flex().flex_none().flex_wrap().justify_end().max_w(relative(0.6)).gap(px(4.))
+                        .children(serves.map(|task| ui::chip(t(task.label()), Theme::accent(), Theme::accent_soft())))
+                        .children(profile.missing().map(|what| ui::chip(t(what), warn.0, warn.1))))
                     .child(ui::icon(if shown { "chevron-up" } else { "chevron-down" }, 14., Theme::text_tertiary()));
                 div().flex().flex_col().w_full().child(head).children(open.take_if(|_| shown)).into_any_element()
             })
             .collect();
-        models.push(div().flex().items_center().w_full().px(px(16.)).py(px(10.)).child(button("model-add", "添加模型").on_click(self.on(Cmd::AddProfile, cx))).into_any_element());
+        models.push(div().flex().items_center().w_full().px(px(16.)).py(px(10.)).child(button("model-add", t("添加模型")).on_click(self.on(Cmd::AddProfile, cx))).into_any_element());
 
         // Which model does what.
         let pick = |n: usize, task: Task, this: &Self, cx: &mut Context<Self>| {
             let used = settings.profile_for_or_default(task).title();
-            let text = if task != Task::Chat && settings.tasks.get(task).is_empty() { format!("与提问相同（{used}）") } else { used };
+            let text = if task != Task::Chat && settings.tasks.get(task).is_empty() { tf!("与提问相同（{used}）", "Same as chat ({used})") } else { used };
             let shell = div().id(("task-model", n)).flex().flex_none().items_center().gap(px(6.)).h(px(28.)).max_w(px(300.)).px(px(10.)).rounded(px(7.)).child(div().truncate().child(text));
             // With only the built-in default there is nothing to choose from.
             if saved { shell.bg(Theme::hover()).hover(|s| s.bg(Theme::pressed())).cursor_pointer().child(ui::icon("chevron-down", 12., Theme::text_secondary())).on_click(this.on_menu(MenuKind::TaskModel(task), cx)) } else { shell.text_color(Theme::text_secondary()) }
@@ -909,11 +913,11 @@ impl Workspace {
         const WORKERS: [usize; 6] = [1, 2, 3, 4, 6, 8];
         let workers: Vec<(&'static str, Cmd)> = ["1", "2", "3", "4", "6", "8"].into_iter().zip(WORKERS).map(|(name, count)| (name, Cmd::SetScreenWorkers(count))).collect();
         let tasks = vec![
-            row(Task::Chat.label(), Some("向文献库或单篇文献提问，以及向导里编写检索式。".into()), pick(0, Task::Chat, self, cx)).into_any_element(),
-            row(Task::Screen.label(), Some("筛选页里替你逐篇阅读待判断文献的助手。文献多的时候，可以给它一个更快、更便宜的模型。".into()), pick(1, Task::Screen, self, cx)).into_any_element(),
-            row("同时阅读的篇数", Some("批量筛选时同时发出的请求数。服务限速时调小。".into()), segmented("workers", workers, WORKERS.iter().position(|count| *count == settings.screen_workers).unwrap_or(usize::MAX), self, cx)).into_any_element(),
-            row(Task::Translate.label(), Some("翻译题目和摘要。翻译用不着思考：可以给它一个把「思考」设为关闭的小模型。".into()), pick(2, Task::Translate, self, cx)).into_any_element(),
-            row(Task::Structure.label(), Some("写作页的准备工作：把全文按导言、方法、结果、讨论分开，以及读出扫描件页面上的文字（需要能看图的模型）。".into()), pick(3, Task::Structure, self, cx)).into_any_element(),
+            row(t(Task::Chat.label()), Some(t("向文献库或单篇文献提问，以及向导里编写检索式。").into()), pick(0, Task::Chat, self, cx)).into_any_element(),
+            row(t(Task::Screen.label()), Some(t("筛选页里替你逐篇阅读待判断文献的助手。文献多的时候，可以给它一个更快、更便宜的模型。").into()), pick(1, Task::Screen, self, cx)).into_any_element(),
+            row(t("同时阅读的篇数"), Some(t("批量筛选时同时发出的请求数。服务限速时调小。").into()), segmented("workers", workers, WORKERS.iter().position(|count| *count == settings.screen_workers).unwrap_or(usize::MAX), self, cx)).into_any_element(),
+            row(t(Task::Translate.label()), Some(t("翻译题目和摘要。翻译用不着思考：可以给它一个把「思考」设为关闭的小模型。").into()), pick(2, Task::Translate, self, cx)).into_any_element(),
+            row(t(Task::Structure.label()), Some(t("写作页的准备工作：把全文按导言、方法、结果、讨论分开，以及读出扫描件页面上的文字（需要能看图的模型）。").into()), pick(3, Task::Structure, self, cx)).into_any_element(),
         ];
         // The column's width in pixels, less the card's border and padding: a
         // wrapping text field needs to be told its width here, where every
@@ -925,16 +929,16 @@ impl Workspace {
             .gap(px(8.))
             .px(px(16.))
             .py(px(12.))
-            .child(div().flex().items_center().justify_between().w(px(wide)).min_h(px(26.)).child("翻译要求").when(!settings.translation_prompt.is_empty(), |d| d.child(link_button("translation-reset", "恢复默认").on_click(self.on(Cmd::ResetTranslationPrompt, cx)))))
+            .child(div().flex().items_center().justify_between().w(px(wide)).min_h(px(26.)).child(t("翻译要求")).when(!settings.translation_prompt.is_empty(), |d| d.child(link_button("translation-reset", t("恢复默认")).on_click(self.on(Cmd::ResetTranslationPrompt, cx)))))
             .child(div().w(px(wide)).child(ui::field(&view.translation_prompt, window, cx)));
         div()
             .flex()
             .flex_col()
             .w_full()
             .gap(px(24.))
-            .child(group(Some("模型"), models).child(note("可以放进多个模型，各做各的事：点一个模型展开它的设置，修改会自动保存。下面的「任务」决定谁做什么。")))
-            .child(group(Some("任务"), tasks).child(note("没有单独指定模型的任务，使用提问的模型。")))
-            .child(group(Some("翻译"), vec![translation.into_any_element()]).child(note("可以在这里指定别的目标语言、术语的译法或输出的格式。要求改了以后，同一段文字会按新的要求重新翻译；译过的文字保存在文献库里，不会再次请求。")))
+            .child(group(Some(t("模型")), models).child(note(t("可以放进多个模型，各做各的事：点一个模型展开它的设置，修改会自动保存。下面的「任务」决定谁做什么。"))))
+            .child(group(Some(t("任务")), tasks).child(note(t("没有单独指定模型的任务，使用提问的模型。"))))
+            .child(group(Some(t("翻译")), vec![translation.into_any_element()]).child(note(t("可以在这里指定别的目标语言、术语的译法或输出的格式。要求改了以后，同一段文字会按新的要求重新翻译；译过的文字保存在文献库里，不会再次请求。"))))
             .into_any_element()
     }
 
@@ -947,7 +951,7 @@ impl Workspace {
             let problem = name_problem(&fields.typed_name(cx), *index, commands);
             let wrong = problem.is_some();
             let field = |input: &Entity<TextInput>| div().w(px(INPUT_W)).child(ui::field(input, window, cx));
-            let name_detail = problem.map_or_else(|| format!("在提问框里输入 /{} 使用。", commands[*index].name), |why| format!("{why}现在仍是 /{}。", commands[*index].name));
+            let name_detail = problem.map_or_else(|| tf!("在提问框里输入 /{} 使用。", "Type /{} in the chat input to use it.", commands[*index].name), |why| tf!("{why}现在仍是 /{}。", "{why}The command is still /{}.", commands[*index].name));
             let name = div()
                 .flex()
                 .items_center()
@@ -957,7 +961,7 @@ impl Workspace {
                 .min_h(px(48.))
                 .px(px(16.))
                 .py(px(10.))
-                .child(div().flex().flex_col().flex_1().min_w_0().gap(px(2.)).child("名称").child(div().text_size(px(12.)).line_height(px(17.)).text_color(if wrong { Theme::danger() } else { Theme::text_tertiary() }).child(name_detail)))
+                .child(div().flex().flex_col().flex_1().min_w_0().gap(px(2.)).child(t("名称")).child(div().text_size(px(12.)).line_height(px(17.)).text_color(if wrong { Theme::danger() } else { Theme::text_tertiary() }).child(name_detail)))
                 .child(field(&fields.name));
             let template = div()
                 .flex()
@@ -965,10 +969,10 @@ impl Workspace {
                 .gap(px(8.))
                 .px(px(16.))
                 .py(px(12.))
-                .child(div().flex().flex_col().gap(px(2.)).w(px(wide)).child("模板").child(div().text_size(px(12.)).line_height(px(17.)).text_color(Theme::text_tertiary()).child("发给模型的就是这段话。写上 {} 的地方换成命令后面的内容，这时命令后面必须写内容；不写 {} 的模板可以单独使用，后面写了内容就接在末尾。")))
+                .child(div().flex().flex_col().gap(px(2.)).w(px(wide)).child(t("模板")).child(div().text_size(px(12.)).line_height(px(17.)).text_color(Theme::text_tertiary()).child(t("发给模型的就是这段话。写上 {} 的地方换成命令后面的内容，这时命令后面必须写内容；不写 {} 的模板可以单独使用，后面写了内容就接在末尾。"))))
                 .child(div().w(px(wide)).child(ui::field(&fields.template, window, cx)));
-            let about = row("说明", None, field(&fields.about));
-            let remove = row("删除这个命令", Some("用过它的对话保留着当时发出的内容，不受影响。".into()), button("command-remove", "删除…").text_color(Theme::danger()).on_click(self.on(Cmd::AskRemoveCommand(*index), cx)));
+            let about = row(t("说明"), None, field(&fields.about));
+            let remove = row(t("删除这个命令"), Some(t("用过它的对话保留着当时发出的内容，不受影响。").into()), button("command-remove", t("删除…")).text_color(Theme::danger()).on_click(self.on(Cmd::AskRemoveCommand(*index), cx)));
             (*index, div().flex().flex_col().w_full().bg(Theme::bg_sunken()).children([name, about, template, remove].into_iter().map(|row| row.border_t_1().border_color(Theme::line()))))
         });
         let mut own: Vec<AnyElement> = commands
@@ -976,7 +980,7 @@ impl Workspace {
             .enumerate()
             .map(|(i, command)| {
                 let shown = open.as_ref().is_some_and(|(index, _)| *index == i);
-                let about = if command.template.trim().is_empty() { "还没有写模板".to_string() } else if command.about.is_empty() { command.template.split_whitespace().collect::<Vec<_>>().join(" ") } else { command.about.clone() };
+                let about = if command.template.trim().is_empty() { t("还没有写模板").to_string() } else if command.about.is_empty() { command.template.split_whitespace().collect::<Vec<_>>().join(" ") } else { command.about.clone() };
                 let head = div()
                     .id(("command", i))
                     .flex()
@@ -995,15 +999,15 @@ impl Workspace {
                 div().flex().flex_col().w_full().child(head).children(open.take_if(|_| shown).map(|(_, fields)| fields)).into_any_element()
             })
             .collect();
-        own.push(div().flex().items_center().w_full().px(px(16.)).py(px(10.)).child(button("command-add", "添加命令").on_click(self.on(Cmd::AddCommand, cx))).into_any_element());
-        let builtin = ai::SLASH.iter().map(|command| row(format!("/{}", command.name), Some(command.about.into()), div().max_w(px(280.)).truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(command.hint)).into_any_element()).collect();
+        own.push(div().flex().items_center().w_full().px(px(16.)).py(px(10.)).child(button("command-add", t("添加命令")).on_click(self.on(Cmd::AddCommand, cx))).into_any_element());
+        let builtin = ai::SLASH.iter().map(|command| row(format!("/{}", command.name), Some(t(command.about).into()), div().max_w(px(280.)).truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(t(command.hint))).into_any_element()).collect();
         div()
             .flex()
             .flex_col()
             .w_full()
             .gap(px(24.))
-            .child(group(Some("我的命令"), own).child(note("把常用的提问存成一条命令：在提问框里输入 / 就能选到它，选中后可以接着写内容，按 Enter 才发送。命令只是一段提示：它不运行脚本，也不会让助手多出工具或绕过确认；材料范围、模型和引文核对都和平常提问一样。修改会自动保存在本机的 settings.json 里，保存时不请求模型。")))
-            .child(group(Some("内置命令"), builtin).child(note("内置命令不能修改，也不能被同名的命令替换。")))
+            .child(group(Some(t("我的命令")), own).child(note(t("把常用的提问存成一条命令：在提问框里输入 / 就能选到它，选中后可以接着写内容，按 Enter 才发送。命令只是一段提示：它不运行脚本，也不会让助手多出工具或绕过确认；材料范围、模型和引文核对都和平常提问一样。修改会自动保存在本机的 settings.json 里，保存时不请求模型。"))))
+            .child(group(Some(t("内置命令")), builtin).child(note(t("内置命令不能修改，也不能被同名的命令替换。"))))
             .into_any_element()
     }
 
@@ -1011,9 +1015,9 @@ impl Workspace {
         let Some(view) = &self.settings_view else { return div().into_any_element() };
         let problem = wisp_core::settings::proxy_problem(view.proxy.read(cx).text(), false);
         let (state, colors) = match (&problem, self.settings.proxy.trim().is_empty()) {
-            (Some(_), _) => ("地址有误，未启用", theme::status_colors("uncertain")),
-            (None, true) => ("未设置，跟随系统环境变量", theme::status_colors("pending")),
-            (None, false) => ("已启用", theme::status_colors("included")),
+            (Some(_), _) => (t("地址有误，未启用"), theme::status_colors("uncertain")),
+            (None, true) => (t("未设置，跟随系统环境变量"), theme::status_colors("pending")),
+            (None, false) => (t("已启用"), theme::status_colors("included")),
         };
         div()
             .flex()
@@ -1022,13 +1026,13 @@ impl Workspace {
             .gap(px(24.))
             .child(
                 group(
-                    Some("代理"),
+                    Some(t("代理")),
                     vec![
-                        row("全局代理", Some("文献检索、元数据查询、检查更新和模型请求都经过它。修改会自动保存，下一次请求起生效。".into()), ui::chip(state, colors.0, colors.1)).into_any_element(),
-                        row("代理地址", Some(problem.unwrap_or_else(|| "支持 http、https、socks4、socks4a、socks5、socks5h，例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080。".to_string()).into()), div().w(px(INPUT_W)).child(ui::field(&view.proxy, window, cx))).into_any_element(),
+                        row(t("全局代理"), Some(t("文献检索、元数据查询、检查更新和模型请求都经过它。修改会自动保存，下一次请求起生效。").into()), ui::chip(state, colors.0, colors.1)).into_any_element(),
+                        row(t("代理地址"), Some(problem.unwrap_or_else(|| t("支持 http、https、socks4、socks4a、socks5、socks5h，例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080。").to_string()).into()), div().w(px(INPUT_W)).child(ui::field(&view.proxy, window, cx))).into_any_element(),
                     ],
                 )
-                .child(note("留空时使用环境变量 ALL_PROXY、HTTPS_PROXY、HTTP_PROXY（NO_PROXY 同样有效）。模型服务可以在「AI」页单独指定代理，或者填 direct 不走代理。命令行 wisp 使用同一个设置。代理地址连同其中的用户名和密码以明文保存在本机的 settings.json 里。")),
+                .child(note(t("留空时使用环境变量 ALL_PROXY、HTTPS_PROXY、HTTP_PROXY（NO_PROXY 同样有效）。模型服务可以在「AI」页单独指定代理，或者填 direct 不走代理。命令行 wisp 使用同一个设置。代理地址连同其中的用户名和密码以明文保存在本机的 settings.json 里。"))),
             )
             .into_any_element()
     }
@@ -1049,15 +1053,15 @@ impl Workspace {
                     .pt(px(8.))
                     .child(img(about_icon()).size(px(88.)))
                     .child(div().pt(px(4.)).text_size(px(20.)).line_height(px(26.)).font_weight(FontWeight::SEMIBOLD).child("Wisp Paper"))
-                    .child(div().text_color(Theme::text_secondary()).child(format!("版本 {}", env!("CARGO_PKG_VERSION"))))
-                    .child(div().text_color(Theme::text_tertiary()).child("本地优先的文献库：收集文献、整理、预览 PDF、对文献库提问。")),
+                    .child(div().text_color(Theme::text_secondary()).child(tf!("版本 {}", "Version {}", env!("CARGO_PKG_VERSION"))))
+                    .child(div().text_color(Theme::text_tertiary()).child(t("本地优先的文献库：收集文献、整理、预览 PDF、对文献库提问。"))),
             )
             .child(group(None, vec![self.update_row(cx)]))
             .child(group(
                 None,
                 vec![
-                    row("项目主页", Some("github.com/xuzhougeng/WispPaper".into()), open("about-project", "打开", update::PROJECT_URL.to_string(), self, cx)).into_any_element(),
-                    row("开源许可", Some("Wisp Paper 以 MIT 协议发布；随附的第三方组件见 THIRD_PARTY.md。".into()), open("about-license", "查看", format!("{}/blob/main/THIRD_PARTY.md", update::PROJECT_URL), self, cx)).into_any_element(),
+                    row(t("项目主页"), Some("github.com/xuzhougeng/WispPaper".into()), open("about-project", t("打开"), update::PROJECT_URL.to_string(), self, cx)).into_any_element(),
+                    row(t("开源许可"), Some(t("Wisp Paper 以 MIT 协议发布；随附的第三方组件见 THIRD_PARTY.md。").into()), open("about-license", t("查看"), format!("{}/blob/main/THIRD_PARTY.md", update::PROJECT_URL), self, cx)).into_any_element(),
                 ],
             ))
             .into_any_element()

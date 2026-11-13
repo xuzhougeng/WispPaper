@@ -1,5 +1,6 @@
 //! Small shared UI pieces: icons, buttons, chips, field shells, popover and dialog shells.
 
+use crate::i18n::t;
 use crate::input::TextInput;
 use crate::theme::{self, Theme};
 use gpui::{prelude::FluentBuilder, *};
@@ -8,11 +9,11 @@ use std::time::Duration;
 /// The same colours and counts in the compact progress bar and its detail dialog.
 pub fn fetch_segments(run: &crate::app::FetchRun) -> [(usize, &'static str, Hsla); 5] {
     [
-        (run.count("saved"), "已保存", Theme::success()),
-        (run.count("not_found"), "未找到地址", Theme::warning()),
-        (run.count("failed"), "下载失败", Theme::danger()),
-        (run.working.len(), "正在查找", theme::accent_of("blue").strong()),
-        (run.remaining(), if run.stopped { "未处理" } else { "等待中" }, Theme::text_placeholder()),
+        (run.count("saved"), t("已保存"), Theme::success()),
+        (run.count("not_found"), t("未找到地址"), Theme::warning()),
+        (run.count("failed"), t("下载失败"), Theme::danger()),
+        (run.working.len(), t("正在查找"), theme::accent_of("blue").strong()),
+        (run.remaining(), if run.stopped { t("未处理") } else { t("等待中") }, Theme::text_placeholder()),
     ]
 }
 
@@ -48,12 +49,12 @@ pub fn zotero_segments(run: &crate::app::ZoteroRun) -> [ProgressSegment; 6] {
 
 fn import_progress(counts: [usize; 4], working: usize, waiting: usize) -> [ProgressSegment; 6] {
     [
-        (counts[0], "已导入", Theme::success()),
-        (counts[1], "待完善", Theme::warning()),
-        (counts[2], "已跳过", Theme::text_tertiary()),
-        (counts[3], "导入失败", Theme::danger()),
-        (working, "处理中", theme::accent_of("blue").strong()),
-        (waiting, "等待中", Theme::text_placeholder()),
+        (counts[0], t("已导入"), Theme::success()),
+        (counts[1], t("待完善"), Theme::warning()),
+        (counts[2], t("已跳过"), Theme::text_tertiary()),
+        (counts[3], t("导入失败"), Theme::danger()),
+        (working, t("处理中"), theme::accent_of("blue").strong()),
+        (waiting, t("等待中"), Theme::text_placeholder()),
     ]
 }
 
@@ -70,7 +71,7 @@ pub fn progress_entry(id: &'static str, label: &'static str, done: usize, total:
         .child(div().flex().items_center().gap(px(6.)).text_size(px(12.)).line_height(px(17.))
             .when(running, |d| d.child(spinner((id, 0_usize), 12., theme::accent_of("blue").strong())))
             .child(div().flex_1().min_w_0().truncate().text_color(Theme::text_secondary()).child(label))
-            .child(div().flex_none().text_color(Theme::text_tertiary()).child(if running && total == 0 { "准备中".into() } else { format!("{done}/{total}") }))
+            .child(div().flex_none().text_color(Theme::text_tertiary()).child(if running && total == 0 { t("准备中").into() } else { format!("{done}/{total}") }))
             .child(icon("chevron-right", 12., Theme::text_tertiary())))
         .child(progress_bar(total, segments))
 }
@@ -79,8 +80,8 @@ pub fn progress_overview(done: usize, total: usize, state: &'static str, running
     let color = if running { theme::accent_of("blue").strong() } else { Theme::text_secondary() };
     div().flex().flex_none().flex_col().gap(px(12.)).px(px(20.)).py(px(14.))
         .child(div().flex().items_center().gap(px(8.))
-            .child(div().text_size(px(20.)).font_weight(FontWeight::SEMIBOLD).child(if running && total == 0 { "正在准备…".into() } else { format!("{done} / {total}") }))
-            .when(total > 0, |d| d.child(div().text_color(Theme::text_tertiary()).child("项已处理")))
+            .child(div().text_size(px(20.)).font_weight(FontWeight::SEMIBOLD).child(if running && total == 0 { t("正在准备…").into() } else { format!("{done} / {total}") }))
+            .when(total > 0, |d| d.child(div().text_color(Theme::text_tertiary()).child(t("项已处理"))))
             .child(div().flex_1())
             .when(running, |d| d.child(spinner("progress-modal-working", 13., color)))
             .child(div().text_color(color).child(state)))
@@ -254,6 +255,7 @@ pub fn dialog(width: f32) -> Div {
         .flex()
         .flex_col()
         .w(px(width))
+        .max_w(relative(0.92))
         .max_h(relative(0.9))
         .rounded(px(14.))
         .bg(Theme::bg_body())
@@ -280,7 +282,9 @@ pub fn empty_state(icon_name: &str, title: &str, hint: &str) -> Div {
         .items_center()
         .justify_center()
         .gap(px(8.))
-        .p(px(32.))
+        .p(px(24.))
+        .min_w_0()
+        .max_w_full()
         .child(icon(icon_name, 30., Theme::text_placeholder()))
         .child(div().text_size(px(14.)).text_color(Theme::text_secondary()).child(title.to_string()))
         .child(div().max_w(px(360.)).text_size(px(12.)).text_color(Theme::text_tertiary()).child(hint.to_string()))

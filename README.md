@@ -32,7 +32,7 @@
 </p>
 
 > [!NOTE]
-> Wisp Paper 还在早期，变化很快。界面只有中文。第一次用，可以跟着[教程](docs/TUTORIAL.md)从零建一个文献库。遇到问题或有想法，欢迎[提 issue](https://github.com/xuzhougeng/WispPaper/issues)，更欢迎直接发 pull request。
+> Wisp Paper 还在早期，变化很快。支持中文和英文界面，在「设置 › 通用 › 界面语言」中切换（Settings › General › Interface language），立即生效并自动保存。第一次用，可以跟着[教程](docs/TUTORIAL.md)从零建一个文献库。遇到问题或有想法，欢迎[提 issue](https://github.com/xuzhougeng/WispPaper/issues)，更欢迎直接发 pull request。
 
 ## 为什么是 Wisp Paper
 
