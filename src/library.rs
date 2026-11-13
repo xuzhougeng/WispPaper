@@ -30,6 +30,33 @@ fn split_chat_width(own: f32, width: f32) -> f32 {
     wished.min(width - SPLIT_PDF_MIN).max(SPLIT_CHAT_MIN)
 }
 
+/// The list of papers beside a paper that is asked about: the width it comes with, and how narrow and how wide it is dragged.
+const ASK_LIST_W: f32 = 280.;
+const ASK_LIST_MIN: f32 = 200.;
+const ASK_LIST_MAX: f32 = 420.;
+
+/// How wide that list is in a window `viewport` wide, when the reader asked for `own` (0 or less: no wish).
+/// The conversation and the PDF keep `detail::SPLIT_MIN` between them; a window without room for the list has none.
+fn ask_list_width(own: f32, viewport: f32) -> f32 {
+    let room = viewport - crate::detail::SPLIT_MIN;
+    if room < ASK_LIST_MIN { return 0. }
+    (if own > 0. { own } else { ASK_LIST_W }).clamp(ASK_LIST_MIN, ASK_LIST_MAX).min(room)
+}
+
+fn view_label(view: View) -> &'static str {
+    VIEWS.iter().find(|(_, _, _, other)| *other == view).map_or("文献", |(_, _, label, _)| label)
+}
+
+/// The views of a library, as the sidebar lists them: element id, icon, name.
+const VIEWS: [(&str, &str, &str, View); 6] = [
+    ("view-all", "library", "全部文献", View::All),
+    ("view-recent", "plus", "最近添加", View::Recent),
+    ("view-unread", "eye", "未读", View::Unread),
+    ("view-starred", "star", "收藏", View::Starred),
+    ("view-pending", "list-todo", "待判断", View::Pending),
+    ("view-nopdf", "file-text", "缺 PDF", View::NoPdf),
+];
+
 /// A column of the paper table: fixed width, or the flexible title column.
 struct Column {
     label: String,
@@ -79,6 +106,34 @@ impl Workspace {
         cx.notify();
     }
 
+    /// A paper is asked about with its PDF wanted beside the conversation:
+    /// the window is laid out for that. The sidebar is away, the papers are
+    /// a narrow list at the left (`ask_list_width`), and the conversation
+    /// and the PDF have the rest. Nothing is kept for it: it follows from
+    /// the tab and `Library::split`, so 信息, the PDF put away, Esc
+    /// (`Cmd::LeaveAsk`) and closing the paper all end it.
+    pub fn asking(&self, window: &Window) -> bool {
+        let Some(lib) = &self.lib else { return false };
+        lib.selected.is_some() && lib.tab == Tab::Ask && lib.split && !lib.reading && !matches!(lib.page, Page::Trash | Page::Sources | Page::Guide) && f32::from(window.viewport_size().width) >= crate::detail::SPLIT_MIN
+    }
+
+    /// The width of the list of papers beside a paper that is asked about: none on a page whose
+    /// list is not the papers', nor in a window too narrow for three columns (the paper then has it all).
+    pub fn ask_list_width(&self, window: &Window) -> f32 {
+        if !self.asking(window) || self.lib.as_ref().is_none_or(|lib| lib.page != Page::Papers) { return 0. }
+        ask_list_width(self.settings.ask_list_width, f32::from(window.viewport_size().width))
+    }
+
+    /// How tall a paper's row is: in the table, or in the narrow list beside a paper that is asked
+    /// about, where a title has two lines. 设置 › 外观: the compact rows still fit the title and its line of details.
+    pub fn row_height(&self, narrow: bool) -> f32 {
+        match (narrow, self.settings.density == "compact") {
+            (false, false) => 56.,
+            (true, false) => 68.,
+            (_, true) => 44.,
+        }
+    }
+
     /// The detail panel's width for this window: the width the reader
     /// dragged it to, or the one it comes with; most of the window while it
     /// is expanded. The list beside it keeps `MAIN_MIN` where the window allows.
@@ -88,6 +143,8 @@ impl Workspace {
         let viewport = f32::from(window.viewport_size().width);
         // Reading mode: the paper has the window.
         if lib.reading { return viewport }
+        // Asked about: what the narrow list leaves.
+        if self.asking(window) { return viewport - self.ask_list_width(window) }
         let own = if self.settings.detail_width > 0. { self.settings.detail_width } else { DETAIL_W };
         let sidebar = self.sidebar_width(window);
         if lib.wide { (viewport * 0.62).max(DETAIL_W).min(viewport - sidebar - 80.) } else { own.min(viewport - sidebar - MAIN_MIN).max(DETAIL_MIN) }
@@ -100,6 +157,13 @@ impl Workspace {
         // Let go outside the window: the button is up by the time the pointer is back.
         if event.pressed_button != Some(MouseButton::Left) { return self.end_drag(cx) }
         let viewport = f32::from(window.viewport_size().width);
+        // Beside a paper that is asked about, the edge is the narrow list's: it reaches from the window's left to the pointer.
+        if self.asking(window) {
+            let width = ask_list_width(f32::from(event.position.x).max(ASK_LIST_MIN), viewport);
+            if (width - self.settings.ask_list_width).abs() < 0.5 { return }
+            self.settings.ask_list_width = width;
+            return cx.notify();
+        }
         let width = (viewport - f32::from(event.position.x)).min(viewport - self.sidebar_width(window) - MAIN_MIN).max(DETAIL_MIN);
         if (width - self.settings.detail_width).abs() < 0.5 { return }
         self.settings.detail_width = width;
@@ -137,6 +201,18 @@ impl Workspace {
         let detail_width = self.detail_width(window);
         // Reading mode: nothing but the paper.
         if detail_width > 0. && self.lib.as_ref().is_some_and(|l| l.reading) { return div().size_full().child(self.render_detail(detail_width, window, cx)).into_any_element() }
+        // Into or out of the layout for asking, the rows change their height: the list finds its paper again.
+        let asking = self.asking(window);
+        if let Some(lib) = self.lib.as_mut().filter(|lib| lib.ask_drawn != asking) {
+            lib.ask_drawn = asking;
+            if let Some(at) = lib.selected.as_ref().and_then(|id| lib.shown.iter().position(|&i| lib.papers[i].id == *id)) { lib.table_scroll.scroll_to_item(at, ScrollStrategy::Center) }
+        }
+        // A paper asked about: the papers as a narrow list, then the conversation and the PDF.
+        if asking {
+            let list_width = self.ask_list_width(window);
+            let list = (list_width > 0.).then(|| self.render_ask_list(list_width, window, cx));
+            return div().flex().size_full().children(list).child(self.render_detail(detail_width, window, cx)).into_any_element();
+        }
         let sidebar_width = self.sidebar_width(window);
         let main_width = f32::from(window.viewport_size().width) - sidebar_width - detail_width;
         let page = self.lib.as_ref().map_or(Page::Papers, |l| l.page);
@@ -239,15 +315,7 @@ impl Workspace {
                 .when_some(count, |d, n| d.child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(n.to_string())))
         };
         let on_papers = lib.page == Page::Papers;
-        let views = [
-            ("view-all", "library", "全部文献", View::All),
-            ("view-recent", "plus", "最近添加", View::Recent),
-            ("view-unread", "eye", "未读", View::Unread),
-            ("view-starred", "star", "收藏", View::Starred),
-            ("view-pending", "list-todo", "待判断", View::Pending),
-            ("view-nopdf", "file-text", "缺 PDF", View::NoPdf),
-        ];
-        let view_rows: Vec<AnyElement> = views
+        let view_rows: Vec<AnyElement> = VIEWS
             .into_iter()
             .map(|(id, icon, label, view)| nav(id, icon, label, Some(filter::view_count(&lib.papers, view, now)), on_papers && lib.filters.view == view, Cmd::SetView(view), self, cx).into_any_element())
             .collect();
@@ -533,8 +601,7 @@ impl Workspace {
     fn render_rows(&mut self, range: Range<usize>, width: f32, _: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let Some(lib) = &self.lib else { return vec![] };
         let columns = Self::columns(lib, width);
-        // 设置 › 外观: the compact table still fits the title and its line of details.
-        let row_height = if self.settings.density == "compact" { 44. } else { 56. };
+        let row_height = self.row_height(false);
         let muted = |text: &str| div().text_color(Theme::text_placeholder()).child(text.to_string());
         range
             .filter_map(|row| {
@@ -573,7 +640,7 @@ impl Workspace {
                                 )
                                 .into_any_element(),
                             ColumnKind::Title => {
-                                let title = if lib.show_translation && let Some(Translated::Done(text)) = lib.translations.get(&wisp_core::store::translation_key(&p.title, wisp_core::ai::translation_prompt(&self.settings.translation_prompt))) { text } else { &p.title };
+                                let title = self.listed_title(lib, p);
                                 let mut meta = vec![];
                                 let authors = p.short_authors();
                                 if !authors.is_empty() { meta.push(authors) }
@@ -637,20 +704,146 @@ impl Workspace {
                         .on_mouse_down(MouseButton::Right, self.on_paper_context(p.id.clone(), cx))
                         .on_click(cx.listener({
                             let id = p.id.clone();
-                            move |this, ev: &ClickEvent, window, cx| {
-                                // With ⌘ / Ctrl or Shift held the click marks papers; alone it shows one.
-                                let held = ev.modifiers();
-                                if held.secondary() || held.shift { return this.mark(&id, held.shift, window, cx) }
-                                if let Some(lib) = this.lib.as_mut() { (lib.anchor, lib.cursor) = (Some(id.clone()), None) }
-                                // A double click opens the PDF straight away.
-                                if ev.click_count() >= 2 && let Some(lib) = this.lib.as_mut() && lib.pdf_file(&id).is_some() { lib.tab = Tab::Pdf }
-                                this.run(Cmd::Select(id.clone()), window, cx);
-                                this.run(Cmd::SetTab(this.lib.as_ref().map_or(Tab::Info, |l| l.tab)), window, cx);
-                                // The keyboard stays with the list, for the arrow keys; a question about the paper keeps its box.
-                                if this.lib.as_ref().is_some_and(|l| l.tab != Tab::Ask) { window.focus(&this.focus) }
-                            }
+                            move |this, ev: &ClickEvent, window, cx| this.row_clicked(&id, ev, window, cx)
                         }))
                         .children(cells)
+                        .into_any_element(),
+                )
+            })
+            .collect()
+    }
+
+    /// A paper's title as the lists show it: translated while translations are on show and this one is there.
+    fn listed_title<'a>(&'a self, lib: &'a Library, p: &'a Paper) -> &'a String {
+        if !lib.show_translation { return &p.title }
+        match lib.translations.get(&wisp_core::store::translation_key(&p.title, wisp_core::ai::translation_prompt(&self.settings.translation_prompt))) {
+            Some(Translated::Done(text)) => text,
+            _ => &p.title,
+        }
+    }
+
+    /// A click on a paper's row, in the table or in the narrow list beside a paper that is asked about.
+    fn row_clicked(&mut self, id: &str, ev: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // With ⌘ / Ctrl or Shift held the click marks papers; alone it shows one.
+        let held = ev.modifiers();
+        if held.secondary() || held.shift { return self.mark(id, held.shift, window, cx) }
+        if let Some(lib) = self.lib.as_mut() { (lib.anchor, lib.cursor) = (Some(id.to_string()), None) }
+        // A double click opens the PDF straight away; beside a paper that is asked about, its PDF is on show already.
+        if ev.click_count() >= 2 && !self.asking(window) && let Some(lib) = self.lib.as_mut() && lib.pdf_file(id).is_some() { lib.tab = Tab::Pdf }
+        self.run(Cmd::Select(id.to_string()), window, cx);
+        self.run(Cmd::SetTab(self.lib.as_ref().map_or(Tab::Info, |l| l.tab)), window, cx);
+        // The keyboard stays with the list, for the arrow keys; a question about the paper keeps its box.
+        if self.lib.as_ref().is_some_and(|l| l.tab != Tab::Ask) { window.focus(&self.focus) }
+    }
+
+    /// The papers on show as a narrow list, at the left of a paper that is asked about: the way
+    /// back at the top where the sidebar's corner is, the search, then a title and a line for each.
+    fn render_ask_list(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let lib = self.lib.as_ref().unwrap();
+        let (shown, total) = (lib.shown.len(), filter::view_count(&lib.papers, View::All, 0));
+        let filtered = lib.filters.active() > 0 || !lib.search.read(cx).text().trim().is_empty();
+        let body = if shown == 0 {
+            div().flex_1().px(px(8.)).pt(px(8.)).text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_placeholder()).child("没有匹配的文献。换个搜索词，或按 Esc 回到完整列表调整筛选。").into_any_element()
+        } else {
+            uniform_list("ask-papers", shown, cx.processor(move |this, range: Range<usize>, _, cx| this.render_ask_rows(range, cx))).track_scroll(lib.table_scroll.clone()).flex_1().into_any_element()
+        };
+        // The edge between the list and the paper is drawn by the detail panel, which is where it is dragged.
+        div()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .w(px(width))
+            .h_full()
+            .px(px(10.))
+            .pb(px(8.))
+            .pt(px(Self::corner_top()))
+            .gap(px(8.))
+            .child(self.render_corner(width >= ui::traffic_lights_width() + 150., cx).when(ui::custom_titlebar(), |d| d.mb(px(4.))))
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(px(8.))
+                    .h(px(32.))
+                    .px(px(10.))
+                    .rounded(px(8.))
+                    .bg(Theme::bg_body())
+                    .border_1()
+                    .border_color(if lib.search.focus_handle(cx).is_focused(window) { Theme::accent() } else { Theme::line() })
+                    .child(ui::icon("search", 14., Theme::text_tertiary()))
+                    .child(lib.search.clone()),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(8.))
+                    .px(px(8.))
+                    .child(ui::caption(if lib.filters.tag.is_empty() { view_label(lib.filters.view).to_string() } else { format!("{} · #{}", view_label(lib.filters.view), lib.filters.tag) }).min_w_0().truncate())
+                    .child(div().flex_none().text_size(px(11.)).text_color(Theme::text_tertiary()).child(if filtered || shown != total { format!("{shown} / {total} 篇") } else { format!("{total} 篇") })),
+            )
+            .child(body)
+            .child(div().flex_none().px(px(8.)).truncate().text_size(px(11.)).text_color(Theme::text_placeholder()).child(format!("↑↓ 切换文献 · {} 回到完整列表", crate::shortcuts::pretty("escape"))))
+            .into_any_element()
+    }
+
+    fn render_ask_rows(&mut self, range: Range<usize>, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let Some(lib) = &self.lib else { return vec![] };
+        let row_height = self.row_height(true);
+        let compact = self.settings.density == "compact";
+        range
+            .filter_map(|row| {
+                let p = lib.papers.get(*lib.shown.get(row)?)?;
+                let selected = lib.selected.as_deref() == Some(p.id.as_str()) || lib.marked.contains(&p.id);
+                let pointed = self.menu.as_ref().is_some_and(|menu| menu.paper.as_deref() == Some(p.id.as_str()));
+                let unread = p.reading == "unread";
+                let mut meta = vec![];
+                let authors = p.short_authors();
+                if !authors.is_empty() { meta.push(authors) }
+                if let Some(year) = p.year { meta.push(year.to_string()) }
+                if meta.is_empty() && !p.journal.is_empty() { meta.push(p.journal.clone()) }
+                Some(
+                    // A row of the list's own height, and inside it the rounded piece that is pointed at, as in the sidebar.
+                    div()
+                        .id(("ask-row", row))
+                        .h(px(row_height))
+                        .w_full()
+                        .py(px(1.))
+                        .cursor_pointer()
+                        .on_mouse_down(MouseButton::Right, self.on_paper_context(p.id.clone(), cx))
+                        .on_click(cx.listener({
+                            let id = p.id.clone();
+                            move |this, ev: &ClickEvent, window, cx| this.row_clicked(&id, ev, window, cx)
+                        }))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .justify_center()
+                                .size_full()
+                                .px(px(8.))
+                                .rounded(px(6.))
+                                .when(selected, |d| d.bg(Theme::accent_soft()))
+                                .when(!selected && pointed, |d| d.bg(Theme::hover()))
+                                .when(!selected && !pointed, |d| d.hover(|s| s.bg(Theme::hover())))
+                                .child(div().w_full().text_size(px(13.)).line_height(px(19.)).map(|d| if compact { d.truncate() } else { d.line_clamp(2) }).font_weight(if unread || selected { FontWeight::MEDIUM } else { FontWeight::NORMAL }).text_color(if selected { Theme::accent() } else if unread { Theme::text() } else { Theme::text_secondary() }).child(self.listed_title(lib, p).clone()))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(6.))
+                                        .text_size(px(12.))
+                                        .line_height(px(18.))
+                                        .text_color(Theme::text_tertiary())
+                                        .child(div().min_w_0().truncate().child(if meta.is_empty() { "作者、年份待补".to_string() } else { meta.join(" · ") }))
+                                        .when(p.starred, |d| d.child(ui::icon("star", 11., Theme::star())))
+                                        // Asked about without its PDF, the answer has only the record to go by.
+                                        .when(lib.pdf_file(&p.id).is_none(), |d| d.child(div().flex_none().text_color(Theme::text_placeholder()).child("无 PDF"))),
+                                ),
+                        )
                         .into_any_element(),
                 )
             })
@@ -693,7 +886,20 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that would bring in gpui's own `test` attribute.
-    use super::{SPLIT_CHAT_MIN, SPLIT_PDF_MIN, split_chat_width};
+    use super::{ASK_LIST_MAX, ASK_LIST_MIN, ASK_LIST_W, SPLIT_CHAT_MIN, SPLIT_PDF_MIN, ask_list_width, split_chat_width};
+    use crate::detail::SPLIT_MIN;
+
+    #[test]
+    fn list_beside_a_paper_asked_about() {
+        // No wish: the width it comes with, where the window has room for it.
+        assert_eq!(ask_list_width(0., 1360.), ASK_LIST_W);
+        // The conversation and the PDF keep their least: the list gives way, down to none.
+        assert_eq!(ask_list_width(0., SPLIT_MIN + 240.), 240.);
+        assert_eq!(ask_list_width(0., SPLIT_MIN + ASK_LIST_MIN), ASK_LIST_MIN);
+        assert_eq!(ask_list_width(0., SPLIT_MIN + ASK_LIST_MIN - 1.), 0.);
+        // A wish is kept within the list's own bounds.
+        assert_eq!((ask_list_width(340., 1360.), ask_list_width(40., 1360.), ask_list_width(900., 1600.)), (340., ASK_LIST_MIN, ASK_LIST_MAX));
+    }
 
     #[test]
     fn conversation_beside_pdf() {

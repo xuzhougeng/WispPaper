@@ -19,6 +19,10 @@ impl Workspace {
         let Some(p) = lib.selected_paper() else { return div().into_any_element() };
         let tab = lib.tab;
         let reading = lib.reading;
+        // Asked about with the PDF beside: the panel is what the narrow list leaves of the window (`Workspace::asking`).
+        let asking = self.asking(window);
+        // The edge at the panel's left is there to drag while something stands at its left.
+        let edged = !reading && (!asking || self.ask_list_width(window) > 0.);
         let has_pdf = lib.pdf_file(&p.id).is_some();
         let title = if lib.show_translation && let Some(Translated::Done(text)) = lib.translations.get(&translation_key(&p.title, ai::translation_prompt(&self.settings.translation_prompt))) { text } else { &p.title };
         let tab_button = |id: &'static str, label: &'static str, value: Tab, this: &Self, cx: &mut Context<Self>| {
@@ -38,8 +42,8 @@ impl Workspace {
                 .on_click(this.on(Cmd::SetTab(value), cx))
                 .child(label)
         };
-        // Reading mode keeps one line over the paper: what is read, the three tabs, and the way back.
-        let header = if reading {
+        // Reading mode, and a paper that is asked about, keep one line over the paper: what is read, the three tabs, and the way back.
+        let header = if reading || asking {
             div()
                 .flex()
                 .flex_none()
@@ -53,7 +57,11 @@ impl Workspace {
                 .child(tab_button("tab-pdf", if has_pdf { "PDF" } else { "PDF（无）" }, Tab::Pdf, self, cx))
                 .child(tab_button("tab-ask", "提问", Tab::Ask, self, cx))
                 .when(tab == Tab::Ask && has_pdf && !(lib.split && width >= SPLIT_MIN), |d| d.child(ui::ghost_button("beside-pdf", Some("file-text"), Some("对照 PDF".into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::BesidePdf(true), cx))))
-                .child(ui::ghost_button("reading-leave", Some("x"), Some(format!("退出阅读 {}", crate::shortcuts::pretty("escape")).into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::ToggleReading, cx)))
+                .child(if reading {
+                    ui::ghost_button("reading-leave", Some("x"), Some(format!("退出阅读 {}", crate::shortcuts::pretty("escape")).into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::ToggleReading, cx))
+                } else {
+                    ui::ghost_button("ask-leave", Some("x"), Some(format!("退出提问 {}", crate::shortcuts::pretty("escape")).into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::LeaveAsk, cx))
+                })
         } else { div()
             .flex()
             .flex_col()
@@ -83,9 +91,10 @@ impl Workspace {
                     .when(tab == Tab::Ask && has_pdf && !(lib.split && width >= SPLIT_MIN), |d| d.child(div().flex_1()).child(ui::ghost_button("beside-pdf", Some("file-text"), Some("对照 PDF".into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::BesidePdf(true), cx)))),
             ) };
         // Asking about a paper: the conversation, and the paper's PDF to its right where the panel has room for both.
-        let split = lib.split && tab == Tab::Ask && has_pdf && width >= SPLIT_MIN;
+        // A paper without one keeps the layout it is asked about in, with the ways to get its PDF at the right.
+        let split = lib.split && tab == Tab::Ask && (has_pdf || asking) && width >= SPLIT_MIN;
         let body = match tab {
-            Tab::Ask if split && self.settings.floating.on => self.render_floating(width, window, cx),
+            Tab::Ask if split && has_pdf && self.settings.floating.on => self.render_floating(width, window, cx),
             Tab::Ask if split => {
                 let chat_width = self.chat_width(width);
                 let chat = self.render_chat(true, window, cx);
@@ -136,10 +145,11 @@ impl Workspace {
             .justify_center()
             .cursor_col_resize()
             .occlude()
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _, cx| {
+            .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                 if event.click_count >= 2 {
                     this.resizing = None;
-                    this.settings.detail_width = 0.;
+                    // Beside a paper that is asked about, the edge is the narrow list's.
+                    if asking { this.settings.ask_list_width = 0. } else { this.settings.detail_width = 0. }
                     if let Some(lib) = this.lib.as_mut() { lib.wide = false }
                     this.save_settings(cx);
                 } else {
@@ -150,8 +160,8 @@ impl Workspace {
             // A tap is over before the layer that follows the pointer is drawn: the edge hears the end of it itself.
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_drag(cx)))
             .child(div().w(px(2.)).h_full().when(resizing, |d| d.bg(Theme::accent())).when(!resizing, |d| d.group_hover("detail-edge", |s| s.bg(Theme::accent().opacity(0.5)))));
-        // In reading mode the panel is the window: no edge to drag, no line at its left.
-        div().relative().flex().flex_col().flex_none().w(px(width)).h_full().bg(Theme::bg_body()).when(!reading, |d| d.border_l_1().border_color(Theme::line())).child(ui::title_strip()).child(header).child(div().flex().flex_col().flex_1().min_h_0().child(body)).when(!reading, |d| d.child(edge)).into_any_element()
+        // Where the panel is the window (reading mode, or asked about without the list): no edge to drag, no line at its left.
+        div().relative().flex().flex_col().flex_none().w(px(width)).h_full().bg(Theme::bg_body()).when(edged, |d| d.border_l_1().border_color(Theme::line())).child(ui::title_strip()).child(header).child(div().flex().flex_col().flex_1().min_h_0().child(body)).when(edged, |d| d.child(edge)).into_any_element()
     }
 
     /// The translated abstract replaces its source in place. Until it is
