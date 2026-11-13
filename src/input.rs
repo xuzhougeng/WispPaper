@@ -298,6 +298,21 @@ impl TextInput {
         cx.notify();
     }
 
+    /// Put `text` in place of `range` as one step that Undo takes back, the caret and the selection staying
+    /// with the words they were at: a change made by someone else than the person at the keyboard.
+    pub fn replace_apart(&mut self, range: Range<usize>, text: &str, cx: &mut Context<Self>) {
+        let range = self.text.floor_char_boundary(range.start.min(self.text.len()))..self.text.floor_char_boundary(range.end.min(self.text.len()));
+        let (sel, reversed) = (self.sel.clone(), self.reversed);
+        self.typing = false;
+        self.replace(range.clone(), text, cx);
+        self.typing = false;
+        // `replace` left the caret after what it put in: that is how long it is as kept.
+        let put = self.sel.end - range.start;
+        let moved = |at: usize| if at <= range.start { at } else if at >= range.end { at - range.len() + put } else { range.start + put };
+        (self.sel, self.reversed) = (moved(sel.start)..moved(sel.end), reversed);
+        cx.notify();
+    }
+
     /// The pictures pasted since this was last asked.
     pub fn take_images(&mut self) -> Vec<Image> {
         std::mem::take(&mut self.pasted)
@@ -1106,7 +1121,12 @@ impl Element for InputElement {
                 let (line, start, top, line_height) = (&row.line, row.start, row.top, row.line_height);
                 let (from, to) = (a.max(start), b.min(start + line.len()));
                 if from > to || (from == to && !(a < start && b > start + line.len())) { continue }
-                let (Some(p), Some(q)) = (line.position_for_index(from - start, line_height), line.position_for_index(to - start, line_height)) else { continue };
+                let (Some(mut p), Some(q)) = (line.position_for_index(from - start, line_height), line.position_for_index(to - start, line_height)) else { continue };
+                // A stretch that begins where the line wraps begins on the next line, not at the end of this one.
+                if from < to {
+                    let next = (from - start + 1..=line.text.len()).find(|at| line.text.is_char_boundary(*at));
+                    if let Some(after) = next.and_then(|at| line.position_for_index(at, line_height)) && after.y > p.y { p = point(px(0.), after.y) }
+                }
                 let x0 = row.x;
                 let quad = |l: Pixels, r: Pixels, y: Pixels| fill(Bounds::from_corners(origin + point(l, top + y), origin + point(r, top + y + line_height)), color);
                 if p.y == q.y {

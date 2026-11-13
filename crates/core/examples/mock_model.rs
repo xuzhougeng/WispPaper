@@ -90,7 +90,7 @@ fn main() {
 fn answer(mut stream: TcpStream, delay: u64) {
     {
         let request = body(&mut stream);
-        let kind = if request.contains("图片库助手") { "figure" } else if request.contains("审稿助手") { "review of a section" } else if request.contains("学术写作助手") { "write" } else if request.contains("文献筛选助手") { "screen" } else if request.contains("文献信息提取助手") { "extract" } else if request.contains("写作检索词助手") { "search words" } else if request.contains("翻译助手") { "translate" } else if request.contains("\"tools\"") { "chat" } else { "queries" };
+        let kind = if request.contains("图片库助手") { "figure" } else if request.contains("改稿助手") { "revise a section" } else if request.contains("审稿助手") { "review of a section" } else if request.contains("学术写作助手") { "write" } else if request.contains("文献筛选助手") { "screen" } else if request.contains("文献信息提取助手") { "extract" } else if request.contains("写作检索词助手") { "search words" } else if request.contains("翻译助手") { "translate" } else if request.contains("\"tools\"") { "chat" } else { "queries" };
         println!("{kind}: model {} thinking {} output_config {}", sent(&request, "model"), sent(&request, "thinking"), sent(&request, "output_config"));
         std::thread::sleep(std::time::Duration::from_millis(delay));
         // The last message decides the step: tool results get the answer, a question gets the calls.
@@ -116,6 +116,41 @@ fn answer(mut stream: TcpStream, delay: u64) {
             events.push_str(&event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#));
             events.push_str(&event(&format!(r#"{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":{}}}}}"#, quoted(&serde_json::Value::Array(remarks).to_string()))));
             events.push_str(&event(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#));
+        } else if request.contains("改稿助手") {
+            // Told to change a section of the manuscript (改稿): it says a word, adds half a sentence to the first sentence, asks for a change
+            // to words the section does not have, changes the start of the last paragraph when there is another, and adds a paragraph at the
+            // end. An empty section gets two paragraphs. It answers piece by piece, so the place being written can be watched.
+            let value: serde_json::Value = serde_json::from_str(&request).unwrap_or_default();
+            let message = value["messages"][0]["content"].as_str().unwrap_or("").to_string();
+            let text = message.split("\n这一节的全文：\n").nth(1).unwrap_or("").trim();
+            let block = |old: &str, new: &str| format!("<<<<<<< SEARCH\n{old}\n=======\n{new}\n>>>>>>> REPLACE\n");
+            let mut reply = String::from("（假模型）按要求改了几处。\n");
+            if text.is_empty() || text.starts_with("（这一节还没有文字）") {
+                reply.push_str(&block("", "(mock) Plant roots explore the soil for water and nutrients.\n\n(mock) How single cells decide their fate there remains unclear."));
+            } else {
+                let paragraphs: Vec<&str> = text.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+                let first = paragraphs[0];
+                let sentence: String = first.char_indices().find(|(_, c)| ['.', '。', '；', ';'].contains(c)).map_or(first, |(at, c)| &first[..at + c.len_utf8()]).to_string();
+                let end = sentence.trim_end_matches(['.', '。', '；', ';']).len();
+                reply.push_str(&block(&sentence, &format!("{}, as the mock model adds{}", &sentence[..end], &sentence[end..])));
+                reply.push_str(&block("a sentence the section does not have", "anything"));
+                if let Some(last) = paragraphs.last().filter(|_| paragraphs.len() > 1) {
+                    let opening: String = last.chars().take(24).collect();
+                    reply.push_str(&block(&opening, &format!("(mock) {opening}")));
+                }
+                reply.push_str(&block("", "(mock) A closing sentence the mock model puts at the end."));
+            }
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n");
+            let _ = stream.write_all(event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#).as_bytes());
+            let chars: Vec<char> = reply.chars().collect();
+            for piece in chars.chunks(10) {
+                let piece: String = piece.iter().collect();
+                let _ = stream.write_all(event(&format!(r#"{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":{}}}}}"#, serde_json::Value::String(piece))).as_bytes());
+                let _ = stream.flush();
+                std::thread::sleep(std::time::Duration::from_millis(90));
+            }
+            let _ = stream.write_all(event(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#).as_bytes());
+            return;
         } else if request.contains("学术写作助手") {
             // The paragraph is the message's last block; the rewrite marks itself as one.
             let value: serde_json::Value = serde_json::from_str(&request).unwrap_or_default();

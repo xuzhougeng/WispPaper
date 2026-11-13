@@ -480,6 +480,8 @@ pub enum Cmd {
     WriteAssist(ai::Assist),
     WriteAssistStop,
     WriteAssistUse(crate::write_assist::Use),
+    /// 改稿: the box under the manuscript where the assistant is told what to change (`revise.rs`).
+    Revise(crate::revise::Do),
     // The figure library (`src/figures.rs`)
     /// Only the figures with this tag; the tag chosen already, or none, shows all of them.
     FigureTag(String),
@@ -695,6 +697,8 @@ pub struct Writing {
     pub scroll: ScrollHandle,
     /// The model's work on a paragraph (`write_assist.rs`).
     pub assist: crate::write_assist::Assisting,
+    /// The assistant's changes to the section, asked for in the box under the manuscript (`revise.rs`).
+    pub revise: crate::revise::Revising,
     /// The comments on the manuscript, and the assistant's review (`comments.rs`).
     pub comments: crate::comments::Commenting,
     /// Where the manuscript's editor is scrolled to.
@@ -1967,6 +1971,7 @@ impl Workspace {
             Cmd::WriteAssist(assist) => self.assist_start(assist, cx),
             Cmd::WriteAssistStop => self.assist_stop(cx),
             Cmd::WriteAssistUse(how) => self.assist_use(how, window, cx),
+            Cmd::Revise(what) => self.run_revise(what, cx),
             Cmd::WriteStop => {
                 if let Some(lib) = self.lib.as_mut() {
                     let sorting = &mut lib.writing.sorting;
@@ -2760,7 +2765,8 @@ impl Workspace {
         subscriptions.push(cx.subscribe(&find, |this, _, event: &InputEvent, cx| if *event == InputEvent::Submit { this.write_find(true, cx) }));
         let (comments, heard) = crate::comments::Commenting::new(store.comments(&manuscript).unwrap_or_default(), store.manuscript_source(&manuscript).ok().flatten(), cx);
         subscriptions.extend(heard);
-        let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new(), assist: Default::default(), comments, editor_scroll: ScrollHandle::new(), library_nav: false };
+        let revise = crate::revise::Revising::new(&mut subscriptions, cx);
+        let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new(), assist: Default::default(), revise, comments, editor_scroll: ScrollHandle::new(), library_nav: false };
         let citing = crate::cite::Citing::new(&store, &mut subscriptions, cx);
         let gallery = crate::figures::Gallery::new(&mut subscriptions, cx);
         let mut lib = Library {
@@ -5055,6 +5061,25 @@ impl Workspace {
                 // `assisted:replace|below|copy|drop` uses the result, `assiststop` stops it; `caret:<byte>` / `pick:<from>;<to>` place the caret / select.
                 "assist" => Some(Cmd::WriteAssist(match arg { "rewrite" => ai::Assist::Rewrite, "translate" => ai::Assist::Translate, "polish" => ai::Assist::Polish, "cite" => ai::Assist::Cite, own => ai::Assist::Own(own.to_string()) })),
                 "assiststop" => Some(Cmd::WriteAssistStop),
+                // `revise:<wish>` tells the assistant what to change in the section, as if typed into the box under the manuscript and sent;
+                // `revise:stop`, `revise:keep`, `revise:undo` (all) / `revise:undo;<n>`, `revise:go;<n>`, `revise:next` / `revise:prev` are its buttons.
+                "revise" => {
+                    use crate::revise::Do;
+                    let (what, n) = arg.split_once(';').map_or((arg, 0), |(what, n)| (what, n.parse::<usize>().unwrap_or(0)));
+                    Some(Cmd::Revise(match (what, arg.contains(';')) {
+                        ("stop", _) => Do::Stop,
+                        ("keep", _) => Do::Keep,
+                        ("undo", false) => Do::UndoAll,
+                        ("undo", true) => Do::Undo(n),
+                        ("go", _) => Do::Go(n),
+                        ("next", _) => Do::Step(true),
+                        ("prev", _) => Do::Step(false),
+                        _ => {
+                            if let Some(lib) = self.lib.as_ref() { lib.writing.revise.input.update(cx, |input, cx| input.set_text(arg, cx)) }
+                            Do::Send
+                        }
+                    }))
+                }
                 "assisted" => Some(Cmd::WriteAssistUse(match arg { "replace" => crate::write_assist::Use::Replace, "below" => crate::write_assist::Use::Below, "copy" => crate::write_assist::Use::Copy, _ => crate::write_assist::Use::Drop })),
                 "undo" => {
                     if let Some(lib) = self.lib.as_ref() { lib.writing.editor.update(cx, |input, cx| input.undo_last(cx)) }
