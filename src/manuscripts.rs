@@ -627,7 +627,8 @@ impl Workspace {
             .iter()
             .enumerate()
             .map(|(n, section)| {
-                let paragraphs: Vec<Div> = manuscript::paragraphs(&section.body).map(|line| div().text_size(px(15.)).line_height(px(26.)).text_color(Theme::text()).child(line.to_string())).collect();
+                // The section's Markdown drawn as it says, a heading in it under the section's name.
+                let written = manuscript::section_markdown(&section.body, 2);
                 div()
                     .flex()
                     .flex_col()
@@ -643,8 +644,8 @@ impl Workspace {
                             .child(div().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::text()).hover(|s| s.text_color(Theme::accent())).child(section.name.clone()))
                             .when(section.kind != "other", |d| d.child(div().text_size(px(11.)).text_color(Theme::text_tertiary()).child(label(&SECTIONS, &section.kind).to_string()))),
                     )
-                    .when(paragraphs.is_empty(), |d| d.child(div().text_size(px(13.)).text_color(Theme::text_tertiary()).child(t("这一节还没有写。"))))
-                    .children(paragraphs)
+                    .when(written.is_empty(), |d| d.child(div().text_size(px(13.)).text_color(Theme::text_tertiary()).child(t("这一节还没有写。"))))
+                    .when(!written.is_empty(), |d| d.child(div().text_size(px(15.)).text_color(Theme::text()).child(crate::markdown::render(&format!("write-read-{n}"), &written, None, None))))
                     .into_any_element()
             })
             .collect();
@@ -763,7 +764,7 @@ impl Workspace {
                         .border_color(Theme::line())
                         .bg(Theme::bg_body())
                         .when(snapshot.body.trim().is_empty(), |d| d.child(div().text_size(px(13.)).text_color(Theme::text_tertiary()).child(t("（这一版是空的）"))))
-                        .children(manuscript::paragraphs(&snapshot.body).map(|line| div().text_size(px(14.)).line_height(px(23.)).text_color(Theme::text()).child(line.to_string()))),
+                        .when(!snapshot.body.trim().is_empty(), |d| d.child(div().text_size(px(14.)).text_color(Theme::text()).child(crate::markdown::render("write-version", &manuscript::section_markdown(&snapshot.body, 2), None, None)))),
                 ),
         };
         Some(

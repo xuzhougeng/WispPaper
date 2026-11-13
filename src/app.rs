@@ -2733,7 +2733,7 @@ impl Workspace {
         subscriptions.push(cx.subscribe(&title, |this, input, event: &InputEvent, cx| {
             if *event == InputEvent::Changed { this.write_title_typed(input.read(cx).text().to_string(), cx) }
         }));
-        let editor = cx.new(|cx| TextInput::new("在这里写。写好一段，按「查找候选句」的快捷键，右边就列出文献库里的文献在同一部分相近的写法；中文或别的语言也可以，先写下想表达的意思。", cx).multiline(14).with_text(&draft));
+        let editor = cx.new(|cx| TextInput::new("在这里写。写好一段，按「查找候选句」的快捷键，右边就列出文献库里的文献在同一部分相近的写法；中文或别的语言也可以，先写下想表达的意思。", cx).multiline(14).markdown().with_text(&draft));
         let find = cx.new(|cx| TextInput::new("找句子：输入词或短语，例如 remains unclear", cx));
         subscriptions.push(cx.subscribe(&editor, |this, input, event: &InputEvent, cx| {
             if *event != InputEvent::Changed { return }
