@@ -111,7 +111,8 @@ mod tray {
     }
 
     fn hwnd(window: &Window) -> Option<HWND> {
-        match window.window_handle().ok()?.as_raw() {
+        // GPUI's own `Window::window_handle` (an `AnyWindowHandle`) would win over the trait's.
+        match HasWindowHandle::window_handle(window).ok()?.as_raw() {
             RawWindowHandle::Win32(handle) => Some(handle.hwnd.get() as HWND),
             _ => None,
         }
