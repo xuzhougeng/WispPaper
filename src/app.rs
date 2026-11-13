@@ -201,6 +201,7 @@ pub enum Cmd {
     /// Bind a task to a profile id; an empty id follows the default.
     SetTaskModel(Task, String),
     SetScreenWorkers(usize),
+    SetTranslateWorkers(usize),
     ResetTranslationPrompt,
     /// One more slash command of the person's own, on 设置 › 命令.
     AddCommand,
@@ -787,6 +788,8 @@ pub struct PendingTools {
 
 /// The PDFs of an import read at the same time.
 const IMPORT_WORKERS: usize = 3;
+/// Full texts read again at the same time (`extract_missing`), at most one per core.
+const READ_WORKERS: usize = 4;
 
 /// What became of one PDF of an import.
 #[derive(Clone, Debug, PartialEq)]
@@ -1845,6 +1848,10 @@ impl Workspace {
             }
             Cmd::SetScreenWorkers(count) => {
                 self.settings.screen_workers = count.clamp(1, wisp_core::settings::MAX_SCREEN_WORKERS);
+                self.save_settings(cx);
+            }
+            Cmd::SetTranslateWorkers(count) => {
+                self.settings.translate_workers = count.clamp(1, wisp_core::settings::MAX_SCREEN_WORKERS);
                 self.save_settings(cx);
             }
             Cmd::ResetTranslationPrompt => self.reset_translation_prompt(cx),
@@ -3333,7 +3340,7 @@ impl Workspace {
     }
 
     /// Read the text of the stored full texts that have not been read and
-    /// sorted into parts yet, one at a time: new files, and those an
+    /// sorted into parts yet, a few side by side: new files, and those an
     /// earlier build read without telling headings from paragraphs.
     pub fn extract_missing(&mut self, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
@@ -3348,24 +3355,32 @@ impl Workspace {
         if todo.is_empty() { return }
         lib.extracting.extend(todo.iter().map(|(id, ..)| id.clone()));
         let library = lib.info.id.clone();
-        cx.spawn(async move |this, cx| {
-            for (id, path, known) in todo {
-                let pages = cx.background_executor().spawn(async move { fulltext::reread(&path, known) }).await;
-                let same = this.update(cx, |this, cx| {
-                    let Some(lib) = this.lib.as_mut().filter(|l| l.info.id == library) else { return false };
-                    lib.extracting.remove(&id);
-                    let _ = lib.store.save_fulltext_pages(&id, &pages);
-                    // Whether a text came of it shows in the list.
-                    let _ = lib.reload();
-                    // The candidates on show were found without this paper.
-                    if lib.extracting.is_empty() { this.write_texts_changed(cx) }
-                    cx.notify();
-                    true
-                });
-                if !matches!(same, Ok(true)) { break }
-            }
-        })
-        .detach();
+        todo.reverse();
+        let queue = std::rc::Rc::new(std::cell::RefCell::new(todo));
+        // Reading is the processor's work: one file per core, up to a few.
+        let workers = std::thread::available_parallelism().map_or(2, |n| n.get()).clamp(1, READ_WORKERS).min(queue.borrow().len());
+        for _ in 0..workers {
+            let (queue, library) = (queue.clone(), library.clone());
+            cx.spawn(async move |this, cx| {
+                loop {
+                    let Some((id, path, known)) = queue.borrow_mut().pop() else { break };
+                    let pages = cx.background_executor().spawn(async move { fulltext::reread(&path, known) }).await;
+                    let same = this.update(cx, |this, cx| {
+                        let Some(lib) = this.lib.as_mut().filter(|l| l.info.id == library) else { return false };
+                        lib.extracting.remove(&id);
+                        let _ = lib.store.save_fulltext_pages(&id, &pages);
+                        // Whether a text came of it shows in the list.
+                        let _ = lib.reload();
+                        // The candidates on show were found without this paper.
+                        if lib.extracting.is_empty() { this.write_texts_changed(cx) }
+                        cx.notify();
+                        true
+                    });
+                    if !matches!(same, Ok(true)) { break }
+                }
+            })
+            .detach();
+        }
     }
 
     fn export(&mut self, kind: ExportKind, cx: &mut Context<Self>) {

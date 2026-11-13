@@ -34,6 +34,8 @@ pub struct Settings {
     pub tasks: Tasks,
     /// How many papers the screening assistant reads at the same time, 1 to `MAX_SCREEN_WORKERS`.
     pub screen_workers: usize,
+    /// How many texts a batch translation asks for at the same time, 1 to `MAX_SCREEN_WORKERS`.
+    pub translate_workers: usize,
     /// The instructions translations are made with; empty means `ai::TRANSLATION_PROMPT`.
     pub translation_prompt: String,
     /// The slash commands the person wrote: prompt templates under a name (`ai::read_input`).
@@ -72,7 +74,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         let providers = provider::DEFAULT_PRESETS.iter().filter_map(|key| provider::preset(key)).map(Provider::from_preset).collect();
-        let mut settings = Settings { data_dir: String::new(), providers, legacy_profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translation_prompt: String::new(), commands: vec![], auto_update: true, appearance: String::new(), language: Language::default(), density: String::new(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., floating: Default::default(), keep_running: true, author: String::new() };
+        let mut settings = Settings { data_dir: String::new(), providers, legacy_profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translate_workers: 4, translation_prompt: String::new(), commands: vec![], auto_update: true, appearance: String::new(), language: Language::default(), density: String::new(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., floating: Default::default(), keep_running: true, author: String::new() };
         settings.tidy();
         settings
     }
@@ -253,6 +255,7 @@ impl Settings {
             if self.model(self.tasks.get(task)).is_none() { self.tasks.set(task, "") }
         }
         self.screen_workers = self.screen_workers.clamp(1, MAX_SCREEN_WORKERS);
+        self.translate_workers = self.translate_workers.clamp(1, MAX_SCREEN_WORKERS);
         if !self.detail_width.is_finite() || self.detail_width < 0. { self.detail_width = 0. }
         if !self.sidebar_width.is_finite() || self.sidebar_width < 0. { self.sidebar_width = 0. }
         if !self.chat_width.is_finite() || self.chat_width < 0. { self.chat_width = 0. }
@@ -414,7 +417,7 @@ mod tests {
         assert_eq!((with.proxy.as_str(), with.providers[0].proxy.as_str(), with.providers[0].title().as_str()), ("socks5://127.0.0.1:1080", "", "x"));
         // Nor an id, a thinking setting or a task: it is given an id and serves everything.
         let model = &with.providers[0].models[0];
-        assert_eq!((model.id.as_str(), model.effort.as_str(), with.screen_workers), ("m1", "", 3));
+        assert_eq!((model.id.as_str(), model.effort.as_str(), with.screen_workers, with.translate_workers), ("m1", "", 3, 4));
         assert_eq!(with.profile_for(Task::Translate).map(|p| p.model), Some("m".into()));
         // The providers every file starts with come after it, and nothing of the old list is written again.
         assert_eq!(with.providers.iter().map(|p| p.title()).collect::<Vec<_>>(), ["x", "DeepSeek", "Kimi", "GLM"]);
@@ -469,9 +472,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("wisp-settings-{}", crate::model::new_id("T")));
         let path = dir.join("settings.json");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(&path, r#"{"activeProfile":1,"screenWorkers":40,"tasks":{"screen":"gone"},"profiles":[{"name":"Claude"},{"name":"b","effort":"off","model":"claude-haiku-5-5"},{"protocol":"openai","baseUrl":"https://api.deepseek.com/","model":"deepseek-v4-pro","id":"m1"}]}"#).unwrap();
+        std::fs::write(&path, r#"{"activeProfile":1,"screenWorkers":40,"translateWorkers":0,"tasks":{"screen":"gone"},"profiles":[{"name":"Claude"},{"name":"b","effort":"off","model":"claude-haiku-5-5"},{"protocol":"openai","baseUrl":"https://api.deepseek.com/","model":"deepseek-v4-pro","id":"m1"}]}"#).unwrap();
         let old = Settings::load(&path).unwrap();
-        assert_eq!((old.tasks.chat.as_str(), old.tasks.screen.as_str(), old.screen_workers), ("m3", "", MAX_SCREEN_WORKERS));
+        assert_eq!((old.tasks.chat.as_str(), old.tasks.screen.as_str(), old.screen_workers, old.translate_workers), ("m3", "", MAX_SCREEN_WORKERS, 1));
         assert_eq!(old.profile_for(Task::Screen).map(|p| (p.model, p.effort, p.provider)), Some(("claude-haiku-5-5".into(), "off".into(), "Claude".into())));
         assert_eq!(old.providers.iter().map(|p| (p.title(), p.models.len())).collect::<Vec<_>>(), [("Claude".to_string(), 2), ("DeepSeek".to_string(), 1), ("Kimi".to_string(), 1), ("GLM".to_string(), 2)]);
         assert_eq!(old.providers.iter().map(|p| p.preset.as_str()).collect::<Vec<_>>(), ["claude", "deepseek", "kimi", "glm"]);
