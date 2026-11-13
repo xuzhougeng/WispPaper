@@ -49,6 +49,8 @@ pub enum InputEvent {
     Tab,
     /// Pictures were pasted (a field that `accepts_images`); the owner takes them with `take_images`.
     Images,
+    /// A click (not a drag) inside one of the stretches `set_marks` gave: its place in that list.
+    MarkClicked(usize),
 }
 
 /// What the last paint laid out, for hit-testing and the IME.
@@ -169,6 +171,8 @@ pub struct TextInput {
     typing: bool,
     /// Stretches of the text drawn on a tint (bytes, and the tint): the words a comment is about.
     marks: Vec<(Range<usize>, Hsla)>,
+    /// How far below the top of the text each mark begins, as last drawn.
+    mark_tops: Vec<Pixels>,
     /// Updated during prepaint, so a selection toolbar follows wrapping and scrolling in this frame.
     selection_geometry: Option<SelectionGeometry>,
     selection_toolbar_visible: bool,
@@ -213,6 +217,7 @@ impl TextInput {
             redo: vec![],
             typing: false,
             marks: vec![],
+            mark_tops: vec![],
             selection_geometry: None,
             selection_toolbar_visible: false,
             selection_toolbar_dismissed: false,
@@ -255,6 +260,12 @@ impl TextInput {
     /// Draw these stretches of the text on a tint. The owner gives them anew when the text or what they mark changes; nothing is redrawn for it.
     pub fn set_marks(&mut self, marks: Vec<(Range<usize>, Hsla)>) {
         self.marks = marks;
+    }
+
+    /// How far below the top of the text each stretch `set_marks` gave begins, as last drawn: one per mark,
+    /// or fewer before they were drawn. A frame that moves them draws another, so the owner catches up.
+    pub fn mark_tops(&self) -> &[Pixels] {
+        &self.mark_tops
     }
 
     /// How far below the top of the text byte `at` was last drawn; none before the first frame.
@@ -633,6 +644,9 @@ impl TextInput {
         if self.selecting {
             self.selecting = false;
             self.reveal_held = None;
+            // A click on marked words: the owner says what they are marked for.
+            let at = self.cursor();
+            if self.sel.is_empty() && let Some(n) = self.marks.iter().position(|(range, _)| range.start <= at && at <= range.end && range.start < range.end) { cx.emit(InputEvent::MarkClicked(n)) }
             cx.notify();
         }
     }
@@ -1162,7 +1176,14 @@ impl Element for InputElement {
         let map = std::mem::take(&mut prepaint.map);
         self.input.update(cx, |input, _| {
             input.scroll_x = scroll_x;
-            input.layout = Some(Layout { rows, map, bounds, scroll_x });
+            let layout = Layout { rows, map, bounds, scroll_x };
+            let tops: Vec<Pixels> = input.marks.iter().map(|(range, _)| input.position_in(&layout, input.to_display(&layout.map, range.start.min(input.text.len()))).map_or(px(0.), |p| p.y)).collect();
+            // What the owner drew beside the marks was placed by the last frame's: draw again with these.
+            if tops != input.mark_tops {
+                input.mark_tops = tops;
+                window.request_animation_frame();
+            }
+            input.layout = Some(layout);
         });
     }
 }

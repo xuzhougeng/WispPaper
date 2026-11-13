@@ -44,6 +44,12 @@ pub struct Commenting {
     generation: u64,
     /// Those dealt with are listed too.
     pub show_done: bool,
+    /// The comment last pointed at, from its words or its marker in the manuscript: its card stands out.
+    pub focused: Option<String>,
+    /// That comment's card is to be scrolled to once the list has been drawn (`comment_reveal`).
+    reveal: Option<String>,
+    /// The list of cards was drawn in the last frame, so its scroll handle knows where they are.
+    list_drawn: bool,
     pub scroll: ScrollHandle,
 }
 
@@ -92,7 +98,7 @@ impl Commenting {
                 _ => {}
             }),
         ];
-        (Commenting { list, source, open: false, wish, draft, drafting: None, busy: false, error: String::new(), note: String::new(), model: String::new(), generation: 0, show_done: false, scroll: ScrollHandle::new() }, subscriptions)
+        (Commenting { list, source, open: false, wish, draft, drafting: None, busy: false, error: String::new(), note: String::new(), model: String::new(), generation: 0, show_done: false, focused: None, reveal: None, list_drawn: false, scroll: ScrollHandle::new() }, subscriptions)
     }
 
     /// The comments on a section that are still to be dealt with.
@@ -140,11 +146,59 @@ impl Workspace {
         lib.writing.comments.source = lib.store.manuscript_source(&id).ok().flatten();
     }
 
-    /// The words comments are about, in the section being written: where they stand now, with the tint each is drawn on.
-    pub(crate) fn comment_marks(&self, text: &str) -> Vec<(Range<usize>, Hsla)> {
+    /// The words comments are about, in the section being written: where they stand now, with the tint each is drawn on, and the comment.
+    pub(crate) fn comment_marks(&self, text: &str) -> Vec<(Range<usize>, Hsla, &Comment)> {
         let Some(lib) = self.lib.as_ref() else { return vec![] };
         let writing = &lib.writing;
-        writing.comments.list.iter().filter(|comment| comment.section_id == writing.section_id && comment.state != comment::DONE).filter_map(|comment| Some((comment::locate(text, &comment.quote, None)?, if comment.proposes() { Theme::note_strong() } else { Theme::note() }))).collect()
+        writing.comments.list.iter().filter(|comment| comment.section_id == writing.section_id && comment.state != comment::DONE).filter_map(|comment| Some((comment::locate(text, &comment.quote, None)?, if comment.proposes() { Theme::note_strong() } else { Theme::note() }, comment))).collect()
+    }
+
+    /// The comments of the section being written in the order the panel lists them: as their words stand in the text,
+    /// those whose words are gone last; with where their words begin.
+    fn comments_in_order<'a>(&'a self, text: &str) -> Vec<(Option<usize>, &'a Comment)> {
+        let Some(lib) = self.lib.as_ref() else { return vec![] };
+        let writing = &lib.writing;
+        let mut shown: Vec<(Option<usize>, &Comment)> = writing.comments.list.iter().filter(|comment| comment.section_id == writing.section_id).map(|comment| (comment::locate(text, &comment.quote, None).map(|range| range.start), comment)).collect();
+        shown.sort_by_key(|(at, _)| at.unwrap_or(usize::MAX));
+        shown
+    }
+
+    /// The comment's card on show beside the manuscript, standing out, and scrolled to.
+    pub(crate) fn comment_point(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(lib) = self.lib.as_mut() else { return };
+        let comments = &mut lib.writing.comments;
+        (comments.open, comments.focused, comments.reveal) = (true, Some(id.to_string()), Some(id.to_string()));
+        cx.notify();
+    }
+
+    /// Before the panel is drawn: scroll to the card asked for, once the list was drawn in the last frame;
+    /// a list that was not has no bounds to scroll by, so that waits a frame.
+    pub(crate) fn comment_reveal(&mut self, window: &Window, cx: &App) {
+        let Some(lib) = self.lib.as_ref() else { return };
+        let comments = &lib.writing.comments;
+        let drawn = comments.open && !lib.writing.reading;
+        let Some(id) = comments.reveal.clone().filter(|_| drawn) else {
+            if let Some(lib) = self.lib.as_mut() { lib.writing.comments.list_drawn = drawn }
+            return;
+        };
+        if !comments.list_drawn {
+            if let Some(lib) = self.lib.as_mut() { lib.writing.comments.list_drawn = true }
+            return window.request_animation_frame();
+        }
+        let text = lib.writing.editor.read(cx).text().to_string();
+        let show_done = comments.show_done;
+        let at = self.comments_in_order(&text).into_iter().filter(|(_, comment)| show_done || comment.state != comment::DONE).position(|(_, comment)| comment.id == id);
+        let Some(lib) = self.lib.as_mut() else { return };
+        if let Some(at) = at { lib.writing.comments.scroll.scroll_to_item(at) }
+        lib.writing.comments.reveal = None;
+    }
+
+    /// A click on words a comment is about: its card is shown, the caret stays where it was put.
+    pub(crate) fn comment_mark_clicked(&mut self, n: usize, cx: &mut Context<Self>) {
+        let Some(lib) = self.lib.as_ref() else { return };
+        let text = lib.writing.editor.read(cx).text().to_string();
+        let Some(id) = self.comment_marks(&text).get(n).map(|(_, _, comment)| comment.id.clone()) else { return };
+        self.comment_point(&id, cx);
     }
 
     pub(crate) fn run_comment(&mut self, what: Do, window: &mut Window, cx: &mut Context<Self>) {
@@ -265,8 +319,9 @@ impl Workspace {
         if let Some(kept) = writing.comments.list.iter_mut().find(|comment| comment.id == id) { *kept = back }
     }
 
-    /// Select the words a comment is about and bring them into view.
+    /// Select the words a comment is about and bring them into view, with its card beside them.
     fn comment_show(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.comment_point(id, cx);
         let Some(lib) = self.lib.as_mut() else { return };
         let writing = &mut lib.writing;
         let Some(found) = writing.comments.list.iter().find(|comment| comment.id == id) else { return };
@@ -471,9 +526,7 @@ impl Workspace {
         let text = writing.editor.read(cx).text().to_string();
         let selected = !writing.editor.read(cx).selection().is_empty();
         let configured = self.settings.profile_for_or_default(Task::Chat).missing().is_none();
-        // In the order their words stand in the text; those whose words are gone come last.
-        let mut shown: Vec<(Option<usize>, &Comment)> = comments.list.iter().filter(|comment| comment.section_id == writing.section_id).map(|comment| (comment::locate(&text, &comment.quote, None).map(|range| range.start), comment)).collect();
-        shown.sort_by_key(|(at, _)| at.unwrap_or(usize::MAX));
+        let shown = self.comments_in_order(&text);
         let done = shown.iter().filter(|(_, comment)| comment.state == comment::DONE).count();
         let proposals = shown.iter().filter(|(_, comment)| comment.proposes()).count();
         let elsewhere = comments.list.iter().filter(|comment| comment.section_id != writing.section_id && comment.state != comment::DONE).count();
@@ -562,16 +615,70 @@ impl Workspace {
             })
     }
 
+    /// In the manuscript's right margin, a marker on each line where commented words begin: hovered, it says
+    /// the comments; clicked, it selects the first one's words and shows its card. `tops` are where the marks
+    /// were last drawn, one per mark; until they are, there is no marker.
+    pub(crate) fn render_comment_markers(&self, marks: &[(Range<usize>, Hsla, &Comment)], tops: &[Pixels], cx: &mut Context<Self>) -> Vec<AnyElement> {
+        if marks.is_empty() || tops.len() != marks.len() { return vec![] }
+        let focused = self.lib.as_ref().and_then(|lib| lib.writing.comments.focused.clone());
+        // The marks of one line share its marker, in the order they stand.
+        let mut lines: Vec<(Pixels, Vec<&Comment>)> = vec![];
+        let mut order: Vec<usize> = (0..marks.len()).collect();
+        order.sort_by_key(|&n| (tops[n], marks[n].0.start));
+        for n in order {
+            match lines.last_mut() {
+                Some((top, comments)) if (*top - tops[n]).abs() < px(1.) => comments.push(marks[n].2),
+                _ => lines.push((tops[n], vec![marks[n].2])),
+            }
+        }
+        lines
+            .into_iter()
+            .map(|(top, comments)| {
+                let first = comments[0].id.clone();
+                let on = comments.iter().any(|comment| focused.as_deref() == Some(comment.id.as_str()));
+                let proposes = comments.iter().any(|comment| comment.proposes());
+                let tip = comments.iter().map(|comment| comment_tip(comment)).collect::<Vec<_>>().join("\n\n");
+                div()
+                    .id(SharedString::from(format!("comment-marker-{first}")))
+                    .absolute()
+                    // The text's top padding, then the line, centred on its 26px.
+                    .top(px(14.) + top + px(3.))
+                    .right(px(8.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(2.))
+                    .min_w(px(20.))
+                    .h(px(20.))
+                    .px(px(4.))
+                    .rounded(px(10.))
+                    .border_1()
+                    .border_color(if on { Theme::note_line() } else { Theme::note_line().opacity(0.55) })
+                    .bg(if on || proposes { Theme::note_strong() } else { Theme::note() })
+                    .cursor_pointer()
+                    .occlude()
+                    .hover(|s| s.bg(Theme::note_strong()).border_color(Theme::note_line()))
+                    .on_click(self.on(Cmd::Comment(Do::Show(first)), cx))
+                    .tooltip(move |_, cx| cx.new(|_| crate::write_assist::Tip(tip.clone())).into())
+                    .child(ui::icon("message-square", 11., Theme::text_secondary()))
+                    .when(comments.len() > 1, |d| d.child(div().text_size(px(10.)).line_height(px(12.)).text_color(Theme::text_secondary()).child(comments.len().to_string())))
+                    .into_any_element()
+            })
+            .collect()
+    }
+
     /// One comment: who said it, the words it is about, what it says, and what can be done about it.
     fn render_comment(&self, comment: &Comment, anchored: bool, width: f32, cx: &mut Context<Self>) -> AnyElement {
         let id = |part: &str| SharedString::from(format!("comment-{part}-{}", comment.id));
         let small = |part: &str, name: &'static str| ui::ghost_button(id(part), None, Some(name.into())).h(px(24.)).px(px(7.)).text_size(px(12.));
-        let (who, tint) = match comment.origin.as_str() {
-            comment::ASSISTANT => (t("助手").to_string(), Theme::accent()),
-            comment::FILE => (if comment.author.is_empty() { "Word".to_string() } else { comment.author.clone() }, Theme::warning()),
-            _ => (if comment.author.is_empty() { t("我").to_string() } else { comment.author.clone() }, Theme::text_secondary()),
+        let who = author(comment);
+        let tint = match comment.origin.as_str() {
+            comment::ASSISTANT => Theme::accent(),
+            comment::FILE => Theme::warning(),
+            _ => Theme::text_secondary(),
         };
         let done = comment.state == comment::DONE;
+        let focused = self.lib.as_ref().is_some_and(|lib| lib.writing.comments.focused.as_deref() == Some(comment.id.as_str()));
         let when = wisp_core::time::short_time(&comment.created_at);
         let mut about = vec![];
         if comment.origin == comment::FILE { about.push(t("来自 Word 文件").to_string()) }
@@ -591,8 +698,9 @@ impl Workspace {
             .py(px(10.))
             .rounded(px(10.))
             .border_1()
-            .border_color(Theme::line())
+            .border_color(if focused { Theme::note_line() } else { Theme::line() })
             .bg(Theme::bg_body())
+            .when(focused, |d| d.shadow(crate::theme::shadow_panel()))
             .when(done, |d| d.opacity(0.6))
             .child(
                 div()
@@ -623,6 +731,22 @@ impl Workspace {
             );
         ui::fade_in(id("card"), card).into_any_element()
     }
+}
+
+/// Who made a comment, as its card names them.
+fn author(comment: &Comment) -> String {
+    match comment.origin.as_str() {
+        comment::ASSISTANT => t("助手").to_string(),
+        comment::FILE => if comment.author.is_empty() { "Word".to_string() } else { comment.author.clone() },
+        _ => if comment.author.is_empty() { t("我").to_string() } else { comment.author.clone() },
+    }
+}
+
+/// A comment in a few lines, for a marker's hover: who, what it says, and what it would change.
+fn comment_tip(comment: &Comment) -> String {
+    let mut lines = vec![if comment.body.is_empty() { author(comment) } else { format!("{}{}{}", author(comment), if crate::i18n::is_english() { ": " } else { "：" }, clipped(&comment.body, 140)) }];
+    if comment.proposes() { lines.push(tf!("建议改为：{}", "Suggests: {}", clipped(&comment.suggestion, 100))) }
+    lines.join("\n")
 }
 
 fn clipped(text: &str, most: usize) -> String {
