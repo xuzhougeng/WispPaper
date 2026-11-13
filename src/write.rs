@@ -275,6 +275,8 @@ impl Workspace {
         let (paper, text, cite) = (field("paperId"), field("text"), field("cite"));
         let (before, after) = (field("before"), field("after"));
         let page = sentence["page"].as_u64().map(|page| page as usize);
+        // The part of its paper the sentence is from: the part the candidates were asked of.
+        let part = self.lib.as_ref().and_then(|lib| lib.writing.search.candidates.as_ref()?.as_ref().ok()?["section"].as_str().map(str::to_string)).unwrap_or_default();
         // Known by what it shows: the list is sorted anew with every search.
         let card = format!("{paper}-{}", sentence["position"].as_u64().unwrap_or(0));
         let id = |part: &str| SharedString::from(format!("write-{part}-{card}-{n}"));
@@ -308,7 +310,7 @@ impl Workspace {
                     .items_center()
                     .gap(px(2.))
                     .child(div().flex_1().min_w_0().truncate().text_size(px(11.)).text_color(Theme::text_tertiary()).child(about.join(" · ")))
-                    .child(small(id("cite"), t("引用")).text_color(Theme::accent()).on_click(self.on(Cmd::WriteCite(paper.clone()), cx))),
+                    .child(small(id("cite"), t("引用")).text_color(Theme::accent()).on_click(self.on(Cmd::WriteCiteFrom(paper.clone(), wisp_core::passage::Candidate { text: text.clone(), part, page: page.unwrap_or(0) }), cx))),
             )
             // Over the end of that line while the card is under the pointer, so it takes no width otherwise.
             .child(

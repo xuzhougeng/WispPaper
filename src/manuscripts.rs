@@ -118,6 +118,10 @@ impl Workspace {
             Err(err) => return self.fail(tf!("没有加进稿件：{err:#}", "Not added to the manuscript: {err:#}"), cx),
         };
         if let Ok(kept) = lib.store.cite_keys() { lib.citing.kept = kept }
+        // The sentences the answer quoted are what its citations rest on in the manuscript.
+        let manuscript = lib.writing.manuscripts.iter().find(|m| m.section(&section_id).is_some()).map(|m| m.id.clone()).unwrap_or_default();
+        self.sources_quoted(&manuscript, &section_id, &part.text, &part.quoted, cx);
+        let Some(lib) = self.lib.as_mut() else { return };
         let mut name = String::new();
         for section in lib.writing.manuscripts.iter_mut().flat_map(|m| m.sections.iter_mut()).filter(|s| s.id == section_id) {
             section.body = body.clone();
@@ -149,6 +153,7 @@ impl Workspace {
             sections.iter().map(|(name, body)| (name.clone(), wisp_core::cite::convert_ai_citations(body, &sources, &index))).collect::<Vec<_>>()
         };
         let keys: Vec<(String, String)> = converted.iter().flat_map(|(_, part)| part.keys.clone()).collect();
+        let quoted: Vec<Vec<wisp_core::cite::Quoted>> = converted.iter().map(|(_, part)| part.quoted.clone()).collect();
         let mut sections: Vec<(String, String)> = converted.into_iter().map(|(name, part)| (name, part.text)).collect();
         let answer = sections.iter().map(|(_, body)| body.as_str()).collect::<Vec<_>>().join("\n\n");
         let labels = answer_source_labels(&answer, &sources, &lib.papers);
@@ -165,10 +170,13 @@ impl Workspace {
             Ok(kept) => kept,
             Err(err) => return self.fail(tf!("新稿件 {id} 已保存，但无法重新读取引用键：{err:#}", "New manuscript {id} saved, but citation keys could not be reloaded: {err:#}"), cx),
         };
+        let brought: Vec<(String, String, Vec<wisp_core::cite::Quoted>)> = made.sections.iter().zip(quoted).map(|(section, quoted)| (section.id.clone(), section.body.clone(), quoted)).collect();
         lib.writing.manuscripts.push(made);
         lib.writing.reading = false;
         lib.writing.structures = lib.store.structures().unwrap_or_default();
         lib.page = Page::Write;
+        // The sentences the assistant quoted are what the citations rest on in the new manuscript.
+        for (section, body, quoted) in &brought { self.sources_quoted(&id, section, body, quoted, cx) }
         self.write_show(id, section, cx);
         self.write_texts_changed(cx);
         if let Some(lib) = self.lib.as_ref() { lib.writing.editor.read(cx).focus(window) }
@@ -218,6 +226,7 @@ impl Workspace {
         writing.comments.focused = None;
         writing.editor_scroll.set_offset(point(px(0.), px(0.)));
         self.comments_load();
+        self.sources_load();
         self.write_openers(cx);
         cx.notify();
     }

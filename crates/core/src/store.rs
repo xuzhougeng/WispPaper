@@ -489,6 +489,7 @@ impl Store {
         db.execute_batch(SCHEMA)?;
         db.execute_batch(crate::manuscript::SCHEMA)?;
         db.execute_batch(crate::comment::SCHEMA)?;
+        db.execute_batch(crate::passage::SCHEMA)?;
         db.execute_batch(crate::review::SCHEMA)?;
         crate::figure::migrate(&mut db)?;
         db.execute_batch(crate::figure::SCHEMA)?;

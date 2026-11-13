@@ -332,6 +332,8 @@ impl Workspace {
         if cited.is_empty() { return self.fail(t("还没有勾选要引用的文献。"), cx) }
         let pins: Vec<(String, String)> = found.rows.iter().flat_map(|row| &row.offers).filter(|offer| offer.ticked).map(|offer| (offer.paper.clone(), offer.key.clone())).collect();
         let count = pins.len();
+        // The sentence of its own each paper was ticked for: what the citation rests on from now on.
+        let rested: Vec<_> = found.rows.iter().flat_map(|row| row.offers.iter().filter(|offer| offer.ticked && !offer.evidence.is_empty()).map(|offer| (card.section.clone(), offer.paper.clone(), wisp_core::passage::claim(&row.sentence), wisp_core::passage::Candidate { text: offer.evidence.clone(), part: if offer.part == "record" { String::new() } else { offer.part.clone() }, page: offer.page.unwrap_or(0) }, offer.why.clone(), wisp_core::passage::CITED.to_string()))).collect();
         // The draft may have been edited meanwhile: the text is found again by what it says, else each sentence by itself.
         let text = writing.editor.read(cx).text().to_string();
         let whole = if text.get(card.range.clone()) == Some(card.original.as_str()) { Some(card.range.clone()) } else { text.find(&card.original).map(|at| at..at + card.original.len()) };
@@ -354,6 +356,7 @@ impl Workspace {
             if lib.store.keep_cite_key(&paper, &key).is_ok() { lib.citing.kept.insert(key, paper); }
         }
         // In a manuscript that came from a Word file, what was added is said on the spot, as a comment.
+        self.sources_keep(rested, cx);
         self.comment_on_change(&before, &after, t("配引用"));
         self.say(tf!("已加上 {count} 条引用", "Added {count} citations"), cx);
     }

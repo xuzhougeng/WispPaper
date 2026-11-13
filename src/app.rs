@@ -475,6 +475,10 @@ pub enum Cmd {
     HistoryPick(usize),
     /// Cite a paper (by id) at the caret: its key, `[@Zhang2024]` (`src/cite.rs`).
     WriteCite(String),
+    /// 引用 on a sentence of a paper: cite the paper and keep the sentence as what the citation rests on.
+    WriteCiteFrom(String, wisp_core::passage::Candidate),
+    /// The passages citations rest on (write_source.rs).
+    Source(crate::write_source::Do),
     /// The reference list of the whole manuscript (true) or of the part being written.
     WriteCiteScope(bool),
     /// Put citations in the part being written right: (start, end, what is there, what replaces it), last first.
@@ -2052,8 +2056,13 @@ impl Workspace {
             }
             Cmd::WriteSection(_) | Cmd::WriteManuscript(_) | Cmd::NewManuscript | Cmd::AskRemoveManuscript(_) | Cmd::RemoveManuscript(_) | Cmd::WriteLanguage(_) | Cmd::EditSection(_) | Cmd::PickSectionKind(_) | Cmd::MoveSection(..) | Cmd::AskRemoveSection(_) | Cmd::RemoveSection(_) | Cmd::SplitSection(_) | Cmd::MergeSection(_) | Cmd::WriteReading(_) | Cmd::WriteNav(_) | Cmd::ExportManuscript(_) | Cmd::WriteHistory | Cmd::HistoryPick(_) => self.run_manuscript(cmd, window, cx),
             Cmd::FigureTag(_) | Cmd::OpenFigure(_) | Cmd::FigureSource(_) | Cmd::AskFigure(_) | Cmd::CopyFigure(_) | Cmd::SaveFigure(_) | Cmd::AskRemoveFigure(_) | Cmd::RemoveFigure(_) | Cmd::FigureAddTag(_) | Cmd::FigureInfer(_) | Cmd::DrawFigure | Cmd::FigureDraw | Cmd::FigureShape(_) => self.run_figures(cmd, window, cx),
+            Cmd::WriteCiteFrom(id, from) => {
+                self.cite_paper(&id, Some(from), cx);
+                if let Some(lib) = self.lib.as_ref() { lib.writing.editor.read(cx).focus(window) }
+            }
+            Cmd::Source(what) => self.run_source(what, cx),
             Cmd::WriteCite(id) => {
-                self.cite_paper(&id, cx);
+                self.cite_paper(&id, None, cx);
                 if let Some(lib) = self.lib.as_ref() { lib.writing.editor.read(cx).focus(window) }
             }
             Cmd::WriteCiteScope(whole) => {
@@ -2885,7 +2894,7 @@ impl Workspace {
         subscriptions.extend(heard);
         let revise = crate::revise::Revising::new(&mut subscriptions, cx);
         let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new(), assist: Default::default(), revise, comments, editor_scroll: ScrollHandle::new(), library_nav: false };
-        let citing = crate::cite::Citing::new(&store, &mut subscriptions, cx);
+        let citing = crate::cite::Citing::new(&store, &writing.manuscript, &mut subscriptions, cx);
         let gallery = crate::figures::Gallery::new(&mut subscriptions, cx);
         let mut lib = Library {
             info,
@@ -5258,6 +5267,26 @@ impl Workspace {
                         "rest" => Do::Rest,
                         _ => Do::Insert,
                     }))
+                }
+                // `cite:<n>` is 引用 on the n-th candidate (from 0): the paper cited at the caret, the sentence kept as what the citation rests on.
+                "cite" => self.lib.as_ref().and_then(|lib| {
+                    let found = lib.writing.search.candidates.as_ref()?.as_ref().ok()?;
+                    let sentence = found["sentences"].get(arg.parse::<usize>().unwrap_or(0))?;
+                    Some(Cmd::WriteCiteFrom(sentence["paperId"].as_str()?.to_string(), wisp_core::passage::Candidate { text: sentence["text"].as_str()?.to_string(), part: found["section"].as_str().unwrap_or("").to_string(), page: sentence["page"].as_u64().unwrap_or(0) as usize }))
+                }),
+                // `source` looks for the passages of the citations that have none, `source:stop` stops that;
+                // `source:go;<n>` shows the n-th passage kept (from 0) in its paper, `source:drop;<n>` lets go of it.
+                "source" => {
+                    use crate::write_source::Do;
+                    let (what, n) = arg.split_once(';').map_or((arg, 0), |(what, n)| (what, n.parse::<usize>().unwrap_or(0)));
+                    let nth = self.lib.as_ref().and_then(|lib| lib.citing.sources.kept.get(n)).cloned();
+                    match (what, nth) {
+                        ("stop", _) => Some(Cmd::Source(Do::Stop)),
+                        ("go", Some(passage)) => Some(Cmd::GotoSource(passage.paper_id.clone(), (passage.page > 0).then_some(passage.page), passage.passage.clone())),
+                        ("drop", Some(passage)) => Some(Cmd::Source(Do::Drop(passage.id.clone()))),
+                        ("go" | "drop", None) => None,
+                        _ => Some(Cmd::Source(Do::Find(None))),
+                    }
                 }
                 // `revise:<wish>` tells the assistant what to change in the section, as if typed into the box under the manuscript and sent;
                 // `revise:stop`, `revise:keep`, `revise:undo` (all) / `revise:undo;<n>`, `revise:go;<n>`, `revise:next` / `revise:prev` are its buttons.

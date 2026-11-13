@@ -13,6 +13,7 @@ use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
 use std::collections::BTreeMap;
 use wisp_core::cite::{self, Cited, Found, Index};
+use wisp_core::passage::{self, Candidate};
 use wisp_core::store::Store;
 
 /// Papers offered while a part of one is typed.
@@ -26,10 +27,13 @@ pub struct Citing {
     pub kept: BTreeMap<String, String>,
     /// The reference list of the whole manuscript, not only of the part being written.
     pub whole: bool,
+    /// Where in its paper each citation is from (write_source.rs).
+    pub sources: crate::write_source::Sourcing,
 }
 
 impl Citing {
-    pub fn new(store: &Store, subscriptions: &mut Vec<Subscription>, cx: &mut Context<Workspace>) -> Citing {
+    /// `manuscript` is the one being written: its citations' passages are read.
+    pub fn new(store: &Store, manuscript: &str, subscriptions: &mut Vec<Subscription>, cx: &mut Context<Workspace>) -> Citing {
         let find = cx.new(|cx| TextInput::new("引用库里的其他文献：输入作者、题目或年份", cx));
         subscriptions.push(cx.observe(&find, |_, _, cx| cx.notify()));
         subscriptions.push(cx.subscribe(&find, |this, input, event: &InputEvent, cx| match event {
@@ -37,36 +41,56 @@ impl Citing {
             InputEvent::Submit => {
                 let query = input.read(cx).text().to_string();
                 let first = this.lib.as_ref().and_then(|lib| index(lib).matching(&query, 1).first().map(|paper| paper.id.clone()));
-                if let Some(id) = first { this.cite_paper(&id, cx) }
+                if let Some(id) = first { this.cite_paper(&id, None, cx) }
             }
             InputEvent::Cancel => input.update(cx, |input, cx| input.set_text("", cx)),
             _ => {}
         }));
-        Citing { find, kept: store.cite_keys().unwrap_or_default(), whole: false }
+        Citing { find, kept: store.cite_keys().unwrap_or_default(), whole: false, sources: crate::write_source::Sourcing::new(store.passages(manuscript).unwrap_or_default()) }
     }
 }
 
 /// Every paper of the open library, the trash's included, with its key.
-fn index(lib: &Library) -> Index<'_> {
+pub(crate) fn index(lib: &Library) -> Index<'_> {
     Index::new(&lib.papers, lib.trash.iter().map(|entry| &entry.paper), &lib.citing.kept)
 }
 
 impl Workspace {
     /// 引用: the paper's key at the caret, kept so it stays the paper's.
-    pub fn cite_paper(&mut self, id: &str, cx: &mut Context<Self>) {
+    /// `from` is the sentence of the paper it is cited from (a candidate's): kept as the passage the citation rests on.
+    /// A sentence that cites the paper already is not made to cite it twice: the passage is kept for the citation there.
+    pub fn cite_paper(&mut self, id: &str, from: Option<Candidate>, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
         let Some(key) = index(lib).key(id).map(str::to_string) else { return self.fail(t("文献库里没有这篇文献。"), cx) };
         if !lib.citing.kept.contains_key(&key) {
             if let Err(err) = lib.store.keep_cite_key(id, &key) { return self.fail(tf!("引用没有记下：{err:#}", "Citation not saved: {err:#}"), cx) }
             lib.citing.kept.insert(key.clone(), id.to_string());
         }
-        lib.writing.editor.update(cx, |input, cx| {
-            let before = input.text()[..input.caret()].chars().last();
-            // After a word a space; after Chinese, an opening bracket or a space, none.
-            let space = if before.is_some_and(|c| c.is_ascii() && !c.is_whitespace() && !"([（".contains(c)) { " " } else { "" };
-            input.insert(&format!("{space}{}", cite::written(&key)), cx);
-        });
+        let (text, caret) = { let editor = lib.writing.editor.read(cx); (editor.text().to_string(), editor.caret()) };
+        let cited_here = from.as_ref().and_then(|_| wisp_core::citefind::sentences(&text).into_iter().find(|range| range.start <= caret && caret <= range.end)).filter(|range| wisp_core::citefind::cites(&text[range.clone()], &key));
+        if cited_here.is_none() {
+            lib.writing.editor.update(cx, |input, cx| {
+                let before = input.text()[..input.caret()].chars().last();
+                // After a word a space; after Chinese, an opening bracket or a space, none.
+                let space = if before.is_some_and(|c| c.is_ascii() && !c.is_whitespace() && !"([（".contains(c)) { " " } else { "" };
+                input.insert(&format!("{space}{}", cite::written(&key)), cx);
+            });
+        }
         lib.citing.find.update(cx, |input, cx| input.set_text("", cx));
+        if let Some(from) = from {
+            // What the sentence that now cites the paper says: the citation just written ends before the caret, one that stood there is in the caret's sentence.
+            let (text, caret) = { let editor = lib.writing.editor.read(cx); (editor.text().to_string(), editor.caret()) };
+            let claim = {
+                let index = index(lib);
+                let citations = passage::citations(&text, &cite::find(&text, &index));
+                citations.iter().find(|one| one.paper == id && if cited_here.is_some() { one.sentence.start <= caret && caret <= one.sentence.end } else { one.at.end + 1 == caret }).map(|one| one.claim.clone())
+            };
+            if let Some(claim) = claim {
+                let section = lib.writing.section_id.clone();
+                self.sources_keep(vec![(section, id.to_string(), claim, from, String::new(), passage::CITED.to_string())], cx);
+                if cited_here.is_some() { self.say(t("这句话已经引用了这篇文献：已把这句原文记为它的出处。"), cx) }
+            }
+        }
         cx.notify();
     }
 
@@ -92,7 +116,7 @@ impl Workspace {
     }
 
     /// The texts the reference list is made of: the part being written, or every part in order.
-    fn cited_texts(&self, cx: &App) -> Vec<(String, String)> {
+    pub(crate) fn cited_texts(&self, cx: &App) -> Vec<(String, String)> {
         let Some(lib) = self.lib.as_ref() else { return vec![] };
         let section = lib.writing.section_id.clone();
         let current = lib.writing.editor.read(cx).text().to_string();
@@ -150,6 +174,11 @@ impl Workspace {
         let found: Vec<(&str, &str, Vec<Cited>)> = texts.iter().map(|(key, text)| (key.as_str(), text.as_str(), cite::find(text, &index))).collect();
         let all: Vec<Cited> = found.iter().flat_map(|(_, _, cited)| cited.iter().cloned()).collect();
         let references = cite::references(&all, &index);
+        // Where each citation is from: the passage kept for it, and the citation the caret is in.
+        let standing = crate::write_source::standing(&found, &lib.citing.sources.kept);
+        let at = self.source_at(&standing, cx);
+        self.source_follow(at, at.and_then(|one| references.iter().position(|reference| reference.paper_id == one.citation.paper)));
+        let source_actions = self.render_source_actions(&standing, cx);
         let key_of = |id: &str| index.key(id).unwrap_or("").to_string();
         let title_of = |id: &str| index.paper(id).map(|paper| paper.title.clone()).unwrap_or_default();
 
@@ -214,21 +243,34 @@ impl Workspace {
         let rows: Vec<AnyElement> = references
             .iter()
             .map(|reference| {
+                let own: Vec<&crate::write_source::Standing> = standing.iter().filter(|one| one.citation.paper == reference.paper_id).collect();
+                let lit = at.is_some_and(|one| one.citation.paper == reference.paper_id);
+                // The entry leads to its paper; the passages under it, each to where it stands in the paper.
                 div()
-                    .id(SharedString::from(format!("cite-ref-{}", reference.paper_id)))
                     .flex()
-                    .items_start()
-                    .gap(px(8.))
-                    .px(px(8.))
-                    .py(px(4.))
+                    .flex_col()
+                    .flex_none()
+                    .gap(px(2.))
+                    .pb(px(2.))
                     .rounded(px(6.))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(Theme::hover()))
-                    .text_size(px(12.))
-                    .line_height(px(18.))
-                    .child(div().flex_1().min_w_0().text_color(if reference.trashed { Theme::text_tertiary() } else { Theme::text() }).child(reference.text.clone()))
-                    .child(div().flex_none().text_size(px(11.)).text_color(Theme::text_tertiary()).child(format!("@{}", reference.key)))
-                    .on_click(self.on(Cmd::GotoSource(reference.paper_id.clone(), None, String::new()), cx))
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("cite-ref-{}", reference.paper_id)))
+                            .flex()
+                            .items_start()
+                            .gap(px(8.))
+                            .px(px(8.))
+                            .py(px(4.))
+                            .rounded(px(6.))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(Theme::hover()))
+                            .text_size(px(12.))
+                            .line_height(px(18.))
+                            .child(div().flex_1().min_w_0().text_color(if reference.trashed { Theme::text_tertiary() } else { Theme::text() }).child(reference.text.clone()))
+                            .child(div().flex_none().text_size(px(11.)).text_color(if lit { Theme::accent() } else { Theme::text_tertiary() }).child(format!("@{}", reference.key)))
+                            .on_click(self.on(Cmd::GotoSource(reference.paper_id.clone(), None, String::new()), cx)),
+                    )
+                    .child(div().flex().flex_col().gap(px(3.)).pl(px(8.)).pr(px(4.)).children(self.render_passages(&own, at, cx)))
                     .into_any_element()
             })
             .collect();
@@ -261,7 +303,8 @@ impl Workspace {
                     .gap(px(6.))
                     .child(div().flex_none().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child(t("参考文献")))
                     .child(div().flex_none().text_size(px(12.)).text_color(Theme::text_tertiary()).child(count))
-                    .child(ui::hint("cite-about", t("在右边的句子上点「引用」，或在这里找一篇文献。引用写作 [@Zhang2024]，导出的 Markdown 和 BibTeX 可以直接交给 Pandoc。")))
+                    .child(ui::hint("cite-about", t("在右边的句子上点「引用」，或在这里找一篇文献。引用写作 [@Zhang2024]，导出的 Markdown 和 BibTeX 可以直接交给 Pandoc。每篇文献下面是出处：引用它的那句话依据的文献原文，点一下在 PDF 里看；光标停在一处引用上，它的出处会标出来。")))
+                    .children(source_actions)
                     .child(div().w(px(2.)))
                     .child(scope("cite-scope-part", t("本节"), false))
                     .child(scope("cite-scope-whole", t("全文"), true))
@@ -271,7 +314,7 @@ impl Workspace {
                     .when(!references.is_empty(), |d| d.child(small("cite-copy", t("复制")).on_click(self.on(Cmd::WriteCopyReferences, cx))).child(small("cite-bib", t("导出 BibTeX")).on_click(self.on(Cmd::WriteExportCited, cx)))),
             )
             .children(issues)
-            .when(!rows.is_empty(), |d| d.child(div().id("cite-references").flex().flex_col().max_h(px(150.)).overflow_y_scroll().children(rows)))
+            .when(!rows.is_empty(), |d| d.child(div().id("cite-references").flex().flex_col().max_h(px(220.)).overflow_y_scroll().track_scroll(&lib.citing.sources.scroll).children(rows)))
             .when(!query.is_empty(), |d| d.child(if offered.is_empty() { div().px(px(8.)).text_size(px(12.)).text_color(Theme::text_tertiary()).child(t("没有对得上的文献")).into_any_element() } else { div().flex().flex_col().children(offered).into_any_element() }))
     }
 }
