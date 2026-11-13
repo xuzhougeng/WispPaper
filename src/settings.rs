@@ -90,6 +90,8 @@ pub struct SettingsView {
     fields: ProviderFields,
     /// The proxy for everything.
     proxy: Entity<TextInput>,
+    /// Whose name the comments and tracked changes of a Word export carry.
+    author: Entity<TextInput>,
     translation_prompt: Entity<TextInput>,
     /// The command of the person's own whose fields 命令 shows, as an index into `Settings::commands`.
     command: Option<(usize, CommandFields)>,
@@ -326,10 +328,17 @@ impl Workspace {
                 let shown = self.settings.providers.get(index).cloned().unwrap_or_default();
                 let fields = ProviderFields::new(&shown, cx);
                 let proxy = cx.new(|cx| TextInput::new("http://127.0.0.1:7890", cx).with_text(&self.settings.proxy));
+                let author = cx.new(|cx| TextInput::new(wisp_core::settings::Settings::default().author_name(), cx).with_text(&self.settings.author));
                 let translation_prompt = cx.new(|cx| TextInput::new("留空则使用默认要求：译成简体中文，保留术语、基因名、物种学名和数字原样，只输出译文。", cx).multiline(3).with_text(&self.settings.translation_prompt));
                 let subscriptions = vec![
                     cx.subscribe(&proxy, |this, _, event: &InputEvent, cx| {
                         if *event == InputEvent::Changed { this.save_proxy(cx) }
+                    }),
+                    cx.subscribe(&author, |this, input, event: &InputEvent, cx| {
+                        if *event == InputEvent::Changed {
+                            this.settings.author = input.read(cx).text().trim().to_string();
+                            this.save_settings(cx);
+                        }
                     }),
                     cx.subscribe(&translation_prompt, |this, input, event: &InputEvent, cx| {
                         if *event == InputEvent::Changed {
@@ -339,7 +348,7 @@ impl Workspace {
                         }
                     }),
                 ];
-                self.settings_view = Some(SettingsView { page, ai_tab: AiTab::default(), scroll: ScrollHandle::new(), provider: index, protocol: shown.protocol, fields, proxy, translation_prompt, command: None, recording: None, shortcut_error: None, _subscriptions: subscriptions });
+                self.settings_view = Some(SettingsView { page, ai_tab: AiTab::default(), scroll: ScrollHandle::new(), provider: index, protocol: shown.protocol, fields, proxy, author, translation_prompt, command: None, recording: None, shortcut_error: None, _subscriptions: subscriptions });
             }
         }
         window.focus(&self.focus);
@@ -748,7 +757,7 @@ impl Workspace {
             .child(nav("settings-back", "arrow-left", t("返回"), false, Cmd::CloseSettings, self, cx));
 
         let body = match page {
-            SettingsPage::General => self.general_page(cx),
+            SettingsPage::General => self.general_page(window, cx),
             SettingsPage::Appearance => self.appearance_page(cx),
             SettingsPage::Shortcuts => self.shortcuts_page(cx),
             SettingsPage::Ai => self.ai_page(window, cx),
@@ -791,7 +800,7 @@ impl Workspace {
         (f32::from(window.viewport_size().width) - SIDEBAR_W - 65.).min(if page == Some(SettingsPage::Ai) { AI_COLUMN_W } else { COLUMN_W })
     }
 
-    fn general_page(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn general_page(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let custom = !self.settings.data_dir.trim().is_empty();
         let reveal = if cfg!(target_os = "macos") { t("在访达中显示") } else if cfg!(target_os = "windows") { t("在资源管理器中显示") } else { t("在文件管理器中显示") };
         let folder = div()
@@ -811,6 +820,7 @@ impl Workspace {
                 group(Some(t("数据")), vec![row(t("数据目录"), Some(self.root.display().to_string().into()), folder).into_any_element()])
                     .child(note(t("所有文献库都在这个文件夹下，每个文献库是其中的一个子文件夹。改到别的目录后，首页显示那个目录里的文献库；原目录里的文献库不会被移动。"))),
             )
+            .children(self.settings_view.as_ref().map(|view| group(Some(t("写作")), vec![row(t("署名"), Some(t("导出到 Word 的批注和修订用这个名字；留空用这台电脑的用户名。").into()), div().w(px(INPUT_W)).child(ui::field(&view.author, window, cx))).into_any_element()])))
             .when(crate::background::SUPPORTED, |d| {
                 let detail = if cfg!(target_os = "macos") { t("关闭窗口后应用留在程序坞中，检索同步、筛选和导入照常进行；点程序坞图标回到窗口，⌘Q 退出。") } else { t("关闭窗口后应用留在通知区域，检索同步、筛选和导入照常进行；点托盘图标回到窗口，在它的菜单里退出。") };
                 d.child(group(Some(t("后台")), vec![row(t("关闭窗口后在后台运行"), Some(detail.into()), switch("keep-running", self.settings.keep_running).on_click(self.on(Cmd::ToggleKeepRunning, cx))).into_any_element()]))

@@ -20,6 +20,9 @@
 //! `undo_import` instead, a tool the window asks the person about first;
 //! one containing 「试试整理」 makes it call `organise_papers` for the first
 //! two papers, whose changes the window lists before it asks.
+//! Asked to review a section of the manuscript (批注), it proposes a change
+//! to the first sentence, remarks on the start of the second paragraph, and
+//! makes one remark on words the manuscript does not have, which is dropped.
 //! Asked to work on a paragraph of the manuscript (写作), it streams the
 //! paragraph back in pieces with a few words changed (a translation is
 //! marked as one), so the result card and its marks can be watched.
@@ -87,7 +90,7 @@ fn main() {
 fn answer(mut stream: TcpStream, delay: u64) {
     {
         let request = body(&mut stream);
-        let kind = if request.contains("图片库助手") { "figure" } else if request.contains("学术写作助手") { "write" } else if request.contains("文献筛选助手") { "screen" } else if request.contains("文献信息提取助手") { "extract" } else if request.contains("写作检索词助手") { "search words" } else if request.contains("翻译助手") { "translate" } else if request.contains("\"tools\"") { "chat" } else { "queries" };
+        let kind = if request.contains("图片库助手") { "figure" } else if request.contains("审稿助手") { "review of a section" } else if request.contains("学术写作助手") { "write" } else if request.contains("文献筛选助手") { "screen" } else if request.contains("文献信息提取助手") { "extract" } else if request.contains("写作检索词助手") { "search words" } else if request.contains("翻译助手") { "translate" } else if request.contains("\"tools\"") { "chat" } else { "queries" };
         println!("{kind}: model {} thinking {} output_config {}", sent(&request, "model"), sent(&request, "thinking"), sent(&request, "output_config"));
         std::thread::sleep(std::time::Duration::from_millis(delay));
         // The last message decides the step: tool results get the answer, a question gets the calls.
@@ -98,6 +101,20 @@ fn answer(mut stream: TcpStream, delay: u64) {
             let reply = if request.contains("只输出标签") { "示意图, 流程图, 配色" } else if request.contains("解读") { "（假模型的解读）这张图用流程示意说明方法的步骤，配色克制，可以借鉴它的排版。" } else { "Fig. 9\n\n（假模型的图注）A schematic of the method. a, Steps. b, Setup." };
             events.push_str(&event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#));
             events.push_str(&event(&format!(r#"{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":{}}}}}"#, quoted(reply).replace('\n', "\\n"))));
+            events.push_str(&event(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#));
+        } else if request.contains("审稿助手") {
+            // A review of a section of the manuscript (批注): it proposes a change to the first sentence, and remarks on the start of the second paragraph.
+            let value: serde_json::Value = serde_json::from_str(&request).unwrap_or_default();
+            let message = value["messages"][0]["content"].as_str().unwrap_or("").to_string();
+            let text = message.split("\n稿件：\n").nth(1).unwrap_or("").trim();
+            let mut paragraphs = text.lines().map(str::trim).filter(|line| !line.is_empty());
+            let first = paragraphs.next().unwrap_or("");
+            let sentence: String = first.char_indices().find(|(_, c)| ['.', '。', '；', ';'].contains(c)).map_or(first, |(at, c)| &first[..at + c.len_utf8()]).to_string();
+            let mut remarks = vec![serde_json::json!({"quote": sentence, "comment": "（假模型）这一句可以更具体，补了半句。", "replacement": format!("{sentence}（假模型补充的内容）")})];
+            if let Some(second) = paragraphs.next() { remarks.push(serde_json::json!({"quote": second.chars().take(10).collect::<String>(), "comment": "（假模型）这里需要一条引用。", "replacement": ""})) }
+            remarks.push(serde_json::json!({"quote": "a sentence the manuscript does not have", "comment": "（假模型）引的原文不在稿件里。", "replacement": ""}));
+            events.push_str(&event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#));
+            events.push_str(&event(&format!(r#"{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":{}}}}}"#, quoted(&serde_json::Value::Array(remarks).to_string()))));
             events.push_str(&event(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#));
         } else if request.contains("学术写作助手") {
             // The paragraph is the message's last block; the rewrite marks itself as one.

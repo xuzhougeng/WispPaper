@@ -89,6 +89,8 @@ pub struct TextInput {
     redo: Vec<(String, Range<usize>)>,
     /// The last change was a character typed: the next one joins its step.
     typing: bool,
+    /// Stretches of the text drawn on a tint (bytes, and the tint): the words a comment is about.
+    marks: Vec<(Range<usize>, Hsla)>,
 }
 
 /// The most changes a field can go back through.
@@ -126,6 +128,7 @@ impl TextInput {
             undo: vec![],
             redo: vec![],
             typing: false,
+            marks: vec![],
         }
     }
 
@@ -153,6 +156,17 @@ impl TextInput {
         // Another text altogether (a draft of another part): its changes are not this one's.
         (self.undo, self.redo, self.typing) = (vec![], vec![], false);
         cx.notify();
+    }
+
+    /// Draw these stretches of the text on a tint. The owner gives them anew when the text or what they mark changes; nothing is redrawn for it.
+    pub fn set_marks(&mut self, marks: Vec<(Range<usize>, Hsla)>) {
+        self.marks = marks;
+    }
+
+    /// How far below the top of the text byte `at` was last drawn; none before the first frame.
+    pub fn top_of(&self, at: usize) -> Option<Pixels> {
+        let layout = self.layout.as_ref()?;
+        Some(self.position_in(layout, self.to_display(at.min(self.text.len())))?.y)
     }
 
     /// What is selected, in bytes; empty at the caret.
@@ -629,6 +643,8 @@ struct InputElement {
 
 struct Prepaint {
     lines: Vec<(WrappedLine, usize, Pixels)>,
+    /// Under the text whether the field has the keyboard or not.
+    marks: Vec<PaintQuad>,
     selection: Vec<PaintQuad>,
     caret: Option<PaintQuad>,
     scroll_x: Pixels,
@@ -724,29 +740,32 @@ impl Element for InputElement {
             scroll_x = if input.focus.is_focused(window) { input.scroll_x.min(caret_at.x).max(caret_at.x - width).max(px(0.)) } else { px(0.) };
         }
         let origin = point(bounds.left() - scroll_x, bounds.top());
-        let mut selection = vec![];
-        if !input.sel.is_empty() {
-            let (a, b) = (input.to_display(input.sel.start), input.to_display(input.sel.end));
+        // The rows a stretch of the text covers, line by line.
+        let rows = |a: usize, b: usize, color: Hsla| {
+            let mut quads = vec![];
             for (line, start, top) in &probe.lines {
                 let (from, to) = (a.max(*start), b.min(start + line.len()));
                 if from > to || (from == to && !(a < *start && b > *start + line.len())) { continue }
                 let (Some(p), Some(q)) = (line.position_for_index(from - start, line_height), line.position_for_index(to - start, line_height)) else { continue };
-                let row = |x0: Pixels, x1: Pixels, y: Pixels| fill(Bounds::from_corners(origin + point(x0, *top + y), origin + point(x1, *top + y + line_height)), Theme::selection());
+                let row = |x0: Pixels, x1: Pixels, y: Pixels| fill(Bounds::from_corners(origin + point(x0, *top + y), origin + point(x1, *top + y + line_height)), color);
                 if p.y == q.y {
-                    selection.push(row(p.x, q.x, p.y));
+                    quads.push(row(p.x, q.x, p.y));
                 } else {
-                    selection.push(row(p.x, bounds.size.width, p.y));
+                    quads.push(row(p.x, bounds.size.width, p.y));
                     let mut y = p.y + line_height;
                     while y < q.y {
-                        selection.push(row(px(0.), bounds.size.width, y));
+                        quads.push(row(px(0.), bounds.size.width, y));
                         y += line_height;
                     }
-                    selection.push(row(px(0.), q.x, q.y));
+                    quads.push(row(px(0.), q.x, q.y));
                 }
             }
-        }
+            quads
+        };
+        let selection = if input.sel.is_empty() { vec![] } else { rows(input.to_display(input.sel.start), input.to_display(input.sel.end), Theme::selection()) };
+        let marks = input.marks.iter().filter(|(range, _)| range.start < range.end && range.end <= input.text.len() && !input.masked).flat_map(|(range, color)| rows(range.start, range.end, *color)).collect();
         let caret = input.sel.is_empty().then(|| fill(Bounds::new(origin + point(caret_at.x, caret_at.y + px(1.)), size(px(1.5), line_height - px(2.))), Theme::text()));
-        Prepaint { lines: probe.lines, selection, caret, scroll_x }
+        Prepaint { lines: probe.lines, marks, selection, caret, scroll_x }
     }
 
     fn paint(&mut self, _: Option<&GlobalElementId>, _: Option<&InspectorElementId>, bounds: Bounds<Pixels>, _: &mut (), prepaint: &mut Prepaint, window: &mut Window, cx: &mut App) {
@@ -757,6 +776,9 @@ impl Element for InputElement {
         let lines = std::mem::take(&mut prepaint.lines);
         let focused = focus.is_focused(window);
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            for quad in prepaint.marks.drain(..) {
+                window.paint_quad(quad);
+            }
             if focused {
                 for quad in prepaint.selection.drain(..) {
                     window.paint_quad(quad);

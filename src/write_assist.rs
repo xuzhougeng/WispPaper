@@ -207,6 +207,7 @@ impl Workspace {
         // The draft may have been edited meanwhile: the paragraph is found again by what it says.
         let text = writing.editor.read(cx).text().to_string();
         let found = if text.get(card.range.clone()) == Some(card.original.as_str()) { Some(card.range.clone()) } else { text.find(&card.original).map(|at| at..at + card.original.len()) };
+        let (changed, why) = (how == Use::Replace && found.is_some(), (card.original.clone(), crate::i18n::assist_title(&card.assist, &card.language)));
         match (how, found) {
             (Use::Replace, Some(range)) => writing.editor.update(cx, |input, cx| input.replace_range(range, &result, cx)),
             (Use::Replace, None) => return self.fail(t("原来那段已经改动，找不到了：可以复制结果，自己放进去。"), cx),
@@ -223,6 +224,8 @@ impl Workspace {
             if lib.citing.kept.contains_key(&key) { continue }
             if lib.store.keep_cite_key(&paper, &key).is_ok() { lib.citing.kept.insert(key, paper); }
         }
+        // In a manuscript that came from a Word file, what the model changed is said on the spot, as a comment.
+        if changed { self.comment_on_change(&why.0, &result, &why.1) }
         cx.notify();
     }
 
@@ -261,6 +264,7 @@ impl Workspace {
             .pb(px(6.))
             .child(div().flex_none().mr(px(4.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(if selected { t("对选中的文字：") } else { t("对光标所在的段落：") }))
             .when(configured, |d| d.children(buttons))
+            .child(ui::ghost_button("write-comment", Some("message-square"), Some(t("批注").into())).h(px(24.)).px(px(7.)).text_size(px(12.)).on_click(self.on(Cmd::Comment(crate::comments::Do::Write), cx)))
             .when(!configured, |d| d.child(ui::ghost_button("write-assist-settings", Some("settings-gear"), Some(t("配置模型后可以改写、翻译和润色").into())).h(px(24.)).text_size(px(12.)).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx))))
     }
 
@@ -355,7 +359,7 @@ fn plain(text: &str) -> StyledText {
 }
 
 /// A version of the paragraph with what the other lacks marked: struck out in the original, shaded in the result.
-fn marked(pieces: &[(Change, String)]) -> StyledText {
+pub(crate) fn marked(pieces: &[(Change, String)]) -> StyledText {
     let (mut text, mut highlights) = (String::new(), vec![]);
     for (n, (change, piece)) in pieces.iter().enumerate() {
         let range = text.len()..text.len() + piece.len();

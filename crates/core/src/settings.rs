@@ -65,12 +65,14 @@ pub struct Settings {
     pub floating: crate::floating::Floating,
     /// Closing the window keeps the app running in the background (macOS: the Dock, Windows: the tray) instead of quitting.
     pub keep_running: bool,
+    /// Whose comments and tracked changes a manuscript exported to Word carries; empty is the name this computer knows the person by.
+    pub author: String,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         let providers = provider::DEFAULT_PRESETS.iter().filter_map(|key| provider::preset(key)).map(Provider::from_preset).collect();
-        let mut settings = Settings { data_dir: String::new(), providers, legacy_profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translation_prompt: String::new(), commands: vec![], auto_update: true, appearance: String::new(), language: Language::default(), density: String::new(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., floating: Default::default(), keep_running: true };
+        let mut settings = Settings { data_dir: String::new(), providers, legacy_profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translation_prompt: String::new(), commands: vec![], auto_update: true, appearance: String::new(), language: Language::default(), density: String::new(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., floating: Default::default(), keep_running: true, author: String::new() };
         settings.tidy();
         settings
     }
@@ -173,6 +175,13 @@ pub fn proxy_problem(value: &str, allow_direct: bool) -> Option<String> {
 }
 
 impl Settings {
+    /// Whose name the person's comments and tracked changes carry: the one set, else the one this computer knows them by.
+    pub fn author_name(&self) -> String {
+        let named = self.author.trim();
+        if !named.is_empty() { return named.to_string() }
+        ["USER", "USERNAME"].iter().find_map(|key| std::env::var(key).ok()).map(|name| name.trim().to_string()).filter(|name| !name.is_empty()).unwrap_or_else(|| "作者".to_string())
+    }
+
     /// A missing file is the defaults; a broken one is an error, so it is
     /// never silently overwritten with defaults.
     pub fn load(path: &Path) -> Result<Settings> {

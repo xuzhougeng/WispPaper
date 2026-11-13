@@ -1208,6 +1208,8 @@ fn read_manuscript(store: &mut Store, args: &Value) -> Result<Value> {
         _ => manuscripts.iter().find(|m| m.id == wanted || m.shown_title() == wanted).ok_or_else(|| anyhow!("没有这份稿件：{wanted}。现有：{}", manuscripts.iter().map(|m| format!("「{}」", m.shown_title())).collect::<Vec<_>>().join("、")))?,
     };
     let section = text(args, "section")?;
+    // The comments that still wait: those a Word file came with, the person's and the assistant's.
+    let comments = store.comments(&manuscript.id)?;
     let sections: Vec<_> = if section.is_empty() {
         manuscript.sections.iter().filter(|s| !s.body.trim().is_empty()).collect()
     } else {
@@ -1219,7 +1221,7 @@ fn read_manuscript(store: &mut Store, args: &Value) -> Result<Value> {
         "id": manuscript.id,
         "title": manuscript.shown_title(),
         "language": manuscript.language,
-        "sections": sections.iter().map(|s| json!({"id": s.id, "name": s.name, "kind": s.kind, "body": s.body})).collect::<Vec<_>>(),
+        "sections": sections.iter().map(|s| json!({"id": s.id, "name": s.name, "kind": s.kind, "body": s.body, "comments": comments.iter().filter(|c| c.section_id == s.id && c.state != crate::comment::DONE).map(|c| json!({"quote": c.quote, "comment": c.body, "by": c.author, "from": c.origin, "proposes": c.suggestion})).collect::<Vec<_>>()})).collect::<Vec<_>>(),
     }))
 }
 

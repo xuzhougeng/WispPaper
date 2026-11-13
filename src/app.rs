@@ -466,6 +466,8 @@ pub enum Cmd {
     WriteOnly(String, bool),
     /// Show or hide the sentences around a candidate, by its card's id.
     WriteUnfold(String),
+    /// 批注, and manuscripts that start from a file (`comments.rs`).
+    Comment(crate::comments::Do),
     /// Have the model work on the selected text or the caret's paragraph; stop it; use what it gave.
     WriteAssist(ai::Assist),
     WriteAssistStop,
@@ -685,6 +687,10 @@ pub struct Writing {
     pub scroll: ScrollHandle,
     /// The model's work on a paragraph (`write_assist.rs`).
     pub assist: crate::write_assist::Assisting,
+    /// The comments on the manuscript, and the assistant's review (`comments.rs`).
+    pub comments: crate::comments::Commenting,
+    /// Where the manuscript's editor is scrolled to.
+    pub editor_scroll: ScrollHandle,
 }
 
 /// A run of the screening assistant gives up after this many papers in a
@@ -1942,6 +1948,7 @@ impl Workspace {
             Cmd::WriteUnfold(card) => {
                 if let Some(unfolded) = self.lib.as_mut().map(|lib| &mut lib.writing.search.unfolded) && !unfolded.remove(&card) { unfolded.insert(card); }
             }
+            Cmd::Comment(what) => self.run_comment(what, window, cx),
             Cmd::WriteAssist(assist) => self.assist_start(assist, cx),
             Cmd::WriteAssistStop => self.assist_stop(cx),
             Cmd::WriteAssistUse(how) => self.assist_use(how, window, cx),
@@ -2732,7 +2739,9 @@ impl Workspace {
         }));
         // Candidates are asked for: the find box on Enter, the manuscript by the shortcut.
         subscriptions.push(cx.subscribe(&find, |this, _, event: &InputEvent, cx| if *event == InputEvent::Submit { this.write_find(true, cx) }));
-        let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new(), assist: Default::default() };
+        let (comments, heard) = crate::comments::Commenting::new(store.comments(&manuscript).unwrap_or_default(), store.manuscript_source(&manuscript).ok().flatten(), cx);
+        subscriptions.extend(heard);
+        let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new(), assist: Default::default(), comments, editor_scroll: ScrollHandle::new() };
         let citing = crate::cite::Citing::new(&store, &mut subscriptions, cx);
         let gallery = crate::figures::Gallery::new(&mut subscriptions, cx);
         let mut lib = Library {
@@ -3079,6 +3088,11 @@ impl Workspace {
     /// folders between it and the file (`import::folder_pdfs`).
     pub fn import_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         if self.lib.is_none() { return self.fail(t("请先打开一个文献库，再拖入文件。"), cx) }
+        // A Word file is a manuscript to go on with, wherever it is dropped; Markdown and plain text are, on the writing page.
+        let writing = self.lib.as_ref().is_some_and(|lib| lib.page == Page::Write);
+        let (drafts, paths): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|path| path.is_file() && (path.extension().is_some_and(|e| e.eq_ignore_ascii_case("docx")) || (writing && (crate::comments::is_manuscript_file(path) || path.extension().is_some_and(|e| e.eq_ignore_ascii_case("txt"))))));
+        if !drafts.is_empty() { self.import_manuscript_files(drafts, cx) }
+        if paths.is_empty() { return }
         let mut pdfs: Vec<(PathBuf, Vec<String>)> = vec![];
         let mut others = vec![];
         let mut empty_folders = vec![];
@@ -4720,6 +4734,8 @@ impl Workspace {
                 // `section` / `section:<id>` is the dialog for a new section / one's name and kind;
                 // `reading` shows the whole manuscript, `versions` the section's history.
                 "manuscript" if arg == "new" => Some(Cmd::NewManuscript),
+                // `manuscript:open;<n>` writes the n-th of the library's manuscripts, from 0.
+                "manuscript" if arg.starts_with("open;") => self.lib.as_ref().and_then(|lib| lib.writing.manuscripts.get(arg[5..].parse::<usize>().ok()?)).map(|m| Cmd::WriteManuscript(m.id.clone())),
                 "manuscript" => {
                     if let Some(lib) = self.lib.as_ref() { lib.writing.title.update(cx, |input, cx| input.set_text(arg, cx)) }
                     self.write_title_typed(arg.to_string(), cx);
@@ -4728,6 +4744,43 @@ impl Workspace {
                 "section" => Some(Cmd::EditSection((!arg.is_empty()).then(|| arg.to_string()))),
                 "reading" => Some(Cmd::WriteReading(true)),
                 "versions" => Some(Cmd::WriteHistory),
+                // `importdoc:<path>` starts a manuscript from a Word or Markdown file; `comments` shows the comments beside the manuscript (`comments:off` the candidates);
+                // `comment:<step>` is `review`, `stop`, `write`, `save`, `cancel`, `takeall`, `import`, `fromreview` (a manuscript of the newest review the assistant wrote sections for), and by a comment's place among those of the section from 0: `take;<n>`, `back;<n>`, `drop;<n>`, `done;<n>`, `show;<n>`;
+                // `wish:<text>` / `commenttext:<text>` leave text in the review's box / the comment being written; `exportdoc:<path>` / `exportdoc:track;<path>` write the manuscript as a Word file there.
+                "importdoc" => {
+                    self.import_manuscript_files(vec![PathBuf::from(arg)], cx);
+                    None
+                }
+                "comments" => Some(Cmd::Comment(crate::comments::Do::Panel(arg != "off"))),
+                "wish" | "commenttext" => {
+                    if let Some(comments) = self.lib.as_ref().map(|lib| &lib.writing.comments) { (if step == "wish" { &comments.wish } else { &comments.draft }).update(cx, |input, cx| input.set_text(arg, cx)) }
+                    None
+                }
+                "exportdoc" => {
+                    let (track, path) = arg.strip_prefix("track;").map_or((false, arg), |path| (true, path));
+                    self.write_word_to(PathBuf::from(path), track, cx);
+                    None
+                }
+                "comment" => {
+                    use crate::comments::Do;
+                    let (what, n) = arg.split_once(';').map_or((arg, 0), |(what, n)| (what, n.parse::<usize>().unwrap_or(0)));
+                    let nth = self.lib.as_ref().and_then(|lib| lib.writing.comments.list.iter().filter(|comment| comment.section_id == lib.writing.section_id).nth(n)).map(|comment| comment.id.clone()).unwrap_or_default();
+                    Some(Cmd::Comment(match what {
+                        "review" => Do::Review,
+                        "stop" => Do::Stop,
+                        "write" => Do::Write,
+                        "save" => Do::Save,
+                        "cancel" => Do::Cancel,
+                        "takeall" => Do::TakeAll,
+                        "import" => Do::Import,
+                        "fromreview" => Do::FromReview(self.reviews_written().first().map(|(conversation, _, _)| conversation.clone()).unwrap_or_default()),
+                        "take" => Do::Take(nth),
+                        "back" => Do::Back(nth),
+                        "drop" => Do::Drop(nth),
+                        "done" => Do::Done(nth, true),
+                        _ => Do::Show(nth),
+                    }))
+                }
                 // `find` asks for candidates as the shortcut does; `find:<words>` puts words in the find box and presses Enter.
                 "find" if arg.is_empty() => Some(Cmd::WriteFind),
                 "find" => {

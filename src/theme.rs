@@ -100,6 +100,10 @@ impl Theme {
     /// Text and icons on an accent or danger fill: the dark set's fills are
     /// bright, so they carry dark text.
     pub fn on_accent() -> Hsla { pick(0xFFFFFF, 0x141518) }
+    /// Under the words a comment of a manuscript is about; stronger where the assistant proposes a change; the line beside a comment's quotation.
+    pub fn note() -> Hsla { if dark() { hsla(0.11, 0.85, 0.6, 0.22) } else { hsla(0.11, 0.95, 0.55, 0.2) } }
+    pub fn note_strong() -> Hsla { if dark() { hsla(0.11, 0.85, 0.6, 0.38) } else { hsla(0.11, 0.95, 0.55, 0.36) } }
+    pub fn note_line() -> Hsla { pick(0xE0A100, 0xE8B92E) }
     pub fn selection() -> Hsla { Self::accent().opacity(if dark() { 0.36 } else { 0.22 }) }
     /// The off state of a switch and the groove of a segmented control.
     pub fn groove() -> Hsla { if dark() { hsla(0., 0., 1., 0.12) } else { hsla(0., 0., 0., 0.07) } }

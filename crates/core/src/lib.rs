@@ -15,6 +15,8 @@
 //! - `pdftext`  that text read off a PDF's glyphs, with the breaks the page shows
 //! - `structure` that text sorted into the parts of a paper and cut into sentences, for 写作
 //! - `cite`     citations in a manuscript: keys, finding them, the reference list and BibTeX
+//! - `docx`     Word files for 写作: read into paragraphs and comments, written again with the text as it stands and its comments
+//! - `comment`  批注: remarks on words of a manuscript, the person's, the assistant's and those a Word file came with
 //! - `markdown` the Markdown of an answer → blocks to draw
 //! - `ai`       context building, request bodies and stream parsing for 文献库提问
 //! - `screening` the person's side of 筛选: the keys, a round of papers one by one, suggestions confirmed together
@@ -27,7 +29,9 @@
 
 pub mod ai;
 pub mod cite;
+pub mod comment;
 pub mod complete;
+pub mod docx;
 pub mod export;
 pub mod extract;
 pub mod figure;

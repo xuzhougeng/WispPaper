@@ -6,14 +6,26 @@
 //! on a pause or when the person leaves it, so an earlier version can be
 //! looked at and restored. Export turns a manuscript into Markdown, plain
 //! text or a Word file, its section names becoming headings.
+//!
+//! A manuscript can also start from a file (`from_word`, `from_markdown`,
+//! `Store::import_manuscript`): its headings become the sections, and the
+//! comments a Word file came with become the manuscript's (`comment.rs`).
+//! The Word file itself is kept beside the library (`manuscripts/`), and an
+//! export to Word is that file written again (`docx::rewrite`): with its
+//! formatting, tables and pictures, the text as it now stands, and the
+//! comments made here.
 
+use crate::comment::{self, Comment};
+use crate::docx;
 use crate::model::new_id;
 use crate::store::Store;
-use crate::structure::SECTIONS;
+use crate::structure::{self, SECTIONS};
 use crate::time::now_iso;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
+use std::ops::Range;
+use std::path::PathBuf;
 
 /// The tables, made with the library's own (`store::SCHEMA`). An older build
 /// does not know them and reads the rest of the database as before.
@@ -49,7 +61,23 @@ CREATE TABLE IF NOT EXISTS section_snapshots (
     taken_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_section_snapshots ON section_snapshots(section_id, id);
+-- The file a manuscript was started from.
+CREATE TABLE IF NOT EXISTS manuscript_sources (
+    manuscript_id TEXT PRIMARY KEY NOT NULL REFERENCES manuscripts(id) ON DELETE CASCADE,
+    -- docx or markdown.
+    kind TEXT NOT NULL,
+    -- The file's name as it was taken in.
+    name TEXT NOT NULL,
+    -- Where the copy of a Word file is, relative to the library folder; empty when none is kept.
+    path TEXT NOT NULL DEFAULT '',
+    -- The manuscript's title is a paragraph of the file.
+    titled INTEGER NOT NULL DEFAULT 0,
+    imported_at TEXT NOT NULL
+);
 "#;
+
+/// The folder of the library that holds the Word files manuscripts were started from.
+pub const FOLDER: &str = "manuscripts";
 
 /// The languages a manuscript can be written in: (code, name).
 pub const LANGUAGES: [(&str, &str); 6] = [("en", "英文"), ("zh", "中文"), ("de", "德文"), ("fr", "法文"), ("es", "西班牙文"), ("ja", "日文")];
@@ -91,6 +119,8 @@ pub struct Section {
     pub kind: String,
     pub body: String,
     pub updated_at: String,
+    /// Text that stood under no heading in the file the manuscript came from: its name is the manuscript's own and is not written back.
+    pub bare: bool,
 }
 
 /// An earlier version of a section's text.
@@ -185,7 +215,7 @@ pub fn plain_text(manuscript: &Manuscript) -> String {
     out
 }
 
-fn xml_escape(text: &str) -> String {
+pub(crate) fn xml_escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
         match c {
@@ -236,7 +266,7 @@ pub fn docx(manuscript: &Manuscript) -> Vec<u8> {
     stored_zip(&[("[Content_Types].xml", content_types.as_bytes()), ("_rels/.rels", rels.as_bytes()), ("word/document.xml", document.as_bytes()), ("word/_rels/document.xml.rels", document_rels.as_bytes()), ("word/styles.xml", styles.as_bytes())])
 }
 
-fn crc32(data: &[u8]) -> u32 {
+pub(crate) fn crc32(data: &[u8]) -> u32 {
     let mut crc = !0u32;
     for &byte in data {
         crc ^= byte as u32;
@@ -278,6 +308,313 @@ fn stored_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
     out
 }
 
+// ---- starting from a file
+
+/// What a file gives a manuscript.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Draft {
+    pub title: String,
+    /// The title is a paragraph of the file, not the file's name.
+    pub titled: bool,
+    /// A code of `LANGUAGES`.
+    pub language: String,
+    pub sections: Vec<DraftSection>,
+    pub comments: Vec<DraftComment>,
+    /// What a Word file holds besides: kept in the file, not in the manuscript.
+    pub tables: usize,
+    pub pictures: usize,
+    /// The Word file had tracked changes: it was read as if they were accepted.
+    pub tracked: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DraftSection {
+    pub name: String,
+    /// A key of `structure::SECTIONS`.
+    pub kind: String,
+    /// The text before the first heading: the name is not a heading of the file.
+    pub bare: bool,
+    pub paragraphs: Vec<String>,
+}
+
+/// A comment the file came with.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DraftComment {
+    /// Which of `Draft::sections` it is in.
+    pub section: usize,
+    pub quote: String,
+    pub author: String,
+    pub date: String,
+    pub body: String,
+}
+
+/// A paragraph of a file, as far as the outline goes.
+struct Line {
+    /// What it says; for a heading, its words alone.
+    text: String,
+    /// As it reads when it stays in a section's text (a Markdown heading keeps its marks there).
+    kept: String,
+    level: Option<u8>,
+    title: bool,
+}
+
+/// A title is short and is not a sentence.
+const TITLE_WIDTH: usize = 150;
+
+/// A heading told by its name alone (in a file without heading styles) is no longer than this.
+const HEADING_WIDTH: usize = 60;
+
+fn manuscript_language(text: &str) -> String {
+    let code = structure::language(&[text.to_string()]);
+    if is_language(code) { return code.to_string() }
+    // Too short for the rules of a paper's full text: a text mostly in Chinese characters is Chinese.
+    let (cjk, letters) = (text.chars().filter(|c| structure::is_cjk(*c)).count(), text.chars().filter(|c| c.is_alphabetic()).count());
+    if code.is_empty() && cjk * 2 > letters { "zh".to_string() } else { DEFAULT_LANGUAGE.to_string() }
+}
+
+/// The manuscript a file's paragraphs make, and the section each of them went to (none for the title).
+fn outline(mut lines: Vec<Line>, file_name: &str) -> (Draft, Vec<Option<usize>>) {
+    // A file without heading styles: the headings every paper has are told by their names.
+    if lines.iter().all(|line| line.level.is_none()) {
+        for line in &mut lines {
+            if structure::width(&line.text) <= HEADING_WIDTH && structure::canonical(&line.text).is_some() { line.level = Some(1) }
+        }
+    }
+    let language = manuscript_language(&lines.iter().filter(|line| line.level.is_none()).map(|line| line.text.as_str()).collect::<Vec<_>>().join("\n"));
+    let stem = file_name.rsplit(['/', '\\']).next().unwrap_or(file_name);
+    let stem = stem.rsplit_once('.').map_or(stem, |(stem, _)| stem).trim();
+    // The title: the paragraph styled as one, else a short first line that is not a sentence.
+    let mut title = lines.iter().position(|line| line.title);
+    if title.is_none() && lines.len() > 1 && lines[0].level.is_none() && structure::width(&lines[0].text) <= TITLE_WIDTH && !lines[0].text.ends_with(['。', '.', '；', ';', '：', ':', '，', ',']) { title = Some(0) }
+    let top = lines.iter().enumerate().filter(|(n, _)| Some(*n) != title).filter_map(|(_, line)| line.level).min();
+    let mut draft = Draft { title: title.map_or(stem.to_string(), |n| lines[n].text.clone()), titled: title.is_some(), language, ..Default::default() };
+    let chinese = draft.language == "zh";
+    let mut places = vec![];
+    for (n, line) in lines.iter().enumerate() {
+        if Some(n) == title {
+            places.push(None);
+            continue;
+        }
+        if line.level.is_some() && line.level == top {
+            let kind = structure::canonical(&line.text).filter(|kind| is_kind(kind)).unwrap_or("other");
+            draft.sections.push(DraftSection { name: line.text.clone(), kind: kind.to_string(), bare: false, paragraphs: vec![] });
+        } else {
+            if draft.sections.is_empty() {
+                let name = match (top.is_some(), chinese) {
+                    (true, true) => "开头",
+                    (true, false) => "Front matter",
+                    (false, true) => "正文",
+                    (false, false) => "Text",
+                };
+                draft.sections.push(DraftSection { name: name.to_string(), kind: "other".to_string(), bare: true, paragraphs: vec![] });
+            }
+            if let Some(section) = draft.sections.last_mut() { section.paragraphs.push(line.kept.clone()) }
+        }
+        places.push(Some(draft.sections.len() - 1));
+    }
+    if draft.sections.is_empty() { draft.sections.push(DraftSection { name: if chinese { "正文" } else { "Text" }.to_string(), kind: "other".to_string(), bare: true, paragraphs: vec![] }) }
+    (draft, places)
+}
+
+/// The manuscript a Word file makes: sections at its highest headings, the comments it came with.
+pub fn from_word(read: &docx::Read, file_name: &str) -> Draft {
+    let lines = read.paragraphs.iter().map(|para| Line { text: para.text.clone(), kept: para.text.clone(), level: para.level, title: para.title }).collect();
+    let (mut draft, places) = outline(lines, file_name);
+    (draft.tables, draft.pictures, draft.tracked) = (read.tables, read.pictures, read.tracked);
+    draft.comments = read.comments.iter().filter(|comment| !comment.body.trim().is_empty()).map(|comment| DraftComment { section: comment.paragraph.and_then(|n| places[n]).unwrap_or(0), quote: comment.quote.clone(), author: comment.author.clone(), date: comment.date.clone(), body: comment.body.clone() }).collect();
+    draft
+}
+
+/// The manuscript a Markdown (or plain text) file makes. Lines of one
+/// paragraph become one line, as the manuscript has them; a list item, a
+/// table row or a line of code keeps its own.
+pub fn from_markdown(text: &str, file_name: &str) -> Draft {
+    let text = text.replace("\r\n", "\n");
+    let mut rest = text.trim_start_matches('\u{feff}');
+    // A header of fields before the text: its `title` is the title.
+    let mut named = None;
+    if let Some(after) = rest.strip_prefix("---\n") && let Some(end) = after.find("\n---") {
+        named = after[..end].lines().find_map(|line| line.strip_prefix("title:")).map(|title| title.trim().trim_matches(['"', '\'']).to_string()).filter(|title| !title.is_empty());
+        rest = after[end + 4..].split_once('\n').map_or("", |(_, rest)| rest);
+    }
+    let mut lines: Vec<Line> = vec![];
+    let (mut joining, mut code) = (false, false);
+    for line in rest.lines() {
+        let line = line.trim_end();
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            code = !code;
+            joining = false;
+            lines.push(Line { text: line.to_string(), kept: line.to_string(), level: None, title: false });
+            continue;
+        }
+        if code {
+            if !line.is_empty() { lines.push(Line { text: line.to_string(), kept: line.to_string(), level: None, title: false }) }
+            continue;
+        }
+        if trimmed.is_empty() {
+            joining = false;
+            continue;
+        }
+        let marks = trimmed.chars().take_while(|c| *c == '#').count();
+        if (1..=6).contains(&marks) && trimmed[marks..].starts_with(' ') {
+            lines.push(Line { text: trimmed[marks..].trim().trim_end_matches('#').trim().to_string(), kept: trimmed.to_string(), level: Some(marks as u8), title: false });
+            joining = false;
+            continue;
+        }
+        let digits = trimmed.chars().take_while(char::is_ascii_digit).count();
+        let own = trimmed.starts_with(['|', '>']) || ["- ", "* ", "+ "].iter().any(|mark| trimmed.starts_with(mark)) || (digits > 0 && (trimmed[digits..].starts_with(". ") || trimmed[digits..].starts_with(") ")));
+        match lines.last_mut().filter(|_| joining && !own) {
+            Some(last) => {
+                // Chinese is written without spaces between the lines of a paragraph.
+                let apart = !(last.text.ends_with(structure::is_cjk) && trimmed.starts_with(structure::is_cjk));
+                if apart { last.text.push(' ') }
+                last.text.push_str(trimmed);
+                last.kept = last.text.clone();
+            }
+            None => lines.push(Line { text: trimmed.to_string(), kept: trimmed.to_string(), level: None, title: false }),
+        }
+        joining = !own;
+    }
+    // One `#` heading before all others is the title; the sections are the next level.
+    let firsts: Vec<usize> = lines.iter().enumerate().filter(|(_, line)| line.level == Some(1)).map(|(n, _)| n).collect();
+    if named.is_none() && firsts.len() == 1 && lines.iter().position(|line| line.level.is_some()) == Some(firsts[0]) {
+        lines[firsts[0]].title = true;
+        lines[firsts[0]].level = None;
+    }
+    // With a title from the header, no line is taken for one.
+    let guard = named.is_some();
+    if guard { lines.insert(0, Line { text: named.unwrap_or_default(), kept: String::new(), level: None, title: true }) }
+    let (mut draft, _) = outline(lines, file_name);
+    draft.titled = false;
+    draft
+}
+
+/// The file a manuscript was started from.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Source {
+    /// `docx` or `markdown`.
+    pub kind: String,
+    pub name: String,
+    /// The copy of a Word file, relative to the library folder.
+    pub path: String,
+    pub titled: bool,
+    pub imported_at: String,
+}
+
+/// `2026-11-12T08:00:00Z`, as a Word file dates a comment or a change.
+fn word_date(stamp: &str) -> String {
+    match stamp.get(..19) {
+        Some(seconds) if seconds.as_bytes().get(10) == Some(&b'T') => format!("{seconds}Z"),
+        _ => now_iso().get(..19).map(|seconds| format!("{seconds}Z")).unwrap_or_default(),
+    }
+}
+
+/// The manuscript's paragraphs as a Word file is to say them, each with the
+/// comments made here on it. With a `source`, they are the paragraphs of
+/// the file the manuscript came from; without, those `docx` writes.
+pub fn wanted(manuscript: &Manuscript, source: Option<&Source>, comments: &[Comment]) -> Vec<docx::Wanted> {
+    let mut out: Vec<docx::Wanted> = vec![];
+    // Where each section's paragraphs are in `out`: its heading, and its lines.
+    let mut places: Vec<(&str, Option<usize>, Range<usize>)> = vec![];
+    let paragraph = |text: &str, role: docx::Role| docx::Wanted { text: text.to_string(), role, notes: vec![] };
+    match source {
+        Some(source) => {
+            if source.titled && !manuscript.title.trim().is_empty() { out.push(paragraph(manuscript.title.trim(), docx::Role::Title)) }
+        }
+        None => out.push(paragraph(manuscript.shown_title(), docx::Role::Title)),
+    }
+    for section in &manuscript.sections {
+        // A file made here leaves out the sections without text; one written again keeps every heading it had.
+        if source.is_none() && section.body.trim().is_empty() { continue }
+        let heading = (source.is_none() || !section.bare).then(|| {
+            out.push(paragraph(section.name.trim(), docx::Role::Heading));
+            out.len() - 1
+        });
+        let start = out.len();
+        out.extend(paragraphs(&section.body).map(|line| paragraph(line, docx::Role::Body)));
+        places.push((section.id.as_str(), heading, start..out.len()));
+    }
+    for comment in comments.iter().filter(|comment| comment.origin != comment::FILE && comment.state != comment::DONE) {
+        let said = comment.said();
+        if said.is_empty() { continue }
+        let Some((_, heading, lines)) = places.iter().find(|(id, _, _)| *id == comment.section_id) else { continue };
+        // Its words, in the paragraph that has them; a comment whose words were written over since goes on the section's heading, with the words it was about.
+        let first = comment.quote.lines().next().unwrap_or("").trim();
+        let found = lines.clone().find_map(|n| out[n].text.find(first).filter(|_| !first.is_empty()).map(|at| (n, at..at + first.len())));
+        let named = heading.filter(|n| !first.is_empty() && out[*n].text.contains(first)).map(|n| (n, 0..0));
+        let (at, range, body) = match found.or(named) {
+            Some((n, range)) => (n, range, said),
+            None => {
+                let Some(n) = heading.or(lines.clone().next()) else { continue };
+                (n, 0..0, if first.is_empty() { said } else { format!("「{first}」\n{said}") })
+            }
+        };
+        out[at].notes.push(docx::Note { range, author: comment.author.clone(), date: word_date(&comment.created_at), body });
+    }
+    out
+}
+
+impl Store {
+    /// A manuscript made of a file: its sections, the comments it came with,
+    /// and for a Word file (`bytes`) a copy of the file itself, which an
+    /// export to Word is written from. All of it or nothing.
+    pub fn import_manuscript(&mut self, draft: &Draft, kind: &str, file_name: &str, bytes: Option<&[u8]>) -> Result<Manuscript> {
+        if !is_language(&draft.language) { bail!("不认识这种语言：{}", draft.language) }
+        if draft.sections.is_empty() || draft.sections.iter().any(|section| section.name.trim().is_empty()) { bail!("稿件需要有名称的章节") }
+        let (id, now) = (new_id("M"), now_iso());
+        let path = if bytes.is_some() { format!("{FOLDER}/{id}.docx") } else { String::new() };
+        let (folder, file) = (self.root().join(FOLDER), self.root().join(path.replace('/', std::path::MAIN_SEPARATOR_STR)));
+        let tx = self.db.transaction()?;
+        tx.execute("INSERT INTO manuscripts(id, title, language, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)", params![id, draft.title.trim(), draft.language, now])?;
+        let mut sections = vec![];
+        for (position, section) in draft.sections.iter().enumerate() {
+            let section_id = new_id("S");
+            tx.execute("INSERT INTO manuscript_sections(id, manuscript_id, position, name, kind, body, updated_at, bare) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)", params![section_id, id, position as i64, section.name.trim(), if is_kind(&section.kind) { section.kind.as_str() } else { "other" }, section.paragraphs.join("\n\n"), now, section.bare])?;
+            sections.push(section_id);
+        }
+        for (n, theirs) in draft.comments.iter().enumerate() {
+            let Some(section) = sections.get(theirs.section) else { continue };
+            let made = Comment { id: new_id("C"), manuscript_id: id.clone(), section_id: section.clone(), quote: theirs.quote.trim().to_string(), body: theirs.body.trim().to_string(), author: theirs.author.trim().to_string(), origin: comment::FILE.into(), state: comment::OPEN.into(), created_at: if theirs.date.is_empty() { format!("{now}{n:04}") } else { theirs.date.clone() }, ..Default::default() };
+            comment::insert_comment(&tx, &made)?;
+        }
+        tx.execute("INSERT INTO manuscript_sources(manuscript_id, kind, name, path, titled, imported_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", params![id, kind, file_name, path, draft.titled, now])?;
+        if let Some(bytes) = bytes {
+            std::fs::create_dir_all(&folder).with_context(|| format!("无法创建稿件文件夹 {}", folder.display()))?;
+            std::fs::write(&file, bytes).with_context(|| format!("无法保存 {}", file.display()))?;
+        }
+        if let Err(err) = tx.commit() {
+            if bytes.is_some() { let _ = std::fs::remove_file(&file); }
+            return Err(err.into());
+        }
+        self.manuscript(&id)?.ok_or_else(|| anyhow::anyhow!("新稿件保存后未找到"))
+    }
+
+    /// The file a manuscript was started from, when it was.
+    pub fn manuscript_source(&self, manuscript_id: &str) -> Result<Option<Source>> {
+        Ok(self.db.query_row("SELECT kind, name, path, titled, imported_at FROM manuscript_sources WHERE manuscript_id = ?1", [manuscript_id], |r| Ok(Source { kind: r.get(0)?, name: r.get(1)?, path: r.get(2)?, titled: r.get(3)?, imported_at: r.get(4)? })).optional()?)
+    }
+
+    /// Where the copy of a manuscript's Word file is.
+    pub fn source_file(&self, source: &Source) -> PathBuf {
+        self.root().join(source.path.replace('/', std::path::MAIN_SEPARATOR_STR))
+    }
+
+    /// The manuscript as a Word file with its comments. One that came from a
+    /// Word file is that file written again, with `track` its changes as
+    /// revisions by `author`; any other is a plain document made here. The
+    /// second value says whether the file it came from was written again.
+    pub fn manuscript_word(&self, manuscript: &Manuscript, comments: &[Comment], track: bool, author: &str) -> Result<(docx::Rewritten, bool)> {
+        let source = self.manuscript_source(&manuscript.id)?.filter(|source| source.kind == "docx" && !source.path.is_empty());
+        if let Some(source) = &source && let Ok(bytes) = std::fs::read(self.source_file(source)) {
+            let options = docx::Options { track, author: author.to_string(), date: word_date(&now_iso()) };
+            return Ok((docx::rewrite(&bytes, &wanted(manuscript, Some(source), comments), &options)?, true));
+        }
+        Ok((docx::rewrite(&docx(manuscript), &wanted(manuscript, None, comments), &docx::Options::default())?, false))
+    }
+}
+
 // ---- migration
 
 /// The drafts of builds before manuscripts (one text per part, in the
@@ -314,7 +651,7 @@ pub(crate) fn migrate_drafts(db: &mut Connection) -> Result<()> {
 // ---- the store
 
 fn read_section(r: &rusqlite::Row) -> rusqlite::Result<Section> {
-    Ok(Section { id: r.get(0)?, name: r.get(1)?, kind: r.get(2)?, body: r.get(3)?, updated_at: r.get(4)? })
+    Ok(Section { id: r.get(0)?, name: r.get(1)?, kind: r.get(2)?, body: r.get(3)?, updated_at: r.get(4)?, bare: r.get(5)? })
 }
 
 impl Store {
@@ -358,12 +695,12 @@ impl Store {
     }
 
     fn sections_of(&self, manuscript_id: &str) -> Result<Vec<Section>> {
-        let mut stmt = self.db.prepare("SELECT id, name, kind, body, updated_at FROM manuscript_sections WHERE manuscript_id = ?1 ORDER BY position, id")?;
+        let mut stmt = self.db.prepare("SELECT id, name, kind, body, updated_at, bare FROM manuscript_sections WHERE manuscript_id = ?1 ORDER BY position, id")?;
         Ok(stmt.query_map([manuscript_id], read_section)?.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     fn section_row(&self, id: &str) -> Result<(String, Section)> {
-        let found = self.db.query_row("SELECT id, name, kind, body, updated_at, manuscript_id FROM manuscript_sections WHERE id = ?1", [id], |r| Ok((r.get(5)?, read_section(r)?))).optional()?;
+        let found = self.db.query_row("SELECT id, name, kind, body, updated_at, bare, manuscript_id FROM manuscript_sections WHERE id = ?1", [id], |r| Ok((r.get(6)?, read_section(r)?))).optional()?;
         found.ok_or_else(|| anyhow::anyhow!("没有这一节：{id}"))
     }
 
@@ -659,6 +996,90 @@ mod tests {
     fn exports_put_names_as_headings_and_leave_out_empty_sections() {
         assert_eq!(markdown(&sample()), "# Roots & <shoots>\n\n## Introduction\n\nFirst line.\n\nSecond line.\n\n## Results\n\nGrew.\n");
         assert_eq!(plain_text(&sample()), "Roots & <shoots>\n\nIntroduction\n\nFirst line.\n\nSecond line.\n\nResults\n\nGrew.\n");
+    }
+
+    #[test]
+    fn a_markdown_file_becomes_sections_at_its_headings() {
+        let text = "---\ntitle: \"Roots and shoots\"\nauthor: x\n---\n\nA line before\nany heading.\n\n## Introduction\n\nRoots grow\ndown.\n根向下\n生长。\n\n- one\n- two\n\n### Hairs\n\nShort.\n\n## 方法\n\n```\ncode  line\n```\n";
+        let draft = from_markdown(text, "notes/draft.md");
+        assert_eq!((draft.title.as_str(), draft.language.as_str()), ("Roots and shoots", "en"));
+        let shown: Vec<(&str, &str, bool, Vec<&str>)> = draft.sections.iter().map(|s| (s.name.as_str(), s.kind.as_str(), s.bare, s.paragraphs.iter().map(String::as_str).collect())).collect();
+        assert_eq!(shown, [("Front matter", "other", true, vec!["A line before any heading."]), ("Introduction", "introduction", false, vec!["Roots grow down. 根向下生长。", "- one", "- two", "### Hairs", "Short."]), ("方法", "methods", false, vec!["```", "code  line", "```"])]);
+        // One `#` heading before the rest is the title; without any heading the file's name is, and the text is one section.
+        let draft = from_markdown("# 根的综述\n\n## 引言\n\n根向下生长，吸收水分。\n", "x.md");
+        assert_eq!((draft.title.as_str(), draft.language.as_str(), draft.sections.len(), draft.sections[0].name.as_str(), draft.sections[0].kind.as_str()), ("根的综述", "zh", 1, "引言", "introduction"));
+        let draft = from_markdown("只有一段话，没有标题，写得长一点才不会被当成题目。\n\n第二段。", "随手记.txt");
+        assert_eq!((draft.title.as_str(), draft.sections.len(), draft.sections[0].name.as_str(), draft.sections[0].bare), ("随手记", 1, "正文", true));
+        assert_eq!(from_markdown("", "empty.md").sections.len(), 1);
+    }
+
+    /// A Word file as this app writes one, with a comment put on it.
+    fn word_file() -> Vec<u8> {
+        let section = |name: &str, body: &str| Section { name: name.into(), kind: "other".into(), body: body.into(), ..Default::default() };
+        let written = Manuscript { title: "Roots".into(), language: "en".into(), sections: vec![section("Introduction", "Roots grow down into the soil.\n\nThey take up water."), section("Methods", "We grew plants.")], ..Default::default() };
+        let mut paragraphs = wanted(&written, None, &[]);
+        paragraphs[1 + 1].notes.push(docx::Note { range: 11..15, author: "Li Hua".into(), date: "2026-01-02T03:04:05Z".into(), body: "How far down?".into() });
+        docx::rewrite(&docx(&written), &paragraphs, &docx::Options::default()).unwrap().bytes
+    }
+
+    #[test]
+    fn a_word_file_is_taken_in_and_written_again_with_what_changed() {
+        let dir = std::env::temp_dir().join(format!("wisp-manuscript-{}", new_id("T")));
+        let mut store = Store::open(&dir).unwrap();
+        let bytes = word_file();
+        let draft = from_word(&docx::read(&bytes).unwrap(), "Roots v3.docx");
+        assert_eq!((draft.title.as_str(), draft.titled, draft.sections.iter().map(|s| (s.name.as_str(), s.kind.as_str())).collect::<Vec<_>>()), ("Roots", true, vec![("Introduction", "introduction"), ("Methods", "methods")]));
+        let made = store.import_manuscript(&draft, "docx", "Roots v3.docx", Some(&bytes)).unwrap();
+        assert_eq!(made.sections[0].body, "Roots grow down into the soil.\n\nThey take up water.");
+        let source = store.manuscript_source(&made.id).unwrap().unwrap();
+        assert_eq!((source.kind.as_str(), source.name.as_str(), source.titled, std::fs::read(store.source_file(&source)).unwrap() == bytes), ("docx", "Roots v3.docx", true, true));
+        let theirs = store.comments(&made.id).unwrap();
+        assert_eq!(theirs.iter().map(|c| (c.origin.as_str(), c.author.as_str(), c.quote.as_str(), c.body.as_str(), c.section_id == made.sections[0].id)).collect::<Vec<_>>(), [("file", "Li Hua", "down", "How far down?", true)]);
+
+        // Nothing changed: the file is written again as it was, and their comment is not put in twice.
+        let (same, from_file) = store.manuscript_word(&made, &theirs, true, "Xu").unwrap();
+        assert!(from_file);
+        assert_eq!((same.kept, same.changed, same.added, same.removed, same.comments), (6, 0, 0, 0, 0));
+
+        // A paragraph changed, one put in, a section added, and comments of the person's and the assistant's.
+        let (intro, methods) = (made.sections[0].id.clone(), made.sections[1].id.clone());
+        store.save_section_body(&intro, "Roots grow two metres down into the soil.\n\nThey take up water.\n\nA new paragraph.").unwrap();
+        store.add_section(&made.id, "Outlook", "discussion").unwrap();
+        store.add_comment(&made.id, &intro, "take up water", "And salts?", "Xu", comment::PERSON).unwrap();
+        let remark = store.add_remarks(&made.id, &methods, &[comment::Remark { quote: "We grew plants.".into(), body: "说明品种".into(), suggestion: "We grew Arabidopsis.".into() }]).unwrap();
+        store.add_comment(&made.id, &methods, "words that are gone", "Lost its place.", "Xu", comment::PERSON).unwrap();
+        let now = store.manuscript(&made.id).unwrap().unwrap();
+        let (out, _) = store.manuscript_word(&now, &store.comments(&made.id).unwrap(), true, "Xu").unwrap();
+        assert_eq!((out.kept, out.changed, out.added, out.removed, out.comments), (5, 1, 2, 0, 3));
+        let read = docx::read(&out.bytes).unwrap();
+        assert_eq!(read.paragraphs.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["Roots", "Introduction", "Roots grow two metres down into the soil.", "They take up water.", "A new paragraph.", "Methods", "We grew plants.", "Outlook"]);
+        let said: Vec<(&str, &str, &str)> = read.comments.iter().map(|c| (c.author.as_str(), c.quote.as_str(), c.body.as_str())).collect();
+        assert_eq!(said, [("Li Hua", "down", "How far down?"), ("Xu", "take up water", "And salts?"), ("Xu", "Methods", "「words that are gone」\nLost its place."), (comment::ASSISTANT_NAME, "We grew plants.", "说明品种\n建议改为：We grew Arabidopsis.")]);
+        assert!(read.tracked);
+
+        // Its proposal taken, the comment stands on the new words.
+        store.save_section_body(&methods, "We grew Arabidopsis.").unwrap();
+        store.save_comment(&remark[0].taken()).unwrap();
+        let now = store.manuscript(&made.id).unwrap().unwrap();
+        let (out, _) = store.manuscript_word(&now, &store.comments(&made.id).unwrap(), false, "Xu").unwrap();
+        let read = docx::read(&out.bytes).unwrap();
+        assert!(read.comments.iter().any(|c| c.quote == "We grew Arabidopsis." && c.body == "说明品种") && !read.tracked);
+
+        // Without its file a manuscript is a plain document, comments included.
+        std::fs::remove_file(store.source_file(&source)).unwrap();
+        let (plain, from_file) = store.manuscript_word(&now, &store.comments(&made.id).unwrap(), true, "Xu").unwrap();
+        assert!(!from_file && docx::read(&plain.bytes).unwrap().comments.len() == 3);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_word_file_without_heading_styles_is_cut_at_the_names_every_paper_has() {
+        let para = |text: &str| docx::ReadPara { text: text.into(), level: None, title: false };
+        let read = docx::Read { paragraphs: vec![para("植物单细胞组学的现状"), para("张三，李四"), para("摘要"), para("单细胞技术正在改变植物学研究的方式，本文对此作一综述。"), para("1 引言"), para("植物器官由多种细胞类型组成。"), para("参考文献"), para("[1] Zhang 2021.")], comments: vec![docx::ReadComment { author: "Li".into(), body: "补充".into(), paragraph: Some(5), quote: "多种细胞类型".into(), ..Default::default() }, docx::ReadComment { body: "on a table".into(), ..Default::default() }], ..Default::default() };
+        let draft = from_word(&read, "稿子.docx");
+        assert_eq!((draft.title.as_str(), draft.titled, draft.language.as_str()), ("植物单细胞组学的现状", true, "zh"));
+        assert_eq!(draft.sections.iter().map(|s| (s.name.as_str(), s.kind.as_str(), s.bare, s.paragraphs.len())).collect::<Vec<_>>(), [("开头", "other", true, 1), ("摘要", "abstract", false, 1), ("1 引言", "introduction", false, 1), ("参考文献", "other", false, 1)]);
+        assert_eq!(draft.comments.iter().map(|c| (c.section, c.quote.as_str())).collect::<Vec<_>>(), [(2, "多种细胞类型"), (0, "")]);
     }
 
     #[test]
