@@ -54,6 +54,7 @@ impl Workspace {
             Modal::ReviewText { .. } => self.render_review_text_dialog(window, cx)?,
             Modal::Figure(_) => self.render_figure_dialog(window, cx)?,
             Modal::Extract(_) => self.render_extract_dialog(cx)?,
+            Modal::Headings(_) => self.render_headings_dialog(cx)?,
             Modal::Zotero => ui::dialog(560.)
                 .child(ui::dialog_title(t("从 Zotero 导入")))
                 .child(body()

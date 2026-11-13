@@ -304,6 +304,20 @@ fn val_of(xml: &str, name: &str) -> Option<String> {
     None
 }
 
+/// The switch of this name (`w:b`, `w:i`) is set in `xml`: there, and its `w:val` not one that turns it off.
+fn switched_on(xml: &str, name: &str) -> bool {
+    let open = format!("<{name}");
+    let mut from = 0;
+    while let Some(found) = xml[from..].find(&open) {
+        let at = from + found;
+        if xml[at + open.len()..].starts_with(|c: char| c.is_whitespace() || c == '/' || c == '>') {
+            return !matches!(val_of(&xml[at..], name).as_deref(), Some("0" | "false" | "off"));
+        }
+        from = at + open.len();
+    }
+    false
+}
+
 /// `xml` without the elements of this name.
 fn without(xml: &str, name: &str) -> String {
     let (mut out, mut at, open) = (String::new(), 0, format!("<{name}"));
@@ -569,6 +583,27 @@ impl Para {
             if let Leaf::Text(text) = leaf { out.push_str(text) }
         });
         out
+    }
+
+    /// Every run with words in it is set in bold: a heading made by hand, without a heading style.
+    fn bold(&self) -> bool {
+        fn runs(items: &[Item], seen: &mut usize, bold: &mut bool) {
+            for item in items {
+                match item {
+                    Item::Run(run) => {
+                        if run.parts.iter().any(|part| matches!(part, Part::Text(text) if !text.trim().is_empty())) {
+                            *seen += 1;
+                            *bold &= switched_on(&run.rpr, "w:b");
+                        }
+                    }
+                    Item::Wrap { items, .. } => runs(items, seen, bold),
+                    Item::Raw(_) => {}
+                }
+            }
+        }
+        let (mut seen, mut bold) = (0, true);
+        runs(&self.items, &mut seen, &mut bold);
+        seen > 0 && bold
     }
 
     fn xml(&self) -> String {
@@ -1094,6 +1129,8 @@ pub struct ReadPara {
     pub level: Option<u8>,
     /// It is the document's title.
     pub title: bool,
+    /// All its words are set in bold.
+    pub bold: bool,
 }
 
 /// A comment a Word file came with.
@@ -1149,7 +1186,7 @@ pub fn read(bytes: &[u8]) -> Result<Read> {
         .map(|&block| {
             let para = doc.para(block);
             let style = para.style();
-            ReadPara { text: para.text().trim().to_string(), level: para.outline().or_else(|| styles.level(&style)), title: styles.named(&style, "title") }
+            ReadPara { text: para.text().trim().to_string(), level: para.outline().or_else(|| styles.level(&style)), title: styles.named(&style, "title"), bold: para.bold() }
         })
         .collect();
     // Where each comment's range starts and ends: the words between, as far as they are in the paragraph it starts in.

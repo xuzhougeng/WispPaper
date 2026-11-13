@@ -15,6 +15,7 @@
 //! - `pdftext`  that text read off a PDF's glyphs, with the breaks the page shows
 //! - `structure` that text sorted into the parts of a paper and cut into sentences, for 写作
 //! - `cite`     citations in a manuscript: keys, finding them, the reference list and BibTeX
+//! - `headings` headings guessed by their look in a Word file without heading styles, for the person to confirm
 //! - `docx`     Word files for 写作: read into paragraphs and comments, written again with the text as it stands and its comments
 //! - `comment`  批注: remarks on words of a manuscript, the person's, the assistant's and those a Word file came with
 //! - `markdown` the Markdown of an answer → blocks to draw
@@ -39,6 +40,7 @@ pub mod figure;
 pub mod filter;
 pub mod floating;
 pub mod fulltext;
+pub mod headings;
 pub mod import;
 pub mod libraries;
 pub mod lookup;

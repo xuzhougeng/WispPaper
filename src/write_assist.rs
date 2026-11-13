@@ -263,6 +263,11 @@ impl Workspace {
             .when(!floating, |d| d.px(px(20.)).pb(px(6.)))
             .when(configured, |d| d.children(buttons))
             .child(ui::ghost_button("write-comment", Some("message-square"), Some(t("批注").into())).h(px(if floating { 30. } else { 24. })).px(px(7.)).text_size(px(12.)).on_click(self.on(Cmd::Comment(crate::comments::Do::Write), cx)))
+            // The caret's paragraph as a heading: the section is cut there.
+            .when(!floating, |d| {
+                d.child(ui::ghost_button("write-split-heading", Some("heading"), Some(t("设为标题").into())).h(px(24.)).px(px(7.)).text_size(px(12.)).on_click(self.on(Cmd::SplitSection(true), cx)).tooltip(|_, cx| cx.new(|_| Tip(t("这一段成为新一节的名称，后面的文字归入新的一节").into())).into()))
+                    .child(ui::ghost_button("write-split", Some("scissors"), Some(t("从这里拆成新节").into())).h(px(24.)).px(px(7.)).text_size(px(12.)).on_click(self.on(Cmd::SplitSection(false), cx)).tooltip(|_, cx| cx.new(|_| Tip(t("从这一段起拆成新的一节，再给它起名").into())).into()))
+            })
             .when(!configured, |d| d.child(ui::ghost_button("write-assist-settings", Some("settings-gear"), Some(t("配置模型").into())).h(px(if floating { 30. } else { 24. })).text_size(px(12.)).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx)).tooltip(|_, cx| cx.new(|_| Tip(t("配置模型后可以改写、翻译和润色").into())).into())))
             // What the bar under the manuscript works on, said on hover instead of in front of it.
             .when(!floating, |d| d.child(ui::hint("write-assist-about", t("对光标所在的段落。选中文字时，这些按钮出现在选区旁，对选中的文字。"))))
