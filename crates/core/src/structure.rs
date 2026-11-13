@@ -599,7 +599,21 @@ pub fn usable(sentence: &str) -> bool {
     let first = sentence.chars().next().unwrap_or(' ');
     // It starts as a sentence does: a capital, a number, or a letter of a script without capitals.
     let starts = first.is_ascii_digit() || (first.is_alphabetic() && !first.is_lowercase());
-    letters * 10 >= count * 7 && starts && sentence.ends_with(['.', '?', '!', ')', '”', '"', '。', '！', '？', '）', '」', '』', '．']) && !sentence.contains('@')
+    letters * 10 >= count * 7 && starts && sentence.ends_with(['.', '?', '!', ')', '”', '"', '。', '！', '？', '）', '」', '』', '．']) && !sentence.contains('@') && !apparatus(sentence)
+}
+
+/// Whether a sentence is a table's or a figure's apparatus rather than the
+/// paper's prose: a note under a table (`Note:`, `Abbreviations:`, `注：`),
+/// or the cells of a table read as one line, which run to many bare numbers
+/// (`Stele 0.73 Cortex 0.68 …`). Numbers in prose come with their units and
+/// punctuation, so they are not counted. Also checked when candidates are
+/// offered, so sentences kept by earlier builds are left out without sorting the texts again.
+pub fn apparatus(sentence: &str) -> bool {
+    let opening = sentence.trim_start().to_lowercase();
+    if ["note:", "notes:", "note.", "abbreviations:", "abbreviation:", "source:", "sources:", "注：", "注:"].iter().any(|start| opening.starts_with(start)) { return true }
+    let tokens: Vec<&str> = sentence.split_whitespace().collect();
+    let bare = tokens.iter().filter(|token| token.chars().any(|c| c.is_ascii_digit()) && token.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '-' || c == '–')).count();
+    bare >= 5 && bare * 10 >= tokens.len()
 }
 
 /// The sentences of the blocks that are kept, with their part, the
@@ -926,6 +940,17 @@ mod tests {
         for bad in ["Too short.", "1Department of Biology, Duke University, Durham, NC, USA. x@duke.edu is the address.", "however, a fragment that starts in the middle of things goes on.", "A sentence that never comes to an end and so is likely a heading or a row of a table", "12.5 33.1 45.6 78.9 11.2 0.05 0.01 ns ns 14.2 15.5 16.7 18.9."] {
             assert!(!usable(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn apparatus_is_not_prose() {
+        assert!(apparatus("Note: Cell-type numbers are approximate where the original paper did not report exact counts."));
+        assert!(apparatus("Xylem-pore-pericycle 0.57 Late xylem-pore-pericycle (XPP) 0.49 Phloem-pore-pericycle 0.39 Lateral root primordium 0.55 Stele 0.73 Cortex 0.68 Endodermis 0.69 The correlation analysis identifies non-hair cells as the primary match."));
+        assert!(apparatus("注：细胞类型数目为近似值。"));
+        // Numbers of prose come with units and punctuation; a year or two is no table.
+        assert!(!apparatus("The correlation was 0.57 (P < 0.01), higher than the 0.49 reported in 2019 for 12 samples."));
+        assert!(!apparatus("Notably, the stele showed the highest correlation with cluster 3."));
+        assert!(!apparatus("We profiled 47,000 cells from 10 roots at 3, 5, 7 and 9 days after germination."));
     }
 
     fn texts(pages: &[String]) -> Vec<String> {

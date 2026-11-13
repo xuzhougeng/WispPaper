@@ -8,7 +8,7 @@
 //! pages of files that gave no text.
 
 use crate::i18n::{label, t};
-use crate::app::{Cmd, Workspace};
+use crate::app::{Cmd, MenuItem, MenuKind, Workspace};
 use crate::settings::SettingsPage;
 use crate::theme::Theme;
 use crate::ui;
@@ -17,8 +17,28 @@ use serde_json::Value;
 use wisp_core::settings::Task;
 use wisp_core::structure::SECTIONS;
 
-/// The tags offered for narrowing the candidates: the commonest.
-const NARROWING_TAGS: usize = 6;
+/// The tags offered for narrowing the candidates, in a menu: the commonest.
+const NARROWING_TAGS: usize = 24;
+
+/// The widest the manuscript's text is set, padding included.
+const EDITOR_MEASURE: f32 = 720.;
+
+/// How long a text is, as a writer counts it: a Chinese, Japanese or Korean
+/// letter is one, and so is every word of a language that spaces them.
+/// The second is whether letters were counted, which is what to call the number.
+pub(crate) fn text_length(text: &str) -> (usize, bool) {
+    let letters = text.chars().filter(|c| wisp_core::structure::is_cjk(*c)).count();
+    let words = text.split(|c: char| c.is_whitespace() || wisp_core::structure::is_cjk(c)).filter(|word| word.chars().any(char::is_alphanumeric)).count();
+    (letters + words, letters > 0)
+}
+
+/// That length in words: 「1200 字」 for a text with Chinese in it, 「300 词」 for one without.
+pub(crate) fn length_label(text: &str) -> String {
+    match text_length(text) {
+        (n, true) => tf!("{n} 字", "{n} characters"),
+        (n, false) => tf!("{n} 词", "{n} words"),
+    }
+}
 
 impl Workspace {
     pub fn render_write(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -31,7 +51,7 @@ impl Workspace {
         let lib = self.lib.as_ref().unwrap();
         let writing = &lib.writing;
         let text = writing.editor.read(cx).text();
-        let (words, characters) = (text.split_whitespace().filter(|word| word.chars().any(char::is_alphanumeric)).count(), text.chars().filter(|c| !c.is_whitespace()).count());
+        let (length, characters) = (length_label(text), text.chars().filter(|c| !c.is_whitespace()).count());
         let focused = writing.editor.focus_handle(cx).is_focused(window);
         let stacked = width < 680.;
         let panel = if stacked { width } else if width > 980. { 420. } else { 340. };
@@ -52,8 +72,7 @@ impl Workspace {
                     .px(px(20.))
                     .pt(px(16.))
                     .pb(px(12.))
-                    .child(self.render_manuscript_bar(window, cx))
-                    .when(!writing.reading, |d| d.child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(tf!("写哪一节，右边就列出文献库里的文献怎样开始这一部分；按 {} 查找与选中的文字（没有选中时是光标所在的一段）相近的句子。用什么语言写都可以，模型会先把它变成几组英文检索词。句子是用来参考和引用的，不要照抄。", "The right panel shows how papers begin the section you are writing. Press {} to find sentences similar to your selection or current paragraph. Any writing language is supported; the model generates English search terms. Use sentences as references and cite them; do not copy them verbatim.", self.find_key())))),
+                    .child(self.render_manuscript_bar(window, cx)),
             )
             .child(
                 div().flex().flex_col().flex_1().min_h_0().px(px(20.)).pb(px(8.)).child(if writing.reading { self.render_manuscript_reading(cx) } else {
@@ -67,19 +86,19 @@ impl Workspace {
                         .border_1()
                         .border_color(if focused { Theme::accent().opacity(0.55) } else { Theme::line() })
                         .bg(Theme::bg_body())
-                        .child(div().px(px(18.)).py(px(14.)).text_size(px(15.)).line_height(px(26.)).text_color(Theme::text()).child(crate::input::with_selection_toolbar(&writing.editor, self.render_assist_bar(true, cx))))
+                        .child(div().w_full().max_w(px(EDITOR_MEASURE)).mx_auto().px(px(18.)).py(px(14.)).text_size(px(15.)).line_height(px(26.)).text_color(Theme::text()).child(crate::input::with_selection_toolbar(&writing.editor, self.render_assist_bar(true, cx))))
                         .into_any_element()
                 }),
             )
             .when(!writing.reading && writing.editor.read(cx).selection().is_empty(), |d| d.child(self.render_assist_bar(false, cx)))
             .child(self.render_references(window, cx))
             .child(div().flex().flex_none().px(px(22.)).pb(px(12.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(div().flex_1().min_w_0().child(if writing.reading {
-                let total: usize = writing.current().map_or(0, |m| m.sections.iter().map(|s| s.body.split_whitespace().filter(|word| word.chars().any(char::is_alphanumeric)).count()).sum());
-                tf!("全文 {total} 词 · 点一节的名称，回到那一节写", "Manuscript: {total} words · Click a section name to edit it")
+                let whole: String = writing.current().map_or(String::new(), |m| m.sections.iter().map(|s| s.body.as_str()).collect::<Vec<_>>().join("\n"));
+                tf!("全文 {} · 点一节的名称，回到那一节写", "Manuscript: {} · Click a section name to edit it", length_label(&whole))
             } else if characters == 0 {
-                t("草稿随写随存，留在这个文献库里；停笔或换一节时会留一个历史版本。").to_string()
+                t("随写随存").to_string()
             } else {
-                tf!("{words} 词 · {characters} 字符 · 已保存", "{words} words · {characters} characters · Saved")
+                tf!("{length} · 已保存", "{length} · Saved")
             })));
 
         div().id("write-page").flex().size_full().when(stacked, |d| d.flex_col().overflow_y_scroll()).child(editor)
@@ -139,7 +158,12 @@ impl Workspace {
             .map(|group| div().text_size(px(11.)).line_height(px(16.)).text_color(Theme::text_secondary()).child(if group.kind.is_empty() { group.words.clone() } else { format!("{} · {}", group.kind, group.words) }).into_any_element())
             .collect();
         let key = self.find_key();
-        let find_button = ui::secondary_button("write-find", t("查找候选句")).h(px(28.)).px(px(10.)).text_size(px(12.)).child(div().text_size(px(11.)).text_color(Theme::text_tertiary()).child(key)).on_click(self.on(Cmd::WriteFind, cx));
+        // What the panel is for, said once on hover rather than over the manuscript every time.
+        let about = tf!("写哪一节，这里就列出文献库里的文献怎样开始这一部分。按 {key} 查找与选中的文字（没有选中时是光标所在的一段）相近的句子；用什么语言写都可以，模型会先把它变成几组检索词。句子是用来参考和引用的，不要照抄。", "This panel shows how the library's papers begin the part you are writing. Press {key} to find sentences similar to your selection or current paragraph; any language works, the model turns it into search terms first. Use the sentences as references and cite them; do not copy them verbatim.");
+        let find_button = ui::icon_action("write-find", "scan-text", Theme::accent(), tf!("查找与选中的文字相近的句子；没有选中时，找光标所在的一段（{key}）", "Find sentences similar to the selection, or to the paragraph at the caret ({key})")).on_click(self.on(Cmd::WriteFind, cx));
+        // How much there was to search: the number in the header, the rest on hover.
+        let count = found.map(|value| value["sentencesInSection"].as_u64().unwrap_or(0));
+        let drawn_on = count.zip(drawn_on).map(|(count, text)| div().id("write-drawn-on").flex_none().text_size(px(11.)).text_color(Theme::text_tertiary()).child(tf!("{count} 句", "{count} sentences")).tooltip(move |_, cx| cx.new(|_| crate::write_assist::Tip(text.clone())).into()));
 
         let side = div().flex().flex_col().flex_none().w(px(width)).h_full().border_l_1().border_color(Theme::line()).bg(Theme::bg_sunken()).child(self.render_side_switch(cx));
         if writing.comments.open { return side.child(self.render_comments(width, window, cx)) }
@@ -156,17 +180,25 @@ impl Workspace {
                     .child(
                         div()
                             .flex()
-                            .flex_wrap()
                             .items_center()
-                            .gap(px(8.))
+                            .gap(px(6.))
                             .child(div().flex_none().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child(tf!("候选句 · {name}", "Candidates · {name}")))
+                            .child(ui::hint("write-about", about))
                             .when(search.searching, |d| d.child(ui::spinner("write-searching", 13., Theme::accent())))
                             .child(div().flex_1())
-                            .children(drawn_on.map(|text| div().min_w_0().max_w_full().text_size(px(11.)).text_color(Theme::text_tertiary()).child(text))),
+                            .children(drawn_on),
                     )
-                    .child(div().flex().flex_col().items_start().gap(px(6.)).child(find_button).child(div().text_size(px(11.)).text_color(Theme::text_tertiary()).child(t("找选中的文字；没有选中时，找光标所在的一段。"))))
-                    .child(ui::field(&writing.find, window, cx))
-                    .when(!groups.is_empty(), |d| d.child(div().flex().flex_col().gap(px(3.)).child(div().text_size(px(11.)).text_color(Theme::text_tertiary()).child(t("模型给出的检索词，各组分别查找后合并："))).children(groups)))
+                    .child(div().flex().items_center().gap(px(4.)).child(div().flex_1().min_w_0().child(ui::field(&writing.find, window, cx))).child(find_button))
+                    .when(!groups.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .flex()
+                                .items_start()
+                                .gap(px(6.))
+                                .child(div().id("write-groups-about").flex_none().pt(px(2.)).child(ui::icon("sparkle", 12., Theme::accent())).tooltip(|_, cx| cx.new(|_| crate::write_assist::Tip(t("模型给出的检索词，各组分别查找后合并").into())).into()))
+                                .child(div().flex_1().min_w_0().flex().flex_col().gap(px(3.)).children(groups)),
+                        )
+                    })
                     .when(!search.note.is_empty(), |d| d.child(div().text_size(px(11.)).text_color(Theme::warning()).child(search.note.clone())))
                     .child(self.render_narrowing(cx))
                     .child(self.render_groundwork(cx)),
@@ -185,17 +217,36 @@ impl Workspace {
         let search = &lib.writing.search;
         let tags = wisp_core::filter::tag_counts(&lib.papers);
         let starred = lib.papers.iter().any(|paper| paper.starred);
-        let option = |id: SharedString, name: String, on: bool, cmd: Cmd, this: &Self, cx: &mut Context<Self>| {
-            div().id(id).flex().flex_none().items_center().h(px(22.)).px(px(8.)).rounded(px(11.)).text_size(px(11.)).cursor_pointer().border_1().when(on, |d| d.bg(Theme::accent_soft()).text_color(Theme::accent()).border_color(Theme::accent().opacity(0.35))).when(!on, |d| d.border_color(Theme::line()).text_color(Theme::text_secondary()).hover(|s| s.bg(Theme::hover()))).on_click(this.on(cmd, cx)).child(name).into_any_element()
-        };
-        let mut options = vec![option("write-only-all".into(), t("全部文献").into(), search.tag.is_empty() && !search.starred, Cmd::WriteOnly(String::new(), false), self, cx)];
-        if starred || search.starred { options.push(option("write-only-starred".into(), t("★ 星标").into(), search.starred, Cmd::WriteOnly(search.tag.clone(), !search.starred), self, cx)) }
-        for (tag, count) in tags.iter().take(NARROWING_TAGS) {
-            let on = search.tag == *tag;
-            options.push(option(SharedString::from(format!("write-only-tag-{tag}")), format!("{tag} {count}"), on, Cmd::WriteOnly(if on { String::new() } else { tag.clone() }, search.starred), self, cx));
+        if tags.is_empty() && !starred && !search.starred { return div() }
+        // One button saying which papers the candidates come from; the choices are its menu.
+        let mut shown: Vec<String> = vec![];
+        if search.starred { shown.push(t("★ 星标").into()) }
+        if !search.tag.is_empty() { shown.push(search.tag.clone()) }
+        let narrowed = !shown.is_empty();
+        let name = if narrowed { shown.join(" · ") } else { t("全部文献").to_string() };
+        div().flex().items_center().child(
+            ui::ghost_button("write-only", Some("sliders"), Some(name.into()))
+                .h(px(24.))
+                .px(px(7.))
+                .max_w_full()
+                .text_size(px(12.))
+                .when(narrowed, |d| d.bg(Theme::accent_soft()).text_color(Theme::accent()))
+                .child(ui::icon("chevron-down", 12., Theme::text_tertiary()))
+                .on_click(self.on_menu(MenuKind::WriteNarrow, cx)),
+        )
+    }
+
+    /// The menu of that button: all papers, the starred ones, the commonest tags.
+    pub(crate) fn narrowing_menu(&self) -> Vec<MenuItem> {
+        let Some(lib) = &self.lib else { return vec![] };
+        let search = &lib.writing.search;
+        let mut items = vec![MenuItem { label: t("全部文献").into(), checked: search.tag.is_empty() && !search.starred, note: None, cmd: Cmd::WriteOnly(String::new(), false) }];
+        if search.starred || lib.papers.iter().any(|paper| paper.starred) { items.push(MenuItem { label: t("★ 星标").into(), checked: search.starred, note: None, cmd: Cmd::WriteOnly(search.tag.clone(), !search.starred) }) }
+        for (tag, count) in wisp_core::filter::tag_counts(&lib.papers).into_iter().take(NARROWING_TAGS) {
+            let on = search.tag == tag;
+            items.push(MenuItem { label: tag.clone().into(), checked: on, note: Some(count.to_string().into()), cmd: Cmd::WriteOnly(if on { String::new() } else { tag }, search.starred) });
         }
-        if options.len() == 1 { return div() }
-        div().flex().items_center().flex_wrap().gap(px(4.)).children(options)
+        items
     }
 
     /// One candidate: the sentence, where it is from, and what can be done with it.
@@ -208,9 +259,12 @@ impl Workspace {
         let card = format!("{paper}-{}", sentence["position"].as_u64().unwrap_or(0));
         let id = |part: &str| SharedString::from(format!("write-{part}-{card}-{n}"));
         let unfolded = self.lib.as_ref().is_some_and(|lib| lib.writing.search.unfolded.contains(&card));
-        let mut about = vec![cite.clone(), field("journal"), page.map(|page| tf!("第 {page} 页", "Page {page}")).unwrap_or_default(), field("heading")];
+        // Who, which page and under what heading: the journal's name is cut short in a panel this wide.
+        let mut about = vec![cite.clone(), page.map(|page| tf!("第 {page} 页", "Page {page}")).unwrap_or_default(), field("heading")];
         about.retain(|part| !part.is_empty());
         let small = |id: SharedString, name: &'static str| ui::ghost_button(id, None, Some(name.into())).h(px(22.)).px(px(6.)).text_size(px(12.));
+        // 引用 stays in view; the others come up when the card is under the pointer.
+        let group = id("group");
         let around = |text: String| div().text_size(px(12.)).line_height(px(19.)).text_color(Theme::text_tertiary()).child(text);
         let card_view = div()
             .flex()
@@ -223,6 +277,8 @@ impl Workspace {
             .border_1()
             .border_color(Theme::line())
             .bg(Theme::bg_body())
+            .relative()
+            .group(group.clone())
             .when(unfolded && !before.is_empty(), |d| d.child(around(before.clone())))
             .child(div().text_size(px(13.)).line_height(px(21.)).text_color(Theme::text()).child(text.clone()))
             .when(unfolded && !after.is_empty(), |d| d.child(around(after.clone())))
@@ -232,8 +288,23 @@ impl Workspace {
                     .items_center()
                     .gap(px(2.))
                     .child(div().flex_1().min_w_0().truncate().text_size(px(11.)).text_color(Theme::text_tertiary()).child(about.join(" · ")))
+                    .child(small(id("cite"), t("引用")).text_color(Theme::accent()).on_click(self.on(Cmd::WriteCite(paper.clone()), cx))),
+            )
+            // Over the end of that line while the card is under the pointer, so it takes no width otherwise.
+            .child(
+                div()
+                    .absolute()
+                    .right(px(52.))
+                    .bottom(px(9.))
+                    .flex()
+                    .items_center()
+                    .gap(px(2.))
+                    .pl(px(6.))
+                    .rounded(px(6.))
+                    .bg(Theme::bg_body())
+                    .opacity(0.)
+                    .group_hover(group.clone(), |s| s.opacity(1.))
                     .when(!before.is_empty() || !after.is_empty(), |d| d.child(small(id("around"), if unfolded { t("收起") } else { t("上下文") }).on_click(self.on(Cmd::WriteUnfold(card.clone()), cx))))
-                    .child(small(id("cite"), t("引用")).on_click(self.on(Cmd::WriteCite(paper.clone()), cx)))
                     .child(small(id("copy"), t("复制")).on_click(self.on(Cmd::CopyText(text.clone()), cx)))
                     // With a page, the sentence is shown where it stands in the PDF; an abstract's opens the record.
                     .child(small(id("source"), if page.is_some() { t("原文") } else { t("文献") }).on_click(self.on(Cmd::GotoSource(paper.clone(), page, if page.is_some() { text } else { String::new() }), cx))),
@@ -274,6 +345,10 @@ impl Workspace {
         if reading_now > 0 { facts.push(tf!("正在读取 {reading_now}", "Reading {reading_now}")) }
         let configured = !self.settings.profile_for_or_default(Task::Structure).key().is_empty();
         let button = |id: &'static str, text: String| ui::secondary_button(id, text).h(px(24.)).px(px(8.)).text_size(px(12.));
+        // A model's run, as an icon with how many papers it would read; what it does is said on hover.
+        let sparkle = |id: &'static str, icon: &'static str, n: usize, tip: String| {
+            ui::ghost_button(id, None, Some(n.to_string().into())).h(px(24.)).px(px(6.)).gap(px(4.)).text_size(px(12.)).text_color(Theme::accent()).flex_row_reverse().child(ui::icon(icon, 13., Theme::accent())).tooltip(move |_, cx| cx.new(|_| crate::write_assist::Tip(tip.clone())).into())
+        };
         let running = sorting.running();
         let titles: Vec<String> = sorting.working.iter().filter_map(|id| lib.files.iter().find(|f| f.id == *id)).filter_map(|file| lib.paper(&file.paper_id)).map(|paper| paper.title.clone()).collect();
         div()
@@ -286,10 +361,13 @@ impl Workspace {
                     .items_center()
                     .flex_wrap()
                     .gap(px(6.))
-                    .child(div().flex_1().min_w(px(120.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(facts.join(" · ")))
-                    .when(!running && !configured && open + unread > 0, |d| d.child(ui::ghost_button("write-settings", Some("settings-gear"), Some(t("配置模型").into())).h(px(24.)).text_size(px(12.)).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx))))
-                    .when(!running && configured && open > 0, |d| d.child(button("write-sort", tf!("让模型判断 {open} 篇", "Ask model to structure {open} papers")).on_click(self.on(Cmd::WriteRun(false), cx))))
-                    .when(!running && configured && unread > 0, |d| d.child(button("write-read", tf!("让模型读页面 {unread} 篇", "Ask model to read {unread} papers")).on_click(self.on(Cmd::WriteRun(true), cx))))
+                    // The first fact in words, the others on hover: they are bookkeeping, not what is written by.
+                    .child(div().flex_none().text_size(px(11.)).text_color(Theme::text_tertiary()).child(facts[0].clone()))
+                    .when(facts.len() > 1, |d| d.child(ui::hint("write-groundwork-about", facts.join(" · "))))
+                    .child(div().flex_1())
+                    .when(!running && !configured && open + unread > 0, |d| d.child(ui::icon_action("write-settings", "settings-gear", Theme::text_secondary(), t("配置模型后，可以让模型为没有标题的全文分节、读出没有文字的页面")).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx))))
+                    .when(!running && configured && open > 0, |d| d.child(sparkle("write-sort", "sparkle", open, tf!("让模型判断 {open} 篇有段落没有标题可依的全文", "Ask the model to sort {open} papers whose paragraphs have no heading")).on_click(self.on(Cmd::WriteRun(false), cx))))
+                    .when(!running && configured && unread > 0, |d| d.child(sparkle("write-read", "scan-text", unread, tf!("让模型读页面：{unread} 篇读不出文字或只读了一部分", "Ask the model to read the pages of {unread} papers without readable text")).on_click(self.on(Cmd::WriteRun(true), cx))))
                     .when(running, |d| d.child(button("write-stop", t("停止").into()).on_click(self.on(Cmd::WriteStop, cx)))),
             )
             .when(sorting.total > 0 && (running || sorting.done > 0), |d| {
@@ -333,5 +411,18 @@ impl Workspace {
                 )
             })
             .when(!sorting.error.is_empty(), |d| d.child(ui::error_line(&sorting.error)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::text_length;
+
+    #[test]
+    fn length_as_a_writer_counts_it() {
+        assert_eq!(text_length("Roots adapt to soil."), (4, false));
+        // Each Chinese letter is one, a Latin word among them one more.
+        assert_eq!(text_length("单细胞 RNA-seq 技术"), (6, true));
+        assert_eq!(text_length("  "), (0, false));
     }
 }

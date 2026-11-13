@@ -261,17 +261,17 @@ impl Workspace {
                     .gap(px(6.))
                     .child(div().flex_none().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child(t("参考文献")))
                     .child(div().flex_none().text_size(px(12.)).text_color(Theme::text_tertiary()).child(count))
-                    .child(div().w(px(6.)))
+                    .child(ui::hint("cite-about", t("在右边的句子上点「引用」，或在这里找一篇文献。引用写作 [@Zhang2024]，导出的 Markdown 和 BibTeX 可以直接交给 Pandoc。")))
+                    .child(div().w(px(2.)))
                     .child(scope("cite-scope-part", t("本节"), false))
                     .child(scope("cite-scope-whole", t("全文"), true))
-                    .child(div().flex_1())
+                    // Finding a paper to cite is part of the header: no line of its own while nothing is cited.
+                    .child(div().flex_1().min_w(px(180.)).child(ui::field(&lib.citing.find, window, cx)))
                     .when(!upgrades.is_empty(), |d| d.child(small("cite-upgrade", t("旧式引用改为引用键")).on_click(self.on(Cmd::WriteCiteFix(upgrades.clone()), cx))))
                     .when(!references.is_empty(), |d| d.child(small("cite-copy", t("复制")).on_click(self.on(Cmd::WriteCopyReferences, cx))).child(small("cite-bib", t("导出 BibTeX")).on_click(self.on(Cmd::WriteExportCited, cx)))),
             )
             .children(issues)
             .when(!rows.is_empty(), |d| d.child(div().id("cite-references").flex().flex_col().max_h(px(150.)).overflow_y_scroll().children(rows)))
-            .when(references.is_empty() && found.iter().all(|(_, _, cited)| cited.is_empty()), |d| d.child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(t("在右边的句子上点「引用」，或在下面找一篇文献。引用写作 [@Zhang2024]，导出的 Markdown 和 BibTeX 可以直接交给 Pandoc。"))))
-            .child(ui::field(&lib.citing.find, window, cx))
             .when(!query.is_empty(), |d| d.child(if offered.is_empty() { div().px(px(8.)).text_size(px(12.)).text_color(Theme::text_tertiary()).child(t("没有对得上的文献")).into_any_element() } else { div().flex().flex_col().children(offered).into_any_element() }))
     }
 }

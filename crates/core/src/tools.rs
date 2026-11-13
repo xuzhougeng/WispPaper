@@ -684,6 +684,8 @@ fn find_sentences(store: &mut Store, args: &Value) -> Result<Value> {
     } else {
         store.section_sentences(section, only)?.into_iter().filter(|s| by_id.contains_key(s.paper_id.as_str())).collect()
     };
+    // A table's cells or the note under it are no sentence to write by, whenever they were kept.
+    let found: Vec<crate::store::PaperSentence> = found.into_iter().filter(|s| !crate::structure::apparatus(&s.sentence.text)).collect();
     // A sentence in another language is no model for this one; a text too short to tell stays.
     let in_all = found.len();
     let found: Vec<crate::store::PaperSentence> = found.into_iter().filter(|s| language.is_empty() || s.sentence.language.is_empty() || s.sentence.language == language).collect();
