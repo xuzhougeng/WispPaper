@@ -277,6 +277,13 @@ pub enum Cmd {
     ToggleReview,
     AskRemoveReviewSection(String),
     ReviewAction(String, String),
+    /// Edit a user-entered link between a claim and a source.
+    EditReviewEvidence(Option<String>, String),
+    PickEvidencePaper(String),
+    PickEvidenceSource(String),
+    JudgeReviewEvidence(String, String, String, String, i64),
+    AskRemoveReviewEvidence(String, String, String, i64),
+    RemoveReviewEvidence(String, String, String, i64),
     /// Copy what is selected in a text of the window that is not an answer (`src/select.rs`).
     CopySelected,
     /// A tag of the library under another name (the dialog), or taken off every paper (after asking).
@@ -908,6 +915,8 @@ pub enum Modal {
     Section { editing: Option<String>, name: Entity<TextInput>, kind: String },
     /// 写作: a section's earlier versions, newest first.
     History { section: String, snapshots: Vec<Snapshot>, chosen: usize },
+    /// A manually maintained claim/source pair in a review.
+    ReviewEvidence(Box<crate::chat::EvidenceForm>),
 }
 
 pub struct Library {
@@ -1925,13 +1934,28 @@ impl Workspace {
             }
             Cmd::AskRemoveChat(paper, id) => {
                 let Some(title) = self.lib.as_ref().and_then(|l| l.chat(paper).history.as_ref()?.iter().find(|c| c.id == id).map(|c| c.title.clone())) else { return };
+                let linked = match self.lib.as_ref().map(|l| l.store.review_for_conversation(&id)) {
+                    Some(Ok(Some(review))) if !review.evidence_rows.is_empty() => return self.fail("该对话有证据表记录，暂不能删除。请先保留所需内容，再打开「查看记录」删除全部证据。", cx),
+                    Some(Ok(review)) => review.is_some(),
+                    Some(Err(err)) => return self.fail(format!("无法检查关联的综述：{err:#}"), cx),
+                    None => return,
+                };
                 self.modal_error.clear();
-                self.modal = Some(Modal::Confirm { title: "删除这次对话？".into(), message: format!("「{title}」连同其中的图片会从这个文献库的历史对话里删除，不能恢复。文献库里的文献不受影响。"), action: "删除".into(), cmd: Cmd::RemoveChat(paper, id) });
+                let warning = if linked { "\n\n这次对话关联了综述和证据表。删除后记录仍在数据库中，但目前无法通过界面找回或重新关联；请先保留需要的内容。" } else { "" };
+                self.modal = Some(Modal::Confirm { title: "删除这次对话？".into(), message: format!("「{title}」连同其中的图片会从这个文献库的历史对话里删除，不能恢复。文献库里的文献不受影响。{warning}"), action: "删除".into(), cmd: Cmd::RemoveChat(paper, id) });
             }
             Cmd::RemoveChat(paper, id) => {
                 if let Some(lib) = self.lib.as_mut() {
                     let about = if paper { lib.selected.clone().unwrap_or_default() } else { String::new() };
-                    let result = lib.store.remove_conversation(&id).and_then(|()| lib.store.list_conversations(&about));
+                    if let Err(err) = lib.store.remove_conversation(&id) {
+                        // The database also protects against a second window
+                        // adding evidence after the confirmation was opened.
+                        let blocked = lib.store.review_for_conversation(&id).is_ok_and(|review| review.is_some_and(|r| !r.evidence_rows.is_empty()));
+                        let message = if blocked { "该对话有证据表记录，暂不能删除。请先保留所需内容，再打开「查看记录」删除全部证据。".to_string() } else { format!("删除对话失败：{err:#}") };
+                        self.run(Cmd::CloseModal, window, cx);
+                        return self.fail(message, cx)
+                    }
+                    let result = lib.store.list_conversations(&about);
                     let chat = lib.chat_mut(paper);
                     // The conversation in hand, once removed, would only be saved again with the next answer.
                     if chat.id == id {
@@ -1997,6 +2021,26 @@ impl Workspace {
                 self.modal = Some(Modal::Confirm { title: format!("删除综述记录中的「{name}」？"), message: "这一节会从综述记录中移除，已创建的稿件不受影响。".into(), action: "删除".into(), cmd: Cmd::ReviewAction("remove_section".into(), name) });
             }
             Cmd::ReviewAction(action, text) => self.review_action(&action, text, cx),
+            Cmd::EditReviewEvidence(id, claim) => self.edit_review_evidence(id, claim, window, cx),
+            Cmd::PickEvidencePaper(id) => {
+                if let Some(Modal::ReviewEvidence(form)) = self.modal.as_mut() { form.paper_id = id }
+            }
+            Cmd::PickEvidenceSource(source) => {
+                if let Some(Modal::ReviewEvidence(form)) = self.modal.as_mut() { form.source = source }
+            }
+            Cmd::JudgeReviewEvidence(review_id, conversation_id, id, judgment, revision) => self.judge_review_evidence(review_id, conversation_id, id, &judgment, revision, cx),
+            Cmd::AskRemoveReviewEvidence(review_id, conversation_id, id, revision) => {
+                let current = self.lib.as_ref().filter(|lib| lib.library_chat.id == conversation_id).and_then(|lib| lib.store.review_for_conversation(&conversation_id).ok().flatten());
+                if !current.is_some_and(|review| review.id == review_id && review.revision == revision && review.evidence_rows.iter().any(|row| row.id == id)) {
+                    return self.fail("证据记录已变化，请重新查看后再删除。", cx)
+                }
+                self.modal_error.clear();
+                self.modal = Some(Modal::Confirm { title: "删除这条证据记录？".into(), message: "这条论断与来源的关联会从综述记录中移除，文献和正文不受影响。".into(), action: "删除".into(), cmd: Cmd::RemoveReviewEvidence(review_id, conversation_id, id, revision) });
+            }
+            Cmd::RemoveReviewEvidence(review_id, conversation_id, id, revision) => {
+                self.remove_review_evidence(review_id, conversation_id, id, revision, cx);
+                self.run(Cmd::CloseModal, window, cx);
+            }
             Cmd::CopyText(text) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
                 self.say("已复制", cx);
@@ -4156,6 +4200,7 @@ impl Workspace {
             }
             Modal::ImportReport => self.run(Cmd::CloseModal, window, cx),
             Modal::Section { .. } | Modal::History { .. } => self.submit_manuscript_modal(window, cx),
+            Modal::ReviewEvidence(_) => self.submit_review_evidence(window, cx),
             Modal::Complete(form) => {
                 if form.chosen.is_some() { self.complete_apply(window, cx) } else { self.complete_find(cx) }
             }

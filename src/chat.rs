@@ -8,6 +8,7 @@
 //! library's past conversations in place of the one in hand.
 
 use crate::app::{Chat, ChatImage, ChatItem, Cmd, Consent, MenuKind, Workspace};
+use crate::input::TextInput;
 use crate::settings::SettingsPage;
 use crate::theme::{self, Theme};
 use crate::ui;
@@ -16,6 +17,33 @@ use wisp_core::{ai, time};
 
 /// The sources shown under an answer before the rest is asked for.
 const SOURCES_SHOWN: usize = 8;
+
+/// A draft form; cancel never writes to the review.
+pub struct EvidenceForm {
+    pub library_id: String,
+    pub conversation_id: String,
+    pub review_id: String,
+    pub revision: i64,
+    pub id: String,
+    pub section: Entity<TextInput>,
+    pub claim: Entity<TextInput>,
+    pub paper_query: Entity<TextInput>,
+    pub paper_id: String,
+    pub page: Entity<TextInput>,
+    pub quote: Entity<TextInput>,
+    pub note: Entity<TextInput>,
+    pub source: String,
+}
+
+fn evidence_source_name(source: &wisp_core::review::EvidenceSource) -> &'static str {
+    use wisp_core::review::EvidenceSource::*;
+    match source { Unknown => "未说明", Record => "题录", Abstract => "摘要", FullText => "全文" }
+}
+
+fn evidence_judgment_name(judgment: &wisp_core::review::EvidenceJudgment) -> &'static str {
+    use wisp_core::review::EvidenceJudgment::*;
+    match judgment { Unreviewed => "未判断", Supports => "支持", Partial => "部分支持", Contradicts => "不支持/相反", Insufficient => "无法判断" }
+}
 
 /// The shell of a chip under an answer: a source, or the one that shows the rest.
 fn source_chip(id: SharedString, max_width: f32) -> Stateful<Div> {
@@ -49,6 +77,167 @@ fn tools_summary(calls: &[&str]) -> String {
 }
 
 impl Workspace {
+    /// Begin a manual record from a selected claim, or edit one already saved.
+    pub(crate) fn edit_review_evidence(&mut self, id: Option<String>, claim: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(lib) = self.lib.as_ref() else { return };
+        let review = match lib.store.review_for_conversation(&lib.library_chat.id) {
+            Ok(Some(review)) => review,
+            Ok(None) => return self.fail("请先开始综述流程。", cx),
+            Err(err) => return self.fail(format!("无法读取综述记录：{err:#}"), cx),
+        };
+        let (library_id, conversation_id) = (lib.info.id.clone(), lib.library_chat.id.clone());
+        let row = match id.as_ref() {
+            Some(id) => match review.evidence_rows.iter().find(|row| &row.id == id) {
+                Some(row) => row.clone(),
+                None => return self.fail("证据记录不存在，请重新载入。", cx),
+            },
+            None => wisp_core::review::EvidenceRow { claim, ..Default::default() },
+        };
+        self.modal_subscriptions.clear();
+        self.modal_error.clear();
+        let section = self.modal_input("已有正文的章节名，可留空", &row.section, false, window, cx);
+        let claim = self.modal_input("写明这条论断", &row.claim, true, window, cx);
+        let query = self.modal_input("搜索文献题目或作者", "", true, window, cx);
+        query.update(cx, |input, _| input.min_lines = 1);
+        let subscription = cx.observe(&query, |_, _, cx| cx.notify());
+        self.modal_subscriptions.push(subscription);
+        let page = self.modal_input("PDF 页码，例如 5；可留空", &row.page.map(|n| n.to_string()).unwrap_or_default(), false, window, cx);
+        let quote = self.modal_input("依据的原文或摘要，可留空", &row.quote, true, window, cx);
+        let note = self.modal_input("对象、方法、限制等，可留空", &row.note, true, window, cx);
+        let source = evidence_source_name(&row.source).to_string();
+        self.modal = Some(crate::app::Modal::ReviewEvidence(Box::new(EvidenceForm {
+            library_id, conversation_id, review_id: review.id, revision: review.revision, id: row.id, section, claim: claim.clone(),
+            paper_query: query, paper_id: row.paper_id, page, quote, note, source,
+        })));
+        claim.read(cx).focus(window);
+        cx.notify();
+    }
+
+    pub(crate) fn submit_review_evidence(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use wisp_core::review::{EvidenceRow, EvidenceSource, ReviewAction};
+        let Some(crate::app::Modal::ReviewEvidence(form)) = self.modal.as_ref() else { return };
+        let value = |field: &Entity<TextInput>| field.read(cx).text().trim().to_string();
+        let page = value(&form.page);
+        let page = if page.is_empty() { None } else { match page.parse::<usize>() {
+            Ok(n) if n > 0 => Some(n),
+            _ => { self.modal_error = "页码必须是大于零的整数。".into(); return cx.notify() }
+        }};
+        let source = match form.source.as_str() { "题录" => EvidenceSource::Record, "摘要" => EvidenceSource::Abstract, "全文" => EvidenceSource::FullText, _ => EvidenceSource::Unknown };
+        let row = EvidenceRow { id: form.id.clone(), section: value(&form.section), claim: value(&form.claim), paper_id: form.paper_id.clone(), page, quote: value(&form.quote), note: value(&form.note), source, ..Default::default() };
+        let (library_id, conversation_id, review_id, revision) = (form.library_id.clone(), form.conversation_id.clone(), form.review_id.clone(), form.revision);
+        let Some(lib) = self.lib.as_mut() else { return };
+        if lib.info.id != library_id || lib.library_chat.id != conversation_id {
+            self.modal_error = "文献库或对话已切换；请回到原对话后重新打开证据表单。".into();
+            return cx.notify()
+        }
+        match lib.store.apply_linked_review(&review_id, revision, &conversation_id, ReviewAction::SaveEvidence(row)) {
+            Ok(_) => { lib.library_chat.review_open = true; self.run(Cmd::CloseModal, window, cx); self.say("证据记录已保存，请人工判断是否支持论断。", cx) }
+            Err(err) => { self.modal_error = format!("{err:#}"); cx.notify(); }
+        }
+    }
+
+    pub(crate) fn judge_review_evidence(&mut self, review_id: String, conversation_id: String, id: String, choice: &str, revision: i64, cx: &mut Context<Self>) {
+        use wisp_core::review::{EvidenceJudgment, ReviewAction};
+        let judgment = match choice { "supports" => EvidenceJudgment::Supports, "partial" => EvidenceJudgment::Partial, "contradicts" => EvidenceJudgment::Contradicts, "insufficient" => EvidenceJudgment::Insufficient, _ => EvidenceJudgment::Unreviewed };
+        let Some(lib) = self.lib.as_mut() else { return };
+        if lib.library_chat.id != conversation_id { return self.fail("对话已切换，请重新查看证据。", cx) }
+        let result = lib.store.apply_linked_review(&review_id, revision, &conversation_id, ReviewAction::JudgeEvidence { id, judgment });
+        match result { Ok(_) => self.say("已记录你的判断；请根据原文核实。", cx), Err(err) => self.fail(format!("判断没有保存：{err:#}"), cx) }
+    }
+
+    pub(crate) fn remove_review_evidence(&mut self, review_id: String, conversation_id: String, id: String, revision: i64, cx: &mut Context<Self>) {
+        use wisp_core::review::ReviewAction;
+        let Some(lib) = self.lib.as_mut() else { return };
+        if lib.library_chat.id != conversation_id { return self.fail("对话已切换，请重新查看证据。", cx) }
+        let result = lib.store.apply_linked_review(&review_id, revision, &conversation_id, ReviewAction::RemoveEvidence { id });
+        match result { Ok(_) => self.say("证据记录已删除。", cx), Err(err) => self.fail(format!("证据没有删除：{err:#}"), cx) }
+    }
+
+    pub(crate) fn render_review_evidence_dialog(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<Div> {
+        let Some(crate::app::Modal::ReviewEvidence(form)) = self.modal.as_ref() else { return None };
+        let lib = self.lib.as_ref()?;
+        let context_ok = lib.info.id == form.library_id && lib.library_chat.id == form.conversation_id;
+        let query = form.paper_query.read(cx).text().trim().to_lowercase();
+        let candidates: Vec<_> = lib.papers.iter().filter(|p| context_ok && (query.is_empty() || format!("{} {} {}", p.title, p.authors, p.doi).to_lowercase().contains(&query))).take(40).collect();
+        let mut papers = Vec::new();
+        for (n, paper) in candidates.iter().enumerate() {
+            let active = form.paper_id == paper.id;
+            papers.push(div().id(("evidence-paper", n)).flex_none().px(px(8.)).py(px(4.)).rounded(px(6.)).cursor_pointer()
+                .when(active, |d| d.bg(Theme::accent_soft()).text_color(Theme::accent()))
+                .when(!active, |d| d.hover(|s| s.bg(Theme::hover())))
+                .on_click(self.on(Cmd::PickEvidencePaper(paper.id.clone()), cx))
+                .child(format!("{}{}", if active { "✓ " } else { "" }, paper.title)).into_any_element());
+        }
+        let mut sources = Vec::new();
+        for (n, label) in ["未说明", "题录", "摘要", "全文"].iter().enumerate() {
+            let active = form.source == *label;
+            sources.push(div().id(("evidence-kind", n)).px(px(9.)).py(px(4.)).rounded(px(6.)).border_1().cursor_pointer().border_color(Theme::line())
+                .when(active, |d| d.bg(Theme::accent_soft()).text_color(Theme::accent()))
+                .on_click(self.on(Cmd::PickEvidenceSource((*label).to_string()), cx)).child((*label).to_string()).into_any_element());
+        }
+        let selected = if context_ok { lib.paper(&form.paper_id).map(|p| p.title.clone()).unwrap_or_else(|| if form.paper_id.is_empty() { "尚未选择文献".into() } else { "原来源已不可用，请重新选择文献".into() }) } else { "文献库或对话已切换".into() };
+        Some(ui::dialog(620.).max_w(relative(0.92)).h(px(720.)).max_h(relative(0.9))
+            .child(ui::dialog_title(if form.id.is_empty() { "新增论断与证据" } else { "编辑论断与证据" }))
+            .child(div().id("review-evidence-form").flex().flex_col().flex_1().min_h_0().overflow_y_scroll().gap(px(10.)).px(px(20.)).py(px(8.))
+                .when(!context_ok, |d| d.child(ui::error_line("文献库或对话已切换，请回到原对话后重新打开表单。")))
+                .child(ui::form_row("论断", ui::field(&form.claim, window, cx)))
+                .child(ui::form_row("关联章节（可选）", ui::field(&form.section, window, cx)))
+                .child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child("填写已保存的章节名时，论断必须是该章中的原文；留空则仅作为独立记录。"))
+                .child(ui::form_row("查找文献", ui::field(&form.paper_query, window, cx)))
+                .child(div().text_size(px(12.)).text_color(Theme::text_secondary()).child(format!("所选：{selected}（显示前 40 条，输入题目、作者或 DOI 缩小范围）")))
+                .child(div().id("evidence-paper-list").flex().flex_col().flex_none().h(px(120.)).overflow_y_scroll().border_1().border_color(Theme::line())
+                    .when(papers.is_empty(), |d| d.child(div().p(px(8.)).text_color(Theme::text_tertiary()).child("没有匹配的文献。")))
+                    .children(papers))
+                .child(ui::form_row("依据类型（由你选择）", div().flex().flex_wrap().gap(px(5.)).children(sources)))
+                .child(ui::form_row("默认 PDF 页码（可选）", ui::field(&form.page, window, cx)))
+                .child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child("填写默认 PDF 中从 1 开始的页面序号，不一定等于印刷页码；暂不能指定补充附件。"))
+                .child(ui::form_row("原文或摘要摘录（可选）", ui::field(&form.quote, window, cx)))
+                .child(ui::form_row("对象、方法和限制（可选）", ui::field(&form.note, window, cx)))
+                .child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child("上述内容由你填写；保存不会自动核验原文或论断。编辑后原有判断会失效。"))
+                .child(ui::error_line(&self.modal_error)))
+            .child(div().flex().justify_end().gap(px(8.)).px(px(20.)).py(px(14.))
+                .child(ui::secondary_button("evidence-cancel", "取消").on_click(self.on(Cmd::CloseModal, cx)))
+                .child(ui::primary_button("evidence-save", "保存记录").on_click(self.on(Cmd::SubmitModal, cx)))))
+    }
+
+    fn review_evidence_rows(&self, review: &wisp_core::review::Review, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let mut rows = Vec::new();
+        let conversation_id = self.lib.as_ref().map(|lib| lib.library_chat.id.clone()).unwrap_or_default();
+        for (n, item) in review.evidence_rows.iter().enumerate() {
+            let linked_ok = !item.section_detached && (item.section.is_empty() || review.sections.iter().any(|section| section.name == item.section && section.body.contains(&item.claim)));
+            let source_changed = item.source_available && item.judgment != wisp_core::review::EvidenceJudgment::Unreviewed && !item.source_current;
+            let stale = !item.source_available || !linked_ok || source_changed;
+            let state = if stale { format!("待重新核实（之前：{}）", evidence_judgment_name(&item.judgment)) } else { evidence_judgment_name(&item.judgment).to_string() };
+            let where_in_paper = item.page.map(|p| format!(" · 默认 PDF 第 {p} 页（人工填写）")).unwrap_or_default();
+            let can_open_pdf = !item.local_files_missing && item.page.is_some() && self.lib.as_ref().is_some_and(|lib| lib.pdf_file(&item.paper_id).is_some());
+            let section = if item.section.is_empty() { "未关联章节".to_string() } else { format!("章节：{}", item.section) };
+            let mut decisions = Vec::new();
+            if item.source_available && linked_ok {
+                for (i, (key, label)) in [("supports", "支持"), ("partial", "部分支持"), ("contradicts", "不支持/相反"), ("insufficient", "无法判断"), ("unreviewed", "未判断")].iter().enumerate() {
+                    decisions.push(ui::ghost_button(SharedString::from(format!("evidence-judge-{n}-{i}")), None, Some((*label).into())).h(px(24.)).text_size(px(12.))
+                        .on_click(self.on(Cmd::JudgeReviewEvidence(review.id.clone(), conversation_id.clone(), item.id.clone(), (*key).to_string(), review.revision), cx)).into_any_element());
+                }
+            }
+            let mut card = div().flex().flex_col().gap(px(4.)).p(px(8.)).rounded(px(6.)).border_1().border_color(Theme::line())
+                .child(div().font_weight(FontWeight::MEDIUM).child(format!("{} · {section}", item.claim)))
+                .child(div().text_color(Theme::text_secondary()).child(format!("来源：{}{} · 依据类型（人工填写）：{}", item.paper_title, where_in_paper, evidence_source_name(&item.source))))
+                .child(div().text_color(Theme::text_secondary()).child(format!("人工判断：{state}")))
+                .when(!item.quote.is_empty(), |d| d.child(div().text_color(Theme::text_secondary()).child(format!("摘录（尚需核对原文）：{}", item.quote))))
+                .when(!item.note.is_empty(), |d| d.child(div().text_color(Theme::text_secondary()).child(format!("对象、方法或限制：{}", item.note))))
+                .when(!item.source_available, |d| d.child(div().text_color(Theme::warning()).child("来源不在当前文献库或已进入回收站，既往判断不能作为当前核验结果。")))
+                .when(item.local_files_missing, |d| d.child(div().text_color(Theme::warning()).child("本地全文附件不可用；可检查文献记录和摘要，但不能将缺失附件当作已读全文。")))
+                .when(source_changed, |d| d.child(div().text_color(Theme::warning()).child("来源内容或附件发生变化，旧判断待复核；检查来源后请重新判断。")))
+                .when(!linked_ok, |d| d.child(div().text_color(Theme::warning()).child("关联章节已断开、删除或不再包含此论断，请编辑记录重新关联。")))
+                .child(div().flex().flex_wrap().gap(px(3.))
+                    .when(item.source_available, |d| d.child(ui::ghost_button(SharedString::from(format!("evidence-goto-{n}")), None, Some(if can_open_pdf { "打开默认 PDF".into() } else { "查看文献".into() })).h(px(24.)).on_click(self.on(Cmd::GotoSource(item.paper_id.clone(), item.page.filter(|_| can_open_pdf), item.quote.clone()), cx))))
+                    .child(ui::ghost_button(SharedString::from(format!("evidence-edit-{n}")), None, Some("编辑".into())).h(px(24.)).on_click(self.on(Cmd::EditReviewEvidence(Some(item.id.clone()), String::new()), cx)))
+                    .child(ui::ghost_button(SharedString::from(format!("evidence-delete-{n}")), None, Some("删除".into())).h(px(24.)).on_click(self.on(Cmd::AskRemoveReviewEvidence(review.id.clone(), conversation_id.clone(), item.id.clone(), review.revision), cx))));
+            if !decisions.is_empty() { card = card.child(div().flex().flex_wrap().gap(px(3.)).child("人工判断：").children(decisions)); }
+            rows.push(card.into_any_element());
+        }
+        rows
+    }
+
     pub(crate) fn start_review(&mut self, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
         let chat = &lib.library_chat;
@@ -155,6 +344,11 @@ impl Workspace {
             None => format!("范围：当前列表的 {} 篇文献（受左侧视图、搜索和筛选影响），以及其中已存 PDF 的相关页面{textless_note}", lib.shown.len()),
         };
 
+        let listing = chat.history.is_some();
+        let (review, review_error) = if !about_paper && !listing && !chat.id.is_empty() {
+            match lib.store.review_for_conversation(&chat.id) { Ok(review) => (review, None), Err(err) => (None, Some(format!("无法读取综述记录：{err:#}"))) }
+        } else { (None, None) };
+
         // What was asked before can be read without a model; only asking needs one.
         let body = if let Some(history) = &chat.history {
             self.render_history(about_paper, chat, history, cx)
@@ -166,13 +360,9 @@ impl Workspace {
                 .children(suggestions.iter().enumerate().map(|(i, text)| ui::secondary_button(SharedString::from(format!("suggest-{side}-{i}")), *text).h(px(30.)).on_click(self.on(Cmd::Suggest(about_paper, text.to_string()), cx))))
                 .into_any_element()
         } else {
-            div().id(SharedString::from(format!("chat-{side}"))).flex().flex_col().flex_1().min_h_0().overflow_y_scroll().track_scroll(&chat.scroll).px(px(16.)).py(px(14.)).gap(px(14.)).children(self.render_messages(about_paper, chat, cx)).into_any_element()
+            div().id(SharedString::from(format!("chat-{side}"))).flex().flex_col().flex_1().min_h_0().overflow_y_scroll().track_scroll(&chat.scroll).px(px(16.)).py(px(14.)).gap(px(14.)).children(self.render_messages(about_paper, chat, review.as_ref(), review_error.is_none(), cx)).into_any_element()
         };
 
-        let listing = chat.history.is_some();
-        let (review, review_error) = if !about_paper && !listing && !chat.id.is_empty() {
-            match lib.store.review_for_conversation(&chat.id) { Ok(review) => (review, None), Err(err) => (None, Some(format!("无法读取综述记录：{err:#}"))) }
-        } else { (None, None) };
         // The papers behind the scope line can be looked through: in a conversation whose material was built, or before the first question.
         let listable = !about_paper && !listing && (chat.ctx.is_some() || chat.messages.is_empty());
         let materials = (listable && chat.materials_open).then(|| self.render_materials(chat, cx));
@@ -237,6 +427,10 @@ impl Workspace {
                     .child(row("写作要求", &review.requirements))
                     .child(row("大纲", &review.outline))
                     .child(row("证据记录", &review.evidence))
+                    .child(div().flex().items_center().gap(px(6.)).child(div().flex_1().font_weight(FontWeight::MEDIUM).child(format!("论断与证据（{}）", review.evidence_rows.len())))
+                        .child(ui::ghost_button("evidence-add", Some("plus"), Some("添加".into())).h(px(24.)).on_click(self.on(Cmd::EditReviewEvidence(None, String::new()), cx))))
+                    .child(div().text_color(Theme::text_tertiary()).child("证据表记录的是你选择的论断和来源，填写与判断均需人工核对；写作页的后续修改不会同步。证据表不会自动发送给模型，需要时请在提问中提供。"))
+                    .children(self.review_evidence_rows(review, cx))
                     .when(!review.sections.is_empty(), |d| d.child(div().text_color(Theme::text_secondary()).child("修改要求或大纲后，请检查保留的正文是否仍然适用。")))
                     .children(review.sections.iter().enumerate().map(|(n, section)| div().flex().flex_col().gap(px(3.))
                         .child(div().flex().items_center().gap(px(6.)).child(div().flex_1().child(format!("正文 {} · {}", n + 1, section.name))).child(ui::ghost_button(SharedString::from(format!("review-remove-section-{n}")), Some("bin"), Some("删除".into())).h(px(24.)).on_click(self.on(Cmd::AskRemoveReviewSection(section.name.clone()), cx))))
@@ -348,9 +542,8 @@ impl Workspace {
 
     /// What was said, in order: questions, the assistant's tool calls
     /// folded by run, the pieces of its answers with their sources.
-    fn render_messages(&self, about_paper: bool, chat: &Chat, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    fn render_messages(&self, about_paper: bool, chat: &Chat, review: Option<&wisp_core::review::Review>, review_read_ok: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let side = if about_paper { "paper" } else { "library" };
-        let review = if !about_paper && !chat.id.is_empty() { self.lib.as_ref().and_then(|lib| lib.store.review_for_conversation(&chat.id).ok().flatten()) } else { None };
         let mut items: Vec<AnyElement> = vec![];
         // A citation clicked where it stands in the text.
         let workspace = cx.entity().downgrade();
@@ -487,7 +680,8 @@ impl Workspace {
                                 .items_center()
                                 .gap(px(2.))
                                 .child(ui::ghost_button(SharedString::from(format!("picked-copy-{side}-{i}")), Some("copy"), Some("复制所选".into())).h(px(24.)).text_size(px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::CopyPicked(about_paper), cx)))
-                                .child(ui::ghost_button(SharedString::from(format!("picked-quote-{side}-{i}")), Some("pen-line"), Some("引用到输入框".into())).h(px(24.)).text_size(px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::QuotePicked(about_paper), cx))),
+                                .child(ui::ghost_button(SharedString::from(format!("picked-quote-{side}-{i}")), Some("pen-line"), Some("引用到输入框".into())).h(px(24.)).text_size(px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::QuotePicked(about_paper), cx)))
+                                .when(!about_paper && review.is_some(), |d| d.child(ui::ghost_button(SharedString::from(format!("picked-evidence-{side}-{i}")), Some("plus"), Some("记录为论断".into())).h(px(24.)).text_size(px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::EditReviewEvidence(None, chat.picked_text().unwrap_or_default()), cx)))),
                         )
                     })
                     .when(!chips.is_empty(), |d| d.child(div().flex().flex_wrap().gap(px(6.)).children(chips)))
@@ -499,8 +693,8 @@ impl Workspace {
                                 .flex_wrap()
                                 .gap(px(2.))
                                 .child(ui::ghost_button(SharedString::from(format!("copy-{side}-{i}")), Some("copy"), None).h(px(24.)).min_w(px(24.)).opacity(0.7).on_click(self.on(Cmd::CopyText(whole.clone()), cx)))
-                                .when(!about_paper && !whole.trim().is_empty() && review.as_ref().is_none_or(|r| r.outline_confirmed), |d| d.child(ui::ghost_button(SharedString::from(format!("manuscript-{side}-{i}")), Some("pen-line"), Some("保存为新稿件".into())).h(px(24.)).text_size(px(12.)).opacity(0.7).on_click(self.on(Cmd::AnswerToManuscript(question.clone(), whole.clone()), cx))))
-                                .when_some(review.as_ref(), |d, review| {
+                                .when(!about_paper && review_read_ok && !whole.trim().is_empty() && review.is_none_or(|r| r.outline_confirmed), |d| d.child(ui::ghost_button(SharedString::from(format!("manuscript-{side}-{i}")), Some("pen-line"), Some("保存为新稿件".into())).h(px(24.)).text_size(px(12.)).opacity(0.7).on_click(self.on(Cmd::AnswerToManuscript(question.clone(), whole.clone()), cx))))
+                                .when_some(review, |d, review| {
                                     let mut button = |key: &'static str, label: &'static str| ui::ghost_button(SharedString::from(format!("review-{key}-{side}-{i}")), None, Some(label.into())).h(px(24.)).text_size(px(12.)).on_click(self.on(Cmd::ReviewAction(key.into(), whole.clone()), cx));
                                     d.child(button("requirements", "记为要求"))
                                         .when(review.requirements_confirmed, |d| d.child(button("outline", "记为大纲")))
