@@ -8,7 +8,7 @@
 //! export to Word shows its reader. The rules are `wisp_core::comment`'s,
 //! the Word file's reading and writing `wisp_core::docx`'s.
 
-use crate::app::{Cmd, Page, Workspace};
+use crate::app::{Cmd, Modal, Page, Workspace};
 use crate::i18n::t;
 use crate::input::{InputEvent, TextInput};
 use crate::settings::SettingsPage;
@@ -19,6 +19,8 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use wisp_core::ai;
 use wisp_core::comment::{self, Comment};
+use wisp_core::docx;
+use wisp_core::headings::Sign;
 use wisp_core::manuscript::{self, Draft, Source};
 use wisp_core::settings::Task;
 
@@ -72,6 +74,9 @@ pub enum Do {
     ShowDone(bool),
     /// Start a manuscript from a Word or Markdown file: pick one.
     Import,
+    /// In the dialog of a Word file without heading styles: tick or untick the n-th heading guessed; all of them, or none.
+    Heading(usize),
+    Headings(bool),
     /// Make a manuscript of the sections a review wrote, by its conversation.
     FromReview(String),
 }
@@ -102,11 +107,36 @@ impl Commenting {
 }
 
 /// What a file makes of a manuscript, read off the main thread.
-struct Taken {
+pub(crate) struct Taken {
     draft: Draft,
     kind: &'static str,
     /// A Word file itself, to be kept beside the library.
     bytes: Option<Vec<u8>>,
+    /// What was read of a Word file, to make the draft again at the headings the person chose.
+    read: Option<docx::Read>,
+}
+
+/// A Word file without heading styles, waiting for the person to say which
+/// of the paragraphs that look like headings start a section (`Modal::Headings`).
+pub(crate) struct HeadingsForm {
+    library: String,
+    name: String,
+    taken: Taken,
+    /// Beside each of `taken.draft.headings`.
+    ticked: Vec<bool>,
+    /// Files of the same drop that are to be asked about next.
+    waiting: Vec<(String, Taken)>,
+}
+
+/// What made a paragraph look like a heading, as the dialog says it.
+fn sign_label(sign: Sign) -> &'static str {
+    match sign {
+        Sign::Named => t("常见章节名"),
+        Sign::Numbered => t("有编号"),
+        Sign::Figure => t("以图号结尾"),
+        Sign::Bold => t("加粗"),
+        Sign::Alone => t("短句单独成行"),
+    }
 }
 
 fn is_word(path: &Path) -> bool {
@@ -124,9 +154,9 @@ fn take_file(path: &Path) -> Result<Taken, String> {
     let bytes = std::fs::read(path).map_err(|err| tf!("无法读取 {name}：{err}", "Cannot read {name}: {err}"))?;
     if is_word(path) {
         let read = wisp_core::docx::read(&bytes).map_err(|err| format!("{err:#}"))?;
-        return Ok(Taken { draft: manuscript::from_word(&read, &name), kind: "docx", bytes: Some(bytes) });
+        return Ok(Taken { draft: manuscript::from_word(&read, &name), kind: "docx", bytes: Some(bytes), read: Some(read) });
     }
-    Ok(Taken { draft: manuscript::from_markdown(&String::from_utf8_lossy(&bytes), &name), kind: "markdown", bytes: None })
+    Ok(Taken { draft: manuscript::from_markdown(&String::from_utf8_lossy(&bytes), &name), kind: "markdown", bytes: None, read: None })
 }
 
 impl Workspace {
@@ -203,6 +233,12 @@ impl Workspace {
                 if let Some(lib) = self.lib.as_mut() { lib.writing.comments.show_done = show }
             }
             Do::Import => self.pick_manuscript_file(cx),
+            Do::Heading(n) => {
+                if let Some(Modal::Headings(form)) = self.modal.as_mut() && let Some(ticked) = form.ticked.get_mut(n) { *ticked = !*ticked }
+            }
+            Do::Headings(all) => {
+                if let Some(Modal::Headings(form)) = self.modal.as_mut() { form.ticked.iter_mut().for_each(|ticked| *ticked = all) }
+            }
             Do::FromReview(conversation) => self.review_into_manuscript(conversation, window, cx),
         }
         cx.notify();
@@ -400,6 +436,43 @@ impl Workspace {
             Ok(taken) => taken,
             Err(error) => return self.fail(tf!("「{name}」没有导入：{error}", "“{name}” not imported: {error}"), cx),
         };
+        // A Word file without heading styles is cut only where the person says.
+        if !taken.draft.headings.is_empty() {
+            if let Some(Modal::Headings(form)) = self.modal.as_mut() {
+                form.waiting.push((name, taken));
+            } else {
+                self.headings_ask(library.to_string(), name, taken, vec![], cx);
+            }
+            return;
+        }
+        self.manuscript_import(library, &name, taken, cx);
+    }
+
+    /// Ask which paragraphs of a Word file without heading styles start a section.
+    fn headings_ask(&mut self, library: String, name: String, taken: Taken, waiting: Vec<(String, Taken)>, cx: &mut Context<Self>) {
+        let ticked = taken.draft.headings.iter().map(|guess| guess.likely).collect();
+        self.modal_error.clear();
+        self.modal = Some(Modal::Headings(Box::new(HeadingsForm { library, name, taken, ticked, waiting })));
+        cx.notify();
+    }
+
+    /// The headings dialog is done with, by import (`chosen`) or not: the next file waiting is asked about.
+    pub(crate) fn headings_done(&mut self, import: bool, cx: &mut Context<Self>) {
+        let Some(Modal::Headings(form)) = self.modal.take() else { return };
+        let HeadingsForm { library, name, mut taken, ticked, mut waiting } = *form;
+        if import {
+            let chosen: Vec<usize> = taken.draft.headings.iter().zip(&ticked).filter(|(_, on)| **on).map(|(guess, _)| guess.paragraph).collect();
+            if let Some(read) = taken.read.as_ref() { taken.draft = manuscript::from_word_with(read, &name, Some(&chosen)) }
+            self.manuscript_import(&library, &name, taken, cx);
+        }
+        if !waiting.is_empty() {
+            let (next, taken) = waiting.remove(0);
+            self.headings_ask(library, next, taken, waiting, cx);
+        }
+    }
+
+    fn manuscript_import(&mut self, library: &str, name: &str, taken: Taken, cx: &mut Context<Self>) {
+        let name = name.to_string();
         self.write_snapshot("leave");
         let Some(lib) = self.lib.as_mut().filter(|lib| lib.info.id == library) else { return };
         let made = match lib.store.import_manuscript(&taken.draft, taken.kind, &name, taken.bytes.as_deref()) {
@@ -441,6 +514,81 @@ impl Workspace {
     }
 
     // ---- render
+
+    /// The paragraphs of a Word file without heading styles that look like headings: the person ticks those that start a section.
+    pub(crate) fn render_headings_dialog(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let Some(Modal::Headings(form)) = self.modal.as_ref() else { return None };
+        let paragraphs = form.taken.read.as_ref().map_or(&[][..], |read| read.paragraphs.as_slice());
+        let rows: Vec<Stateful<Div>> = form
+            .taken
+            .draft
+            .headings
+            .iter()
+            .zip(&form.ticked)
+            .enumerate()
+            .map(|(n, (guess, on))| {
+                // What follows it, so the person sees what the section would start with.
+                let next: String = paragraphs.get(guess.paragraph + 1).map_or(String::new(), |para| para.text.chars().take(60).collect());
+                div()
+                    .id(("heading-guess", n))
+                    .flex()
+                    .items_start()
+                    .gap(px(10.))
+                    .py(px(6.))
+                    .pr(px(8.))
+                    .pl(px(8. + 18. * (guess.level.saturating_sub(1).min(3)) as f32))
+                    .rounded(px(8.))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(Theme::hover()))
+                    .on_click(self.on(Cmd::Comment(Do::Heading(n)), cx))
+                    .child(div().mt(px(2.)).child(crate::extract::tick_box(*on, true)))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(2.))
+                            .child(div().flex().items_baseline().gap(px(8.)).child(div().flex_1().min_w_0().truncate().text_color(if *on { Theme::text() } else { Theme::text_secondary() }).when(*on, |d| d.font_weight(FontWeight::MEDIUM)).child(guess.text.clone())).child(div().flex_none().text_size(px(11.)).text_color(Theme::text_tertiary()).child(sign_label(guess.sign))))
+                            .when(!next.is_empty(), |d| d.child(div().truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(next))),
+                    )
+            })
+            .collect();
+        let count = form.ticked.iter().filter(|on| **on).count();
+        let more = if form.waiting.is_empty() { String::new() } else { tf!("之后还有 {} 个文件。", "{} more files after this one.", form.waiting.len()) };
+        Some(
+            ui::dialog(560.)
+                .child(ui::dialog_title(t("按哪些段落分节？")))
+                .child(
+                    div()
+                        .id("modal-body")
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .gap(px(10.))
+                        .px(px(20.))
+                        .py(px(8.))
+                        .child(div().text_size(px(12.)).line_height(px(19.)).text_color(Theme::text_tertiary()).child(tf!("「{}」没有用 Word 的标题样式。下面这些段落看上去像标题：勾选的每一段开始新的一节，其余留在正文里。导出回 Word 时，它们仍是文件里原来的段落。{more}", "“{}” uses no Word heading styles. These paragraphs look like headings: each one ticked starts a section, the rest stay in the text. Exported back to Word they are the paragraphs they were. {more}", form.name)))
+                        .child(div().flex().gap(px(4.)).child(ui::ghost_button("headings-all", None, Some(t("全选").into())).h(px(24.)).text_size(px(12.)).on_click(self.on(Cmd::Comment(Do::Headings(true)), cx))).child(ui::ghost_button("headings-none", None, Some(t("全不选").into())).h(px(24.)).text_size(px(12.)).on_click(self.on(Cmd::Comment(Do::Headings(false)), cx))))
+                        .child(div().flex().flex_col().gap(px(2.)).children(rows))
+                        .child(div().px(px(8.)).text_size(px(12.)).line_height(px(19.)).text_color(Theme::text_tertiary()).child(t("导入后也可以在写作里把光标所在的段落设为标题，或从那里拆成新的一节。")))
+                        .child(ui::error_line(&self.modal_error)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .justify_end()
+                        .gap(px(8.))
+                        .px(px(20.))
+                        .py(px(14.))
+                        .child(ui::secondary_button("modal-cancel", t("不导入")).on_click(self.on(Cmd::CloseModal, cx)))
+                        .child(ui::primary_button("modal-ok", if count == 0 { t("不分节导入").to_string() } else { tf!("按 {count} 个标题导入", "Import at {count} headings") }).on_click(self.on(Cmd::SubmitModal, cx))),
+                ),
+        )
+    }
 
     /// Over the panel beside the manuscript: the candidates, or the comments.
     pub(crate) fn render_side_switch(&self, cx: &mut Context<Self>) -> Div {

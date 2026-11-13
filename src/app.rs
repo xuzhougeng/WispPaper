@@ -444,6 +444,10 @@ pub enum Cmd {
     MoveSection(String, i64),
     AskRemoveSection(String),
     RemoveSection(String),
+    /// Cut the section being written at the caret's paragraph: that paragraph its heading (true), or the first of a new section.
+    SplitSection(bool),
+    /// Put a section back into the one before it.
+    MergeSection(String),
     /// The whole manuscript to read (true), or one section to write.
     WriteReading(bool),
     ExportManuscript(ManuscriptExport),
@@ -1072,6 +1076,8 @@ pub enum Modal {
     Figure(Box<crate::figures::FigureForm>),
     /// 提取: which fields to ask the assistant about, for which papers.
     Extract(Box<crate::extract::Form>),
+    /// 写作: which paragraphs of a Word file without heading styles start a section.
+    Headings(Box<crate::comments::HeadingsForm>),
 }
 
 pub struct Library {
@@ -1933,7 +1939,7 @@ impl Workspace {
                     }
                 }
             }
-            Cmd::WriteSection(_) | Cmd::WriteManuscript(_) | Cmd::NewManuscript | Cmd::AskRemoveManuscript(_) | Cmd::RemoveManuscript(_) | Cmd::WriteLanguage(_) | Cmd::EditSection(_) | Cmd::PickSectionKind(_) | Cmd::MoveSection(..) | Cmd::AskRemoveSection(_) | Cmd::RemoveSection(_) | Cmd::WriteReading(_) | Cmd::ExportManuscript(_) | Cmd::WriteHistory | Cmd::HistoryPick(_) => self.run_manuscript(cmd, window, cx),
+            Cmd::WriteSection(_) | Cmd::WriteManuscript(_) | Cmd::NewManuscript | Cmd::AskRemoveManuscript(_) | Cmd::RemoveManuscript(_) | Cmd::WriteLanguage(_) | Cmd::EditSection(_) | Cmd::PickSectionKind(_) | Cmd::MoveSection(..) | Cmd::AskRemoveSection(_) | Cmd::RemoveSection(_) | Cmd::SplitSection(_) | Cmd::MergeSection(_) | Cmd::WriteReading(_) | Cmd::ExportManuscript(_) | Cmd::WriteHistory | Cmd::HistoryPick(_) => self.run_manuscript(cmd, window, cx),
             Cmd::FigureTag(_) | Cmd::OpenFigure(_) | Cmd::FigureSource(_) | Cmd::AskFigure(_) | Cmd::CopyFigure(_) | Cmd::SaveFigure(_) | Cmd::AskRemoveFigure(_) | Cmd::RemoveFigure(_) | Cmd::FigureAddTag(_) | Cmd::FigureInfer(_) => self.run_figures(cmd, window, cx),
             Cmd::WriteCite(id) => {
                 self.cite_paper(&id, cx);
@@ -2563,6 +2569,9 @@ impl Workspace {
             }
 
             Cmd::CloseModal => {
+                // A file not imported: the next one waiting is asked about.
+                if matches!(self.modal, Some(Modal::Headings(_))) { self.headings_done(false, cx) }
+                if matches!(self.modal, Some(Modal::Headings(_))) { return cx.notify() }
                 self.modal = None;
                 self.modal_subscriptions.clear();
                 window.focus(&self.focus);
@@ -4473,6 +4482,10 @@ impl Workspace {
             }
             Modal::ImportReport => self.run(Cmd::CloseModal, window, cx),
             Modal::Section { .. } | Modal::History { .. } => self.submit_manuscript_modal(window, cx),
+            Modal::Headings(_) => {
+                self.headings_done(true, cx);
+                if self.modal.is_none() { window.focus(&self.focus) }
+            }
             Modal::ReviewEvidence(_) => self.submit_review_evidence(window, cx),
             Modal::ReviewText { .. } => self.submit_review_text(window, cx),
             Modal::Figure(_) => self.submit_figure(window, cx),
@@ -4766,6 +4779,15 @@ impl Workspace {
                     None
                 }
                 "section" => Some(Cmd::EditSection((!arg.is_empty()).then(|| arg.to_string()))),
+                // `split` / `split:heading` cut the section at the caret's paragraph (that paragraph a new section's first / its heading); `merge` puts the section being written back into the one before;
+                // `headings:<n>` / `headings:all` / `headings:none` tick in the dialog of a Word file without heading styles (`submit` imports).
+                "split" => Some(Cmd::SplitSection(arg == "heading")),
+                "merge" => self.lib.as_ref().map(|lib| Cmd::MergeSection(lib.writing.section_id.clone())),
+                "headings" => Some(Cmd::Comment(match arg {
+                    "all" => crate::comments::Do::Headings(true),
+                    "none" => crate::comments::Do::Headings(false),
+                    n => crate::comments::Do::Heading(n.parse().unwrap_or(0)),
+                })),
                 "reading" => Some(Cmd::WriteReading(true)),
                 "versions" => Some(Cmd::WriteHistory),
                 // `importdoc:<path>` starts a manuscript from a Word or Markdown file; `comments` shows the comments beside the manuscript (`comments:off` the candidates);

@@ -1181,5 +1181,21 @@
   "Word（.docx）：改动记为修订，带批注": "Word (.docx): changes as tracked revisions, with comments",
   "Word（.docx），带批注": "Word (.docx), with comments",
   "署名": "Author name",
-  "导出到 Word 的批注和修订用这个名字；留空用这台电脑的用户名。": "Used for comments and tracked changes in Word exports; empty uses this computer's user name."
+  "导出到 Word 的批注和修订用这个名字；留空用这台电脑的用户名。": "Used for comments and tracked changes in Word exports; empty uses this computer's user name.",
+  "常见章节名": "Common section name",
+  "有编号": "Numbered",
+  "以图号结尾": "Ends with a figure number",
+  "加粗": "Bold",
+  "短句单独成行": "Short line on its own",
+  "按哪些段落分节？": "Which paragraphs start a section?",
+  "导入后也可以在写作里把光标所在的段落设为标题，或从那里拆成新的一节。": "After the import you can still make the paragraph at the caret a heading, or start a new section there, on the writing page.",
+  "不导入": "Don't import",
+  "不分节导入": "Import as one section",
+  "设为标题": "Make heading",
+  "从这里拆成新节": "New section from here",
+  "这一段成为新一节的名称，后面的文字归入新的一节": "This paragraph becomes the name of a new section, and the text after it goes into that section",
+  "从这一段起拆成新的一节，再给它起名": "Start a new section at this paragraph, then name it",
+  "并入上一节": "Merge into previous section",
+  "拆分前": "Before split",
+  "并入前": "Before merge"
 }
