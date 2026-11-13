@@ -52,10 +52,11 @@ pub struct Found {
     pub judged: bool,
     /// The sentences whose other papers are on show, by their place.
     pub unfolded: HashSet<usize>,
-    /// The sentences no paper was chosen for are on show.
+    /// The papers found for the sentences a model chose none for are on show.
     pub rest: bool,
-    /// How many papers were searched.
+    /// How many papers were searched, and how many of them by their record alone, having no full text.
     pub searched: usize,
+    pub without_text: usize,
 }
 
 /// A sentence and the papers found for it.
@@ -105,7 +106,7 @@ pub enum Do {
 enum Event {
     Stage(Stage),
     Note(String),
-    Rows(Vec<Row>, usize),
+    Rows(Vec<Row>, usize, usize),
     Picks(Vec<Pick>),
     Failed(String),
     Done,
@@ -114,6 +115,30 @@ enum Event {
 impl Found {
     pub fn ticked(&self) -> usize {
         self.rows.iter().flat_map(|row| &row.offers).filter(|offer| offer.ticked).count()
+    }
+
+    /// Whether a sentence leads the card: a model chose a paper for it, or, before a model has chosen, any was found.
+    /// A tick of the person's own moves nothing: the card says what the model made of the sentences.
+    pub fn leads(&self, n: usize) -> bool {
+        self.rows.get(n).is_some_and(|row| if self.judged { row.offers.iter().any(|offer| offer.chosen) } else { !row.offers.is_empty() })
+    }
+
+    /// The sentences a model chose nothing for although papers were found by their words.
+    fn spare(&self) -> Vec<usize> {
+        (0..self.rows.len()).filter(|n| !self.leads(*n) && !self.rows[*n].offers.is_empty()).collect()
+    }
+
+    /// Show the papers found for the sentences nothing was chosen for, all at once, or put them away again.
+    fn turn_rest(&mut self) {
+        self.rest = !self.rest;
+        for n in self.spare() {
+            if self.rest { self.unfolded.insert(n); } else { self.unfolded.remove(&n); }
+        }
+    }
+
+    /// Whether there is anything to tick on show, which is when the card has something to insert.
+    pub fn offering(&self) -> bool {
+        self.rest || self.ticked() > 0 || (0..self.rows.len()).any(|n| self.leads(n))
     }
 
     /// The model's choices, ticked and put first in its order. A paper it names for a sentence it was found for under another is taken along.
@@ -191,7 +216,8 @@ fn work(send: &dyn Fn(Event), info: &LibraryInfo, text: &str, language: &str, ke
     };
     let rows = rows_of(&found, text, &ranges, keys);
     let nothing = rows.iter().all(|row| row.offers.is_empty());
-    send(Event::Rows(rows.clone(), found["papersSearched"].as_u64().unwrap_or(0) as usize));
+    let counted = |name: &str| found[name].as_u64().unwrap_or(0) as usize;
+    send(Event::Rows(rows.clone(), counted("papersSearched"), counted("papersWithoutText")));
     if nothing {
         // Words of one language find nothing in papers of another: said, since it is the likeliest reason.
         let other_script = sentences.iter().any(|sentence| sentence.chars().any(wisp_core::structure::is_cjk)) != matches!(language, "zh" | "ja" | "ko");
@@ -278,8 +304,8 @@ impl Workspace {
                             card.note = note;
                             true
                         }
-                        Event::Rows(rows, searched) => {
-                            (found.rows, found.searched) = (rows, searched);
+                        Event::Rows(rows, searched, without_text) => {
+                            (found.rows, found.searched, found.without_text) = (rows, searched, without_text);
                             true
                         }
                         Event::Picks(picks) => {
@@ -315,7 +341,7 @@ impl Workspace {
             Do::Unfold(row) => {
                 if !found.unfolded.remove(&row) { found.unfolded.insert(row); }
             }
-            Do::Rest => found.rest = !found.rest,
+            Do::Rest => found.turn_rest(),
             Do::Insert => {}
         }
         cx.notify();
@@ -370,25 +396,19 @@ impl Workspace {
             Stage::Done => "",
         };
         let waiting = card.busy.then(|| div().flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(Theme::text_tertiary()).child(ui::spinner("write-cite-wait", 12., Theme::accent())).child(stage));
-        // A sentence leads when a paper is ticked for it, or, before a model has chosen, when any was found.
-        let leads = |row: &Row| if found.judged { row.offers.iter().any(|offer| offer.chosen || offer.ticked) } else { !row.offers.is_empty() };
-        let (first, rest): (Vec<usize>, Vec<usize>) = (0..found.rows.len()).partition(|n| leads(&found.rows[*n]));
+        let (first, rest): (Vec<usize>, Vec<usize>) = (0..found.rows.len()).partition(|n| found.leads(*n));
         let with_offers = rest.iter().filter(|n| !found.rows[**n].offers.is_empty()).count();
-        let about = if card.busy || found.rows.is_empty() {
-            None
-        } else if found.judged && first.is_empty() {
-            Some(t("模型核对后，认为找到的文献都不足以支持这些句子。").to_string())
-        } else if found.judged {
-            Some(t("勾选的是模型核对后认为可以引用的文献；每篇下面是它自己的原句，点一下可以取消或另选。").to_string())
-        } else {
-            None
-        };
+        // The model looked and chose nothing: one line says so, and the papers found by their words come up only when asked for.
+        let none = found.judged && first.is_empty();
+        let about = (!card.busy && found.judged && !none).then(|| t("勾选的是模型核对后认为可以引用的文献；每篇下面是它自己的原句，点一下可以取消或另选。"));
         let mut body = div().id("write-cite-body").flex().flex_col().gap(px(10.)).max_h(px(480.)).overflow_y_scroll().children(waiting).children(about.map(|text| div().text_size(px(11.)).line_height(px(16.)).text_color(Theme::text_tertiary()).child(text)));
         for n in &first {
             body = body.child(self.render_cite_row(*n, &found.rows[*n], found, cx));
         }
         if !rest.is_empty() && !card.busy {
-            let line = if first.is_empty() && !found.judged {
+            let line = if none {
+                if found.rows.len() == 1 { t("模型核对后，认为找到的文献都不足以支持这句话。").to_string() } else { t("模型核对后，认为找到的文献都不足以支持这些句子。").to_string() }
+            } else if first.is_empty() {
                 String::new()
             } else if with_offers > 0 {
                 tf!("另外 {} 句没有合适的文献", "{} more sentences have no fitting paper", rest.len())
@@ -397,16 +417,21 @@ impl Workspace {
             };
             if !line.is_empty() {
                 body = body.child(
-                    div().flex().items_center().gap(px(4.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(line).when(with_offers > 0, |d| {
+                    div().flex().flex_wrap().items_center().gap(px(4.)).text_size(px(11.)).line_height(px(16.)).text_color(Theme::text_tertiary()).child(line).when(with_offers > 0, |d| {
                         d.child(ui::ghost_button("write-cite-rest", None, Some(if found.rest { t("收起").into() } else { t("看相近的").into() })).h(px(20.)).px(px(5.)).text_size(px(11.)).on_click(self.on(Cmd::WriteCited(Do::Rest), cx)))
                     }),
                 );
             }
-            if found.rest {
-                for n in rest.iter().filter(|n| !found.rows[**n].offers.is_empty()) {
-                    body = body.child(self.render_cite_row(*n, &found.rows[*n], found, cx));
-                }
+            // Put away, a sentence stays only for a paper the person ticked under it.
+            for n in rest.iter().filter(|n| found.rest || found.rows[**n].offers.iter().any(|offer| offer.ticked)) {
+                if !found.rows[*n].offers.is_empty() { body = body.child(self.render_cite_row(*n, &found.rows[*n], found, cx)) }
             }
+        }
+        // Where it looked, so that an empty answer is not taken for a narrow search: every part of the full texts, not the part being written.
+        if !card.busy && found.searched > 0 {
+            let scope = tf!("查找范围：{} 篇文献的题录、摘要和全文的各个部分（导言、方法、结果、讨论）", "Searched: the records, abstracts and every part of the full text (introduction, methods, results, discussion) of {} papers", found.searched);
+            let lacking = if found.without_text > 0 { tf!("；其中 {} 篇没有全文，只查了题录和摘要。", "; {} of them have no full text and were searched by record and abstract only.", found.without_text) } else { tf!("。", ".") };
+            body = body.child(div().text_size(px(11.)).line_height(px(16.)).text_color(Theme::text_tertiary()).child(format!("{scope}{lacking}")));
         }
         body
     }
@@ -432,7 +457,8 @@ impl Workspace {
             )
             .children(offers)
             .when(found.judged && others > 0 && (hidden > 0 || found.unfolded.contains(&n)), |d| {
-                let name = if hidden > 0 { tf!("还有 {hidden} 篇相近的", "{hidden} more similar papers") } else { t("收起").to_string() };
+                // 「还有」 only where some papers stand under the sentence already.
+                let name = if hidden == 0 { t("收起").to_string() } else if hidden == row.offers.len() { tf!("看 {hidden} 篇相近的", "Show {hidden} similar papers") } else { tf!("还有 {hidden} 篇相近的", "{hidden} more similar papers") };
                 d.child(div().flex().child(ui::ghost_button(("write-cite-more", n), None, Some(name.into())).h(px(20.)).px(px(5.)).text_size(px(11.)).text_color(Theme::text_tertiary()).on_click(self.on(Cmd::WriteCited(Do::Unfold(n)), cx))))
             })
     }
@@ -545,5 +571,29 @@ mod tests {
         assert_eq!(keys(&card.rows[1]), [("Lee2020".to_string(), true), ("Pandey2021".to_string(), false)]);
         assert_eq!((card.rows[1].offers[0].why.as_str(), card.judged, card.ticked()), ("乙烯", true, 1));
         assert!(!card.rows[0].offers[0].ticked);
+        // The sentence the model chose for leads; the other has papers found by words alone, which come up together when asked for.
+        assert!(card.leads(1) && !card.leads(0) && card.offering());
+        card.turn_rest();
+        assert!(card.rest && card.unfolded.contains(&0) && !card.unfolded.contains(&1));
+        card.turn_rest();
+        assert!(!card.rest && card.unfolded.is_empty());
+    }
+
+    #[test]
+    fn a_model_that_chose_nothing() {
+        let offer = |key: &str| Offer { paper: key.to_lowercase(), key: key.into(), title: String::new(), year: None, cite: String::new(), part: "record".into(), page: None, evidence: String::new(), why: String::new(), chosen: false, ticked: false };
+        let row = |offers: Vec<Offer>| Row { range: 0..0, sentence: String::new(), offers };
+        let mut card = Found { rows: vec![row(vec![offer("A2020"), offer("B2021")]), row(vec![])], ..Default::default() };
+        // Before a model has looked, a sentence leads with whatever was found for it.
+        assert!(card.leads(0) && !card.leads(1) && card.offering());
+        card.take(vec![]);
+        // It chose nothing: no sentence leads and there is nothing to insert, until the papers found are asked for.
+        assert!(card.judged && !card.leads(0) && !card.offering());
+        card.turn_rest();
+        assert!(card.offering() && card.unfolded.contains(&0) && !card.unfolded.contains(&1));
+        // A tick of the person's own does not make the sentence one the model chose for, and keeps the card's actions when the rest is put away.
+        card.rows[0].offers[1].ticked = true;
+        card.turn_rest();
+        assert!(!card.leads(0) && card.offering() && card.ticked() == 1);
     }
 }

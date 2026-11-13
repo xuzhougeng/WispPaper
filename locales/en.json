@@ -1085,6 +1085,7 @@
   "正在文献库里查找…": "Searching the library…",
   "正在核对找到的文献是否真的支持这些句子…": "Checking whether the papers found really support these sentences…",
   "模型核对后，认为找到的文献都不足以支持这些句子。": "After checking, the model takes none of the papers found to support these sentences.",
+  "模型核对后，认为找到的文献都不足以支持这句话。": "After checking, the model takes none of the papers found to support this sentence.",
   "勾选的是模型核对后认为可以引用的文献；每篇下面是它自己的原句，点一下可以取消或另选。": "The ticked papers are the ones the model takes to fit after checking; under each is a sentence of its own. Click to untick or to pick another.",
   "看相近的": "Show similar papers",
   "在 PDF 里看这句原文": "See this sentence in the PDF",
