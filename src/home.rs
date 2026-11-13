@@ -4,7 +4,7 @@
 use crate::app::{Cmd, Edge, MenuKind, Workspace};
 use crate::context::Nav;
 use crate::settings::{SettingsPage, UpdateState};
-use crate::shortcuts::{MarkAll, MarkDown, MarkUp, MoveDown, MoveFirst, MoveLast, MoveLeft, MovePageDown, MovePageUp, MoveRight, MoveUp, OpenSelected, TrashSelected, AddPaper, AskLibrary, FocusSearch, ImportPdf, NewLibrary, ShowHome, ShowSettings, CopyPicked, FindCandidates, ToggleDetail, ToggleReading, ToggleSidebar, ZoomFit, ZoomIn, ZoomOut};
+use crate::shortcuts::{AskAssistant, DecideIncluded, DecideIrrelevant, DecidePending, DecideRelated, DecideUncertain, StarScreened, TakeSuggestion, TickSuggestion, TranslateScreened, UndoDecision, MarkAll, MarkDown, MarkUp, MoveDown, MoveFirst, MoveLast, MoveLeft, MovePageDown, MovePageUp, MoveRight, MoveUp, OpenSelected, TrashSelected, AddPaper, AskLibrary, FocusSearch, ImportPdf, NewLibrary, ShowHome, ShowSettings, CopyPicked, FindCandidates, ToggleDetail, ToggleReading, ToggleSidebar, ZoomFit, ZoomIn, ZoomOut};
 use crate::theme::{self, Theme};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
@@ -61,6 +61,18 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &MarkAll, window, cx| this.nav(Nav::MarkAll, window, cx)))
             .on_action(cx.listener(|this, _: &OpenSelected, window, cx| this.nav(Nav::Open, window, cx)))
             .on_action(cx.listener(|this, _: &TrashSelected, window, cx| this.nav(Nav::Trash, window, cx)))
+            // The keys of 筛选 (screen_single.rs).
+            .on_action(cx.listener(|this, _: &DecideIncluded, window, cx| this.screen_key("y", window, cx)))
+            .on_action(cx.listener(|this, _: &DecideRelated, window, cx| this.screen_key("r", window, cx)))
+            .on_action(cx.listener(|this, _: &DecideUncertain, window, cx| this.screen_key("u", window, cx)))
+            .on_action(cx.listener(|this, _: &DecideIrrelevant, window, cx| this.screen_key("n", window, cx)))
+            .on_action(cx.listener(|this, _: &DecidePending, window, cx| this.screen_key("p", window, cx)))
+            .on_action(cx.listener(|this, _: &TakeSuggestion, window, cx| this.screen_key("a", window, cx)))
+            .on_action(cx.listener(|this, _: &StarScreened, window, cx| this.screen_key("s", window, cx)))
+            .on_action(cx.listener(|this, _: &TranslateScreened, window, cx| this.screen_key("t", window, cx)))
+            .on_action(cx.listener(|this, _: &UndoDecision, window, cx| this.screen_key("z", window, cx)))
+            .on_action(cx.listener(|this, _: &AskAssistant, window, cx| this.screen_key("g", window, cx)))
+            .on_action(cx.listener(|this, _: &TickSuggestion, window, cx| this.screen_key("space", window, cx)))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.import_paths(paths.paths().to_vec(), cx)))
 
             .child(page)

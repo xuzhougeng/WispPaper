@@ -269,6 +269,8 @@ impl Workspace {
                 pdf.go_to(if nav == Nav::Left { page.saturating_sub(1).max(1) } else { page + 1 }, cx);
             });
         }
+        // 逐篇 and 确认 have their own places to move between.
+        if lib.page == Page::Screen && lib.screen.mode != crate::app::ScreenMode::Batch { return self.screen_nav(nav, window, cx) }
         // The papers in the order the page shows them.
         let ids: Vec<String> = match lib.page {
             Page::Papers => lib.shown.iter().map(|&i| lib.papers[i].id.clone()).collect(),
