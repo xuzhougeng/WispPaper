@@ -214,6 +214,7 @@ impl Workspace {
         writing.title.update(cx, |input, cx| input.set_text(&title, cx));
         // A comment being written was about the section left.
         writing.comments.drafting = None;
+        writing.comments.focused = None;
         writing.editor_scroll.set_offset(point(px(0.), px(0.)));
         self.comments_load();
         self.write_openers(cx);
@@ -367,6 +368,9 @@ impl Workspace {
                     if !reading { lib.writing.editor.read(cx).focus(window) }
                 }
                 if reading { self.write_snapshot("leave") }
+            }
+            Cmd::WriteNav(library) => {
+                if let Some(lib) = self.lib.as_mut() { lib.writing.library_nav = library }
             }
             Cmd::ExportManuscript(kind) => self.export_manuscript(kind, cx),
             Cmd::WriteHistory => {
@@ -545,6 +549,122 @@ impl Workspace {
 
     // ---- render
 
+    /// The sidebar, when it is there, is the manuscript's outline: 写作 is the page and the library's navigation was not asked for.
+    pub(crate) fn outline_shown(&self) -> bool {
+        self.lib.as_ref().is_some_and(|lib| lib.page == Page::Write && !lib.writing.library_nav && lib.writing.current().is_some())
+    }
+
+    /// The sidebar while writing: the way back to the library's navigation,
+    /// the manuscript, and its sections with how long each is and how many
+    /// comments wait in it. A section's row opens it; the one written in has its menu.
+    pub(crate) fn render_outline(&self, width: f32, cx: &mut Context<Self>) -> AnyElement {
+        let lib = self.lib.as_ref().unwrap();
+        let writing = &lib.writing;
+        let Some(manuscript) = writing.current() else { return div().into_any_element() };
+        let whole: String = manuscript.sections.iter().map(|s| s.body.as_str()).collect::<Vec<_>>().join("\n");
+        let waiting: usize = manuscript.sections.iter().map(|s| writing.comments.open_in(&s.id)).sum();
+        let mut about = vec![crate::write::length_label(&whole)];
+        if waiting > 0 { about.push(tf!("{waiting} 条批注待处理", "{waiting} open comments")) }
+        let row = |id: ElementId, on: bool| div().id(id).flex().items_center().gap(px(8.)).px(px(8.)).rounded(px(6.)).cursor_pointer().when(on, |d| d.bg(Theme::accent_soft())).when(!on, |d| d.hover(|s| s.bg(Theme::hover())));
+        let rows: Vec<AnyElement> = manuscript
+            .sections
+            .iter()
+            .enumerate()
+            .map(|(n, section)| {
+                let on = section.id == writing.section_id && !writing.reading;
+                let empty = section.body.trim().is_empty();
+                let noted = writing.comments.open_in(&section.id);
+                let mut said = vec![];
+                if section.kind != "other" && label(&SECTIONS, &section.kind) != section.name { said.push(label(&SECTIONS, &section.kind).to_string()) }
+                said.push(if empty { t("未写").to_string() } else { crate::write::length_label(&section.body) });
+                row(("outline-section", n).into(), on)
+                    .py(px(6.))
+                    .on_click(self.on(Cmd::WriteSection(section.id.clone()), cx))
+                    .when(on, |d| d.on_mouse_down(MouseButton::Right, self.on_context(MenuKind::Section(section.id.clone()), cx)))
+                    .child(div().flex_none().w(px(16.)).text_size(px(11.)).text_color(if on { Theme::accent() } else { Theme::text_placeholder() }).child((n + 1).to_string()))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(1.))
+                            .child(div().truncate().text_size(px(13.)).when(on, |d| d.text_color(Theme::accent()).font_weight(FontWeight::MEDIUM)).when(!on, |d| d.text_color(if empty { Theme::text_tertiary() } else { Theme::text() })).child(section.name.clone()))
+                            .child(div().truncate().text_size(px(11.)).text_color(Theme::text_tertiary()).child(said.join(" · "))),
+                    )
+                    // How many comments wait in the section.
+                    .when(noted > 0, |d| d.child(div().flex().flex_none().items_center().justify_center().min_w(px(18.)).h(px(18.)).px(px(5.)).rounded(px(9.)).bg(Theme::note_strong()).text_size(px(10.)).text_color(Theme::text()).child(noted.to_string())))
+                    .when(on, |d| d.child(div().id("outline-section-menu").flex().flex_none().items_center().justify_center().size(px(20.)).rounded(px(10.)).hover(|s| s.bg(Theme::accent().opacity(0.12))).on_click(self.on_menu(MenuKind::Section(section.id.clone()), cx)).child(ui::icon("chevron-down", 12., Theme::accent()))))
+                    .into_any_element()
+            })
+            .collect();
+        let small_row = |id: &'static str, icon: &'static str, name: String, on: bool| {
+            row(id.into(), on).h(px(30.)).text_size(px(13.)).text_color(if on { Theme::accent() } else { Theme::text_secondary() }).child(div().flex().flex_none().w(px(16.)).justify_center().child(ui::icon(icon, 14., if on { Theme::accent() } else { Theme::text_tertiary() }))).child(div().flex_1().min_w_0().truncate().child(name))
+        };
+        div()
+            .id("write-outline")
+            .flex()
+            .flex_col()
+            .flex_none()
+            .w(px(width))
+            .h_full()
+            .px(px(10.))
+            .pb(px(10.))
+            .pt(px(Self::corner_top()))
+            .gap(px(10.))
+            .child(self.render_corner(width >= ui::traffic_lights_width() + 150., cx).when(ui::custom_titlebar(), |d| d.mb(px(4.))))
+            // Back to the tags and the views, staying on this page.
+            .child(
+                div()
+                    .id("outline-library")
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .h(px(28.))
+                    .px(px(8.))
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .text_size(px(12.))
+                    .text_color(Theme::text_secondary())
+                    .hover(|s| s.bg(Theme::hover()).text_color(Theme::text()))
+                    .on_click(self.on(Cmd::WriteNav(true), cx))
+                    .child(ui::icon("panel-left", 14., Theme::text_tertiary()))
+                    .child(div().flex_1().min_w_0().truncate().child(tf!("{} · 文献库导航", "{} · Library", lib.info.name))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(3.))
+                    .px(px(8.))
+                    .child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).line_height(px(21.)).text_color(Theme::text()).child(crate::i18n::manuscript_title(manuscript).to_string()))
+                    .child(div().text_size(px(11.)).text_color(Theme::text_tertiary()).child(about.join(" · "))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .gap(px(2.))
+                    .child(ui::caption(t("大纲")).px(px(8.)).py(px(4.)))
+                    .child(div().id("outline-sections").flex().flex_col().flex_1().min_h_0().overflow_y_scroll().gap(px(1.)).children(rows).child(small_row("outline-add", "plus", t("添加一节").into(), false).on_click(self.on(Cmd::EditSection(None), cx)))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(1.))
+                    .pt(px(6.))
+                    .border_t_1()
+                    .border_color(Theme::line())
+                    .child(small_row("outline-reading", "eye", t("通读全文").into(), writing.reading).on_click(self.on(Cmd::WriteReading(!writing.reading), cx)))
+                    .child(small_row("outline-manuscripts", "list", tf!("稿件 {}", "Manuscripts {}", writing.manuscripts.len()), false).on_click(self.on_menu(MenuKind::Manuscripts, cx))),
+            )
+            .into_any_element()
+    }
+
+
     /// Above the editor: the title, the manuscript's own buttons, and its sections.
     pub(crate) fn render_manuscript_bar(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let lib = self.lib.as_ref().unwrap();
@@ -615,7 +735,8 @@ impl Workspace {
                     .child(tool("write-export", "export", Some(t("导出").into())).on_click(self.on_menu(MenuKind::ManuscriptExport, cx)))
                     .child(if writing.reading { tool("write-reading", "pen-line", Some(t("写作").into())).on_click(self.on(Cmd::WriteReading(false), cx)) } else { tool("write-reading", "eye", Some(t("通读").into())).on_click(self.on(Cmd::WriteReading(true), cx)) }),
             )
-            .child(div().flex().items_center().flex_wrap().gap(px(6.)).children(pills).child(add))
+            // The outline in the sidebar lists the sections: here only while it is put away or shows the library.
+            .when(!(self.outline_shown() && !self.settings.sidebar_hidden), |d| d.child(div().flex().items_center().flex_wrap().gap(px(6.)).children(pills).child(add)))
     }
 
     /// The whole manuscript, to be read through; a heading opens its section.

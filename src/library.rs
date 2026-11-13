@@ -270,14 +270,14 @@ impl Workspace {
 
     /// What is left free above the top-left buttons. Where the window draws its own title bar there is
     /// nothing: the buttons sit in a strip of its height, level with macOS's traffic lights beside them.
-    fn corner_top() -> f32 {
+    pub(crate) fn corner_top() -> f32 {
         if ui::custom_titlebar() { 0. } else { 10. }
     }
 
     /// The window's top-left corner in a library: the button that puts the
     /// sidebar away or brings it back, and the way back to the libraries.
     /// A narrow sidebar keeps the arrow and drops its words.
-    fn render_corner(&self, roomy: bool, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn render_corner(&self, roomy: bool, cx: &mut Context<Self>) -> Div {
         ui::title_strip()
             .when(!ui::custom_titlebar(), |d| d.h(px(28.)))
             .pl(px(ui::traffic_lights_width()))
@@ -299,6 +299,8 @@ impl Workspace {
     }
 
     fn render_sidebar(&mut self, width: f32, cx: &mut Context<Self>) -> AnyElement {
+        // While writing, the tags and counts are of no use: the manuscript's outline takes their place.
+        if self.outline_shown() { return self.render_outline(width, cx) }
         let lib = self.lib.as_ref().unwrap();
         let now = time::now_millis();
         let nav = |id: &'static str, icon: &'static str, label: &'static str, count: Option<usize>, active: bool, cmd: Cmd, this: &Self, cx: &mut Context<Self>| {
