@@ -41,7 +41,7 @@ pub fn manuscript_title(manuscript: &wisp_core::manuscript::Manuscript) -> &str 
 pub fn assist_title(assist: &wisp_core::ai::Assist, language: &str) -> String {
     use wisp_core::ai::Assist;
     match assist {
-        Assist::Rewrite => t("参照候选句改写").into(),
+        Assist::Rewrite => t("仿写").into(),
         Assist::Polish => t("润色").into(),
         Assist::Cite => t("配引用").into(),
         Assist::Translate if is_english() => format!("Translate to {}", t(&wisp_core::ai::language_name(language))),

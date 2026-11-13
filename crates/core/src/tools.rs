@@ -189,9 +189,10 @@ pub fn catalog() -> Vec<ToolDef> {
         scoped(
             "find_citations",
             "查找可引用的文献",
-            "为一段文字逐句找出文献库中可能支持它的文献：按词语在题目、摘要、笔记和已保存的全文里匹配，返回每句的候选文献，全文命中的附页码和原文片段。只是按词语匹配的候选，是否真的支持这句话需要读原文判断。",
+            "为一段文字逐句找出文献库中可能支持它的文献：每句话按文献的题目、摘要、笔记和全文里的句子检索，返回候选文献和它自己最贴近的一句原文（in 是这句所在的部分，全文里的附页码）。只是按词语找出的候选，是否真的支持这句话需要读原文判断。文字和文献不是同一种语言时（返回的 language 是文献的语言），用 queries 给每句配上那种语言的检索词，否则找不到。",
             json!({
                 "text": {"type": "string", "description": "要配引用的文字，可以是一句或一段。"},
+                "queries": {"type": "array", "items": {"type": "string"}, "description": "各句的检索词，按句子的顺序，用文献的语言写（术语、同义词、缩写，空格分隔）；不需要的句子给空字符串。"},
                 "perSentence": {"type": "integer", "description": "每句最多几篇候选，默认 3，最大 10。"},
             }),
             &["text"],
@@ -926,77 +927,68 @@ fn find_pdf(store: &mut Store, args: &Value, fetch: Fetch, download: Download) -
     }))
 }
 
-/// The sentences of a text: full stops of either script, question and
-/// exclamation marks, semicolons and line breaks end one. A Latin full stop
-/// only does when a space follows, so "0.05" and "e.g.x" stay whole.
-fn sentences(text: &str) -> Vec<String> {
-    let mut out = vec![];
-    let mut current = String::new();
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        let ends = match c {
-            '。' | '！' | '？' | '!' | '?' | '；' | ';' | '\n' => true,
-            '.' => chars.peek().is_none_or(|next| next.is_whitespace()),
-            _ => false,
-        };
-        if c != '\n' { current.push(c) }
-        if ends {
-            if !current.trim().is_empty() { out.push(current.trim().to_string()) }
-            current.clear();
-        }
-    }
-    if !current.trim().is_empty() { out.push(current.trim().to_string()) }
-    out
-}
-
 /// The papers without readable text that a search names; the rest are counted.
 const UNREADABLE_LISTED: usize = 20;
-const MAX_SENTENCES: usize = 40;
 
 fn find_citations(store: &mut Store, args: &Value) -> Result<Value> {
     let text = text(args, "text")?;
     if text.is_empty() { bail!("请提供要配引用的文字。") }
     let per_sentence = number(args, "perSentence", 3, 10)?.max(1);
+    // Search words for the sentences, in their order: what finds papers written in another language than the text.
+    let extra: Vec<String> = match &args["queries"] {
+        Value::Null => vec![],
+        Value::Array(items) => items.iter().map(|item| item.as_str().unwrap_or("").trim().to_string()).collect(),
+        _ => bail!("queries 应是一组字符串，第 n 个是第 n 句的检索词。"),
+    };
     extract_missing(store, None)?;
     let papers: Vec<Paper> = store.list_papers()?.into_iter().filter(|p| p.screening != "irrelevant").collect();
-    let texts = store.all_fulltext()?;
-    // Lowercased once: every sentence is matched against every record and page.
-    let records: Vec<String> = papers.iter().map(|p| searchable(&format!("{} {} {} {}", p.title, p.abstract_text, p.tags.join(" "), p.notes))).collect();
-    let pages: Vec<Vec<String>> = papers.iter().map(|p| texts.get(&p.id).map(|(_, pages)| pages.iter().map(|page| searchable(page)).collect()).unwrap_or_default()).collect();
-    let all = sentences(text);
-    let mut out = vec![];
-    for sentence in all.iter().take(MAX_SENTENCES) {
-        let words = terms(sentence);
-        let mut candidates = vec![];
-        // A sentence of one or two words says too little to match on.
-        if words.len() >= 3 {
-            for (i, paper) in papers.iter().enumerate() {
-                let in_record = words.iter().filter(|word| records[i].contains(word.as_str())).count();
-                // The page holding the most of the sentence's words, and where its first one stands.
-                let best = pages[i].iter().enumerate().map(|(n, page)| (words.iter().filter(|word| page.contains(word.as_str())).count(), n)).max_by_key(|&(count, n)| (count, std::cmp::Reverse(n)));
-                let (count, page) = match best {
-                    Some((count, n)) if count > in_record => (count, Some(n)),
-                    _ => (in_record, None),
-                };
-                if count * 2 < words.len() { continue }
-                let mut candidate = json!({"paperId": paper.id, "title": paper.title, "year": paper.year, "matched": count, "of": words.len(), "in": if page.is_some() { "fulltext" } else { "record" }});
-                if let Some(n) = page {
-                    let original = &texts[&paper.id].1[n];
-                    let at = words.iter().filter_map(|word| pages[i][n].find(word.as_str())).min().unwrap_or(0);
-                    candidate["page"] = json!(n + 1);
-                    candidate["snippet"] = json!(snippet(original, at));
-                }
-                candidates.push((count, candidate));
-            }
-        }
-        candidates.sort_by_key(|(count, _)| std::cmp::Reverse(*count));
-        out.push(json!({"sentence": sentence, "candidates": candidates.into_iter().take(per_sentence).map(|(_, c)| c).collect::<Vec<_>>()}));
-    }
+    let known: std::collections::HashSet<&str> = papers.iter().map(|p| p.id.as_str()).collect();
+    // What a paper says of its own: the abstract its record has, and every sentence kept of its full text.
+    let mut held: Vec<crate::store::PaperSentence> = papers
+        .iter()
+        .flat_map(|p| crate::structure::split_sentences(&p.abstract_text).into_iter().filter(|s| crate::structure::usable(s)).enumerate().map(|(position, text)| crate::store::PaperSentence { paper_id: p.id.clone(), sentence: crate::structure::Sentence { section: "abstract".into(), position, text, ..Default::default() } }).collect::<Vec<_>>())
+        .collect();
+    let stored: Vec<crate::store::PaperSentence> = store.section_sentences("", "")?.into_iter().filter(|s| known.contains(s.paper_id.as_str()) && s.sentence.section != "abstract" && !crate::structure::apparatus(&s.sentence.text)).collect();
+    let with_text: std::collections::HashSet<&str> = stored.iter().map(|s| s.paper_id.as_str()).collect();
+    let without_text = papers.iter().filter(|p| !with_text.contains(p.id.as_str())).count();
+    held.extend(stored.iter().cloned());
+    let all = crate::citefind::sentences(text);
+    let asked: Vec<&str> = all.iter().take(crate::citefind::MAX_SENTENCES).map(|range| &text[range.clone()]).collect();
+    let queries: Vec<Vec<String>> = asked
+        .iter()
+        .enumerate()
+        .map(|(n, sentence)| if crate::citefind::worth(sentence) { std::iter::once(sentence.to_string()).chain(extra.get(n).filter(|words| !words.is_empty()).cloned()).collect() } else { vec![] })
+        .collect();
+    let found = crate::citefind::search(&papers, &held, &queries, per_sentence);
+    let out: Vec<Value> = asked
+        .iter()
+        .zip(&found)
+        .map(|(sentence, hits)| {
+            let candidates: Vec<Value> = hits
+                .iter()
+                .map(|hit| {
+                    let paper = &papers[hit.paper];
+                    let mut candidate = json!({"paperId": paper.id, "title": paper.title, "year": paper.year, "cite": paper.citation(), "matched": hit.matched, "of": hit.of, "in": "record"});
+                    // The sentence of the paper's own that says most of it, and where it stands.
+                    if let Some(at) = hit.sentence {
+                        let own = &held[at].sentence;
+                        candidate["in"] = json!(own.section);
+                        candidate["snippet"] = json!(own.text);
+                        if own.page > 0 { candidate["page"] = json!(own.page) }
+                    }
+                    candidate
+                })
+                .collect();
+            json!({"sentence": sentence, "candidates": candidates})
+        })
+        .collect();
     Ok(json!({
         "sentences": out,
-        "sentencesSkipped": all.len().saturating_sub(MAX_SENTENCES),
+        "sentencesSkipped": all.len().saturating_sub(crate::citefind::MAX_SENTENCES),
         "papersSearched": papers.len(),
-        "papersWithoutText": papers.iter().filter(|p| !texts.contains_key(&p.id)).count(),
+        "papersWithoutText": without_text,
+        // What search words are to be written in, for a text in another language.
+        "language": crate::citefind::library_language(&papers),
     }))
 }
 
@@ -1677,18 +1669,36 @@ pub(crate) mod tests {
     #[test]
     fn citations_for_a_text() {
         let (root, id) = sample();
-        assert_eq!(sentences("Roots grow (p < 0.05). 根尖有干细胞。WOX5 is key;\nDone"), ["Roots grow (p < 0.05).", "根尖有干细胞。", "WOX5 is key;", "Done"]);
+        // A full text long enough to have sentences kept: the methods are on its second page.
+        {
+            let info = libraries::list(&root).remove(0);
+            let mut store = Store::open(&info.dir).unwrap();
+            let file = store.paper_files(&id).unwrap().remove(0);
+            let pages = vec![
+                "Introduction\n\nThe root tip of Arabidopsis holds a small group of stem cells that divide rarely. How this niche is kept through development has been studied for decades.".to_string(),
+                "Methods\n\nProtoplasts were isolated from root tips and libraries were prepared with the 10x Genomics Chromium platform. Reads were aligned to the reference genome and counted per gene.".to_string(),
+            ];
+            store.save_fulltext_pages(&file.id, &Ok(pages)).unwrap();
+        }
         let found = call(&root, "find_citations", &json!({"text": "Libraries were prepared with the Chromium platform. WOX5 maintains the quiescent centre of the root. Too short."})).unwrap();
         let sentence = |n: usize| &found["sentences"][n];
         assert_eq!(found["sentences"].as_array().unwrap().len(), 3);
-        // The methods sentence is only in the full text, on page 2; the second is the abstract.
-        assert_eq!((sentence(0)["candidates"][0]["paperId"].as_str(), sentence(0)["candidates"][0]["in"].as_str(), sentence(0)["candidates"][0]["page"].as_u64()), (Some(id.as_str()), Some("fulltext"), Some(2)));
-        assert!(sentence(0)["candidates"][0]["snippet"].as_str().unwrap().contains("Libraries were prepared"));
-        assert_eq!((sentence(1)["candidates"][0]["in"].as_str(), sentence(1)["candidates"][0]["page"].as_u64()), (Some("record"), None));
+        // Each candidate comes with the sentence of its own that says most of it: here one of the full text, with its page.
+        assert_eq!(sentence(0)["candidates"][0]["paperId"].as_str(), Some(id.as_str()));
+        assert!(sentence(0)["candidates"][0]["snippet"].as_str().unwrap().contains("libraries were prepared"));
+        assert_eq!((sentence(0)["candidates"][0]["in"].as_str(), sentence(0)["candidates"][0]["page"].as_u64()), (Some("methods"), Some(2)));
+        // The second is what the abstract says.
+        assert_eq!((sentence(1)["candidates"][0]["paperId"].as_str(), sentence(1)["candidates"][0]["page"].as_u64()), (Some(id.as_str()), None));
         assert_eq!(sentence(2)["candidates"], json!([]));
         // The paper marked irrelevant is never a candidate.
-        assert_eq!((found["papersSearched"].as_u64(), found["papersWithoutText"].as_u64()), (Some(1), Some(0)));
+        assert_eq!((found["papersSearched"].as_u64(), found["papersWithoutText"].as_u64(), found["language"].as_str()), (Some(1), Some(0), Some("en")));
         assert_eq!(call(&root, "find_citations", &json!({"text": "Unrelated sentence about volcanic eruptions in Iceland."})).unwrap()["sentences"][0]["candidates"], json!([]));
+        // A sentence in another language finds the paper by the search words given for it.
+        let chinese = "文库用 Chromium 平台构建。";
+        assert_eq!(call(&root, "find_citations", &json!({"text": chinese})).unwrap()["sentences"][0]["candidates"], json!([]));
+        let helped = call(&root, "find_citations", &json!({"text": chinese, "queries": ["libraries prepared Chromium platform"]})).unwrap();
+        assert_eq!(helped["sentences"][0]["candidates"][0]["paperId"].as_str(), Some(id.as_str()));
+        assert!(call(&root, "find_citations", &json!({"text": chinese, "queries": "x"})).is_err());
         std::fs::remove_dir_all(root).ok();
     }
 

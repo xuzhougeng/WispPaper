@@ -493,6 +493,8 @@ pub enum Cmd {
     WriteAssist(ai::Assist),
     WriteAssistStop,
     WriteAssistUse(crate::write_assist::Use),
+    /// 配引用's card: tick a paper, show more, write the ticked citations (write_cite.rs).
+    WriteCited(crate::write_cite::Do),
     /// 改稿: the box under the manuscript where the assistant is told what to change (`revise.rs`).
     Revise(crate::revise::Do),
     // The figure library (`src/figures.rs`)
@@ -2030,6 +2032,7 @@ impl Workspace {
             Cmd::WriteAssist(assist) => self.assist_start(assist, cx),
             Cmd::WriteAssistStop => self.assist_stop(cx),
             Cmd::WriteAssistUse(how) => self.assist_use(how, window, cx),
+            Cmd::WriteCited(what) => self.cite_do(what, window, cx),
             Cmd::Revise(what) => self.run_revise(what, cx),
             Cmd::WriteStop => {
                 if let Some(lib) = self.lib.as_mut() {
@@ -5194,6 +5197,20 @@ impl Workspace {
                 // `assisted:replace|below|copy|drop` uses the result, `assiststop` stops it; `caret:<byte>` / `pick:<from>;<to>` place the caret / select.
                 "assist" => Some(Cmd::WriteAssist(match arg { "rewrite" => ai::Assist::Rewrite, "translate" => ai::Assist::Translate, "polish" => ai::Assist::Polish, "cite" => ai::Assist::Cite, own => ai::Assist::Own(own.to_string()) })),
                 "assiststop" => Some(Cmd::WriteAssistStop),
+                // `cited:tick;<sentence>;<paper>` ticks a paper 配引用 found (by their places from 0), `cited:more;<sentence>` shows its other papers,
+                // `cited:rest` the sentences nothing was chosen for, `cited:insert` writes the ticked citations.
+                "cited" => {
+                    use crate::write_cite::Do;
+                    let mut parts = arg.split(';');
+                    let what = parts.next().unwrap_or("");
+                    let mut number = || parts.next().and_then(|n| n.parse::<usize>().ok()).unwrap_or(0);
+                    Some(Cmd::WriteCited(match what {
+                        "tick" => Do::Tick(number(), number()),
+                        "more" => Do::Unfold(number()),
+                        "rest" => Do::Rest,
+                        _ => Do::Insert,
+                    }))
+                }
                 // `revise:<wish>` tells the assistant what to change in the section, as if typed into the box under the manuscript and sent;
                 // `revise:stop`, `revise:keep`, `revise:undo` (all) / `revise:undo;<n>`, `revise:go;<n>`, `revise:next` / `revise:prev` are its buttons.
                 "revise" => {

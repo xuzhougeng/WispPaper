@@ -122,7 +122,7 @@ impl Workspace {
     }
 
     /// The key that asks for candidates, as people read it.
-    fn find_key(&self) -> String {
+    pub(crate) fn find_key(&self) -> String {
         let key = crate::shortcuts::key_of("write-find", &self.settings.shortcuts);
         if key.is_empty() { t("右边的按钮").into() } else { crate::shortcuts::pretty(&key) }
     }
@@ -181,7 +181,11 @@ impl Workspace {
         let drawn_on = count.zip(drawn_on).map(|(count, text)| div().id("write-drawn-on").flex_none().text_size(px(11.)).text_color(Theme::text_tertiary()).child(tf!("{count} 句", "{count} sentences")).tooltip(move |_, cx| cx.new(|_| crate::write_assist::Tip(text.clone())).into()));
 
         let side = div().flex().flex_col().flex_none().w(px(width)).h_full().border_l_1().border_color(Theme::line()).bg(Theme::bg_sunken()).child(self.render_side_switch(cx));
-        if writing.comments.open { return side.child(self.render_comments(width, window, cx)) }
+        // What an action on the text came to stands over either page of the panel.
+        if writing.comments.open {
+            let card = self.render_assist_card(width, cx);
+            return side.when(card.is_some(), |d| d.child(div().flex_none().h(px(10.)))).children(card).child(self.render_comments(width, window, cx));
+        }
         side
             .child(
                 div()
@@ -211,7 +215,8 @@ impl Workspace {
                                 .items_start()
                                 .gap(px(6.))
                                 .child(div().id("write-groups-about").flex_none().pt(px(2.)).child(ui::icon("sparkle", 12., Theme::accent())).tooltip(|_, cx| cx.new(|_| crate::write_assist::Tip(t("模型给出的检索词，各组分别查找后合并").into())).into()))
-                                .child(div().flex_1().min_w_0().flex().flex_col().gap(px(3.)).children(groups)),
+                                // A width in pixels: a column that shares the row is measured narrower than it is drawn, and leaves a gap under the words.
+                                .child(div().flex_none().w(px(width - 28. - 18.)).flex().flex_col().gap(px(3.)).children(groups)),
                         )
                     })
                     .when(!search.note.is_empty(), |d| d.child(div().text_size(px(11.)).text_color(Theme::warning()).child(search.note.clone())))
