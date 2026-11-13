@@ -32,7 +32,8 @@ impl Workspace {
     pub(crate) fn translate_selected(&mut self, retry: bool, cx: &mut Context<Self>) {
         let profile = self.settings.profile_for_or_default(Task::Translate);
         let prompt = self.settings.translation_prompt.clone();
-        let Some(paper) = self.lib.as_ref().filter(|lib| lib.show_translation).and_then(|lib| lib.selected_paper()) else { return };
+        // The paper on show: the one open in the detail panel, or the one a round of 逐篇筛选 is at.
+        let Some(paper) = self.lib.as_ref().filter(|lib| lib.show_translation).and_then(|lib| lib.selected_paper().or(lib.round_paper())) else { return };
         for text in [paper.title.clone(), paper.abstract_text.clone()] {
             self.translate_text(&text, &profile, &prompt, retry, false, cx);
         }

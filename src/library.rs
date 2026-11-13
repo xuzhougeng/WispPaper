@@ -222,7 +222,7 @@ impl Workspace {
             Page::Trash => self.render_trash(cx),
             Page::Sources => self.render_searches(cx),
             Page::Guide => self.render_guide(window, cx),
-            Page::Screen => self.render_screen(window, cx),
+            Page::Screen => self.render_screen(main_width, window, cx),
             Page::Write => self.render_write(main_width, window, cx),
             Page::Figures => self.render_figures(main_width, window, cx),
         };

@@ -5,7 +5,11 @@
 use gpui::*;
 use std::collections::BTreeMap;
 
-actions!(workspace, [Dismiss, FocusSearch, AddPaper, ImportPdf, AskLibrary, ToggleDetail, ToggleSidebar, ToggleReading, ShowSettings, ShowHome, NewLibrary, ZoomIn, ZoomOut, ZoomFit, CopyPicked, FindCandidates, MoveUp, MoveDown, MoveLeft, MoveRight, MovePageUp, MovePageDown, MoveFirst, MoveLast, OpenSelected, TrashSelected, MarkUp, MarkDown, MarkAll]);
+actions!(workspace, [Dismiss, FocusSearch, AddPaper, ImportPdf, AskLibrary, ToggleDetail, ToggleSidebar, ToggleReading, ShowSettings, ShowHome, NewLibrary, ZoomIn, ZoomOut, ZoomFit, CopyPicked, FindCandidates, MoveUp, MoveDown, MoveLeft, MoveRight, MovePageUp, MovePageDown, MoveFirst, MoveLast, OpenSelected, TrashSelected, MarkUp, MarkDown, MarkAll, DecideIncluded, DecideRelated, DecideUncertain, DecideIrrelevant, DecidePending, TakeSuggestion, StarScreened, TranslateScreened, UndoDecision, AskAssistant, TickSuggestion]);
+
+/// The keys of 筛选, fixed like the arrow keys: what each does is in `Workspace::screen_key`. Bare letters
+/// and digits, so they are heard only while no text field has the keyboard.
+pub const SCREEN_KEYS: [(&str, &str); 9] = [("Y / 1", "已纳入"), ("R / 2", "相关"), ("U / 3", "证据不足"), ("N / 4", "不相关"), ("P / 0", "留待判断"), ("A", "采纳助手的建议"), ("Z", "逐篇：撤销上一个判断"), ("G", "让助手判断这一篇"), ("Space", "确认建议：勾选 / 不勾选")];
 
 pub struct Shortcut {
     pub id: &'static str,
@@ -100,6 +104,15 @@ pub fn rebuild(custom: &BTreeMap<String, String>, cx: &mut App) {
         KeyBinding::new("delete", TrashSelected, context),
         KeyBinding::new(TRASH, TrashSelected, context),
     ]);
+    // Screening: a decision is one key. Not while typing: a letter there is a letter.
+    let screening = Some("Workspace && !TextInput");
+    for key in ["y", "1"] { bindings.push(KeyBinding::new(key, DecideIncluded, screening)) }
+    for key in ["r", "2"] { bindings.push(KeyBinding::new(key, DecideRelated, screening)) }
+    for key in ["u", "3"] { bindings.push(KeyBinding::new(key, DecideUncertain, screening)) }
+    for key in ["n", "4"] { bindings.push(KeyBinding::new(key, DecideIrrelevant, screening)) }
+    for key in ["p", "0"] { bindings.push(KeyBinding::new(key, DecidePending, screening)) }
+    for key in ["space", "x"] { bindings.push(KeyBinding::new(key, TickSuggestion, screening)) }
+    bindings.extend([KeyBinding::new("a", TakeSuggestion, screening), KeyBinding::new("s", StarScreened, screening), KeyBinding::new("t", TranslateScreened, screening), KeyBinding::new("z", UndoDecision, screening), KeyBinding::new("g", AskAssistant, screening)]);
     for shortcut in &SHORTCUTS {
         let key = key_of(shortcut.id, custom);
         // A key from a hand-edited settings.json may not parse; `KeyBinding::new` would panic on it.

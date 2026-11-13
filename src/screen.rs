@@ -1,17 +1,17 @@
 //! 筛选: the papers waiting for a decision. The assistant reads them, several
-//! at a time, and suggests; the person decides, one paper at a time, with
-//! the paper's record and PDF open beside the list. While the assistant is
-//! at it, a panel shows how far the run is. The queue can be looked at one
-//! suggested verdict at a time, and such a part decided in one go.
+//! at a time, and suggests; the person decides. The page has three faces
+//! (`ScreenMode`): 批量, the queue as a list with the assistant's run over
+//! it (this file); 逐篇, one paper at a time (`screen_single.rs`); and 确认,
+//! the suggestions looked over and written together (`screen_confirm.rs`).
+//! The decisions have keys in all three (`Workspace::screen_key`).
 
-use crate::app::{Cmd, MenuKind, Screen, Workspace};
-use crate::settings::SettingsPage;
+use crate::app::{Cmd, MenuKind, Screen, ScreenMode, Workspace};
 use crate::theme::Theme;
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
 use std::time::Duration;
 use wisp_core::model::{Paper, SCREENINGS, label};
-use wisp_core::settings::Task;
+use wisp_core::screening;
 use wisp_core::store::Suggestion;
 
 /// The rows drawn at most: a longer queue is worked off from the top.
@@ -35,7 +35,62 @@ pub(crate) fn progress_bar(done: usize, total: usize) -> Div {
 }
 
 impl Workspace {
-    pub fn render_screen(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    /// The two ways of working through the queue, as a switch at the page's top.
+    pub(crate) fn render_screen_modes(&self, cx: &mut Context<Self>) -> Div {
+        let single = self.lib.as_ref().is_some_and(|lib| lib.screen.mode == ScreenMode::Single);
+        crate::settings::segmented("screen-mode", vec![("批量", Cmd::ScreenMode(ScreenMode::Batch)), ("逐篇", Cmd::ScreenMode(ScreenMode::Single))], single as usize, self, cx)
+    }
+
+    /// What the assistant made of a paper, in full: its verdict, how sure
+    /// it was and what it read, its reason, the words it rests on (with a
+    /// page, a click opens the PDF there). Without a suggestion, the way to
+    /// ask for one; `ask` also offers to ask again.
+    pub(crate) fn render_advice(&self, paper: &Paper, ask: bool, cx: &mut Context<Self>) -> Div {
+        let lib = self.lib.as_ref().unwrap();
+        let id = |part: &str| SharedString::from(format!("advice-{part}-{}", paper.id));
+        let group = lib.screen_group(&paper.id);
+        let reading = lib.screen.reading.contains(&paper.id);
+        let mut again = |text: &'static str| ui::ghost_button(id("ask"), None, Some(text.into())).h(px(24.)).text_size(px(12.)).child(ui::keycap("G")).on_click(self.on(Cmd::ScreenAskOne(paper.id.clone()), cx));
+        let head = div().flex().items_center().gap(px(8.)).min_h(px(24.)).child(ui::icon("sparkle", 14., Theme::accent())).child(div().flex_none().text_size(px(12.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text_secondary()).child("助手的建议"));
+        let card = div().flex().flex_col().gap(px(8.)).px(px(12.)).py(px(10.)).rounded(px(10.)).border_1().border_color(Theme::line()).bg(Theme::bg_sunken());
+        if reading { return card.child(head.child(ui::spinner(id("spin"), 13., Theme::accent())).child(div().text_size(px(12.)).text_color(Theme::accent()).child("正在读这一篇…"))) }
+        let Some(s) = lib.suggestions.get(&paper.id) else {
+            let head = head.child(div().flex_1().min_w_0().text_size(px(12.)).text_color(Theme::text_tertiary()).child("还没有判断这一篇。"));
+            let head = if !ask { head } else if self.screen_configured() { head.child(again("让助手判断")) } else { head.child(self.screen_setup_button(cx)) };
+            return card.child(head).when(ask && !lib.screen.error.is_empty(), |d| d.child(ui::error_line(&lib.screen.error)));
+        };
+        let read = match s.basis.as_str() {
+            "fulltext" => "读了全文",
+            "abstract" => "只读了摘要",
+            _ => "没有可读的内容",
+        };
+        let chip = if group == "stale" { ui::chip(format!("旧目标：{}", label(&SCREENINGS, &s.verdict)), Theme::text_tertiary(), Theme::groove()) } else { ui::status_chip(&s.verdict, label(&SCREENINGS, &s.verdict)) };
+        let sure = s.confidence.map(|c| format!("把握 {:.0}% · ", c * 100.)).unwrap_or_default();
+        let mut card = card.child(head.child(chip).child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(format!("{sure}{read} · {}", s.author))).when(ask && self.screen_configured(), |d| d.child(again("重新判断"))));
+        card = card.child(self.selectable(format!("advice-reason-{}", paper.id), s.reason.clone(), cx).text_size(px(13.)).line_height(px(21.)));
+        if !s.excerpt.is_empty() {
+            let quote = div().id(id("quote")).flex().gap(px(8.)).px(px(10.)).py(px(8.)).rounded(px(6.)).bg(Theme::bg_body()).border_l_2().border_color(Theme::accent()).text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_secondary()).child(div().flex_1().min_w_0().child(s.excerpt.clone()));
+            card = card.child(match s.page {
+                Some(page) => quote.cursor_pointer().child(div().flex_none().text_color(Theme::accent()).child(format!("第 {page} 页"))).on_click(self.on(Cmd::GotoSource(paper.id.clone(), Some(page), s.excerpt.clone()), cx)),
+                None => quote.child(div().flex_none().text_color(Theme::text_tertiary()).child("摘要")),
+            });
+        }
+        if group == "stale" {
+            let old = s.criteria.as_deref().filter(|c| !c.is_empty()).map_or("按文献库的主题".to_string(), |c| format!("「{c}」"));
+            card = card.child(div().text_size(px(12.)).text_color(Theme::warning()).child(format!("这条建议是按之前的筛选目标 {old} 给出的；让助手按当前目标判断后会被替换。")));
+        }
+        if group == "differs" {
+            card = card.child(div().text_size(px(12.)).text_color(Theme::warning()).child(format!("你之前判断为「{}」，按当前的筛选目标，助手的建议不同。", label(&SCREENINGS, &paper.screening))));
+        }
+        card.when(ask && !lib.screen.error.is_empty(), |d| d.child(ui::error_line(&lib.screen.error)))
+    }
+
+    pub fn render_screen(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        match self.lib.as_ref().map_or(ScreenMode::Batch, |lib| lib.screen.mode) {
+            ScreenMode::Single => return self.render_screen_single(width, cx),
+            ScreenMode::Confirm => return self.render_screen_confirm(cx),
+            ScreenMode::Batch => {}
+        }
         let lib = self.lib.as_ref().unwrap();
         let screen = &lib.screen;
         let all = lib.screen_queue();
@@ -59,9 +114,16 @@ impl Workspace {
         };
         let mut bar: Vec<AnyElement> = vec![part(0, "", format!("全部 {}", all.len()), self, cx).into_any_element()];
         bar.extend(parts.iter().enumerate().map(|(n, (key, name, count))| part(n + 1, key, format!("{name} {count}"), self, cx).into_any_element()));
-        // A whole part can be decided at once, as the assistant suggested, once it has been looked over.
-        let accept = (SCREENINGS.iter().any(|(key, _)| *key == filter) && !screen.running()).then(|| ui::secondary_button("screen-accept", format!("全部采纳为「{}」（{} 篇）", label(&SCREENINGS, filter), queue.len())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::AskScreenAccept(filter.to_string()), cx)));
-        let configured = !self.settings.profile_for_or_default(Task::Screen).key().is_empty();
+        // The suggestions are confirmed together on a page of their own: all of them, or the verdict on show.
+        let confirming = if SCREENINGS.iter().any(|(key, _)| *key == filter) { queue.len() } else { suggested };
+        let confirm = (confirming > 0 && !screen.running()).then(|| {
+            let text = if SCREENINGS.iter().any(|(key, _)| *key == filter) { format!("确认这 {confirming} 条「{}」", label(&SCREENINGS, filter)) } else { format!("确认 {confirming} 条建议") };
+            // Once the assistant has nothing left to read, confirming is what comes next.
+            if waiting == 0 { ui::primary_button("screen-confirm", text) } else { ui::secondary_button("screen-confirm", text) }.on_click(self.on(Cmd::ScreenMode(ScreenMode::Confirm), cx))
+        });
+        // A run that is over leads on to confirming what it suggested.
+        let next = (confirming > 0 && !screen.running() && screen.total > 0).then(|| div().id("screen-run-confirm").flex().flex_none().items_center().gap(px(2.)).cursor_pointer().text_size(px(12.)).text_color(Theme::accent()).hover(|s| s.underline()).on_click(self.on(Cmd::ScreenMode(ScreenMode::Confirm), cx)).child("助手读完了，去确认它的建议").child(ui::icon("chevron-right", 13., Theme::accent())));
+        let configured = self.screen_configured();
         let mut status = if pending == 0 { "没有待判断的文献。".to_string() } else { format!("待判断 {pending} 篇，其中 {suggested} 篇已有按当前目标的建议。") };
         if stale > 0 { status.push_str(&format!("{stale} 篇的建议是按旧目标给出的。")) }
         if differs > 0 { status.push_str(&format!("已判断的文献里，{differs} 篇按当前目标看与你的判断不同。")) }
@@ -86,8 +148,8 @@ impl Workspace {
                     .px(px(16.))
                     .pt(px(16.))
                     .pb(px(12.))
-                    .child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child("筛选"))
-                    .child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child("助手阅读待判断的文献（有全文读全文，否则读摘要），几篇同时进行，给出建议、理由和原文依据。建议只是建议：每一篇的收录判断由你确认。"))
+                    .child(div().flex().items_center().gap(px(12.)).child(div().flex_none().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child("筛选")).child(self.render_screen_modes(cx)))
+                    .child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child("助手读待判断的文献（有全文读全文，否则读摘要），几篇同时进行，给出建议、理由和原文依据；读完后一起确认，或切到「逐篇」一篇篇用按键判断。建议只是建议：收录判断由你确认。"))
                     .child(
                         div()
                             .flex()
@@ -103,18 +165,22 @@ impl Workspace {
                             .items_center()
                             .gap(px(10.))
                             .child(div().flex_1().min_w_0().text_size(px(12.)).text_color(Theme::text_secondary()).child(status))
-                            .when(!configured, |d| d.child(ui::ghost_button("screen-settings", Some("settings-gear"), Some("先配置模型".into())).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx))))
+                            .when(!configured, |d| d.child(self.screen_setup_button(cx)))
                             // The decided papers looked at again against the goal as it is now; only those seen otherwise come back.
                             .when(!screen.running() && unchecked > 0, |d| d.child(ui::secondary_button("screen-recheck", format!("复核已判断的 {unchecked} 篇")).on_click(self.on(Cmd::ScreenRecheck, cx))))
                             .child(if screen.running() {
                                 ui::secondary_button("screen-stop", "停止").on_click(self.on(Cmd::ScreenStop, cx))
+                            } else if waiting == 0 && confirm.is_some() {
+                                // Everything waiting has a suggestion: asking again is no longer the thing to do.
+                                ui::secondary_button("screen-start", start).opacity(0.5).on_click(self.on(Cmd::ScreenStart, cx))
                             } else {
                                 ui::primary_button("screen-start", start).when(waiting == 0, |d| d.opacity(0.5)).on_click(self.on(Cmd::ScreenStart, cx))
-                            }),
+                            })
+                            .children(confirm),
                     )
-                    .when(screen.total > 0, |d| d.child(self.render_screen_run(screen, &titles)))
+                    .when(screen.total > 0, |d| d.child(self.render_screen_run(screen, &titles, next)))
                     .when(!screen.error.is_empty(), |d| d.child(ui::error_line(&screen.error)))
-                    .when(parts.len() > 1 || parts.first().is_some_and(|(key, _, _)| *key != "none"), |d| d.child(div().flex().items_center().flex_wrap().gap(px(6.)).pt(px(2.)).children(bar).child(div().flex_1()).children(accept))),
+                    .when(parts.len() > 1 || parts.first().is_some_and(|(key, _, _)| *key != "none"), |d| d.child(div().flex().items_center().flex_wrap().gap(px(6.)).pt(px(2.)).children(bar).child(div().flex_1()).when(!queue.is_empty(), |d| d.child(div().text_size(px(11.)).text_color(Theme::text_tertiary()).child("点开一篇，按 Y / R / U / N 判断，A 采纳建议"))))),
             )
             .child(if rows.is_empty() {
                 ui::empty_state("check", "都判断过了", "新导入的文献会出现在这里。").into_any_element()
@@ -137,7 +203,7 @@ impl Workspace {
 
     /// The run of the assistant, under way or over: how far it got, and the
     /// papers it is reading at this moment.
-    fn render_screen_run(&self, screen: &Screen, reading: &[String]) -> Div {
+    fn render_screen_run(&self, screen: &Screen, reading: &[String], next: Option<Stateful<Div>>) -> Div {
         let running = screen.running();
         let heading = if running { "助手正在阅读" } else if screen.done >= screen.total { "这一轮判断完了" } else { "这一轮停在了这里" };
         div()
@@ -169,6 +235,7 @@ impl Workspace {
                             .child(div().flex_1().min_w_0().truncate().text_right().text_size(px(11.)).text_color(Theme::text_tertiary()).child(format!("{} · 同时 {} 篇", screen.model, self.settings.screen_workers))),
                     )
                     .child(progress_bar(screen.done, screen.total))
+                    .children(next.map(|next| div().flex().child(next)))
                     .when(running, |d| {
                         d.children(reading.iter().enumerate().map(|(n, title)| {
                             let line = div().flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(Theme::text_secondary()).child(ui::spinner(("screen-reading", n), 12., Theme::accent())).child(div().flex_1().min_w_0().truncate().child(title.clone()));
@@ -220,36 +287,16 @@ impl Workspace {
             .child(head);
         if !selected { return row.into_any_element() }
 
-        if let Some(s) = suggestion {
-            let read = match s.basis.as_str() {
-                "fulltext" => "读了全文",
-                "abstract" => "只读了摘要",
-                _ => "没有可读的内容",
-            };
-            row = row.child(self.selectable(format!("screen-reason-{}", paper.id), s.reason.clone(), cx).text_size(px(13.)).line_height(px(20.)));
-            if !s.excerpt.is_empty() {
-                // The words the suggestion rests on; with a page, a click opens the PDF there.
-                let quote = div().id(id("quote")).flex().gap(px(8.)).px(px(10.)).py(px(8.)).rounded(px(6.)).bg(Theme::bg_body()).border_l_2().border_color(Theme::accent()).text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_secondary()).child(div().flex_1().min_w_0().child(s.excerpt.clone()));
-                row = row.child(match s.page {
-                    Some(page) => quote.cursor_pointer().child(div().flex_none().text_color(Theme::accent()).child(format!("第 {page} 页"))).on_click(self.on(Cmd::GotoSource(paper.id.clone(), Some(page), s.excerpt.clone()), cx)),
-                    None => quote.child(div().flex_none().text_color(Theme::text_tertiary()).child("摘要")),
-                });
-            }
-            row = row.child(div().text_size(px(11.)).text_color(Theme::text_tertiary()).child(format!("{read} · {}", s.author)));
-            if group == "stale" {
-                let old = s.criteria.as_deref().filter(|c| !c.is_empty()).map_or("按文献库的主题".to_string(), |c| format!("「{c}」"));
-                row = row.child(div().text_size(px(12.)).text_color(Theme::warning()).child(format!("这条建议是按之前的筛选目标 {old} 给出的；让助手按当前目标判断后会被替换。")));
-            }
-            if decided {
-                row = row.child(div().text_size(px(12.)).text_color(Theme::warning()).child(format!("你之前判断为「{}」，按当前的筛选目标，助手的建议不同。选一个，这篇就不再出现在这里。", label(&SCREENINGS, &paper.screening))));
-            }
-        } else {
-            row = row.child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(if reading { "助手正在读这一篇。" } else { "助手还没有判断这一篇。" }));
+        row = row.child(self.render_advice(paper, true, cx));
+        if decided && suggestion.is_some() {
+            row = row.child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child("选一个，这篇就不再出现在这里。"));
         }
         // The decision: every choice is there, the suggested one stands out.
         let buttons = SCREENINGS.iter().filter(|(key, _)| *key != "pending").enumerate().map(|(n, (key, name))| {
             let agree = group != "stale" && suggestion.is_some_and(|s| s.verdict == *key);
-            let button = if agree { ui::primary_button(("decide", n), format!("采纳：{name}")) } else if decided && paper.screening == *key { ui::secondary_button(("decide", n), format!("保持：{name}")) } else { ui::secondary_button(("decide", n), *name) };
+            // Each with its key; on the suggested one, the key's cap is drawn for the accent fill.
+            let cap = ui::keycap(screening::key_of(key));
+            let button = if agree { ui::primary_button(("decide", n), format!("采纳：{name}")).child(cap.bg(Theme::on_accent().opacity(0.18)).border_color(Theme::on_accent().opacity(0.35)).text_color(Theme::on_accent())) } else if decided && paper.screening == *key { ui::secondary_button(("decide", n), format!("保持：{name}")).child(cap) } else { ui::secondary_button(("decide", n), *name).child(cap) };
             button.on_click(self.on(Cmd::ScreenDecide(paper.id.clone(), key.to_string()), cx))
         });
         row.child(div().flex().items_center().gap(px(8.)).pt(px(2.)).children(buttons)).into_any_element()
