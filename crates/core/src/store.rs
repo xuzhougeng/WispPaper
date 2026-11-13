@@ -14,9 +14,12 @@ use std::path::{Path, PathBuf};
 
 pub const DB_FILE: &str = "wisp-paper.sqlite";
 /// Bump when an older build would misread the database.
-// Version 2 adds fields to the saved review JSON. Older builds would discard
-// those fields when rewriting a review, so they must refuse to open the library.
-pub const SCHEMA_VERSION: i32 = 2;
+pub const SCHEMA_VERSION: i32 = 1;
+/// A version that builds between 0.5.0 and the release after it gave a library
+/// once a review held evidence. No release wrote it and nothing it stands for
+/// is misread, so such a library opens and is version 1 again. The next real
+/// bump goes past it.
+const UNRELEASED_VERSION: i32 = 2;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS papers (
@@ -454,7 +457,7 @@ fn to_json(values: &[String]) -> String {
 }
 
 fn check_schema_version(found: i32, supported: i32) -> Result<()> {
-    if found > supported {
+    if found > supported && found != UNRELEASED_VERSION {
         bail!("这个文献库由更新版本的 Wisp Paper 创建（数据库版本 {found}），请升级后再打开。");
     }
     Ok(())
@@ -484,14 +487,7 @@ impl Store {
         db.execute_batch(crate::review::SCHEMA)?;
         add_columns(&db)?;
         crate::manuscript::migrate_drafts(&mut db)?;
-        // Ordinary v1 libraries remain readable by the earlier app until the
-        // user saves evidence. Recover protection for any v1 file that already
-        // contains evidence after an interrupted or mixed-version upgrade.
-        let tx = db.transaction()?;
-        let contains_evidence = if version < SCHEMA_VERSION { crate::review::initialize_legacy_watches(&tx)? } else { false };
-        let target = if version >= 2 || contains_evidence { SCHEMA_VERSION } else { 1 };
-        tx.pragma_update(None, "user_version", target)?;
-        tx.commit()?;
+        db.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(Store { root, db })
     }
 
@@ -1021,7 +1017,11 @@ impl Store {
 
     /// Forget a conversation and its pictures.
     pub fn remove_conversation(&mut self, id: &str) -> Result<()> {
-        self.db.execute("DELETE FROM conversations WHERE id = ?1", [id])?;
+        // A review's record is reached through its conversation alone, so it goes with it.
+        let tx = self.db.transaction()?;
+        tx.execute("DELETE FROM review_projects WHERE id IN (SELECT review_id FROM review_conversations WHERE conversation_id = ?1)", [id])?;
+        tx.execute("DELETE FROM conversations WHERE id = ?1", [id])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -1298,12 +1298,10 @@ fn write_paper(tx: &Transaction, p: &Paper) -> Result<()> {
         ],
     )
     .with_context(|| format!("保存文献失败：{}", p.title))?;
+    tx.execute("DELETE FROM paper_identifiers WHERE paper_id = ?1", [&p.id])?;
     for (namespace, value) in [("doi", &p.doi), ("pmid", &p.pmid)] {
-        // Keep unchanged identifiers in place so observers can distinguish
-        // a metadata change from edits to notes, tags or screening status.
-        tx.execute("DELETE FROM paper_identifiers WHERE paper_id = ?1 AND namespace = ?2 AND value <> ?3", params![p.id, namespace, value])?;
         if !value.is_empty() {
-            tx.execute("INSERT INTO paper_identifiers(paper_id, namespace, value) SELECT ?1, ?2, ?3 WHERE NOT EXISTS (SELECT 1 FROM paper_identifiers WHERE paper_id = ?1 AND namespace = ?2 AND value = ?3)", params![p.id, namespace, value])?;
+            tx.execute("INSERT INTO paper_identifiers(paper_id, namespace, value) VALUES (?1, ?2, ?3)", params![p.id, namespace, value])?;
         }
     }
     tx.execute("DELETE FROM paper_fields WHERE paper_id = ?1", [&p.id])?;
@@ -1357,9 +1355,9 @@ mod tests {
     #[test]
     fn schema_version_guard_rejects_newer_libraries() {
         assert!(check_schema_version(1, 1).is_ok());
-        assert!(check_schema_version(2, 1).is_err(), "the v1 guard rejects evidence-bearing v2 libraries");
-        assert!(check_schema_version(2, 2).is_ok());
-        assert!(check_schema_version(3, 2).is_err());
+        assert!(check_schema_version(2, 1).is_ok(), "the version of the builds between releases opens");
+        assert!(check_schema_version(3, 1).is_err());
+        assert!(check_schema_version(4, 3).is_err());
     }
 
     #[test]

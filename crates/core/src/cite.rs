@@ -45,8 +45,11 @@ pub struct AiCitationConversion {
 }
 
 /// Convert only complete, unambiguous chat citation groups. Unrecognised
-/// text, quoted excerpts and groups with an unavailable source remain exactly
-/// as written; conversion is not verification of the claim or page.
+/// text and groups with an unavailable source remain exactly as written.
+/// The sentence a citation quotes (`[P3 p.5 "…"]`) is left out, the page
+/// kept: a manuscript cites, and the quotation was the conversation's way of
+/// showing where (a review keeps it in its evidence). Conversion is not
+/// verification of the claim or page.
 pub fn convert_ai_citations(answer: &str, sources: &[crate::ai::Source], index: &Index<'_>) -> AiCitationConversion {
     let mut text = String::new();
     let mut keys = Vec::new();
@@ -55,7 +58,7 @@ pub fn convert_ai_citations(answer: &str, sources: &[crate::ai::Source], index: 
         if range.start < end { continue }
         text.push_str(&answer[end..range.start]);
         let original = &answer[range.clone()];
-        if let Some(cited) = parse_chat_group(original) {
+        if let Some(cited) = parse_chat_group(&without_quotation(original)) {
             let resolved: Option<Vec<_>> = cited.iter().map(|(label, page)| {
                 let mut matches = sources.iter().filter(|source| &source.label == label);
                 let source = matches.next()?;
@@ -77,6 +80,14 @@ pub fn convert_ai_citations(answer: &str, sources: &[crate::ai::Source], index: 
     }
     text.push_str(&answer[end..]);
     AiCitationConversion { text, keys }
+}
+
+/// A citation group without the sentence it quotes: `[P3 p.5 "…"]` as `[P3 p.5]`.
+/// Only a quotation that runs to the closing bracket is one (`ai::citation_spans`).
+fn without_quotation(group: &str) -> String {
+    let Some(at) = group.find(['"', '“', '「']) else { return group.to_string() };
+    let closed = group.strip_suffix(']').is_some_and(|inner| inner.trim_end().ends_with(['"', '”', '」']) && inner.trim_end().len() > at + 1);
+    if closed { format!("{}]", group[..at].trim_end()) } else { group.to_string() }
 }
 
 /// The deliberately narrow grammar has no free text or quotations, so
@@ -609,12 +620,12 @@ mod tests {
             crate::ai::Source { label: "P1".into(), paper_id: "P1".into(), title: "One".into() },
             crate::ai::Source { label: "P2".into(), paper_id: "P2".into(), title: "Two".into() },
         ];
-        let original = "测试 [P1 p.5] and [P1, p.6; P2 p.7] [P1, P9] [P1 \"quote\"] [P1 p.5 extra] [P1 p.0].";
+        let original = "测试 [P1 p.5] and [P1, p.6; P2 p.7] [P1, P9] [P1 \"quote\"] [P2 p.3 “a sentence. With a stop”] [P1 p.5 extra] [P1 p.0].";
         let converted = convert_ai_citations(original, &sources, &index);
-        assert_eq!(converted.text, "测试 [@Zhang2024, p. 5] and [@Zhang2024, p. 6; @Zhang2024b, p. 7] [P1, P9] [P1 \"quote\"] [P1 p.5 extra] [P1 p.0].");
+        assert_eq!(converted.text, "测试 [@Zhang2024, p. 5] and [@Zhang2024, p. 6; @Zhang2024b, p. 7] [P1, P9] [@Zhang2024] [@Zhang2024b, p. 3] [P1 p.5 extra] [P1 p.0].");
         assert_eq!(converted.keys, vec![("P1".into(), "Zhang2024".into()), ("P2".into(), "Zhang2024b".into())]);
         let references = find(&converted.text, &index);
-        assert_eq!(references.iter().filter(|citation| citation.found.paper().is_some()).count(), 3);
+        assert_eq!(references.iter().filter(|citation| citation.found.paper().is_some()).count(), 5);
 
         let mut ambiguous = sources.clone();
         ambiguous.push(crate::ai::Source { label: "P1".into(), paper_id: "P2".into(), title: "duplicate".into() });
