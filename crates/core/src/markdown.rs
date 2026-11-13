@@ -40,19 +40,6 @@ impl Rich {
         }
     }
 
-    fn append(&mut self, other: Rich) {
-        let mut at = 0;
-        for (len, marks) in other.runs {
-            self.push(&other.text[at..at + len], marks);
-            at += len;
-        }
-    }
-
-    fn mark(mut self, set: impl Fn(&mut Marks)) -> Rich {
-        for (_, marks) in &mut self.runs { set(marks) }
-        self
-    }
-
     /// Each run as its byte range in `text`.
     pub fn spans(&self) -> impl Iterator<Item = (Range<usize>, &Marks)> {
         let mut at = 0;
@@ -316,13 +303,213 @@ fn link_ok(url: &str) -> bool {
 }
 
 /// Inline Markdown: escapes, code spans, links, bare URLs and emphasis.
+/// The text of the pieces `pieces` finds, without their syntax.
 pub fn inline(s: &str) -> Rich {
     let mut out = Rich::default();
-    let mut plain = String::new();
-    fn flush(plain: &mut String, out: &mut Rich) {
-        out.push(plain, Marks::default());
-        plain.clear();
+    let mut pieces = vec![];
+    pieces_of(s, 0, &Marks::default(), &mut pieces);
+    for piece in pieces.into_iter().filter(|piece| piece.part != Part::Syntax) {
+        out.push(&s[piece.range], piece.marks);
     }
+    out
+}
+
+/// What a piece of a written line is: words, or the Markdown around them
+/// (`**`, `# `, a link's address), or a list's bullet (`-`, drawn as a dot).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Part {
+    Text,
+    Syntax,
+    Bullet,
+}
+
+/// A stretch of a written text, in bytes of the whole text, with its marks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Piece {
+    pub range: Range<usize>,
+    pub marks: Marks,
+    pub part: Part,
+    /// A Pandoc citation, `[@Zhang2024, p. 5]`.
+    pub cite: bool,
+}
+
+/// One line of a text being written, as an editor draws it: what kind of
+/// line it is, and its pieces, which cover it exactly and in order.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Line {
+    /// In bytes of the text, without the line break.
+    pub range: Range<usize>,
+    /// 1 to 6 for `#` to `######`, else 0.
+    pub heading: u8,
+    /// How many `>` it opens with.
+    pub quote: u8,
+    pub item: Option<Marker>,
+    /// `---`, `***`, `___`.
+    pub rule: bool,
+    /// A line of fenced code, or a fence.
+    pub code: bool,
+    pub pieces: Vec<Piece>,
+}
+
+/// A text line by line, the way an editor that keeps the Markdown as
+/// written and draws it formatted reads it. Each line stands alone but for
+/// fenced code, which runs to its closing fence (or the end).
+pub fn lines(text: &str) -> Vec<Line> {
+    let mut out = vec![];
+    // The fence that is open: its character and length.
+    let mut fenced: Option<(char, usize)> = None;
+    let mut start = 0;
+    for raw in text.split('\n') {
+        let range = start..start + raw.len();
+        start = range.end + 1;
+        let mut line = Line { range: range.clone(), ..Line::default() };
+        let piece = |range: Range<usize>, part: Part| Piece { range, marks: Marks::default(), part, cite: false };
+        if let Some((mark, n)) = fenced {
+            line.code = true;
+            if fence(raw).is_some_and(|(mark2, n2, rest)| mark2 == mark && n2 >= n && rest.is_empty()) {
+                fenced = None;
+                line.pieces.push(piece(range, Part::Syntax));
+            } else if !raw.is_empty() {
+                line.pieces.push(Piece { marks: Marks { code: true, ..Marks::default() }, ..piece(range, Part::Text) });
+            }
+            out.push(line);
+            continue;
+        }
+        if let Some((mark, n, _)) = fence(raw) {
+            fenced = Some((mark, n));
+            line.code = true;
+            line.pieces.push(piece(range, Part::Syntax));
+            out.push(line);
+            continue;
+        }
+        let mut at = 0;
+        let syntax = |line: &mut Line, from: usize, to: usize, part: Part| {
+            if to > from { line.pieces.push(piece(range.start + from..range.start + to, part)) }
+        };
+        // Indentation stays as written: it is how far a list is nested.
+        let indent = raw.len() - raw.trim_start_matches([' ', '\t']).len();
+        if indent > 0 && indent < raw.len() {
+            line.pieces.push(piece(range.start..range.start + indent, Part::Text));
+            at = indent;
+        }
+        while raw[at..].starts_with('>') {
+            let to = at + 1 + usize::from(raw[at + 1..].starts_with(' '));
+            syntax(&mut line, at, to, Part::Syntax);
+            line.quote += 1;
+            at = to;
+        }
+        let rest = &raw[at..];
+        let hashes = rest.bytes().take_while(|&b| b == b'#').count();
+        if (1..=6).contains(&hashes) && rest[hashes..].starts_with([' ', '\t']) {
+            let to = at + hashes + (rest[hashes..].len() - rest[hashes..].trim_start_matches([' ', '\t']).len());
+            syntax(&mut line, at, to, Part::Syntax);
+            line.heading = hashes as u8;
+            at = to;
+        } else if rule(rest) {
+            syntax(&mut line, at, raw.len(), Part::Syntax);
+            line.rule = true;
+            at = raw.len();
+        } else if let Some((marker, _, content)) = list_item(rest) {
+            let mark = rest.len() - content.len();
+            match marker {
+                Marker::Bullet => {
+                    let bullet = rest.chars().next().map_or(1, char::len_utf8);
+                    // The space after the bullet stays, between the dot and the words.
+                    syntax(&mut line, at, at + bullet, Part::Bullet);
+                    syntax(&mut line, at + bullet, at + mark, Part::Text);
+                }
+                _ => syntax(&mut line, at, at + mark, Part::Text),
+            }
+            line.item = Some(match todo(content) {
+                Some((done, _)) => Marker::Todo(done),
+                None => marker,
+            });
+            at += mark;
+        }
+        pieces_of(&raw[at..], range.start + at, &Marks::default(), &mut line.pieces);
+        out.push(line);
+    }
+    out
+}
+
+/// A text without its Markdown: what `lines` reads as words, each line as
+/// it is drawn (a bullet as `•`, a rule as nothing).
+pub fn plain(text: &str) -> String {
+    lines(text)
+        .iter()
+        .map(|line| {
+            line.pieces
+                .iter()
+                .map(|piece| match piece.part {
+                    Part::Text => &text[piece.range.clone()],
+                    Part::Bullet => "•",
+                    // Code is kept whole, fences and all.
+                    Part::Syntax if line.code && !line.rule => &text[piece.range.clone()],
+                    Part::Syntax => "",
+                })
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// What Enter goes on with in a line of a list or a quote.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Continued {
+    /// What the next line opens with: the indentation, the quote, the next bullet or number.
+    pub prefix: String,
+    /// The line is its marker alone: Enter ends the list instead.
+    pub empty: bool,
+    /// How many bytes of the line its marker takes, indentation and quote included.
+    pub marker: usize,
+}
+
+/// How the line after `line` opens when Enter is pressed at its end, if it
+/// is an item or a quote: `- ` after `- a`, `3. ` after `2. b`, `- [ ] ` after a task.
+pub fn continued(line: &str) -> Option<Continued> {
+    let indent = line.len() - line.trim_start_matches([' ', '\t']).len();
+    let mut at = indent;
+    while line[at..].starts_with('>') {
+        at += 1 + usize::from(line[at + 1..].starts_with(' '));
+    }
+    let quoted = at > indent;
+    let rest = &line[at..];
+    let prefix = |marker: &str| format!("{}{}", &line[..at], marker);
+    if let Some((marker, _, content)) = list_item(rest) {
+        let mark = rest.len() - content.len();
+        let (next, content) = match (marker, todo(content)) {
+            (_, Some((_, after))) => (prefix(&format!("{}[ ] ", &rest[..mark])), after),
+            (Marker::Number(n), None) => {
+                let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+                (prefix(&format!("{}{} ", n + 1, &rest[digits..digits + 1])), content)
+            }
+            _ => (prefix(&rest[..mark]), content),
+        };
+        return Some(Continued { prefix: next, empty: content.trim().is_empty(), marker: at + rest.len() - content.len() });
+    }
+    quoted.then(|| Continued { prefix: prefix(""), empty: rest.trim().is_empty(), marker: at })
+}
+
+/// The pieces of inline Markdown `s`, which starts at byte `base` of the
+/// whole text, with `marks` on all of them; pushed onto `out`.
+fn pieces_of(s: &str, base: usize, marks: &Marks, out: &mut Vec<Piece>) {
+    let push = |out: &mut Vec<Piece>, range: Range<usize>, marks: Marks, part: Part, cite: bool| {
+        if range.is_empty() { return }
+        let range = base + range.start..base + range.end;
+        // Words beside words with the same marks are one piece.
+        if let Some(last) = out.last_mut()
+            && part == Part::Text
+            && last.part == Part::Text
+            && last.range.end == range.start
+            && last.marks == marks
+            && last.cite == cite
+        {
+            return last.range.end = range.end;
+        }
+        out.push(Piece { range, marks, part, cite });
+    };
+    let text = |out: &mut Vec<Piece>, range: Range<usize>| push(out, range, marks.clone(), Part::Text, false);
+    let syntax = |out: &mut Vec<Piece>, range: Range<usize>| push(out, range, marks.clone(), Part::Syntax, false);
     let mut i = 0;
     while i < s.len() {
         let rest = &s[i..];
@@ -330,7 +517,8 @@ pub fn inline(s: &str) -> Rich {
         let prev = s[..i].chars().next_back();
         // `\*`, `\_` …: the character itself.
         if c == '\\' && let Some(next) = rest[1..].chars().next().filter(char::is_ascii_punctuation) {
-            plain.push(next);
+            syntax(out, i..i + 1);
+            text(out, i + 1..i + 1 + next.len_utf8());
             i += 1 + next.len_utf8();
             continue;
         }
@@ -339,21 +527,38 @@ pub fn inline(s: &str) -> Rich {
             let delim = &rest[..n];
             if let Some(end) = find_run(&rest[n..], delim, b'`') {
                 let inner = &rest[n..n + end];
-                let inner = if inner.len() > 2 && inner.starts_with(' ') && inner.ends_with(' ') { &inner[1..inner.len() - 1] } else { inner };
-                flush(&mut plain, &mut out);
-                out.push(inner, Marks { code: true, ..Marks::default() });
+                // One space inside each end is the code span's, not the code's.
+                let pad = usize::from(inner.len() > 2 && inner.starts_with(' ') && inner.ends_with(' '));
+                syntax(out, i..i + n + pad);
+                push(out, i + n + pad..i + n + end - pad, Marks { code: true, ..marks.clone() }, Part::Text, false);
+                syntax(out, i + n + end - pad..i + n + end + n);
                 i += n + end + n;
                 continue;
             }
-            plain.push_str(delim);
+            text(out, i..i + n);
             i += n;
             continue;
         }
         if c == '[' && let Some((label, url, used)) = link_at(rest) {
-            flush(&mut plain, &mut out);
-            let label = if label.is_empty() { Rich::plain(url) } else { inline(label) };
-            out.append(label.mark(|m| m.link = Some(url.to_string())));
+            let linked = Marks { link: Some(url.to_string()), ..marks.clone() };
+            if label.is_empty() {
+                // `[](url)` shows the address.
+                let from = url.as_ptr() as usize - rest.as_ptr() as usize;
+                syntax(out, i..i + from);
+                push(out, i + from..i + from + url.len(), linked, Part::Text, false);
+                syntax(out, i + from + url.len()..i + used);
+            } else {
+                syntax(out, i..i + 1);
+                pieces_of(label, base + i + 1, &linked, out);
+                syntax(out, i + 1 + label.len()..i + used);
+            }
             i += used;
+            continue;
+        }
+        // `[@Key]`, `[@A; @B, p. 5]`, `[-@Key]`: a citation, as it is written.
+        if c == '[' && (rest.starts_with("[@") || rest.starts_with("[-@")) && let Some(end) = rest.find(']').filter(|end| !rest[1..*end].contains('[')) {
+            push(out, i..i + end + 1, marks.clone(), Part::Text, true);
+            i += end + 1;
             continue;
         }
         // A bare URL is a link to itself.
@@ -361,15 +566,13 @@ pub fn inline(s: &str) -> Rich {
             let end = rest.find(|c: char| c.is_whitespace() || "<>\"'`".contains(c) || !c.is_ascii()).unwrap_or(rest.len());
             let url = rest[..end].trim_end_matches(|c: char| ".,;:!?)]}*_~".contains(c));
             if url.split_once("://").is_some_and(|(_, host)| host.len() > 3 && host.contains('.')) {
-                flush(&mut plain, &mut out);
-                out.push(url, Marks { link: Some(url.to_string()), ..Marks::default() });
+                push(out, i..i + url.len(), Marks { link: Some(url.to_string()), ..marks.clone() }, Part::Text, false);
                 i += url.len();
                 continue;
             }
         }
         if matches!(c, '*' | '_' | '~') {
             let n = rest.bytes().take_while(|&b| b == c as u8).count();
-            let run = &rest[..n];
             let set: Option<fn(&mut Marks)> = match (c, n) {
                 ('*' | '_', 3) => Some(|m| (m.bold, m.italic) = (true, true)),
                 ('*' | '_', 2) => Some(|m| m.bold = true),
@@ -386,21 +589,22 @@ pub fn inline(s: &str) -> Rich {
                 let inner = &rest[n..n + end];
                 let after = rest[n + end + n..].chars().next();
                 if !inner.starts_with(char::is_whitespace) && !inner.ends_with(char::is_whitespace) && (!bounded || is_boundary(after)) {
-                    flush(&mut plain, &mut out);
-                    out.append(inline(inner).mark(set));
+                    let mut inside = marks.clone();
+                    set(&mut inside);
+                    syntax(out, i..i + n);
+                    pieces_of(inner, base + i + n, &inside, out);
+                    syntax(out, i + n + end..i + n + end + n);
                     i += n + end + n;
                     continue;
                 }
             }
-            plain.push_str(run);
+            text(out, i..i + n);
             i += n;
             continue;
         }
-        plain.push(c);
+        text(out, i..i + c.len_utf8());
         i += c.len_utf8();
     }
-    flush(&mut plain, &mut out);
-    out
 }
 
 /// Where in `s` a run of `ch` exactly as long as `delim` stands (not part of
@@ -542,5 +746,62 @@ mod tests {
         assert_eq!(parsed[1], Block::Paragraph(Rich::plain("后面的话")));
         // Before its second line has arrived, a table is still a paragraph.
         assert!(matches!(parse("| a | b |")[0], Block::Paragraph(_)));
+    }
+
+    /// Each piece of a line as (its text, part, bold, cite).
+    fn drawn(text: &str) -> Vec<Vec<(&str, Part, bool, bool)>> {
+        lines(text).iter().map(|line| line.pieces.iter().map(|piece| (&text[piece.range.clone()], piece.part, piece.marks.bold, piece.cite)).collect()).collect()
+    }
+
+    #[test]
+    fn lines_keep_where_their_syntax_is() {
+        let text = "# 引言\nRoots **grow** [@Zhang2024, p. 5].\n- 一\n  2. 二\n> 引文\n---";
+        let read = lines(text);
+        assert_eq!((read[0].heading, read[2].item, read[3].item, read[4].quote, read[5].rule), (1, Some(Marker::Bullet), Some(Marker::Number(2)), 1, true));
+        let pieces = drawn(text);
+        assert_eq!(pieces[0], [("# ", Part::Syntax, false, false), ("引言", Part::Text, false, false)]);
+        assert_eq!(pieces[1], [("Roots ", Part::Text, false, false), ("**", Part::Syntax, false, false), ("grow", Part::Text, true, false), ("**", Part::Syntax, false, false), (" ", Part::Text, false, false), ("[@Zhang2024, p. 5]", Part::Text, false, true), (".", Part::Text, false, false)]);
+        assert_eq!(pieces[2], [("-", Part::Bullet, false, false), (" 一", Part::Text, false, false)]);
+        assert_eq!(pieces[3], [("  ", Part::Text, false, false), ("2. 二", Part::Text, false, false)]);
+        assert_eq!(pieces[4][0], ("> ", Part::Syntax, false, false));
+        // The pieces cover each line exactly, and the ranges are the text's.
+        for line in &read {
+            let covered: String = line.pieces.iter().map(|piece| &text[piece.range.clone()]).collect();
+            assert_eq!(covered, &text[line.range.clone()]);
+        }
+        // `#tag` and a lone `#` are not headings; `snake_case` is no emphasis.
+        assert_eq!(lines("#tag\n#\nsnake_case_name").iter().map(|line| line.heading).collect::<Vec<_>>(), [0, 0, 0]);
+    }
+
+    #[test]
+    fn links_code_and_fences() {
+        let text = "see [原文](https://doi.org/10.1/x) and `a*b`\n```\nlet x = *1*;\n```\nafter";
+        let pieces = drawn(text);
+        assert_eq!(pieces[0].iter().filter(|piece| piece.1 == Part::Text).map(|piece| piece.0).collect::<String>(), "see 原文 and a*b");
+        let read = lines(text);
+        assert!(read[1].code && read[2].code && read[3].code && !read[4].code);
+        // Inside a fence nothing is emphasis.
+        assert_eq!(pieces[2], [("let x = *1*;", Part::Text, false, false)]);
+        assert_eq!(plain(text), "see 原文 and a*b\n```\nlet x = *1*;\n```\nafter");
+        assert_eq!(plain("## A **b**\n- c\n***"), "A b\n• c\n");
+    }
+
+    #[test]
+    fn enter_goes_on_with_a_list() {
+        let next = |line: &str| continued(line).map(|c| (c.prefix, c.empty, c.marker));
+        assert_eq!(next("- roots"), Some(("- ".into(), false, 2)));
+        assert_eq!(next("  * a"), Some(("  * ".into(), false, 4)));
+        assert_eq!(next("9. nine"), Some(("10. ".into(), false, 3)));
+        assert_eq!(next("1) a"), Some(("2) ".into(), false, 3)));
+        assert_eq!(next("- [x] done"), Some(("- [ ] ".into(), false, 6)));
+        assert_eq!(next("> quoted"), Some(("> ".into(), false, 2)));
+        assert_eq!(next("> - a"), Some(("> - ".into(), false, 4)));
+        // A marker alone ends the list.
+        assert_eq!(next("- "), Some(("- ".into(), true, 2)));
+        assert_eq!(next("3. "), Some(("4. ".into(), true, 3)));
+        assert_eq!(next("> "), Some(("> ".into(), true, 2)));
+        assert_eq!(next("Plain words."), None);
+        assert_eq!(next("---"), None);
+        assert_eq!(next("-"), None);
     }
 }

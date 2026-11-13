@@ -18,6 +18,7 @@
 use crate::comment::{self, Comment};
 use crate::docx;
 use crate::headings;
+use crate::markdown;
 use crate::model::new_id;
 use crate::store::Store;
 use crate::structure::{self, SECTIONS};
@@ -194,26 +195,143 @@ pub fn paragraphs(text: &str) -> impl Iterator<Item = &str> {
     text.lines().map(str::trim).filter(|line| !line.is_empty())
 }
 
+/// A section's text as Markdown to stand under a heading of level
+/// `under`: each line a paragraph of its own, as the editor has them, the
+/// items of a list and the lines of fenced code kept together, and a
+/// heading written in the section set that many levels deeper.
+pub fn section_markdown(body: &str, under: u8) -> String {
+    let mut blocks: Vec<String> = vec![];
+    // What the block being made is: a list, code, or neither.
+    let (mut list, mut code) = (false, false);
+    for line in markdown::lines(body) {
+        let text = &body[line.range.clone()];
+        if line.code {
+            match blocks.last_mut().filter(|_| code) {
+                Some(block) => {
+                    block.push('\n');
+                    block.push_str(text);
+                }
+                None => blocks.push(text.to_string()),
+            }
+            (list, code) = (false, true);
+            continue;
+        }
+        code = false;
+        if text.trim().is_empty() {
+            list = false;
+            continue;
+        }
+        if line.item.is_some() {
+            match blocks.last_mut().filter(|_| list) {
+                Some(block) => {
+                    block.push('\n');
+                    block.push_str(text.trim_end());
+                }
+                None => blocks.push(text.trim_end().to_string()),
+            }
+            list = true;
+            continue;
+        }
+        list = false;
+        let text = text.trim();
+        if line.heading > 0 && line.quote == 0 {
+            let level = (line.heading + under).min(6) as usize;
+            blocks.push(format!("{} {}", "#".repeat(level), text.trim_start_matches('#').trim_start()));
+        } else {
+            blocks.push(text.to_string());
+        }
+    }
+    blocks.join("\n\n")
+}
+
 /// The manuscript as Markdown: the title, then each section with text under its name.
 pub fn markdown(manuscript: &Manuscript) -> String {
     let mut out = format!("# {}\n", manuscript.shown_title());
     for (name, body) in sections_with_text(manuscript) {
         out.push_str(&format!("\n## {}\n\n", if name.is_empty() { "Section" } else { name }));
-        out.push_str(&paragraphs(body).collect::<Vec<_>>().join("\n\n"));
+        out.push_str(&section_markdown(body, 2));
         out.push('\n');
     }
     out
 }
 
-/// The manuscript as plain text, for the clipboard: headings on lines of their own.
+/// The manuscript as plain text, for the clipboard: headings on lines of their own, without the Markdown.
 pub fn plain_text(manuscript: &Manuscript) -> String {
     let mut out = format!("{}\n", manuscript.shown_title());
     for (name, body) in sections_with_text(manuscript) {
         out.push_str(&format!("\n{name}\n\n"));
-        out.push_str(&paragraphs(body).collect::<Vec<_>>().join("\n\n"));
+        out.push_str(&paragraphs(&markdown::plain(body)).collect::<Vec<_>>().join("\n\n"));
         out.push('\n');
     }
     out
+}
+
+/// A line of a section as a paragraph of a Word file: a heading written in
+/// the section as a heading a level under the section's, the words with
+/// their bold, italic, strike-through and code. Empty for a line that says
+/// nothing (blank, a fence, a rule).
+fn word_paragraph(body: &str, line: &markdown::Line) -> String {
+    let mut runs = String::new();
+    for piece in &line.pieces {
+        let text = match piece.part {
+            markdown::Part::Text => &body[piece.range.clone()],
+            markdown::Part::Bullet => "• ",
+            markdown::Part::Syntax => continue,
+        };
+        let marks = &piece.marks;
+        let mut look = String::new();
+        if marks.code { look.push_str(&format!("<w:rFonts w:ascii=\"{MONO}\" w:hAnsi=\"{MONO}\"/>")) }
+        if marks.bold { look.push_str("<w:b/>") }
+        if marks.italic { look.push_str("<w:i/>") }
+        if marks.strike { look.push_str("<w:strike/>") }
+        if marks.link.is_some() { look.push_str("<w:u w:val=\"single\"/>") }
+        let look = if look.is_empty() { look } else { format!("<w:rPr>{look}</w:rPr>") };
+        runs.push_str(&format!("<w:r>{look}<w:t xml:space=\"preserve\">{}</w:t></w:r>", xml_escape(text)));
+    }
+    if runs.trim().is_empty() || body[line.range.clone()].trim().is_empty() { return String::new() }
+    let style = match (line.heading, line.quote, line.code) {
+        (1, 0, _) => "Heading2",
+        (2, 0, _) => "Heading3",
+        (3.., 0, _) => "Heading4",
+        (_, 1.., _) => "Quote",
+        (_, _, true) => "Code",
+        _ => "",
+    };
+    let style = if style.is_empty() { String::new() } else { format!("<w:pPr><w:pStyle w:val=\"{style}\"/></w:pPr>") };
+    format!("<w:p>{style}{runs}</w:p>")
+}
+
+/// The font code is set in, in a Word file.
+const MONO: &str = "Consolas";
+
+/// A Word file's paragraphs say what is written in words alone: a line
+/// that `markdown::plain` reads otherwise (`* p < 0.05`, `#3`) gets the
+/// backslashes that keep its characters as they are.
+fn escape_markdown(text: &str) -> String {
+    if markdown::plain(text) == text { return text.to_string() }
+    let mut out = String::with_capacity(text.len() + 8);
+    let lead = text.len() - text.trim_start().len();
+    out.push_str(&text[..lead]);
+    let rest = &text[lead..];
+    // What would open a block: `#`, `>`, a bullet, a number with its dot, a rule.
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    let rest = if rest.starts_with(['#', '>', '-', '+', '*', '_', '`', '~']) {
+        out.push('\\');
+        out.push_str(&rest[..1]);
+        &rest[1..]
+    } else if digits > 0 && rest[digits..].starts_with(['.', ')']) {
+        out.push_str(&rest[..digits]);
+        out.push('\\');
+        &rest[digits..]
+    } else {
+        rest
+    };
+    for c in rest.chars() {
+        if matches!(c, '\\' | '*' | '_' | '`' | '~' | '[') { out.push('\\') }
+        out.push(c);
+    }
+    // Never worse than the line as it was.
+    if markdown::plain(&out) == text { out } else { text.to_string() }
 }
 
 pub(crate) fn xml_escape(text: &str) -> String {
@@ -243,7 +361,7 @@ pub fn docx(manuscript: &Manuscript) -> Vec<u8> {
     let mut body = paragraph("Title", manuscript.shown_title());
     for (name, text) in sections_with_text(manuscript) {
         body.push_str(&paragraph("Heading1", name));
-        for line in paragraphs(text) { body.push_str(&paragraph("", line)) }
+        for line in markdown::lines(text) { body.push_str(&word_paragraph(text, &line)) }
     }
     let document = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body>{body}<w:sectPr><w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"708\" w:footer=\"708\" w:gutter=\"0\"/></w:sectPr></w:body></w:document>"
@@ -259,6 +377,11 @@ pub fn docx(manuscript: &Manuscript) -> Vec<u8> {
 <w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/><w:qFormat/></w:style>\
 <w:style w:type=\"paragraph\" w:styleId=\"Title\"><w:name w:val=\"Title\"/><w:basedOn w:val=\"Normal\"/><w:next w:val=\"Normal\"/><w:qFormat/><w:pPr><w:spacing w:after=\"320\"/></w:pPr><w:rPr><w:b/><w:sz w:val=\"40\"/></w:rPr></w:style>\
 <w:style w:type=\"paragraph\" w:styleId=\"Heading1\"><w:name w:val=\"heading 1\"/><w:basedOn w:val=\"Normal\"/><w:next w:val=\"Normal\"/><w:qFormat/><w:pPr><w:keepNext/><w:spacing w:before=\"360\" w:after=\"120\"/><w:outlineLvl w:val=\"0\"/></w:pPr><w:rPr><w:b/><w:sz w:val=\"30\"/></w:rPr></w:style>\
+<w:style w:type=\"paragraph\" w:styleId=\"Heading2\"><w:name w:val=\"heading 2\"/><w:basedOn w:val=\"Normal\"/><w:next w:val=\"Normal\"/><w:qFormat/><w:pPr><w:keepNext/><w:spacing w:before=\"240\" w:after=\"120\"/><w:outlineLvl w:val=\"1\"/></w:pPr><w:rPr><w:b/><w:sz w:val=\"27\"/></w:rPr></w:style>\
+<w:style w:type=\"paragraph\" w:styleId=\"Heading3\"><w:name w:val=\"heading 3\"/><w:basedOn w:val=\"Normal\"/><w:next w:val=\"Normal\"/><w:qFormat/><w:pPr><w:keepNext/><w:spacing w:before=\"200\" w:after=\"80\"/><w:outlineLvl w:val=\"2\"/></w:pPr><w:rPr><w:b/><w:sz w:val=\"25\"/></w:rPr></w:style>\
+<w:style w:type=\"paragraph\" w:styleId=\"Heading4\"><w:name w:val=\"heading 4\"/><w:basedOn w:val=\"Normal\"/><w:next w:val=\"Normal\"/><w:qFormat/><w:pPr><w:keepNext/><w:spacing w:before=\"160\" w:after=\"80\"/><w:outlineLvl w:val=\"3\"/></w:pPr><w:rPr><w:b/><w:i/></w:rPr></w:style>\
+<w:style w:type=\"paragraph\" w:styleId=\"Quote\"><w:name w:val=\"Quote\"/><w:basedOn w:val=\"Normal\"/><w:next w:val=\"Normal\"/><w:qFormat/><w:pPr><w:ind w:left=\"720\"/></w:pPr><w:rPr><w:i/><w:color w:val=\"595959\"/></w:rPr></w:style>\
+<w:style w:type=\"paragraph\" w:styleId=\"Code\"><w:name w:val=\"Code\"/><w:basedOn w:val=\"Normal\"/><w:qFormat/><w:pPr><w:spacing w:after=\"0\" w:line=\"240\" w:lineRule=\"auto\"/></w:pPr><w:rPr><w:rFonts w:ascii=\"Consolas\" w:hAnsi=\"Consolas\"/><w:sz w:val=\"20\"/></w:rPr></w:style>\
 </w:styles>"
     );
     let content_types = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/><Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/></Types>";
@@ -439,7 +562,8 @@ pub fn from_word(read: &docx::Read, file_name: &str) -> Draft {
 /// `read.paragraphs`). They stay plain paragraphs in the file: written
 /// back, a section's name is that paragraph as it was.
 pub fn from_word_with(read: &docx::Read, file_name: &str, chosen: Option<&[usize]>) -> Draft {
-    let mut lines: Vec<Line> = read.paragraphs.iter().map(|para| Line { text: para.text.clone(), kept: para.text.clone(), level: para.level, title: para.title }).collect();
+    // What a paragraph says is its words: Markdown's characters in it stay characters (`escape_markdown`).
+    let mut lines: Vec<Line> = read.paragraphs.iter().map(|para| Line { text: para.text.clone(), kept: escape_markdown(&para.text), level: para.level, title: para.title }).collect();
     let mut guesses = vec![];
     if lines.iter().all(|line| line.level.is_none()) {
         let title = title_of(&lines);
@@ -568,7 +692,8 @@ pub fn wanted(manuscript: &Manuscript, source: Option<&Source>, comments: &[Comm
             out.len() - 1
         });
         let start = out.len();
-        out.extend(paragraphs(&section.body).map(|line| paragraph(line, docx::Role::Body)));
+        // What a paragraph says, as the editor draws it: a Word file has its own bold and headings.
+        out.extend(paragraphs(&markdown::plain(&section.body)).map(|line| paragraph(line, docx::Role::Body)));
         places.push((section.id.as_str(), heading, start..out.len()));
     }
     for comment in comments.iter().filter(|comment| comment.origin != comment::FILE && comment.state != comment::DONE) {
@@ -576,7 +701,8 @@ pub fn wanted(manuscript: &Manuscript, source: Option<&Source>, comments: &[Comm
         if said.is_empty() { continue }
         let Some((_, heading, lines)) = places.iter().find(|(id, _, _)| *id == comment.section_id) else { continue };
         // Its words, in the paragraph that has them; a comment whose words were written over since goes on the section's heading, with the words it was about.
-        let first = comment.quote.lines().next().unwrap_or("").trim();
+        let quote = markdown::plain(&comment.quote);
+        let first = quote.lines().next().unwrap_or("").trim();
         let found = lines.clone().find_map(|n| out[n].text.find(first).filter(|_| !first.is_empty()).map(|at| (n, at..at + first.len())));
         let named = heading.filter(|n| !first.is_empty() && out[*n].text.contains(first)).map(|n| (n, 0..0));
         let (at, range, body) = match found.or(named) {
@@ -831,15 +957,17 @@ impl Store {
         if at.start > at.end || at.end > body.len() || !body.is_char_boundary(at.start) || !body.is_char_boundary(at.end) { bail!("这一段已经不在这一节里了。") }
         let before = body[..at.start].trim_end();
         let (name, after) = if heading {
-            let name = body[at.clone()].trim();
+            // The paragraph's words, not its Markdown: `**Methods**` or `## Methods` names the section Methods.
+            let name = markdown::plain(body[at.clone()].trim()).trim().to_string();
             if name.is_empty() { bail!("光标所在的段落是空的。") }
-            if structure::width(name) > headings::LONGEST * 2 { bail!("这一段太长，不能作为标题。") }
-            (name.to_string(), body[at.end..].trim_start())
+            if structure::width(&name) > headings::LONGEST * 2 { bail!("这一段太长，不能作为标题。") }
+            (name, body[at.end..].trim_start())
         } else {
             let after = body[at.start..].trim_start();
             if after.is_empty() { bail!("这里之后没有文字可以拆成新的一节。") }
             if before.is_empty() { bail!("这已经是这一节的开头。") }
-            let first = paragraphs(after).next().unwrap_or("");
+            let first = markdown::plain(paragraphs(after).next().unwrap_or(""));
+            let first = first.trim();
             let short: String = first.chars().take(16).collect();
             (if short.len() < first.len() { format!("{short}…") } else { short }, after)
         };
@@ -1271,6 +1399,13 @@ mod tests {
         let now = store.manuscript(&whole.id).unwrap().unwrap();
         let (out, _) = store.manuscript_word(&now, &[], false, "Xu").unwrap();
         assert_eq!((out.kept, out.changed, out.added, out.removed), (9, 0, 0, 0));
+        // A paragraph written in Markdown names the section by its words.
+        let typed = store.create_manuscript("Typed", "en").unwrap();
+        let first = &typed.sections[0];
+        store.save_section_body(&first.id, "Opening words.\n\n**Methods**\n\nWe grew roots.").unwrap();
+        let start = "Opening words.\n\n".len();
+        let methods = store.split_section(&first.id, start..start + "**Methods**".len(), true).unwrap();
+        assert_eq!((methods.name.as_str(), methods.kind.as_str(), methods.body.as_str()), ("Methods", "methods", "We grew roots."));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1288,5 +1423,27 @@ mod tests {
         let end = &bytes[bytes.len() - 22..];
         assert_eq!(&end[..4], b"PK\x05\x06");
         assert_eq!(u16::from_le_bytes([end[10], end[11]]), 5);
+    }
+
+    #[test]
+    fn markdown_written_in_a_section_is_exported_as_markdown_and_as_formatting() {
+        let section = Section { name: "Results".into(), kind: "results".into(), body: "# Roots\nThey **grew** fast.\n- one\n- two\n\n```\nlet x = 1;\n\nlet y = 2;\n```\n---".into(), ..Default::default() };
+        let manuscript = Manuscript { title: "T".into(), sections: vec![section], ..Default::default() };
+        // The heading goes under the section's; a list and code keep their lines together.
+        assert_eq!(markdown(&manuscript), "# T\n\n## Results\n\n### Roots\n\nThey **grew** fast.\n\n- one\n- two\n\n```\nlet x = 1;\n\nlet y = 2;\n```\n\n---\n");
+        assert_eq!(plain_text(&manuscript), "T\n\nResults\n\nRoots\n\nThey grew fast.\n\n• one\n\n• two\n\n```\n\nlet x = 1;\n\nlet y = 2;\n\n```\n");
+        let text = String::from_utf8_lossy(&docx(&manuscript)).to_string();
+        assert!(text.contains("<w:p><w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr><w:r><w:t xml:space=\"preserve\">Roots</w:t></w:r></w:p>"));
+        assert!(text.contains("<w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">grew</w:t></w:r>"));
+        assert!(!text.contains("**") && !text.contains("---"));
+    }
+
+    #[test]
+    fn a_word_paragraph_keeps_its_characters() {
+        for said in ["Plain words.", "* p < 0.05 for all", "#3 was the best", "1. Not a list in Word", "a_b and *c* and `d` [x](https://e.org)", "---", "> not quoted"] {
+            let kept = escape_markdown(said);
+            assert_eq!(markdown::plain(&kept), said, "{kept}");
+        }
+        assert_eq!(escape_markdown("Plain words."), "Plain words.");
     }
 }

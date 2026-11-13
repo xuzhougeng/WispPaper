@@ -55,11 +55,82 @@ pub enum InputEvent {
 
 /// What the last paint laid out, for hit-testing and the IME.
 struct Layout {
-    /// Each paragraph with its byte offset in the displayed text and its top.
-    lines: Vec<(WrappedLine, usize, Pixels)>,
+    rows: Vec<Row>,
+    /// How the drawn text stands to the text.
+    map: DisplayMap,
     bounds: Bounds<Pixels>,
-    line_height: Pixels,
     scroll_x: Pixels,
+}
+
+/// A paragraph as drawn: its wrapped line, where it starts in the drawn
+/// text, its top, how far in from the left it is set, the height of each of
+/// its lines, and what is drawn behind it.
+struct Row {
+    line: WrappedLine,
+    start: usize,
+    top: Pixels,
+    x: Pixels,
+    line_height: Pixels,
+    decor: Decor,
+}
+
+impl Row {
+    fn height(&self) -> Pixels {
+        self.line.size(self.line_height).height
+    }
+}
+
+/// What a paragraph of Markdown has behind its text.
+#[derive(Clone, Copy, PartialEq)]
+enum Decor {
+    None,
+    /// A bar at the left for each level.
+    Quote(u8),
+    /// A line across, where `---` is not shown.
+    Rule,
+    /// A ground, for fenced code.
+    Code,
+}
+
+/// How the drawn text stands to the text: stretches of each in order, and
+/// whether a stretch is drawn as written (else it is hidden, `**`, or drawn
+/// as something else, a bullet). With none, the text is drawn as written.
+#[derive(Default)]
+struct DisplayMap {
+    segs: Vec<Seg>,
+}
+
+struct Seg {
+    src: Range<usize>,
+    shown: Range<usize>,
+    same: bool,
+}
+
+impl DisplayMap {
+    /// Where byte `o` of the text is drawn.
+    fn to_shown(&self, o: usize) -> usize {
+        if self.segs.is_empty() { return o }
+        let Some(seg) = self.segs[..self.segs.partition_point(|seg| seg.src.start <= o)].last() else { return 0 };
+        if seg.same { seg.shown.start + (o - seg.src.start).min(seg.shown.len()) } else if o <= seg.src.start { seg.shown.start } else { seg.shown.end }
+    }
+
+    /// The byte of the text drawn at `d`: among stretches that meet there,
+    /// one drawn as written, the first; so a click by a bold word puts the
+    /// caret outside its `**`, and one at a heading's start after its `# `.
+    fn to_source(&self, d: usize) -> usize {
+        if self.segs.is_empty() { return d }
+        let first = self.segs.partition_point(|seg| seg.shown.end < d);
+        let mut at = first;
+        while let Some(seg) = self.segs.get(at).filter(|seg| seg.shown.start <= d) {
+            if seg.same { return seg.src.start + (d - seg.shown.start) }
+            at += 1;
+        }
+        match self.segs.get(first).or(self.segs.last()) {
+            Some(seg) if d <= seg.shown.start => seg.src.start,
+            Some(seg) => seg.src.end,
+            None => d,
+        }
+    }
 }
 
 pub struct TextInput {
@@ -82,6 +153,13 @@ pub struct TextInput {
     pub choosing: bool,
     /// Pasting a picture hands it to the owner instead of being ignored.
     pub accepts_images: bool,
+    /// Draw the text as the Markdown in it says (headings, emphasis, lists,
+    /// quotes, code), its syntax shown only on the lines being edited. The
+    /// text itself stays the Markdown as written.
+    pub markdown: bool,
+    /// While the button is held, the lines that show their syntax stay those
+    /// of the press, so the text does not move under a drag.
+    reveal_held: Option<Range<usize>>,
     pasted: Vec<Image>,
     layout: Option<Layout>,
     selecting: bool,
@@ -129,6 +207,8 @@ impl TextInput {
             min_lines: 1,
             choosing: false,
             accepts_images: false,
+            markdown: false,
+            reveal_held: None,
             pasted: vec![],
             layout: None,
             selecting: false,
@@ -147,6 +227,12 @@ impl TextInput {
     pub fn multiline(mut self, min_lines: usize) -> Self {
         self.multiline = true;
         self.min_lines = min_lines;
+        self
+    }
+
+    /// Draw the text as Markdown (`markdown`).
+    pub fn markdown(mut self) -> Self {
+        self.markdown = true;
         self
     }
 
@@ -185,7 +271,7 @@ impl TextInput {
     /// How far below the top of the text byte `at` was last drawn; none before the first frame.
     pub fn top_of(&self, at: usize) -> Option<Pixels> {
         let layout = self.layout.as_ref()?;
-        Some(self.position_in(layout, self.to_display(at.min(self.text.len())))?.y)
+        Some(self.position_in(layout, self.to_display(&layout.map, at.min(self.text.len())))?.y)
     }
 
     /// What is selected, in bytes; empty at the caret.
@@ -425,6 +511,15 @@ impl TextInput {
 
     fn enter(&mut self, _: &Enter, _: &mut Window, cx: &mut Context<Self>) {
         if self.multiline && !self.submit_on_enter {
+            // In a list or a quote the next line goes on with it; Enter on an empty item ends it.
+            if self.markdown && self.sel.is_empty() && self.marked.is_none() {
+                let (start, at) = (self.line_start(self.cursor()), self.cursor());
+                match wisp_core::markdown::continued(&self.text[start..self.line_end(at)]) {
+                    Some(next) if at >= start + next.marker && next.empty => return self.replace(start..self.line_end(at), "", cx),
+                    Some(next) if at >= start + next.marker => return self.replace(at..at, &format!("\n{}", next.prefix), cx),
+                    _ => {}
+                }
+            }
             return self.replace(self.sel.clone(), "\n", cx);
         }
         cx.emit(InputEvent::Submit);
@@ -467,46 +562,53 @@ impl TextInput {
             return cx.propagate();
         }
         let Some(l) = &self.layout else { return };
-        let Some(at) = self.position_in(l, self.to_display(self.cursor())) else { return };
-        let y = at.y + l.line_height * (0.5 + dir);
-        let bottom = l.lines.last().map_or(px(0.), |(line, _, top)| *top + line.size(l.line_height).height);
-        let target = if y < px(0.) {
-            0
-        } else if y > bottom {
-            self.text.len()
+        let shown = self.to_display(&l.map, self.cursor());
+        let (Some(at), Some(row)) = (self.position_in(l, shown), row_of(l, shown)) else { return };
+        let n = l.rows.iter().position(|r| std::ptr::eq(r, row)).unwrap_or(0);
+        // The middle of the line above or below: in this paragraph, else in the one before or after it.
+        let y = at.y + row.line_height * (0.5 + dir);
+        let y = if y < row.top {
+            n.checked_sub(1).map(|n| &l.rows[n]).map(|r| r.top + r.height() - r.line_height * 0.5)
+        } else if y >= row.top + row.height() {
+            l.rows.get(n + 1).map(|r| r.top + r.line_height * 0.5)
         } else {
-            self.text_offset(self.index_in(l, point(at.x, y)))
+            Some(y)
+        };
+        let target = match y {
+            None if dir < 0. => 0,
+            None => self.text.len(),
+            Some(y) => self.text_offset(&l.map, self.index_in(l, point(at.x, y))),
         };
         self.move_to(target, cx);
     }
 
-    // ---- displayed text (bullets when masked)
+    // ---- displayed text (bullets when masked, Markdown drawn)
 
     fn display_text(&self) -> String {
         if self.masked { BULLET.repeat(self.text.chars().count()) } else { self.text.clone() }
     }
 
-    fn to_display(&self, o: usize) -> usize {
-        if self.masked { self.text[..o.min(self.text.len())].chars().count() * BULLET.len() } else { o }
+    fn to_display(&self, map: &DisplayMap, o: usize) -> usize {
+        if self.masked { self.text[..o.min(self.text.len())].chars().count() * BULLET.len() } else { map.to_shown(o.min(self.text.len())) }
     }
 
-    fn text_offset(&self, d: usize) -> usize {
-        if !self.masked { return d.min(self.text.len()) }
+    fn text_offset(&self, map: &DisplayMap, d: usize) -> usize {
+        if !self.masked { return self.text.floor_char_boundary(map.to_source(d).min(self.text.len())) }
         self.text.char_indices().nth(d / BULLET.len()).map_or(self.text.len(), |(i, _)| i)
     }
 
     /// Where display offset `o` is drawn, relative to the text origin.
     fn position_in(&self, l: &Layout, o: usize) -> Option<Point<Pixels>> {
-        let (line, start, top) = l.lines.iter().rev().find(|(_, start, _)| *start <= o)?;
-        let p = line.position_for_index((o - start).min(line.len()), l.line_height)?;
-        Some(point(p.x, p.y + *top))
+        let row = row_of(l, o)?;
+        let p = row.line.position_for_index((o - row.start).min(row.line.len()), row.line_height)?;
+        Some(point(row.x + p.x, p.y + row.top))
     }
 
     /// The display offset closest to a point relative to the text origin.
     fn index_in(&self, l: &Layout, p: Point<Pixels>) -> usize {
-        let Some((line, start, top)) = l.lines.iter().rev().find(|(_, _, top)| *top <= p.y).or(l.lines.first()) else { return 0 };
-        let local = point(p.x.max(px(0.)), (p.y - *top).max(px(0.)).min(line.size(l.line_height).height - px(1.)));
-        start + match line.closest_index_for_position(local, l.line_height) {
+        let Some(row) = l.rows.iter().rev().find(|row| row.top <= p.y).or(l.rows.first()) else { return 0 };
+        let local = point((p.x - row.x).max(px(0.)), (p.y - row.top).max(px(0.)).min(row.height() - px(1.)));
+        row.start + match row.line.closest_index_for_position(local, row.line_height) {
             Ok(i) | Err(i) => i,
         }
     }
@@ -514,7 +616,7 @@ impl TextInput {
     fn index_for_mouse(&self, p: Point<Pixels>) -> usize {
         let Some(l) = &self.layout else { return 0 };
         let local = point(p.x - l.bounds.left() + l.scroll_x, p.y - l.bounds.top());
-        self.text_offset(self.index_in(l, local))
+        self.text_offset(&l.map, self.index_in(l, local))
     }
 
     fn on_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -527,6 +629,7 @@ impl TextInput {
         }
         let i = self.index_for_mouse(ev.position);
         self.selecting = true;
+        if self.markdown { self.reveal_held = Some(i..i) }
         if ev.modifiers.shift { self.select_to(i, cx) } else { self.move_to(i, cx) }
     }
 
@@ -540,6 +643,7 @@ impl TextInput {
     fn on_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         if self.selecting {
             self.selecting = false;
+            self.reveal_held = None;
             // A click on marked words: the owner says what they are marked for.
             let at = self.cursor();
             if self.sel.is_empty() && let Some(n) = self.marks.iter().position(|(range, _)| range.start <= at && at <= range.end && range.start < range.end) { cx.emit(InputEvent::MarkClicked(n)) }
@@ -626,9 +730,10 @@ impl EntityInputHandler for TextInput {
         let r = self.range8(&range);
         let l = self.layout.as_ref()?;
         let origin = point(l.bounds.left() - l.scroll_x, l.bounds.top());
-        let a = self.position_in(l, self.to_display(r.start))?;
-        let b = self.position_in(l, self.to_display(r.end))?;
-        Some(Bounds::from_corners(origin + a, origin + point(b.x, b.y + l.line_height)))
+        let (a, b) = (self.to_display(&l.map, r.start), self.to_display(&l.map, r.end));
+        let line_height = row_of(l, b)?.line_height;
+        let (a, b) = (self.position_in(l, a)?, self.position_in(l, b)?);
+        Some(Bounds::from_corners(origin + a, origin + point(b.x, b.y + line_height)))
     }
 
     fn character_index_for_point(&mut self, p: Point<Pixels>, _: &mut Window, _: &mut Context<Self>) -> Option<usize> {
@@ -773,7 +878,10 @@ impl Element for SelectionToolbar {
 }
 
 struct Prepaint {
-    lines: Vec<(WrappedLine, usize, Pixels)>,
+    rows: Vec<Row>,
+    map: DisplayMap,
+    /// Behind the text: quote bars, rules, the ground of code.
+    decor: Vec<PaintQuad>,
     /// Under the text whether the field has the keyboard or not.
     marks: Vec<PaintQuad>,
     selection: Vec<PaintQuad>,
@@ -788,13 +896,20 @@ impl IntoElement for InputElement {
     }
 }
 
+/// The row a display offset is drawn in.
+fn row_of(l: &Layout, o: usize) -> Option<&Row> {
+    l.rows.iter().rev().find(|row| row.start <= o).or(l.rows.first())
+}
+
 /// The text to draw with its runs: the placeholder when empty, the marked
-/// (composing) range underlined.
-fn shape(input: &TextInput, style: &TextStyle, window: &mut Window, wrap: Option<Pixels>) -> Vec<(WrappedLine, usize, Pixels)> {
+/// (composing) range underlined; Markdown drawn as it says (`shape_markdown`).
+fn shape(input: &TextInput, style: &TextStyle, window: &mut Window, wrap: Option<Pixels>) -> (Vec<Row>, DisplayMap) {
+    if input.markdown && !input.text.is_empty() && !input.masked { return shape_markdown(input, style, window, wrap) }
     let display = input.display_text();
     let (text, color) = if display.is_empty() { (crate::i18n::t(&input.placeholder).to_string(), Theme::text_placeholder()) } else { (display, style.color) };
     let run = TextRun { len: text.len(), font: style.font(), color, background_color: None, underline: None, strikethrough: None };
-    let marked = input.marked.as_ref().filter(|_| !input.text.is_empty()).map(|m| input.to_display(m.start)..input.to_display(m.end));
+    let plain = DisplayMap::default();
+    let marked = input.marked.as_ref().filter(|_| !input.text.is_empty()).map(|m| input.to_display(&plain, m.start)..input.to_display(&plain, m.end));
     let runs: Vec<TextRun> = match marked {
         Some(m) => vec![
             TextRun { len: m.start, ..run.clone() },
@@ -809,15 +924,128 @@ fn shape(input: &TextInput, style: &TextStyle, window: &mut Window, wrap: Option
     let font_size = style.font_size.to_pixels(window.rem_size());
     let line_height = window.line_height();
     let shaped = window.text_system().shape_text(text.into(), font_size, &runs, wrap, None).unwrap_or_default();
-    let mut lines = vec![];
+    let mut rows = vec![];
     let (mut start, mut top) = (0, px(0.));
     for line in shaped {
-        let (len, height) = (line.len(), line.size(line_height).height);
-        lines.push((line, start, top));
+        let len = line.len();
+        let row = Row { line, start, top, x: px(0.), line_height, decor: Decor::None };
+        top += row.height();
+        rows.push(row);
         start += len + 1;
-        top += height;
     }
-    lines
+    (rows, plain)
+}
+
+/// How much larger a heading is set than the text, by its level.
+fn heading_scale(level: u8) -> f32 {
+    match level {
+        1 => 1.4,
+        2 => 1.25,
+        3 => 1.12,
+        _ => 1.,
+    }
+}
+
+/// How far a quote's text is set in, per level.
+const QUOTE_INDENT: f32 = 16.;
+/// How far code is set in from its ground's edge.
+const CODE_INDENT: f32 = 10.;
+
+/// Markdown drawn as it says, a paragraph at a time: headings larger,
+/// emphasis, code and links in their style, a bullet for `-`, quotes set in
+/// behind a bar. The syntax is hidden but on the lines the selection or the
+/// caret is on, where it is drawn faintly so it can be edited.
+fn shape_markdown(input: &TextInput, style: &TextStyle, window: &mut Window, wrap: Option<Pixels>) -> (Vec<Row>, DisplayMap) {
+    use wisp_core::markdown::{self, Part};
+    let text = &input.text;
+    let focused = input.focus.is_focused(window);
+    let reveal = input.reveal_held.clone().unwrap_or(input.sel.clone());
+    let font_size = style.font_size.to_pixels(window.rem_size());
+    let base_height = window.line_height();
+    let mut map = DisplayMap::default();
+    let mut rows: Vec<Row> = vec![];
+    let (mut start, mut top) = (0usize, px(0.));
+    let lines = markdown::lines(text);
+    for (n, line) in lines.iter().enumerate() {
+        let revealed = focused && line.range.start <= reveal.end && reveal.start <= line.range.end;
+        let mut shown = String::new();
+        let mut runs: Vec<TextRun> = vec![];
+        let base_color = if line.quote > 0 { Theme::text_secondary() } else { style.color };
+        for piece in &line.pieces {
+            let written = &text[piece.range.clone()];
+            let hidden = piece.part == Part::Syntax && !revealed;
+            let drawn: &str = if piece.part == Part::Bullet && !revealed { "•" } else if hidden { "" } else { written };
+            let from = start + shown.len();
+            map.segs.push(Seg { src: piece.range.clone(), shown: from..from + drawn.len(), same: drawn.len() == written.len() && !hidden && drawn == written });
+            if drawn.is_empty() { continue }
+            shown.push_str(drawn);
+            let marks = &piece.marks;
+            let mut font = style.font();
+            if marks.bold || line.heading > 0 { font.weight = FontWeight::SEMIBOLD }
+            if marks.italic { font.style = FontStyle::Italic }
+            if marks.code || line.code { font.family = crate::theme::MONO_FONT.into() }
+            let color = match piece.part {
+                Part::Syntax => Theme::text_tertiary(),
+                Part::Bullet => Theme::text_secondary(),
+                Part::Text if marks.link.is_some() || piece.cite => Theme::accent(),
+                Part::Text => base_color,
+            };
+            let run = TextRun {
+                len: drawn.len(),
+                font,
+                color,
+                background_color: (marks.code && !line.code).then(Theme::groove),
+                underline: marks.link.as_ref().map(|_| UnderlineStyle { color: Some(Theme::accent().opacity(0.5)), thickness: px(1.), wavy: false }),
+                strikethrough: marks.strike.then(|| StrikethroughStyle { thickness: px(1.), color: None }),
+            };
+            // The letters being composed are underlined; they are always drawn as typed.
+            match input.marked.as_ref().filter(|m| piece.part != Part::Bullet && m.start < piece.range.end && piece.range.start < m.end && drawn == written) {
+                Some(m) => {
+                    let (a, b) = (m.start.max(piece.range.start) - piece.range.start, m.end.min(piece.range.end) - piece.range.start);
+                    let underline = Some(UnderlineStyle { color: Some(color), thickness: px(1.), wavy: false });
+                    for (len, underline) in [(a, run.underline), (b - a, underline), (drawn.len() - b, run.underline)] {
+                        if len > 0 { runs.push(TextRun { len, underline, ..run.clone() }) }
+                    }
+                }
+                None => runs.push(run),
+            }
+        }
+        let scale = heading_scale(line.heading);
+        let (size, line_height) = if line.code { (font_size * 0.9, base_height) } else { (font_size * scale, (base_height * scale).round()) };
+        let x = px(QUOTE_INDENT * line.quote as f32) + if line.code { px(CODE_INDENT) } else { px(0.) };
+        let decor = if line.code {
+            Decor::Code
+        } else if line.rule && shown.is_empty() {
+            Decor::Rule
+        } else if line.quote > 0 {
+            Decor::Quote(line.quote)
+        } else {
+            Decor::None
+        };
+        // Room between paragraphs, more over a heading; none inside a list, a quote or code.
+        let empty = |n: usize| text[lines[n].range.clone()].trim().is_empty();
+        let gap = if n == 0 || empty(n) || empty(n - 1) {
+            px(0.)
+        } else if line.heading > 0 {
+            (base_height * 0.5).round()
+        } else if (line.item.is_some() && lines[n - 1].item.is_some()) || (line.code && lines[n - 1].code) || (line.quote > 0 && lines[n - 1].quote > 0) {
+            px(0.)
+        } else {
+            (base_height * 0.3).round()
+        };
+        top += gap;
+        let len = shown.len();
+        let wrap = wrap.map(|w| (w - x).max(px(40.)));
+        let shaped = window.text_system().shape_text(shown.into(), size, &runs, wrap, None).unwrap_or_default();
+        let Some(shaped) = shaped.into_iter().next() else { continue };
+        let row = Row { line: shaped, start, top, x, line_height, decor };
+        top += row.height();
+        rows.push(row);
+        start += len + 1;
+        // The line break, drawn as written.
+        if line.range.end < text.len() { map.segs.push(Seg { src: line.range.end..line.range.end + 1, shown: start - 1..start, same: true }) }
+    }
+    (rows, map)
 }
 
 impl Element for InputElement {
@@ -849,8 +1077,8 @@ impl Element for InputElement {
                 AvailableSpace::Definite(w) => Some(w),
                 _ => None,
             });
-            let lines = shape(entity.read(cx), &text_style, window, width);
-            let height = lines.last().map_or(px(0.), |(line, _, top)| *top + line.size(line_height).height);
+            let (rows, _) = shape(entity.read(cx), &text_style, window, width);
+            let height = rows.last().map_or(px(0.), |row| row.top + row.height());
             size(width.unwrap_or(px(240.)), height.max(min))
         });
         (id, ())
@@ -859,10 +1087,10 @@ impl Element for InputElement {
     fn prepaint(&mut self, _: Option<&GlobalElementId>, _: Option<&InspectorElementId>, bounds: Bounds<Pixels>, _: &mut (), window: &mut Window, cx: &mut App) -> Prepaint {
         let input = self.input.read(cx);
         let style = window.text_style();
-        let line_height = window.line_height();
-        let lines = shape(input, &style, window, input.multiline.then_some(bounds.size.width));
-        let probe = Layout { lines, bounds, line_height, scroll_x: px(0.) };
-        let caret_at = input.position_in(&probe, input.to_display(input.cursor())).unwrap_or_default();
+        let (rows, map) = shape(input, &style, window, input.multiline.then_some(bounds.size.width));
+        let probe = Layout { rows, map, bounds, scroll_x: px(0.) };
+        let cursor = input.to_display(&probe.map, input.cursor());
+        let caret_at = input.position_in(&probe, cursor).unwrap_or_default();
         // A single line scrolls sideways to keep the caret in view.
         let mut scroll_x = px(0.);
         if !input.multiline {
@@ -871,31 +1099,47 @@ impl Element for InputElement {
             scroll_x = if input.focus.is_focused(window) { input.scroll_x.min(caret_at.x).max(caret_at.x - width).max(px(0.)) } else { px(0.) };
         }
         let origin = point(bounds.left() - scroll_x, bounds.top());
-        // The rows a stretch of the text covers, line by line.
-        let rows = |a: usize, b: usize, color: Hsla| {
+        // The rows a stretch of the drawn text covers, line by line.
+        let quads = |a: usize, b: usize, color: Hsla| {
             let mut quads = vec![];
-            for (line, start, top) in &probe.lines {
-                let (from, to) = (a.max(*start), b.min(start + line.len()));
-                if from > to || (from == to && !(a < *start && b > *start + line.len())) { continue }
+            for row in &probe.rows {
+                let (line, start, top, line_height) = (&row.line, row.start, row.top, row.line_height);
+                let (from, to) = (a.max(start), b.min(start + line.len()));
+                if from > to || (from == to && !(a < start && b > start + line.len())) { continue }
                 let (Some(p), Some(q)) = (line.position_for_index(from - start, line_height), line.position_for_index(to - start, line_height)) else { continue };
-                let row = |x0: Pixels, x1: Pixels, y: Pixels| fill(Bounds::from_corners(origin + point(x0, *top + y), origin + point(x1, *top + y + line_height)), color);
+                let x0 = row.x;
+                let quad = |l: Pixels, r: Pixels, y: Pixels| fill(Bounds::from_corners(origin + point(l, top + y), origin + point(r, top + y + line_height)), color);
                 if p.y == q.y {
-                    quads.push(row(p.x, q.x, p.y));
+                    quads.push(quad(x0 + p.x, x0 + q.x, p.y));
                 } else {
-                    quads.push(row(p.x, bounds.size.width, p.y));
+                    quads.push(quad(x0 + p.x, bounds.size.width, p.y));
                     let mut y = p.y + line_height;
                     while y < q.y {
-                        quads.push(row(px(0.), bounds.size.width, y));
+                        quads.push(quad(x0, bounds.size.width, y));
                         y += line_height;
                     }
-                    quads.push(row(px(0.), q.x, q.y));
+                    quads.push(quad(x0, x0 + q.x, q.y));
                 }
             }
             quads
         };
-        let selection = if input.sel.is_empty() { vec![] } else { rows(input.to_display(input.sel.start), input.to_display(input.sel.end), Theme::selection()) };
-        let marks = input.marks.iter().filter(|(range, _)| range.start < range.end && range.end <= input.text.len() && !input.masked).flat_map(|(range, color)| rows(range.start, range.end, *color)).collect();
+        let selection = if input.sel.is_empty() { vec![] } else { quads(input.to_display(&probe.map, input.sel.start), input.to_display(&probe.map, input.sel.end), Theme::selection()) };
+        let marks = input.marks.iter().filter(|(range, _)| range.start < range.end && range.end <= input.text.len() && !input.masked).flat_map(|(range, color)| quads(input.to_display(&probe.map, range.start), input.to_display(&probe.map, range.end), *color)).collect();
+        let line_height = row_of(&probe, cursor).map_or(window.line_height(), |row| row.line_height);
         let caret = input.sel.is_empty().then(|| fill(Bounds::new(origin + point(caret_at.x, caret_at.y + px(1.)), size(px(1.5), line_height - px(2.))), Theme::text()));
+        let decor = probe
+            .rows
+            .iter()
+            .flat_map(|row| {
+                let (top, height) = (row.top, row.height());
+                match row.decor {
+                    Decor::None => vec![],
+                    Decor::Quote(depth) => (0..depth).map(|n| fill(Bounds::new(origin + point(px(QUOTE_INDENT * n as f32 + 2.), top), size(px(3.), height)), Theme::line_strong())).collect(),
+                    Decor::Rule => vec![fill(Bounds::new(origin + point(px(0.), top + (height / 2.).round()), size(bounds.size.width, px(1.))), Theme::line_strong())],
+                    Decor::Code => vec![fill(Bounds::new(origin + point(row.x - px(CODE_INDENT), top), size(bounds.size.width - row.x + px(CODE_INDENT), height)), Theme::bg_sunken())],
+                }
+            })
+            .collect();
         let viewport = bounds.intersect(&window.content_mask().bounds);
         let visible: Vec<_> = selection.iter().map(|quad| quad.bounds.intersect(&viewport)).filter(|bounds| !bounds.is_empty()).collect();
         let geometry = visible.first().zip(visible.last()).map(|(&first, &last)| SelectionGeometry { first, last, viewport });
@@ -903,18 +1147,17 @@ impl Element for InputElement {
             input.selection_geometry = geometry;
             input.selection_toolbar_visible = false;
         });
-        Prepaint { lines: probe.lines, marks, selection, caret, scroll_x }
+        Prepaint { rows: probe.rows, map: probe.map, decor, marks, selection, caret, scroll_x }
     }
 
     fn paint(&mut self, _: Option<&GlobalElementId>, _: Option<&InspectorElementId>, bounds: Bounds<Pixels>, _: &mut (), prepaint: &mut Prepaint, window: &mut Window, cx: &mut App) {
         let focus = self.input.read(cx).focus.clone();
         window.handle_input(&focus, ElementInputHandler::new(bounds, self.input.clone()), cx);
-        let line_height = window.line_height();
         let origin = point(bounds.left() - prepaint.scroll_x, bounds.top());
-        let lines = std::mem::take(&mut prepaint.lines);
+        let rows = std::mem::take(&mut prepaint.rows);
         let focused = focus.is_focused(window);
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
-            for quad in prepaint.marks.drain(..) {
+            for quad in prepaint.decor.drain(..).chain(prepaint.marks.drain(..)) {
                 window.paint_quad(quad);
             }
             if focused {
@@ -922,18 +1165,19 @@ impl Element for InputElement {
                     window.paint_quad(quad);
                 }
             }
-            for (line, _, top) in &lines {
-                let _ = line.paint(origin + point(px(0.), *top), line_height, TextAlign::Left, None, window, cx);
+            for row in &rows {
+                let _ = row.line.paint(origin + point(row.x, row.top), row.line_height, TextAlign::Left, None, window, cx);
             }
             if focused && let Some(caret) = prepaint.caret.take() {
                 window.paint_quad(caret);
             }
         });
         let scroll_x = prepaint.scroll_x;
+        let map = std::mem::take(&mut prepaint.map);
         self.input.update(cx, |input, _| {
             input.scroll_x = scroll_x;
-            let layout = Layout { lines, bounds, line_height, scroll_x };
-            let tops: Vec<Pixels> = input.marks.iter().map(|(range, _)| input.position_in(&layout, input.to_display(range.start.min(input.text.len()))).map_or(px(0.), |p| p.y)).collect();
+            let layout = Layout { rows, map, bounds, scroll_x };
+            let tops: Vec<Pixels> = input.marks.iter().map(|(range, _)| input.position_in(&layout, input.to_display(&layout.map, range.start.min(input.text.len()))).map_or(px(0.), |p| p.y)).collect();
             // What the owner drew beside the marks was placed by the last frame's: draw again with these.
             if tops != input.mark_tops {
                 input.mark_tops = tops;
@@ -941,5 +1185,27 @@ impl Element for InputElement {
             }
             input.layout = Some(layout);
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Not `super::*`: that would bring in gpui's own `test` attribute.
+    use super::{DisplayMap, Seg};
+
+    /// `a **b**` drawn as `a b`, then a line break and `- c` drawn as `• c`.
+    fn map() -> DisplayMap {
+        let seg = |src: std::ops::Range<usize>, shown: std::ops::Range<usize>, same: bool| Seg { src, shown, same };
+        DisplayMap { segs: vec![seg(0..2, 0..2, true), seg(2..4, 2..2, false), seg(4..5, 2..3, true), seg(5..7, 3..3, false), seg(7..8, 3..4, true), seg(8..9, 4..7, false), seg(9..11, 7..9, true)] }
+    }
+
+    #[test]
+    fn drawn_and_written_places_meet() {
+        let map = map();
+        // Inside the hidden `**` the caret is drawn where the stars would be.
+        assert_eq!([0, 2, 3, 4, 5, 6, 7, 8, 9, 11].map(|o| map.to_shown(o)), [0, 2, 2, 2, 3, 3, 3, 4, 7, 9]);
+        // A click beside the bold word lands outside its stars; one after the bullet, after the marker.
+        assert_eq!([0, 2, 3, 4, 7, 9].map(|d| map.to_source(d)), [0, 2, 5, 8, 9, 11]);
+        assert_eq!(DisplayMap::default().to_source(5), 5);
     }
 }
