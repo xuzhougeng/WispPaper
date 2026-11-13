@@ -2871,9 +2871,14 @@ impl Workspace {
     fn ensure_pdf(&mut self, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
         if !(lib.tab == Tab::Pdf || (lib.tab == Tab::Ask && lib.split)) || lib.pdf.is_some() { return }
-        let Some(path) = lib.selected.as_deref().and_then(|id| lib.pdf_file(id)).map(|f| lib.store.file_path(f)) else { return };
+        let Some(file) = lib.selected.as_deref().and_then(|id| lib.pdf_file(id)).cloned() else { return };
+        let path = lib.store.file_path(&file);
+        let annotations = match lib.store.pdf_annotations(&file.paper_id, &file.id) {
+            Ok(annotations) => annotations,
+            Err(error) => return self.fail(format!("{error:#}"), cx),
+        };
         let zoom = lib.zoom;
-        let pdf = cx.new(|cx| PdfView::new(&path, zoom, cx));
+        let pdf = cx.new(|cx| PdfView::new(&path, zoom, &file, annotations, cx));
         lib.pdf_events = Some(cx.subscribe(&pdf, |this, _, event: &PdfEvent, cx| this.pdf_event(event, cx)));
         lib.pdf = Some(pdf);
     }
@@ -2884,6 +2889,9 @@ impl Workspace {
             PdfEvent::Copied => self.say(t("已复制"), cx),
             PdfEvent::Translate(text, profile) => self.translate_passage(text.clone(), profile.clone(), cx),
             PdfEvent::Figure(piece) => self.collect_piece(piece, cx),
+            PdfEvent::Annotate { paper, resource, page, kind, quote, boxes } => self.change_pdf_annotation(resource, |store| store.add_pdf_annotation(paper, resource, *page, *kind, quote, boxes).map(|_| ()), cx),
+            PdfEvent::AnnotationNote { resource, id, note } => self.change_pdf_annotation(resource, |store| store.update_pdf_annotation_note(resource, id, note), cx),
+            PdfEvent::RemoveAnnotation { resource, id } => self.change_pdf_annotation(resource, |store| store.remove_pdf_annotation(resource, id), cx),
             PdfEvent::Picture(png, to_library) => {
                 self.attach_images(!*to_library, vec![Picture::Bytes(png.clone())], cx);
                 if *to_library { self.say(t("截图已加到文献库对话的输入框上方。"), cx) } else { self.show_paper_chat(cx) }
@@ -2903,6 +2911,19 @@ impl Workspace {
                 }
                 cx.notify();
             }
+        }
+    }
+
+    fn change_pdf_annotation(&mut self, resource: &str, change: impl FnOnce(&mut Store) -> anyhow::Result<()>, cx: &mut Context<Self>) {
+        let Some(lib) = self.lib.as_mut() else { return };
+        // An event queued by an old viewer cannot edit the newly selected PDF.
+        if lib.selected.as_deref().and_then(|id| lib.pdf_file(id)).is_none_or(|file| file.id != resource) { return }
+        match change(&mut lib.store).and_then(|()| lib.store.pdf_annotations("", resource)) {
+            Ok(annotations) => {
+                if let Some(pdf) = lib.pdf.clone() { pdf.update(cx, |pdf, cx| pdf.annotations_saved(annotations, cx)) }
+                self.say(t("PDF 标注已保存"), cx);
+            }
+            Err(error) => self.fail(format!("{error:#}"), cx),
         }
     }
 

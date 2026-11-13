@@ -340,6 +340,7 @@ pub fn build_context(library_name: &str, topic: &str, papers: &[&Paper], fields:
 - 上面的材料不够时使用工具：search_fulltext 在已保存的全文里找短语或关键词，read_fulltext 按页读原文核对上下文，list_papers 和 get_paper 查文献记录。工具查的是整个文献库，不限于上面列出的文献。\n\
 - search_online 可以在 PubMed、Europe PMC、Crossref、arXiv 里试检索，不写入文献库。保存或删除检索式、运行导入、撤销导入会改动文献库：只在用户明确要求时使用，并说明做了什么。收录判断由用户本人做出：你可以用 suggest_screening 提出建议，它会出现在筛选页等用户确认。自定义词条也一样由用户写入：你可以用 suggest_field 为一篇文献的一个词条提出取值和原文依据，它会出现在提取页等用户确认。\n\
 - 用户要求整理文献（打标签、加星标、改阅读状态、记一段笔记）时用 organise_papers，一次调用写全所有要改的文献；用户会先看到每一篇要改什么再决定是否允许。标签优先用文献库已有的。没有被要求时不要整理。\n\
+- list_pdf_annotations 读取用户在 PDF 上的下划线、高亮和笔记；用户提到划线、标注、阅读重点时主动读取。quote 是用户选中的原文，note 是用户自己的理解，不能把笔记当作论文结论。用 resourceId 区分同一文献的不同附件，页码属于该附件；引用前核对原文上下文。\n\
 - list_manuscripts 和 read_manuscript 读用户在写作页的稿件，只读：稿件由用户自己修改，你给出建议或可以直接采用的段落即可。
 \n- 工具结果里每篇文献带有 label，就是引用它时用的标签；工具的 paperId 和 id 参数可以直接填标签（如 P3）。没有保存全文的文献只有记录和摘要，回答依据的只是摘要时要说明。\n\
 - 用用户提问的语言回答，直接回答问题，不必复述材料。"

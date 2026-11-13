@@ -39,6 +39,7 @@ wisp list_papers -l 大语言模型 --query attention --limit 10
 wisp get_paper <文献 ID>
 wisp search_fulltext "10x Genomics Chromium"
 wisp read_fulltext <文献 ID> --page 3
+wisp list_pdf_annotations --paper-id <文献 ID> --query "生长"
 wisp search_fulltext --help             # 一个工具的参数
 ```
 
@@ -49,6 +50,7 @@ wisp search_fulltext --help             # 一个工具的参数
 | 工具 | 用途 |
 |---|---|
 | `list_libraries` | 所有文献库的 ID、名称、主题和文献数量 |
+| `list_pdf_annotations` | 只读查询 PDF 下划线、高亮及笔记；可按 `--paper-id`、`--resource-id`、`--page`、`--kind`、`--query` 筛选，用 `--limit`、`--offset` 分页。返回 `quote`（原文）、`note`（用户笔记）、1-based 页码、页面左上角起的点坐标 `boxes`、附件 ID 和时间；`get_paper` 的 `pdfAnnotationCount` 给出总数。内置助手与只读 MCP 也可使用 |
 | `create_library` | 新建文献库；`--name` 必填，`--topic`、`--color` 可选，返回新库 ID（会创建文件和数据库） |
 | `import_pdf` | 复制本地 PDF 或递归导入文件夹，`--path` 必填；单文件可用 `--paper-id` 附到已有条目（会改动文献库） |
 | `import_references` | 导入本地 BibTeX / RIS 文件，`--path` 必填，按内容识别格式（会改动文献库） |

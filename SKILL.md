@@ -172,9 +172,12 @@ $PaperId = 'P-从查询结果取得的实际ID'
 & $Wisp find_citations -l $Library --text 'Single-cell profiling reveals root cell types.' --per-sentence 3
 & $Wisp find_sentences -l $Library --section methods --query 'protoplast isolation' --limit 10
 & $Wisp list_figures -l $Library --paper $PaperId --limit 20
+& $Wisp list_pdf_annotations -l $Library --paper-id $PaperId --limit 50
 ```
 
 `list_papers` 默认不返回回收站条目和判断为 `irrelevant` 的条目；需要查看后者时显式传 `--screening irrelevant`。分页使用 `--offset`，单页上限 500。
+
+用户提到下划线、高亮、标注或阅读重点时，用 `list_pdf_annotations` 读取，支持 `--query` 搜索原文与笔记，`--resource-id`、`--page`、`--kind` 筛选以及分页。`quote` 是选中的原文，`note` 是用户笔记，不能把笔记当成论文结论。页码从 1 开始，属于 `resourceId` 指定的 PDF 附件；`boxes` 是以页面左上角为原点、单位为 PDF 点的各行矩形。标注作为独立 metadata 保存，原文件没有改写。此工具只读；新增、编辑和删除在桌面阅读器里操作。
 
 `find_pdf` 查找开放获取版本，不登录或绕过付费墙。省略 `--paper-id` 会批量处理没有 PDF 的文献，默认 10 篇、最多 50 篇。检查每篇结果，区分已下载、没有候选和失败。
 

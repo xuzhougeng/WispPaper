@@ -28,6 +28,7 @@
 //! - `update`   which release is the newest, and whether it is newer than this build
 
 pub mod ai;
+pub mod annotation;
 pub mod cite;
 pub mod comment;
 pub mod complete;
