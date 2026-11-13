@@ -88,7 +88,7 @@ WISP_PAPER_HOME=/tmp/wisp-demo cargo run
 - **PDF**：在详情面板里直接看，面板宽度可以拖动；缩放、适应宽度或整页；选字、复制、截图。读不出文字的 PDF 会说明原因，可以让能看图的模型读页面。
 - **图片库**：在 PDF 上框出一张图或一个表，收藏进「收藏」下的图片库；图号和图注从页面上读出来，也可以让模型看图写图注、标签和解读。按标签和关键词找图，一键回到原文的那一页。
 - **查找开放全文**：为没有 PDF 的文献批量查找开放获取的全文，下载后附到原条目；不绕过付费墙。
-- **命令行与 MCP**：`wisp` 不开窗口就能读写同一个数据目录，`wisp mcp` 把同一组工具交给外部的 AI 客户端。见 [docs/CLI.md](docs/CLI.md)。
+- **命令行与 MCP**：`wisp` 不开窗口就能新建文献库，导入本地 PDF / 文件夹、BibTeX / RIS 和 Zotero，并读写同一个数据目录；`wisp mcp` 把同一组工具交给外部的 AI 客户端。见 [docs/CLI.md](docs/CLI.md) 和 [SKILL.md](SKILL.md)。
 - **设置**：浅色 / 深色，可改键的快捷键，全局代理和每个模型服务单独的代理。改动即时保存。
 
 每一项的细节在 [docs/FEATURES.md](docs/FEATURES.md)。
@@ -101,6 +101,7 @@ WISP_PAPER_HOME=/tmp/wisp-demo cargo run
 | [功能详解](docs/FEATURES.md) | 每个页面能做什么 |
 | [数据与隐私](docs/DATA.md) | 文件放在哪里，哪些数据会离开本机 |
 | [命令行与 MCP](docs/CLI.md) | `wisp` 的用法、工具一览、MCP 配置 |
+| [智能体技能说明](SKILL.md) | 供外部智能体使用的 `SKILL.md`：支持范围、建库与导入流程、命令示例 |
 | [开发](docs/DEVELOPMENT.md) | 构建、测试、代码结构 |
 
 ## 致谢

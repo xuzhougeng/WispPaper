@@ -142,6 +142,25 @@ mod tests {
     }
 
     #[test]
+    fn creates_and_imports_from_paths_with_spaces() {
+        let root = std::env::temp_dir().join(format!("wisp-cli-local-{}", new_id("T")));
+        let invoke = |args: &[&str]| serde_json::from_str::<Value>(&run(&root, &args.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap()).unwrap();
+        let created = invoke(&["create-library", "--name", "根 单细胞", "--topic", "Root cell atlas", "--color", "green"]);
+        let id = created["id"].as_str().unwrap();
+        assert_eq!(invoke(&["library_status", "-l", id])["topic"], "Root cell atlas");
+        let source = root.join("引用 文献.bib");
+        std::fs::write(&source, "@article{root, title={Root cell atlas}, doi={10.1234/root}}").unwrap();
+        let args = ["import-references", "-l", id, "--path", source.to_str().unwrap()];
+        assert_eq!(invoke(&args)["added"], 1);
+        assert_eq!(invoke(&args)["skipped"], 1);
+        assert_eq!(invoke(&["list_papers", "-l", id])["total"], 1);
+        for name in ["create_library", "import_pdf", "import_references", "import_zotero"] {
+            assert!(run(&root, &words(&format!("{name} --help"))).unwrap().starts_with(&format!("wisp {name}")));
+        }
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
     fn data_dir_flag() {
         let mut line = words("list_papers --data-dir /x --limit 1");
         assert_eq!((take_data_dir(&mut line).unwrap(), line), (Some(PathBuf::from("/x")), words("list_papers --limit 1")));
