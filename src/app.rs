@@ -2412,7 +2412,7 @@ impl Workspace {
                     if !beside { lib.tab = Tab::Pdf }
                     self.ensure_pdf(cx);
                     if let Some(pdf) = self.lib.as_ref().and_then(|l| l.pdf.clone()) {
-                        pdf.update(cx, |pdf, cx| if quote.is_empty() { pdf.go_to(page, cx) } else { pdf.find(page, &quote, cx) });
+                        pdf.update(cx, |pdf, cx| pdf.find(page, &quote, cx));
                     }
                 }
             }
