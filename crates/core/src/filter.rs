@@ -100,13 +100,15 @@ pub fn matches(p: &Paper, f: &Filters, now_ms: i64) -> bool {
     for (field, wanted) in &f.fields {
         if !p.fields.get(field).is_some_and(|values| values.contains(wanted)) { return false }
     }
-    // Every word of the query must appear somewhere.
-    let query = f.search.trim().to_lowercase();
-    if !query.is_empty() {
-        let hay = haystack(p);
-        if !query.split_whitespace().all(|word| hay.contains(word)) { return false }
-    }
-    true
+    says(p, &f.search)
+}
+
+/// Whether a paper holds every word of what was typed into a search box, somewhere in its record; nothing typed matches every paper.
+pub fn says(p: &Paper, query: &str) -> bool {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() { return true }
+    let hay = haystack(p);
+    query.split_whitespace().all(|word| hay.contains(word))
 }
 
 /// The key and direction of a sort value; anything unknown is "newest".
@@ -230,6 +232,13 @@ mod tests {
         let mut d = paper("Off topic", Some(2020), "2026-01-04T00:00:00.000Z");
         d.screening = "irrelevant".into();
         vec![a, b, c, d]
+    }
+
+    #[test]
+    fn a_search_box_asks_for_every_word() {
+        let papers = library();
+        assert!(says(&papers[0], "  FISH atlas ") && says(&papers[0], "danio 2021") && says(&papers[0], ""));
+        assert!(!says(&papers[0], "fish maize") && !says(&papers[1], "atlas"));
     }
 
     fn titles(papers: &[Paper], f: &Filters) -> Vec<String> {
