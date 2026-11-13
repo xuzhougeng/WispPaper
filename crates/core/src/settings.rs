@@ -87,7 +87,7 @@ impl Task {
 
     pub fn label(self) -> &'static str {
         match self {
-            Task::Chat => "提问",
+            Task::Chat => "助手",
             Task::Screen => "批量筛选",
             Task::Translate => "翻译",
             Task::Structure => "整理全文",

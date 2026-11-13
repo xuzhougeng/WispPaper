@@ -227,6 +227,7 @@ impl Workspace {
             Page::Screen => self.render_screen(main_width, window, cx),
             Page::Write => self.render_write(main_width, window, cx),
             Page::Figures => self.render_figures(main_width, window, cx),
+            Page::Extract => self.render_extract(cx),
         };
         let shown = sidebar_width > 0.;
         // The sidebar's right edge: drag it for a wider or narrower sidebar, click it twice to put the sidebar away.
@@ -383,7 +384,7 @@ impl Workspace {
             )
             .child(ui::primary_button("add-paper", t("添加文献")).w_full().on_click(self.on_menu(MenuKind::Add, cx)))
             .child(div().flex().flex_col().gap(px(1.)).children(view_rows))
-            .child(div().flex().flex_col().gap(px(1.)).child(nav("page-ask", "sparkle", t("向文献库提问"), None, lib.page == Page::Ask, Cmd::SetPage(Page::Ask), self, cx)).child(nav("page-sources", "search", t("检索与导入"), (!lib.searches.is_empty()).then_some(lib.searches.len()), matches!(lib.page, Page::Sources | Page::Guide), Cmd::SetPage(Page::Sources), self, cx)).child(nav("page-screen", "list-todo", t("筛选"), Some(lib.papers.iter().filter(|p| p.screening == "pending").count()).filter(|n| *n > 0), lib.page == Page::Screen, Cmd::SetPage(Page::Screen), self, cx)).child(nav("page-write", "pen-line", t("写作"), None, lib.page == Page::Write, Cmd::SetPage(Page::Write), self, cx)))
+            .child(div().flex().flex_col().gap(px(1.)).child(nav("page-ask", "sparkle", t("助手"), None, lib.page == Page::Ask, Cmd::SetPage(Page::Ask), self, cx)).child(nav("page-sources", "search", t("检索与导入"), (!lib.searches.is_empty()).then_some(lib.searches.len()), matches!(lib.page, Page::Sources | Page::Guide), Cmd::SetPage(Page::Sources), self, cx)).child(nav("page-screen", "list-todo", t("筛选"), Some(lib.papers.iter().filter(|p| p.screening == "pending").count()).filter(|n| *n > 0), lib.page == Page::Screen, Cmd::SetPage(Page::Screen), self, cx)).child(nav("page-write", "pen-line", t("写作"), None, lib.page == Page::Write, Cmd::SetPage(Page::Write), self, cx)))
             .child(
                 div()
                     .flex()
@@ -400,6 +401,7 @@ impl Workspace {
                     .on_click(self.on(Cmd::ShowZotero, cx))
             ))
             .children(self.render_fetching(cx))
+            .children(self.render_extract_progress(cx))
             .child(
                 div()
                     .flex()
@@ -409,6 +411,8 @@ impl Workspace {
                     .border_t_1()
                     .border_color(Theme::line())
                     .child(nav("manage-fields", "list", t("自定义词条"), Some(lib.fields.len()), false, Cmd::ManageFields, self, cx))
+                    // 提取: what the assistant proposes for those fields; the number is how many proposals wait.
+                    .child(nav("page-extract", "scan-text", t("提取"), Some(lib.extract_rows().len()).filter(|n| *n > 0), lib.page == Page::Extract, Cmd::SetPage(Page::Extract), self, cx))
                     .child(nav("page-trash", "bin", t("回收站"), (trash_count > 0).then_some(trash_count), lib.page == Page::Trash, Cmd::SetPage(Page::Trash), self, cx))
                     .child(nav("open-settings", "settings-gear", t("设置"), None, false, Cmd::OpenSettings(SettingsPage::General), self, cx)),
             )

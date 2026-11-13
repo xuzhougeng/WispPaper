@@ -234,24 +234,7 @@ impl Workspace {
             .filter(|(_, value, _)| !value.is_empty())
             .map(|(name, value, url)| div().flex().gap(px(6.)).text_size(px(12.)).child(div().flex_none().w(px(40.)).text_color(Theme::text_tertiary()).child(name)).child(self.selectable_link(name, value.clone(), url, cx).min_w_0()).into_any_element())
             .collect();
-        let field_rows: Vec<AnyElement> = lib
-            .fields
-            .iter()
-            .map(|field| {
-                let values = p.fields.get(&field.id).cloned().unwrap_or_default();
-                div()
-                    .flex()
-                    .items_start()
-                    .gap(px(8.))
-                    .child(div().flex_none().w(px(84.)).pt(px(1.)).truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(field.name.clone()))
-                    .child(if values.is_empty() {
-                        div().text_color(Theme::text_placeholder()).child(t("未填写"))
-                    } else {
-                        div().flex().flex_wrap().flex_1().min_w_0().gap(px(4.)).children(values.into_iter().map(|v| ui::chip(v, Theme::text_secondary(), Theme::bg_sunken())))
-                    })
-                    .into_any_element()
-            })
-            .collect();
+        let field_rows = self.render_field_rows(p, cx);
         let files = lib.paper_files(&id);
         let file_rows: Vec<AnyElement> = files
             .iter()

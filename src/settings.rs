@@ -905,7 +905,7 @@ impl Workspace {
         // Which model does what.
         let pick = |n: usize, task: Task, this: &Self, cx: &mut Context<Self>| {
             let used = settings.profile_for_or_default(task).title();
-            let text = if task != Task::Chat && settings.tasks.get(task).is_empty() { tf!("与提问相同（{used}）", "Same as chat ({used})") } else { used };
+            let text = if task != Task::Chat && settings.tasks.get(task).is_empty() { tf!("与助手相同（{used}）", "Same as assistant ({used})") } else { used };
             let shell = div().id(("task-model", n)).flex().flex_none().items_center().gap(px(6.)).h(px(28.)).max_w(px(300.)).px(px(10.)).rounded(px(7.)).child(div().truncate().child(text));
             // With only the built-in default there is nothing to choose from.
             if saved { shell.bg(Theme::hover()).hover(|s| s.bg(Theme::pressed())).cursor_pointer().child(ui::icon("chevron-down", 12., Theme::text_secondary())).on_click(this.on_menu(MenuKind::TaskModel(task), cx)) } else { shell.text_color(Theme::text_secondary()) }
@@ -913,10 +913,10 @@ impl Workspace {
         const WORKERS: [usize; 6] = [1, 2, 3, 4, 6, 8];
         let workers: Vec<(&'static str, Cmd)> = ["1", "2", "3", "4", "6", "8"].into_iter().zip(WORKERS).map(|(name, count)| (name, Cmd::SetScreenWorkers(count))).collect();
         let tasks = vec![
-            row(t(Task::Chat.label()), Some(t("向文献库或单篇文献提问，以及向导里编写检索式。").into()), pick(0, Task::Chat, self, cx)).into_any_element(),
-            row(t(Task::Screen.label()), Some(t("筛选页里替你逐篇阅读待判断文献的助手。文献多的时候，可以给它一个更快、更便宜的模型。").into()), pick(1, Task::Screen, self, cx)).into_any_element(),
+            row(t(Task::Chat.label()), Some(t("助手和单篇文献的对话。向导拟检索式、图片库里看图写图注和标签、写作页的改写和润色也用它；看图需要能读图片的模型。").into()), pick(0, Task::Chat, self, cx)).into_any_element(),
+            row(t(Task::Screen.label()), Some(t("逐篇阅读文献：筛选页的批量建议、复核和单篇再问，以及提取页按词条填写。文献多的时候，可以给它一个更快、更便宜的模型。").into()), pick(1, Task::Screen, self, cx)).into_any_element(),
             row(t("同时阅读的篇数"), Some(t("批量筛选时同时发出的请求数。服务限速时调小。").into()), segmented("workers", workers, WORKERS.iter().position(|count| *count == settings.screen_workers).unwrap_or(usize::MAX), self, cx)).into_any_element(),
-            row(t(Task::Translate.label()), Some(t("翻译题目和摘要。翻译用不着思考：可以给它一个把「思考」设为关闭的小模型。").into()), pick(2, Task::Translate, self, cx)).into_any_element(),
+            row(t(Task::Translate.label()), Some(t("翻译题目、摘要和 PDF 里选中的文字；写作页把你写的话变成候选句的检索词也用它。翻译用不着思考：可以给它一个把「思考」设为关闭的小模型。").into()), pick(2, Task::Translate, self, cx)).into_any_element(),
             row(t(Task::Structure.label()), Some(t("写作页的准备工作：把全文按导言、方法、结果、讨论分开，以及读出扫描件页面上的文字（需要能看图的模型）。").into()), pick(3, Task::Structure, self, cx)).into_any_element(),
         ];
         // The column's width in pixels, less the card's border and padding: a
@@ -937,7 +937,7 @@ impl Workspace {
             .w_full()
             .gap(px(24.))
             .child(group(Some(t("模型")), models).child(note(t("可以放进多个模型，各做各的事：点一个模型展开它的设置，修改会自动保存。下面的「任务」决定谁做什么。"))))
-            .child(group(Some(t("任务")), tasks).child(note(t("没有单独指定模型的任务，使用提问的模型。"))))
+            .child(group(Some(t("任务")), tasks).child(note(t("没有单独指定模型的任务，使用助手的模型。"))))
             .child(group(Some(t("翻译")), vec![translation.into_any_element()]).child(note(t("可以在这里指定别的目标语言、术语的译法或输出的格式。要求改了以后，同一段文字会按新的要求重新翻译；译过的文字保存在文献库里，不会再次请求。"))))
             .into_any_element()
     }

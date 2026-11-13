@@ -7,8 +7,12 @@
 //! key and model). It speaks the Claude Messages streaming format and always
 //! plays the same parts. Asked for search queries by the guide (a request
 //! without tools), it proposes two for PubMed. Asked to screen a paper, it
-//! decides by one word; asked to translate, it hands the text back marked
-//! as translated. In a chat, asked a question, it calls `list_papers` and
+//! decides by one word; asked what a paper's custom fields should hold
+//! (提取), it answers every field by its kind (a Select field's first
+//! option, a Tags field's first usual value) and quotes the start of the
+//! abstract; for a paper whose text says "Few-Shot" it gives a Select answer
+//! that is none of the options and a quotation the paper does not hold;
+//! asked to translate, it hands the text back marked as translated. In a chat, asked a question, it calls `list_papers` and
 //! `library_status`; given their results, it answers and cites the first
 //! paper the search returned, saying how many pictures came with the
 //! conversation. A question containing 「试试撤销」 makes it call
@@ -80,7 +84,7 @@ fn main() {
 fn answer(mut stream: TcpStream, delay: u64) {
     {
         let request = body(&mut stream);
-        let kind = if request.contains("图片库助手") { "figure" } else if request.contains("学术写作助手") { "write" } else if request.contains("文献筛选助手") { "screen" } else if request.contains("写作检索词助手") { "search words" } else if request.contains("翻译助手") { "translate" } else if request.contains("\"tools\"") { "chat" } else { "queries" };
+        let kind = if request.contains("图片库助手") { "figure" } else if request.contains("学术写作助手") { "write" } else if request.contains("文献筛选助手") { "screen" } else if request.contains("文献信息提取助手") { "extract" } else if request.contains("写作检索词助手") { "search words" } else if request.contains("翻译助手") { "translate" } else if request.contains("\"tools\"") { "chat" } else { "queries" };
         println!("{kind}: model {} thinking {} output_config {}", sent(&request, "model"), sent(&request, "thinking"), sent(&request, "output_config"));
         std::thread::sleep(std::time::Duration::from_millis(delay));
         // The last message decides the step: tool results get the answer, a question gets the calls.
@@ -119,6 +123,31 @@ fn answer(mut stream: TcpStream, delay: u64) {
             let reply = format!(r#"{{"verdict": "{verdict}", "reason": "{reason}", "excerpt": "{}", "confidence": {confidence}}}"#, quote.trim());
             events.push_str(&event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#));
             events.push_str(&event(&format!(r#"{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":{}}}}}"#, quoted(&reply))));
+            events.push_str(&event(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#));
+        } else if request.contains("文献信息提取助手") {
+            // 提取: one answer per field asked about, read off the line that names it (`F2 方法（单选） 选项：a | b`).
+            let value: serde_json::Value = serde_json::from_str(&request).unwrap_or_default();
+            let message = value["messages"][0]["content"].as_str().unwrap_or("").to_string();
+            let quote: String = message.split("摘要：").nth(1).map(|rest| rest.chars().take_while(|c| *c != '\n').take(90).collect()).unwrap_or_default();
+            let odd = message.contains("Few-Shot");
+            let mut reply = serde_json::Map::new();
+            for line in message.lines().take_while(|line| !line.starts_with("## 文献")) {
+                let Some((number, rest)) = line.split_once(' ').filter(|(number, _)| number.starts_with('F') && number[1..].parse::<usize>().is_ok()) else { continue };
+                let name = rest.split('（').next().unwrap_or("");
+                let answer = if rest.contains("（单选）") {
+                    let first = rest.split("选项：").nth(1).and_then(|options| options.split(" | ").next()).unwrap_or("").trim();
+                    if odd { serde_json::json!("其他方法") } else { serde_json::json!(first) }
+                } else if rest.contains("（多值）") {
+                    let usual = rest.split("常用取值：").nth(1).and_then(|values| values.split('、').next()).unwrap_or("Arabidopsis thaliana").trim();
+                    if odd { serde_json::json!(["Homo sapiens", "Mus musculus"]) } else { serde_json::json!([usual]) }
+                } else {
+                    serde_json::json!(format!("（假模型）{name}：这篇文献的发现写在摘要的第一句里。"))
+                };
+                let excerpt = if odd && rest.contains("（文本）") { "This sentence is not in the paper." } else { quote.trim() };
+                reply.insert(number.to_string(), serde_json::json!({"value": answer, "excerpt": excerpt}));
+            }
+            events.push_str(&event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#));
+            events.push_str(&event(&serde_json::json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": serde_json::Value::Object(reply).to_string()}}).to_string()));
             events.push_str(&event(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#));
         } else if request.contains("写作检索词助手") {
             // 写作 asking for groups of search words: three, whatever was written.

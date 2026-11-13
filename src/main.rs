@@ -12,6 +12,7 @@ mod chat;
 mod cite;
 mod context;
 mod detail;
+mod extract;
 mod figures;
 mod floating;
 mod dialogs;

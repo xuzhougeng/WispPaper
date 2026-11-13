@@ -65,7 +65,9 @@ CREATE TABLE IF NOT EXISTS field_defs (
     kind TEXT NOT NULL DEFAULT 'text' CHECK (kind IN ('text','tags','select')),
     options_json TEXT NOT NULL DEFAULT '[]',
     in_table INTEGER NOT NULL DEFAULT 0 CHECK (in_table IN (0,1)),
-    position INTEGER NOT NULL DEFAULT 0
+    position INTEGER NOT NULL DEFAULT 0,
+    -- What the field is for: what the assistant is told to look for (added by `add_columns`).
+    hint TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS paper_fields (
     paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
@@ -431,6 +433,7 @@ pub struct Store {
 /// Table, column and type of each column added after its table was first made.
 const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("screening_suggestions", "criteria", "TEXT"),
+    ("field_defs", "hint", "TEXT NOT NULL DEFAULT ''"),
     ("structures", "paragraphs", "INTEGER NOT NULL DEFAULT 0"),
     ("structures", "language", "TEXT NOT NULL DEFAULT ''"),
     ("structures", "pages_read", "INTEGER NOT NULL DEFAULT 0"),
@@ -486,6 +489,7 @@ impl Store {
         db.execute_batch(crate::manuscript::SCHEMA)?;
         db.execute_batch(crate::review::SCHEMA)?;
         db.execute_batch(crate::figure::SCHEMA)?;
+        db.execute_batch(crate::extract::SCHEMA)?;
         add_columns(&db)?;
         crate::manuscript::migrate_drafts(&mut db)?;
         db.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -682,10 +686,10 @@ impl Store {
     // ---- custom fields
 
     pub fn list_fields(&self) -> Result<Vec<FieldDef>> {
-        let mut stmt = self.db.prepare("SELECT id, name, kind, options_json, in_table FROM field_defs ORDER BY position, name")?;
+        let mut stmt = self.db.prepare("SELECT id, name, kind, options_json, in_table, hint FROM field_defs ORDER BY position, name")?;
         let fields = stmt
             .query_map([], |r| {
-                Ok(FieldDef { id: r.get(0)?, name: r.get(1)?, kind: FieldKind::parse(&r.get::<_, String>(2)?), options: json_strings(&r.get::<_, String>(3)?), in_table: r.get::<_, i32>(4)? == 1 })
+                Ok(FieldDef { id: r.get(0)?, name: r.get(1)?, kind: FieldKind::parse(&r.get::<_, String>(2)?), options: json_strings(&r.get::<_, String>(3)?), in_table: r.get::<_, i32>(4)? == 1, hint: r.get(5)? })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(fields)
@@ -695,8 +699,10 @@ impl Store {
     pub fn save_field(&mut self, field: &mut FieldDef) -> Result<()> {
         field.name = field.name.trim().to_string();
         field.options = clean_strings(field.options.iter());
+        field.hint = field.hint.split_whitespace().collect::<Vec<_>>().join(" ");
         if field.name.is_empty() { bail!("请填写词条名称。") }
         if field.name.chars().count() > 40 { bail!("词条名称不能超过 40 个字符。") }
+        if field.hint.chars().count() > 300 { bail!("词条说明不能超过 300 个字符。") }
         if field.kind == FieldKind::Select && field.options.is_empty() { bail!("单选词条至少需要一个选项。") }
         let clash: Option<String> = self.db.query_row("SELECT id FROM field_defs WHERE name = ?1 AND id <> ?2", params![field.name, field.id], |r| r.get(0)).optional()?;
         if clash.is_some() { bail!("已有同名词条「{}」。", field.name) }
@@ -704,13 +710,13 @@ impl Store {
             field.id = new_id("F");
             let position: i64 = self.db.query_row("SELECT coalesce(max(position), 0) + 1 FROM field_defs", [], |r| r.get(0))?;
             self.db.execute(
-                "INSERT INTO field_defs(id, name, kind, options_json, in_table, position) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![field.id, field.name, field.kind.as_str(), to_json(&field.options), field.in_table as i32, position],
+                "INSERT INTO field_defs(id, name, kind, options_json, in_table, position, hint) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![field.id, field.name, field.kind.as_str(), to_json(&field.options), field.in_table as i32, position, field.hint],
             )?;
         } else {
             self.db.execute(
-                "UPDATE field_defs SET name = ?2, kind = ?3, options_json = ?4, in_table = ?5 WHERE id = ?1",
-                params![field.id, field.name, field.kind.as_str(), to_json(&field.options), field.in_table as i32],
+                "UPDATE field_defs SET name = ?2, kind = ?3, options_json = ?4, in_table = ?5, hint = ?6 WHERE id = ?1",
+                params![field.id, field.name, field.kind.as_str(), to_json(&field.options), field.in_table as i32, field.hint],
             )?;
         }
         Ok(())
