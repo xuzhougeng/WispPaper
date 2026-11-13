@@ -180,11 +180,61 @@ const FIND_PAGES: usize = 300;
 /// Page renders kept from a burst of requests; older ones are handed back.
 const KEEP_REQUESTS: usize = 3;
 
+#[derive(Default, Debug, PartialEq)]
+enum CitationStatus {
+    #[default]
+    None,
+    PageOnly,
+    Searching,
+    Found,
+    Missing,
+}
+
+/// The latest citation click, independent of when its PDF or search finishes.
+#[derive(Default)]
+struct CitationFocus {
+    request: u64,
+    page: Option<usize>,
+    boxes: Vec<[f32; 4]>,
+    status: CitationStatus,
+}
+
+impl CitationFocus {
+    fn clear(&mut self) {
+        *self = Self { request: self.request.wrapping_add(1), ..Self::default() };
+    }
+
+    fn begin(&mut self, page: usize, quote: &str) -> u64 {
+        self.clear();
+        self.page = Some(page.saturating_sub(1));
+        self.status = if quote.trim().is_empty() { CitationStatus::PageOnly } else { CitationStatus::Searching };
+        self.request
+    }
+
+    fn index(&self, count: usize) -> Option<usize> {
+        Some(self.page?.min(count.checked_sub(1)?))
+    }
+
+    /// A late search must never replace a newer citation or move back to it.
+    fn finish(&mut self, request: u64, found: Option<(usize, Vec<[f32; 4]>)>) -> bool {
+        if request != self.request || self.status != CitationStatus::Searching { return false }
+        match found.filter(|(_, boxes)| !boxes.is_empty()) {
+            Some((page, boxes)) => {
+                self.page = Some(page);
+                self.boxes = boxes;
+                self.status = CitationStatus::Found;
+            }
+            None => self.status = CitationStatus::Missing,
+        }
+        true
+    }
+}
+
 enum Request {
     /// Render a page at so many device pixels per point.
     Page(usize, f32),
     /// Look for a quoted sentence, starting at this 0-based page.
-    Find(Option<usize>, String),
+    Find(u64, Option<usize>, String),
     /// The glyphs of a page, for selecting text on it.
     Marks(usize),
 }
@@ -198,8 +248,8 @@ enum Reply {
     /// A page whose render was dropped for newer ones: ask again when it is in view.
     Skipped(usize),
     /// Where the quotation is: the page, and one box per line in page points.
-    Found(usize, Vec<[f32; 4]>),
-    NotFound,
+    Found(u64, usize, Vec<[f32; 4]>),
+    NotFound(u64),
     Marks(usize, Vec<Mark>),
 }
 
@@ -302,7 +352,7 @@ fn worker(path: PathBuf, requests: mpsc::Receiver<Request>, replies: async_chann
         waiting.extend(requests.try_iter());
         // Of several quotations asked for in a row, only the last still matters.
         let find = waiting.iter().rev().find_map(|request| match request {
-            Request::Find(page, quote) => Some((*page, quote.clone())),
+            Request::Find(request, page, quote) => Some((*request, *page, quote.clone())),
             Request::Page(..) | Request::Marks(_) => None,
         });
         // Scrolling queues pages faster than they render: the latest few are drawn,
@@ -315,12 +365,12 @@ fn worker(path: PathBuf, requests: mpsc::Receiver<Request>, replies: async_chann
             if replies.send_blocking(Reply::Skipped(skipped)).is_err() { return }
         }
 
-        if let Some((start, quote)) = find {
+        if let Some((request, start, quote)) = find {
             // The page named first, then its neighbours, then the rest in order.
             let mut order: Vec<usize> = start.into_iter().flat_map(|page| [Some(page), page.checked_sub(1), Some(page + 1)]).flatten().filter(|page| *page < pages.len()).collect();
             let rest: Vec<usize> = (0..pages.len().min(FIND_PAGES)).filter(|page| !order.contains(page)).collect();
             order.extend(rest);
-            let mut reply = Reply::NotFound;
+            let mut reply = Reply::NotFound(request);
             for index in order {
                 let page = &pages[index];
                 let (w, h) = page.render_dimensions();
@@ -332,7 +382,7 @@ fn worker(path: PathBuf, requests: mpsc::Receiver<Request>, replies: async_chann
                 }));
                 let Ok(glyphs) = read else { continue };
                 if let Some(range) = wisp_core::fulltext::find_quote(&glyphs.texts, &quote) {
-                    reply = Reply::Found(index, wisp_core::fulltext::line_boxes(&glyphs.boxes[range]));
+                    reply = Reply::Found(request, index, wisp_core::fulltext::line_boxes(&glyphs.boxes[range]));
                     break;
                 }
             }
@@ -380,10 +430,7 @@ pub struct PdfView {
     pending: HashSet<usize>,
     list: ListState,
     requests: mpsc::Sender<Request>,
-    /// The quotation on show: its 0-based page, and one box per line in page points.
-    highlight: Option<(usize, Vec<[f32; 4]>)>,
-    /// A quotation was looked for and is not in this PDF.
-    missing: bool,
+    citation: CitationFocus,
     error: Option<String>,
     /// The viewer's size in logical pixels; the height is known once it has been laid out.
     width: f32,
@@ -452,8 +499,7 @@ impl PdfView {
             max_x: 0.,
             device_scale: 2.,
             goto: None,
-            highlight: None,
-            missing: false,
+            citation: CitationFocus::default(),
             marks: HashMap::new(),
             marks_pending: HashSet::new(),
             selection: None,
@@ -511,12 +557,13 @@ impl PdfView {
 
     /// Go to a 1-based page and look for a sentence quoted from it; when it
     /// is found, there or on another page, it is highlighted and scrolled
-    /// into view.
+    /// into view. A citation without a quotation marks the page itself.
     pub fn find(&mut self, page: usize, quote: &str, cx: &mut Context<Self>) {
-        self.highlight = None;
-        self.missing = false;
         self.go_to(page, cx);
-        let _ = self.requests.send(Request::Find(page.checked_sub(1), quote.to_string()));
+        let request = self.citation.begin(page, quote);
+        if self.citation.status == CitationStatus::Searching {
+            let _ = self.requests.send(Request::Find(request, page.checked_sub(1), quote.to_string()));
+        }
     }
 
     /// How many logical pixels a point of this page takes.
@@ -597,6 +644,11 @@ impl PdfView {
 
     /// Scroll to a 1-based page.
     pub fn go_to(&mut self, page: usize, cx: &mut Context<Self>) {
+        self.citation.clear();
+        self.scroll_to_page(page, cx);
+    }
+
+    fn scroll_to_page(&mut self, page: usize, cx: &mut Context<Self>) {
         if self.sizes.is_empty() {
             self.goto = Some(page);
         } else {
@@ -607,6 +659,7 @@ impl PdfView {
 
     /// Go to a place on a 1-based page: what stands `top` points below the page's top comes a little under the top of the view.
     pub fn go_to_place(&mut self, page: usize, top: f32, cx: &mut Context<Self>) {
+        self.citation.clear();
         if self.sizes.is_empty() { return self.go_to(page, cx) }
         let index = page.clamp(1, self.sizes.len()) - 1;
         self.list.scroll_to(ListOffset { item_ix: index, offset_in_item: px((top * self.scale_of(index) - 48.).max(0.)) });
@@ -619,22 +672,22 @@ impl PdfView {
                 self.sizes = sizes;
                 self.list.reset(self.sizes.len());
                 self.resize((0., 0.), |_| {});
-                if let Some(page) = self.goto.take() { self.go_to(page, cx) }
+                if let Some(page) = self.goto.take() { self.scroll_to_page(page, cx) }
             }
             Reply::Failed(error) => self.error = Some(error),
             Reply::Skipped(index) => {
                 self.pending.remove(&index);
             }
-            Reply::Found(index, boxes) => {
+            Reply::Found(request, index, boxes) => {
+                if !self.citation.finish(request, Some((index, boxes))) { return }
                 // Bring the first line of the quotation a little below the top of the view, and into it sideways.
-                if let Some(first) = boxes.first() {
+                if let Some(first) = self.citation.boxes.first() {
                     let scale = self.scale_of(index);
                     self.list.scroll_to(ListOffset { item_ix: index, offset_in_item: px((first[1] * scale - 80.).max(0.)) });
                     if self.max_x > 0. { self.scroll_x = (first[0] * scale - 40.).clamp(0., self.max_x) }
                 }
-                self.highlight = Some((index, boxes));
             }
-            Reply::NotFound => self.missing = true,
+            Reply::NotFound(request) => { self.citation.finish(request, None); }
             Reply::Marks(index, marks) => {
                 self.marks_pending.remove(&index);
                 // Of a long paper, the glyphs of the pages read last are enough.
@@ -710,11 +763,11 @@ impl PdfView {
             div().absolute().left(px(line[0] * scale)).top(px(top)).w(px((line[2] - line[0]) * scale)).h(px(height)).bg(color)
         })).collect();
         // The quotation on this page: a translucent marker over each of its lines.
+        let cited = self.citation.index(self.sizes.len()) == Some(index);
         let marks: Vec<Div> = self
-            .highlight
+            .citation.boxes
             .iter()
-            .filter(|(page, _)| *page == index)
-            .flat_map(|(_, boxes)| boxes.iter())
+            .filter(|_| cited)
             .map(|line| div().absolute().left(px(line[0] * scale - 1.)).top(px(line[1] * scale)).w(px((line[2] - line[0]) * scale + 2.)).h(px((line[3] - line[1]) * scale)).rounded(px(2.)).bg(hsla(50. / 360., 1., 0.5, 0.35)))
             .collect();
         let sheet = div().relative().flex_none().ml(px(self.sheet_left(width))).w(px(width)).h(px(height)).bg(gpui::white()).border_1().border_color(Theme::line()).overflow_hidden();
@@ -722,6 +775,9 @@ impl PdfView {
             Some((image, _)) => sheet.when(cutting, |d| d.cursor_crosshair()).when(!cutting, |d| d.cursor_text()).child(img(image).w(px(width)).h(px(height))).children(annotations).children(selected).children(marks).children(cut),
             None => sheet.flex().items_center().justify_center().text_size(px(12.)).text_color(Theme::text_placeholder()).child(if self.broken.contains(&index) { tf!("第 {} 页无法渲染", "Cannot render page {}", index + 1) } else { tf!("第 {} 页", "Page {}", index + 1) }),
         };
+        // Draw over the image without changing its size or covering the text.
+        // This also makes page-only citations visible while a page is loading.
+        let sheet = sheet.when(cited, |d| d.child(div().absolute().inset_0().border_2().border_color(Theme::accent())));
         div().w_full().flex().pb(px(PAGE_GAP)).child(sheet).into_any_element()
     }
 
@@ -1168,6 +1224,12 @@ impl Render for PdfView {
         if self.translation.as_ref().is_some_and(|t| Some(t.selection) != self.selection) { self.translation = None }
         let bar = self.selection_bar(cx);
         let card = self.translation_card(cx);
+        let notice = match self.citation.status {
+            CitationStatus::PageOnly => Some(t("此引用仅提供页码，已标出引用页。")),
+            CitationStatus::Searching => Some(t("正在定位引用原文…")),
+            CitationStatus::Missing => Some(t("已跳到引用的页，但没有在 PDF 里找到这句原文。")),
+            CitationStatus::None | CitationStatus::Found => None,
+        };
         div()
             .id("pdf-viewer")
             .key_context("PdfView")
@@ -1195,10 +1257,10 @@ impl Render for PdfView {
                 .size_full(),
             )
             .child(list(self.list.clone(), move |index, _, cx| entity.update(cx, |this, _| this.page(index))).size_full().pt(px(PAGE_GAP)))
-            // Said plainly: the page is the cited one, the sentence was not found on it or anywhere else.
+            // Explain whether the citation names a page or a passage within it.
             .children(bar)
             .children(card)
-            .children(self.missing.then(|| div().absolute().top(px(8.)).left_0().w_full().flex().justify_center().child(div().px(px(10.)).py(px(5.)).rounded(px(6.)).bg(Theme::bg_body()).border_1().border_color(Theme::line()).text_size(px(12.)).text_color(Theme::text_secondary()).child(t("已跳到引用的页，但没有在 PDF 里找到这句原文。")))))
+            .children(notice.map(|notice| div().absolute().top(px(8.)).left_0().w_full().px(px(8.)).flex().justify_center().child(div().px(px(10.)).py(px(5.)).rounded(px(6.)).bg(Theme::bg_body()).border_1().border_color(Theme::line()).text_size(px(12.)).text_color(Theme::text_secondary()).child(notice))))
             .child(self.annotation_panel(window, cx))
             .into_any_element()
     }
@@ -1207,7 +1269,60 @@ impl Render for PdfView {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that would bring in gpui's own `test` attribute.
-    use super::{CARD_EDGE, CardPlace, MARGIN, POINT_PX, Zoom, card_place, page_scale, render_scale, zoom_step};
+    use super::{CARD_EDGE, CardPlace, CitationFocus, CitationStatus, MARGIN, POINT_PX, Zoom, card_place, page_scale, render_scale, zoom_step};
+
+    #[test]
+    fn page_only_citation_marks_its_page_before_or_after_pdf_opens() {
+        let citation = wisp_core::ai::citations("结果见 [P429 p.8]。").remove(0);
+        let mut focus = CitationFocus::default();
+        focus.begin(citation.page.unwrap(), &citation.quote);
+        assert_eq!(focus.status, CitationStatus::PageOnly);
+        assert_eq!(focus.index(0), None);
+        assert_eq!(focus.index(12), Some(7));
+        assert!(focus.boxes.is_empty()); // A page reference must not invent a passage.
+        focus.begin(4, " \n ");
+        assert_eq!((&focus.status, focus.index(12)), (&CitationStatus::PageOnly, Some(3)));
+        focus.begin(99, "");
+        assert_eq!(focus.index(12), Some(11)); // Match navigation's page clamping.
+        focus.begin(0, "");
+        assert_eq!(focus.index(12), Some(0));
+    }
+
+    #[test]
+    fn newer_citation_or_navigation_ignores_old_search_results() {
+        let mut focus = CitationFocus::default();
+        let old = focus.begin(4, "A quoted sentence.");
+        let boxes = vec![[10., 20., 90., 30.]];
+        focus.begin(8, "");
+        assert!(!focus.finish(old, Some((3, boxes.clone()))));
+        assert!(!focus.finish(old, None));
+        assert_eq!((&focus.status, focus.index(12)), (&CitationStatus::PageOnly, Some(7)));
+
+        let old = focus.begin(4, "An earlier quotation.");
+        let latest = focus.begin(6, "Another quotation.");
+        assert!(!focus.finish(old, None));
+        assert!(focus.finish(latest, Some((6, boxes.clone()))));
+        assert_eq!((&focus.status, focus.index(12), &focus.boxes), (&CitationStatus::Found, Some(6), &boxes));
+        assert!(!focus.finish(old, Some((3, boxes))));
+
+        let pending = focus.begin(4, "Still searching.");
+        focus.clear();
+        assert!(!focus.finish(pending, None));
+        assert_eq!((&focus.status, focus.index(12)), (&CitationStatus::None, None));
+    }
+
+    #[test]
+    fn missing_quote_keeps_page_marker_and_next_click_clears_notice() {
+        let mut focus = CitationFocus::default();
+        let request = focus.begin(4, "Not in the PDF.");
+        assert!(focus.finish(request, None));
+        assert_eq!((&focus.status, focus.index(12)), (&CitationStatus::Missing, Some(3)));
+        focus.begin(8, "");
+        assert_eq!((&focus.status, focus.index(12)), (&CitationStatus::PageOnly, Some(7)));
+        let request = focus.begin(4, "Text without drawable boxes.");
+        assert!(focus.finish(request, Some((3, vec![]))));
+        assert_eq!(focus.status, CitationStatus::Missing);
+    }
 
     #[test]
     fn translation_card_stays_in_view() {

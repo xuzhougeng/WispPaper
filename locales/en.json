@@ -27,6 +27,8 @@
   "取消": "Cancel",
   "无法预览": "Preview unavailable",
   "正在打开 PDF…": "Opening PDF…",
+  "此引用仅提供页码，已标出引用页。": "This citation gives only a page number. The cited page is marked.",
+  "正在定位引用原文…": "Locating the quoted text…",
   "已跳到引用的页，但没有在 PDF 里找到这句原文。": "Opened the cited page, but could not find the quoted text in this PDF.",
   "还没有运行过": "Never run",
   "已停用": "Disabled",
