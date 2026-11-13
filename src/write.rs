@@ -104,6 +104,8 @@ impl Workspace {
                 }),
             )
             .when(!writing.reading && writing.editor.read(cx).selection().is_empty(), |d| d.child(self.render_assist_bar(false, cx)))
+            // With the caret in a citation: the paper it names and the passage of that paper its sentence rests on.
+            .children(if writing.reading { None } else { self.render_source_strip(if stacked { width } else { width - panel } - 40., cx) })
             // Under the manuscript, the box where the assistant is told what to change in this section.
             .when(!writing.reading, |d| d.child(self.render_revise(if stacked { width } else { width - panel } - 40., window, cx)))
             .child(div().flex().flex_none().px(px(22.)).pb(px(12.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(div().flex_1().min_w_0().child(if writing.reading {
@@ -275,6 +277,8 @@ impl Workspace {
         let (paper, text, cite) = (field("paperId"), field("text"), field("cite"));
         let (before, after) = (field("before"), field("after"));
         let page = sentence["page"].as_u64().map(|page| page as usize);
+        // The part of its paper the sentence is from: the part the candidates were asked of.
+        let part = self.lib.as_ref().and_then(|lib| lib.writing.search.candidates.as_ref()?.as_ref().ok()?["section"].as_str().map(str::to_string)).unwrap_or_default();
         // Known by what it shows: the list is sorted anew with every search.
         let card = format!("{paper}-{}", sentence["position"].as_u64().unwrap_or(0));
         let id = |part: &str| SharedString::from(format!("write-{part}-{card}-{n}"));
@@ -308,7 +312,7 @@ impl Workspace {
                     .items_center()
                     .gap(px(2.))
                     .child(div().flex_1().min_w_0().truncate().text_size(px(11.)).text_color(Theme::text_tertiary()).child(about.join(" · ")))
-                    .child(small(id("cite"), t("引用")).text_color(Theme::accent()).on_click(self.on(Cmd::WriteCite(paper.clone()), cx))),
+                    .child(small(id("cite"), t("引用")).text_color(Theme::accent()).on_click(self.on(Cmd::WriteCiteFrom(paper.clone(), wisp_core::passage::Candidate { text: text.clone(), part, page: page.unwrap_or(0) }), cx))),
             )
             // Over the end of that line while the card is under the pointer, so it takes no width otherwise.
             .child(

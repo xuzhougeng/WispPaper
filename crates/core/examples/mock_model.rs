@@ -200,7 +200,7 @@ fn answer(mut stream: TcpStream, delay: u64) {
             let _ = stream.write_all(reply.as_bytes());
             return;
         }
-        let kind = if request.contains("图片库助手") { "figure" } else if request.contains("文献检索助手") { "search words for citations" } else if request.contains("只能从给出的候选里选") { "papers to cite" } else if request.contains("改稿助手") { "revise a section" } else if request.contains("审稿助手") { "review of a section" } else if request.contains("学术写作助手") { "write" } else if request.contains("文献筛选助手") { "screen" } else if request.contains("文献信息提取助手") { "extract" } else if request.contains("写作检索词助手") { "search words" } else if request.contains("翻译助手") { "translate" } else if request.contains("\"tools\"") { "chat" } else { "queries" };
+        let kind = if request.contains("图片库助手") { "figure" } else if request.contains("文献检索助手") { "search words for citations" } else if request.contains("只能从给出的候选里选") { "papers to cite" } else if request.contains("核对引用出处") { "passages cited" } else if request.contains("改稿助手") { "revise a section" } else if request.contains("审稿助手") { "review of a section" } else if request.contains("学术写作助手") { "write" } else if request.contains("文献筛选助手") { "screen" } else if request.contains("文献信息提取助手") { "extract" } else if request.contains("写作检索词助手") { "search words" } else if request.contains("翻译助手") { "translate" } else if request.contains("\"tools\"") { "chat" } else { "queries" };
         println!("{kind}: model {} thinking {} output_config {}", sent(&request, "model"), sent(&request, "thinking"), sent(&request, "output_config"));
         std::thread::sleep(std::time::Duration::from_millis(delay));
         // The last message decides the step: tool results get the answer, a question gets the calls.
@@ -228,6 +228,22 @@ fn answer(mut stream: TcpStream, delay: u64) {
                 }
                 serde_json::Value::Array(chosen).to_string()
             };
+            events.push_str(&event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#));
+            events.push_str(&event(&format!(r#"{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":{}}}}}"#, serde_json::Value::String(reply))));
+            events.push_str(&event(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#));
+        } else if request.contains("核对引用出处") {
+            // 出处. Asked which sentence of a paper each citation rests on, it takes the first one offered;
+            // for a citing sentence that says 「试试没有」 it finds none.
+            let value: serde_json::Value = serde_json::from_str(&request).unwrap_or_default();
+            let message = value["messages"][0]["content"].as_str().unwrap_or("").to_string();
+            let mut chosen = vec![];
+            for part in message.split("\n引用 ").skip(1) {
+                let number: usize = part.chars().take_while(char::is_ascii_digit).collect::<String>().parse().unwrap_or(0);
+                if number == 0 || !part.contains("\n所引文献：") { continue }
+                let none = part.lines().next().unwrap_or("").contains("试试没有");
+                chosen.push(if none { serde_json::json!({"cite": number, "passage": 0, "why": "（假模型）给出的原文说的都是别的事。"}) } else { serde_json::json!({"cite": number, "passage": 1, "why": "（假模型）这句原文说的是这件事。"}) });
+            }
+            let reply = serde_json::Value::Array(chosen).to_string();
             events.push_str(&event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#));
             events.push_str(&event(&format!(r#"{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":{}}}}}"#, serde_json::Value::String(reply))));
             events.push_str(&event(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#));
