@@ -252,6 +252,8 @@ pub enum Cmd {
     PdfCut,
     /// Show the paper's PDF to the right of its conversation, or put it away.
     BesidePdf(bool),
+    /// Out of the layout for asking about a paper: the tab it was come to from, with the library around it.
+    LeaveAsk,
     /// The paper's conversation floats over its PDF, or stands beside it (`Settings::floating`).
     FloatChat(bool),
     /// Fold the floating conversation into its button, or open it again.
@@ -982,8 +984,13 @@ pub struct Library {
     pub wide: bool,
     /// Reading mode: the sidebar and the list are put away and the paper has the whole window.
     pub reading: bool,
-    /// The paper's PDF is shown to the right of its conversation, where the panel has room for both.
+    /// The paper's PDF is wanted to the right of its conversation. While the paper is asked about, the
+    /// window is laid out for the two (`Workspace::asking`).
     pub split: bool,
+    /// The tab the asking was come to from, which leaving it goes back to.
+    pub ask_from: Tab,
+    /// Whether the window was last drawn laid out for asking: the list finds its paper again when that changes.
+    pub ask_drawn: bool,
     /// The floating conversation's window or button while the pointer holds it (floating.rs).
     pub float_drag: Option<crate::floating::Drag>,
     /// The size of the area the floating conversation keeps within, as last drawn.
@@ -1878,6 +1885,7 @@ impl Workspace {
                 // Without a model the question box is not drawn: the keyboard stays with the window, so Esc is still heard.
                 let asking = !self.settings.profile_for_or_default(Task::Chat).key().is_empty();
                 if let Some(lib) = self.lib.as_mut() {
+                    if tab == Tab::Ask && lib.tab != Tab::Ask { lib.ask_from = lib.tab }
                     lib.tab = tab;
                     if tab == Tab::Ask && asking { lib.paper_chat.input.read(cx).focus(window) } else if tab == Tab::Ask { window.focus(&self.focus) }
                 }
@@ -1895,16 +1903,25 @@ impl Workspace {
                 self.ensure_pdf(cx);
             }
             Cmd::ToggleSidebar => {
+                // Asking about a paper put the sidebar away for the while: wanting it back is leaving that.
+                if self.asking(window) {
+                    self.run(Cmd::LeaveAsk, window, cx);
+                    if !self.settings.sidebar_hidden { return }
+                }
                 self.settings.sidebar_hidden = !self.settings.sidebar_hidden;
                 self.save_settings(cx);
+            }
+            Cmd::LeaveAsk => {
+                if let Some(lib) = self.lib.as_mut().filter(|lib| lib.tab == Tab::Ask) { lib.tab = lib.ask_from }
+                self.ensure_pdf(cx);
+                window.focus(&self.focus);
             }
             Cmd::PdfCut => {
                 if let Some(pdf) = self.lib.as_ref().and_then(|lib| lib.pdf.clone()) { pdf.update(cx, |pdf, cx| pdf.toggle_cutting(cx)) }
             }
             Cmd::BesidePdf(show) => {
+                // Beside the conversation the window is laid out for the two (`asking`); put away, the library is back around it.
                 if let Some(lib) = self.lib.as_mut() { lib.split = show }
-                // A panel too narrow for the two is widened; a window too small for that keeps the conversation.
-                if show && self.detail_width(window) < crate::detail::SPLIT_MIN && let Some(lib) = self.lib.as_mut() { lib.wide = true }
                 self.ensure_pdf(cx);
             }
             Cmd::FloatChat(on) => self.float_chat(on, window, cx),
@@ -2452,6 +2469,9 @@ impl Workspace {
         } else if self.lib.as_ref().is_some_and(|l| l.reading && l.selected.is_some()) {
             // Out of reading mode first: the paper stays open where it was read.
             if let Some(lib) = self.lib.as_mut() { lib.reading = false }
+        } else if self.asking(window) {
+            // Out of asking first, back to the library with the paper still open.
+            self.run(Cmd::LeaveAsk, window, cx);
         } else if self.lib.as_ref().is_some_and(|l| l.selected.is_some()) {
             self.select(None, window, cx);
         }
@@ -2473,6 +2493,10 @@ impl Workspace {
                 if let Some(lib) = self.lib.as_mut() {
                     lib.page = Page::Papers;
                     lib.reading = false;
+                }
+                // A window too narrow for the list beside a paper asked about: the search box is with the full list.
+                if self.asking(window) && self.ask_list_width(window) <= 0. { self.run(Cmd::LeaveAsk, window, cx) }
+                if let Some(lib) = self.lib.as_ref() {
                     lib.search.read(cx).focus(window);
                     cx.notify();
                 }
@@ -2585,6 +2609,8 @@ impl Workspace {
             wide: false,
             reading: false,
             split: true,
+            ask_from: Tab::Info,
+            ask_drawn: false,
             float_drag: None,
             float_area: (0., 0.),
             notes,
@@ -2651,7 +2677,7 @@ impl Workspace {
             None => {
                 lib.wide = false;
                 lib.reading = false;
-                lib.tab = Tab::Info;
+                (lib.tab, lib.ask_from) = (Tab::Info, Tab::Info);
                 window.focus(&self.focus);
             }
         }
@@ -2727,16 +2753,14 @@ impl Workspace {
     }
 
     /// Something from the PDF went to the paper's own conversation: the
-    /// conversation comes up with the PDF to its right. The panel is
-    /// widened for the two; a window too small for both shows the
-    /// conversation, with what was added over its box.
+    /// conversation comes up with the PDF to its right, the window laid
+    /// out for the two.
     fn show_paper_chat(&mut self, cx: &mut Context<Self>) {
-        let narrow = self.settings.detail_width < crate::detail::SPLIT_MIN;
         self.unfold_chat(cx);
         let Some(lib) = self.lib.as_mut() else { return };
         if !(lib.split && lib.tab == Tab::Ask) {
+            if lib.tab != Tab::Ask { lib.ask_from = lib.tab }
             (lib.split, lib.tab) = (true, Tab::Ask);
-            if narrow { lib.wide = true }
             self.say("已加到这篇文献的提问里。", cx);
         }
         cx.notify();
@@ -4681,6 +4705,12 @@ impl Workspace {
                 "readmode" => Some(Cmd::ToggleReading),
                 "chatwidth" => {
                     self.settings.chat_width = arg.parse().unwrap_or(0.);
+                    cx.notify();
+                    return;
+                }
+                // `asklist:240` is the width of the list beside a paper that is asked about (`tab:ask`).
+                "asklist" => {
+                    self.settings.ask_list_width = arg.parse().unwrap_or(0.);
                     cx.notify();
                     return;
                 }

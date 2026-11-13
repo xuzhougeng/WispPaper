@@ -315,7 +315,7 @@ impl Workspace {
         if ids.is_empty() { return }
         let last = ids.len() - 1;
         // A screenful of rows, less one so that the eye keeps its place.
-        let row = if self.settings.density == "compact" { 44. } else { 56. };
+        let row = self.row_height(self.asking(window));
         let screenful = (((f32::from(window.viewport_size().height) - 190.) / row).floor() as usize).max(2) - 1;
         let to = match (nav, at) {
             (Nav::First, _) => 0,
