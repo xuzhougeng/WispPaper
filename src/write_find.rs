@@ -181,13 +181,16 @@ impl Workspace {
         if !search.tag.is_empty() { args["tag"] = json!(search.tag) }
         if search.starred { args["starred"] = json!(true) }
         search.groups = groups;
-        self.library_tool("find_sentences", args, cx, move |this, result, _| {
+        self.library_tool("find_sentences", args, cx, move |this, result, cx| {
             let Some(lib) = this.lib.as_mut().filter(|l| l.writing.search.round == round) else { return };
             let search = &mut lib.writing.search;
             search.searching = false;
             search.candidates = Some(result);
             search.unfolded.clear();
             lib.writing.scroll.set_offset(point(px(0.), px(0.)));
+            // 仿写 asked for these sentences, and goes on with them.
+            let assist = &mut lib.writing.assist;
+            if assist.awaiting.take().is_some_and(|generation| generation == assist.generation) { this.assist_begin(ai::Assist::Rewrite, true, cx) }
         });
     }
 }

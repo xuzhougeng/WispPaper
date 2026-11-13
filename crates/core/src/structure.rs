@@ -545,7 +545,7 @@ pub fn parse_outline(reply: &str, blocks: &[Block], abstract_text: &str) -> Resu
 
 /// The words a full stop after which does not end a sentence; besides
 /// English, those of German, French, Spanish, Portuguese and Italian papers.
-const ABBREVIATIONS: &[&str] = &[
+pub(crate) const ABBREVIATIONS: &[&str] = &[
     "al", "fig", "figs", "e.g", "i.e", "vs", "cf", "ca", "approx", "ref", "refs", "eq", "eqs", "no", "nos", "dr", "prof", "sp", "spp", "var", "supp", "suppl", "tab", "st", "inc", "ltd", "co", "ed", "eds", "vol",
     "abb", "vgl", "bzw", "z.b", "d.h", "u.a", "usw", "bspw", "ggf", "inkl", "nr", "evtl", "sog", "jh", "mio", "mrd", "s.o", "s.u", "u.ä", "z.t", "env", "ex", "p.ex", "éd", "ej", "p.ej", "aprox", "pág", "págs", "núm", "sr", "sra", "dra", "pp", "tabla", "ecc",
 ];
