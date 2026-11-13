@@ -99,6 +99,32 @@ impl Workspace {
         self.draft_to_manuscript(title, vec![(t("正文").into(), answer)], window, cx);
     }
 
+    /// Add an answer, or part of one, at the end of a section of a
+    /// manuscript. Its citations become the manuscript's (`[P3 p.5 "…"]`
+    /// to `[@Key, p. 5]`); what the section held is kept as a snapshot. The
+    /// person stays in the conversation: more may follow.
+    pub(crate) fn insert_into_section(&mut self, section_id: String, text: String, cx: &mut Context<Self>) {
+        let Some(lib) = self.lib.as_mut() else { return };
+        let known = match lib.store.cite_keys() { Ok(keys) => keys, Err(err) => return self.fail(tf!("无法读取引用记录：{err:#}", "Cannot read citation records: {err:#}"), cx) };
+        let part = {
+            let index = wisp_core::cite::Index::new(&lib.papers, lib.trash.iter().map(|entry| &entry.paper), &known);
+            wisp_core::cite::convert_ai_citations(&text, lib.library_chat.sources(), &index)
+        };
+        let body = match lib.store.append_to_section(&section_id, &part.text, &part.keys) {
+            Ok(body) => body,
+            Err(err) => return self.fail(tf!("没有加进稿件：{err:#}", "Not added to the manuscript: {err:#}"), cx),
+        };
+        if let Ok(kept) = lib.store.cite_keys() { lib.citing.kept = kept }
+        let mut name = String::new();
+        for section in lib.writing.manuscripts.iter_mut().flat_map(|m| m.sections.iter_mut()).filter(|s| s.id == section_id) {
+            section.body = body.clone();
+            name = section.name.clone();
+        }
+        // The section on show has the text in its editor as well.
+        if lib.writing.section_id == section_id { lib.writing.editor.update(cx, |input, cx| input.set_text(&body, cx)) }
+        self.say(tf!("已加到「{name}」的末尾；请核对引用与原文。", "Added at the end of “{name}”; check the citations against the sources."), cx);
+    }
+
     /// Assemble every recorded section in its saved order into a new manuscript.
     pub(crate) fn review_to_manuscript(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(review) = self.lib.as_ref().and_then(|lib| lib.library_chat.review.clone()).filter(|review| review.outline_confirmed && !review.sections.is_empty()) else { return self.fail(t("请先确认大纲并保存正文。"), cx) };

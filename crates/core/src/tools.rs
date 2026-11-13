@@ -15,6 +15,7 @@ use crate::fulltext::{self, terms};
 use crate::libraries::{self, LibraryInfo};
 use crate::model::{FULLTEXTS, Paper, READINGS, SCREENINGS, one_of};
 use crate::openaccess;
+use crate::organise;
 use crate::pdftext;
 use crate::sources::{self, Download, Fetch};
 use crate::store::{SavedSearch, Store, Suggestion};
@@ -39,12 +40,12 @@ pub struct ToolDef {
 
 /// A tool that works inside one library: it also takes `library`.
 /// The tools that change the library.
-const WRITING: [&str; 12] = ["create_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "suggest_field", "sync_searches", "find_pdf"];
+const WRITING: [&str; 13] = ["create_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "suggest_field", "sync_searches", "find_pdf", "organise_papers"];
 /// Of those, the ones the window's assistant runs only with the person's
 /// consent. Saving a search, suggesting a screening decision or proposing
 /// a field's value changes nothing a person has not yet to act on, so they
 /// run as asked.
-const CONFIRMING: [&str; 7] = ["import_pdf", "import_references", "import_zotero", "run_search", "undo_import", "remove_search", "find_pdf"];
+const CONFIRMING: [&str; 8] = ["import_pdf", "import_references", "import_zotero", "run_search", "undo_import", "remove_search", "find_pdf", "organise_papers"];
 
 fn scoped(name: &'static str, title: &'static str, description: &'static str, mut properties: Value, required: &[&str]) -> ToolDef {
     properties["library"] = json!({"type": "string", "description": "文献库的 ID 或名称；只有一个文献库时可以省略。"});
@@ -272,6 +273,41 @@ pub fn catalog() -> Vec<ToolDef> {
             }),
             &["id", "field"],
         ),
+        scoped(
+            "organise_papers",
+            "整理文献",
+            "整理文献库里已有的文献：加或去标签、设或取消星标、改阅读状态、在「我的笔记」末尾追加一段（注明是助手所记，不覆盖已有笔记）。一次调用可以改许多篇，要么全部写入，要么一篇也不写。只在用户要求整理时使用；窗口里的助手运行前，用户会先看到每一篇要改什么。不能改收录判断（用 suggest_screening 提出建议）和自定义词条（用 suggest_field）。返回每篇文献实际改了什么；已经是所要求的样子的不会改动。",
+            json!({
+                "changes": {
+                    "type": "array",
+                    "description": "每项是一篇文献的改动；没写的方面保持不变。",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string", "description": "文献 ID。"},
+                            "addTags": {"type": "array", "items": {"type": "string"}, "description": "要加上的标签。优先用文献库里已有的标签（library_status 的 tags），不要为同一个意思另造一个。"},
+                            "removeTags": {"type": "array", "items": {"type": "string"}, "description": "要去掉的标签。"},
+                            "starred": {"type": "boolean", "description": "true 加星标，false 取消。"},
+                            "reading": {"type": "string", "enum": ["unread", "skimmed", "read"], "description": "阅读状态：未读、已浏览、已精读。这是用户自己的阅读记录，只在用户说明时修改。"},
+                            "note": {"type": "string", "description": "追加到「我的笔记」末尾的一段话。"},
+                        },
+                        "required": ["id"],
+                    },
+                },
+            }),
+            &["changes"],
+        ),
+        scoped("list_manuscripts", "稿件列表", "列出用户在写作页的稿件：题目、语言、各节的名称、属于论文的哪一部分和字数。只读。", json!({}), &[]),
+        scoped(
+            "read_manuscript",
+            "读取稿件",
+            "读取用户在写作页写的稿件正文，可以只读其中一节。只读：稿件只由用户本人修改，你可以在回答里给出修改建议或可以插入的段落。稿件里的引用写作 [@Key]，Key 对应文献库里的一篇文献。",
+            json!({
+                "manuscript": {"type": "string", "description": "稿件的 ID 或题目；只有一份稿件时可以省略。"},
+                "section": {"type": "string", "description": "只读这一节：节的 ID 或名称。省略时返回所有写了内容的节。"},
+            }),
+            &[],
+        ),
     ]
 }
 
@@ -321,6 +357,7 @@ pub fn describe_call(name: &str, args: &Value) -> String {
             ("page", Value::Number(n)) => numbers.push((key, format!("第 {n} 页起"))),
             (_, Value::String(text)) if !text.trim().is_empty() => words.push((key, text.split_whitespace().collect::<Vec<_>>().join(" "))),
             (_, Value::Number(n)) => numbers.push((key, format!("{key} {n}"))),
+            ("changes", Value::Array(items)) => numbers.push((key, format!("{} 篇", items.len()))),
             _ => {}
         }
     }
@@ -338,6 +375,12 @@ pub fn describe_result(result: &Result<Value, String>) -> String {
         Ok(value) => {
             if let Some(total) = value["total"].as_u64() {
                 format!("{total} 条结果")
+            } else if let (Some(changed), Some(unchanged)) = (value["changed"].as_u64(), value["unchanged"].as_u64()) {
+                if unchanged > 0 { format!("改了 {changed} 篇，{unchanged} 篇不用改") } else { format!("改了 {changed} 篇") }
+            } else if let Some(manuscripts) = value["manuscripts"].as_array() {
+                format!("{} 份稿件", manuscripts.len())
+            } else if let Some(sections) = value["sections"].as_array() {
+                format!("读了 {} 节", sections.len())
             } else if let Some(pages) = value["pages"].as_array() {
                 format!("读了 {} 页", pages.len())
             } else if let Some(sentences) = value["sentences"].as_array() {
@@ -389,6 +432,9 @@ fn dispatch(store: &mut Store, info: &LibraryInfo, name: &str, args: &Value, fet
         "undo_import" => undo_import(store, args),
         "suggest_screening" => suggest_screening(store, info, args),
         "suggest_field" => suggest_field(store, args),
+        "organise_papers" => Ok(organise::report(&store.organise(&organise::parse(args).map_err(|e| anyhow!(e))?)?)),
+        "list_manuscripts" => list_manuscripts(store),
+        "read_manuscript" => read_manuscript(store, args),
         "library_status" => library_status(store, info),
         "list_papers" => list_papers(store, info, args),
         "list_figures" => list_figures(store, info, args),
@@ -1132,6 +1178,51 @@ fn suggest_screening(store: &mut Store, info: &LibraryInfo, args: &Value) -> Res
 /// field itself is the person's to write and is not touched here; a
 /// quotation the paper's text does not hold is not kept as evidence, and a
 /// Select field is proposed one of its options or nothing.
+/// What a call would do, a line per thing it changes, for the person who
+/// is asked whether it may run; an error when it cannot run as written.
+/// Only `organise_papers` has more to say than its arguments already do.
+pub fn preview_call(store: &Store, name: &str, args: &Value) -> Result<Vec<String>, String> {
+    if name == "organise_papers" { organise::preview(store, args) } else { Ok(vec![]) }
+}
+
+fn list_manuscripts(store: &mut Store) -> Result<Value> {
+    let manuscripts = store.manuscripts()?;
+    Ok(json!({
+        "manuscripts": manuscripts.iter().map(|m| json!({
+            "id": m.id,
+            "title": m.shown_title(),
+            "language": m.language,
+            "updatedAt": m.updated_at,
+            "sections": m.sections.iter().map(|s| json!({"id": s.id, "name": s.name, "kind": s.kind, "characters": s.body.chars().count()})).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+    }))
+}
+
+fn read_manuscript(store: &mut Store, args: &Value) -> Result<Value> {
+    let manuscripts = store.manuscripts()?;
+    let wanted = text(args, "manuscript")?;
+    let manuscript = match wanted {
+        "" if manuscripts.len() == 1 => &manuscripts[0],
+        "" if manuscripts.is_empty() => bail!("写作页还没有稿件。"),
+        "" => bail!("有 {} 份稿件，用 manuscript 指定一份：{}", manuscripts.len(), manuscripts.iter().map(|m| format!("「{}」", m.shown_title())).collect::<Vec<_>>().join("、")),
+        _ => manuscripts.iter().find(|m| m.id == wanted || m.shown_title() == wanted).ok_or_else(|| anyhow!("没有这份稿件：{wanted}。现有：{}", manuscripts.iter().map(|m| format!("「{}」", m.shown_title())).collect::<Vec<_>>().join("、")))?,
+    };
+    let section = text(args, "section")?;
+    let sections: Vec<_> = if section.is_empty() {
+        manuscript.sections.iter().filter(|s| !s.body.trim().is_empty()).collect()
+    } else {
+        let found: Vec<_> = manuscript.sections.iter().filter(|s| s.id == section || s.name == section).collect();
+        if found.is_empty() { bail!("这份稿件没有名为「{section}」的节。现有：{}", manuscript.sections.iter().map(|s| format!("「{}」", s.name)).collect::<Vec<_>>().join("、")) }
+        found
+    };
+    Ok(json!({
+        "id": manuscript.id,
+        "title": manuscript.shown_title(),
+        "language": manuscript.language,
+        "sections": sections.iter().map(|s| json!({"id": s.id, "name": s.name, "kind": s.kind, "body": s.body})).collect::<Vec<_>>(),
+    }))
+}
+
 fn suggest_field(store: &mut Store, args: &Value) -> Result<Value> {
     let paper = store.get_paper(text(args, "id")?)?;
     let wanted = text(args, "field")?;
@@ -1217,6 +1308,8 @@ pub fn cli_args(schema: &Value, words: &[String]) -> Result<Value, String> {
             "integer" => json!(value.parse::<i64>().map_err(|_| format!("--{} 应为整数：{value}", flag_name(&key)))?),
             "number" => json!(value.parse::<f64>().map_err(|_| format!("--{} 应为数字：{value}", flag_name(&key)))?),
             "boolean" => json!(value == "true"),
+            // A list is written as JSON, or as one value for a list of one.
+            "array" | "object" => serde_json::from_str::<Value>(&value).ok().filter(|parsed| parsed.is_array() || parsed.is_object()).unwrap_or_else(|| json!([value])),
             _ => json!(value),
         };
         out.insert(key, parsed);
@@ -1776,6 +1869,39 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn papers_are_organised_and_manuscripts_read() {
+        let (root, atlas) = sample();
+        let done = call(&root, "organise_papers", &json!({"changes": [{"id": atlas, "addTags": ["综述"], "starred": true, "note": "再读一遍方法"}]})).unwrap();
+        assert_eq!((done["changed"].as_u64(), done["papers"][0]["changed"].as_array().map(Vec::len)), (Some(1), Some(3)));
+        let paper = call(&root, "get_paper", &json!({"id": atlas})).unwrap();
+        assert!(paper.to_string().contains("综述") && paper.to_string().contains("助手所记"));
+        // The decision stays the person's, whatever the call says.
+        assert!(call(&root, "organise_papers", &json!({"changes": [{"id": atlas, "screening": "included"}]})).unwrap_err().contains("suggest_screening"));
+        assert_eq!(describe_call("organise_papers", &json!({"changes": [{"id": "a"}, {"id": "b"}]})), "整理文献：2 篇");
+        assert_eq!(describe_result(&Ok(done)), "改了 1 篇");
+        // The command line writes the list as JSON.
+        let tool = catalog().into_iter().find(|tool| tool.name == "organise_papers").unwrap();
+        let args = cli_args(&tool.input_schema, &["[{\"id\":\"a\",\"starred\":true}]".to_string()]).unwrap();
+        assert_eq!(args, json!({"changes": [{"id": "a", "starred": true}]}));
+
+        assert!(call(&root, "read_manuscript", &json!({})).unwrap_err().contains("还没有稿件"));
+        let info = libraries::list(&root).remove(0);
+        let mut store = Store::open(&info.dir).unwrap();
+        let made = store.create_manuscript("根的综述", "zh").unwrap();
+        store.save_section_body(&made.sections[1].id, "根尖的干细胞 [@Zhang2021]。").unwrap();
+        drop(store);
+        let listed = call(&root, "list_manuscripts", &json!({})).unwrap();
+        assert_eq!((listed["manuscripts"][0]["title"].as_str(), listed["manuscripts"][0]["sections"].as_array().map(Vec::len)), (Some("根的综述"), Some(5)));
+        // Without a section, only the parts that are written.
+        let read = call(&root, "read_manuscript", &json!({})).unwrap();
+        assert_eq!((read["sections"].as_array().map(Vec::len), read["sections"][0]["body"].as_str()), (Some(1), Some("根尖的干细胞 [@Zhang2021]。")));
+        let name = made.sections[0].name.clone();
+        assert_eq!(call(&root, "read_manuscript", &json!({"manuscript": "根的综述", "section": name})).unwrap()["sections"][0]["body"], "");
+        assert!(call(&root, "read_manuscript", &json!({"section": "没有这一节"})).unwrap_err().contains("没有名为"));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
     fn every_tool_is_callable() {
         let (root, _) = sample();
         for tool in catalog() {
@@ -1785,7 +1911,7 @@ pub(crate) mod tests {
             // Only a tool that changes the library has anything to ask the person about.
             assert!(tool.writes || !tool.confirm, "{}", tool.name);
         }
-        assert_eq!(library_catalog().iter().filter(|tool| tool.confirm).map(|tool| tool.name).collect::<Vec<_>>().len(), 7);
+        assert_eq!(library_catalog().iter().filter(|tool| tool.confirm).map(|tool| tool.name).collect::<Vec<_>>().len(), 8);
         std::fs::remove_dir_all(root).ok();
     }
 }

@@ -328,7 +328,9 @@ pub fn build_context(library_name: &str, topic: &str, papers: &[&Paper], fields:
 - 只列出题目的文献没有摘要，对它们的内容不要下结论。\n\
 - 有的文献存了 PDF 却没读出文字，工具会给出读取时得到的原因。照原因转述即可，不要自己推测它是扫描件、加了密或者损坏了；全文检索看不到这些文献的正文，没有命中不等于文中没有。\n\
 - 上面的材料不够时使用工具：search_fulltext 在已保存的全文里找短语或关键词，read_fulltext 按页读原文核对上下文，list_papers 和 get_paper 查文献记录。工具查的是整个文献库，不限于上面列出的文献。\n\
-- search_online 可以在 PubMed、Europe PMC、Crossref、arXiv 里试检索，不写入文献库。保存或删除检索式、运行导入、撤销导入会改动文献库：只在用户明确要求时使用，并说明做了什么。收录判断由用户本人做出：你可以用 suggest_screening 提出建议，它会出现在筛选页等用户确认。自定义词条也一样由用户写入：你可以用 suggest_field 为一篇文献的一个词条提出取值和原文依据，它会出现在提取页等用户确认。
+- search_online 可以在 PubMed、Europe PMC、Crossref、arXiv 里试检索，不写入文献库。保存或删除检索式、运行导入、撤销导入会改动文献库：只在用户明确要求时使用，并说明做了什么。收录判断由用户本人做出：你可以用 suggest_screening 提出建议，它会出现在筛选页等用户确认。自定义词条也一样由用户写入：你可以用 suggest_field 为一篇文献的一个词条提出取值和原文依据，它会出现在提取页等用户确认。\n\
+- 用户要求整理文献（打标签、加星标、改阅读状态、记一段笔记）时用 organise_papers，一次调用写全所有要改的文献；用户会先看到每一篇要改什么再决定是否允许。标签优先用文献库已有的。没有被要求时不要整理。\n\
+- list_manuscripts 和 read_manuscript 读用户在写作页的稿件，只读：稿件由用户自己修改，你给出建议或可以直接采用的段落即可。
 \n- 工具结果里每篇文献带有 label，就是引用它时用的标签；工具的 paperId 和 id 参数可以直接填标签（如 P3）。没有保存全文的文献只有记录和摘要，回答依据的只是摘要时要说明。\n\
 - 用用户提问的语言回答，直接回答问题，不必复述材料。"
     );
@@ -977,6 +979,10 @@ pub fn resolve_labels(args: &mut Value, sources: &[Source]) {
     for key in ["paperId", "id"] {
         if let Some(found) = args[key].as_str().and_then(|value| source_of(sources, value)) { args[key] = json!(found.paper_id) }
     }
+    // A list of things about papers (`organise_papers`' changes) names each of them the same way.
+    for list in args.as_object_mut().into_iter().flat_map(|map| map.values_mut()).filter_map(Value::as_array_mut) {
+        for item in list.iter_mut().filter(|item| item.is_object()) { resolve_labels(item, sources) }
+    }
 }
 
 /// Put the label beside every paper id in a tool result, so the answer can cite it.
@@ -1308,6 +1314,8 @@ pub enum Assist {
     Translate,
     /// Tighten it, changing as little as needed.
     Polish,
+    /// Add citations of the library's papers where they bear a sentence out, changing nothing else (`cite_request`).
+    Cite,
     /// One of the person's own commands (`Settings::commands`), by name.
     Own(String),
 }
@@ -1319,9 +1327,103 @@ impl Assist {
             Assist::Rewrite => "参照候选句改写".into(),
             Assist::Translate => format!("译成{}", language_name(language)),
             Assist::Polish => "润色".into(),
+            Assist::Cite => "配引用".into(),
             Assist::Own(name) => format!("/{name}"),
         }
     }
+}
+
+/// A paper that may be cited for a sentence, as `find_citations` found it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Citable {
+    /// The paper's citation key, as the manuscript writes it: `Zhang2024`.
+    pub key: String,
+    pub title: String,
+    pub year: Option<i64>,
+    /// The page of its full text that holds most of the sentence's words, and a piece of it.
+    pub page: Option<usize>,
+    pub snippet: String,
+}
+
+/// A sentence of the paragraph and the papers that may bear it out, best first.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CiteSentence {
+    pub sentence: String,
+    pub candidates: Vec<Citable>,
+}
+
+/// What `find_citations` answered, with each paper named by its key
+/// (`keys`: paper id to key). A paper without a key is left out.
+pub fn cite_candidates(found: &Value, keys: &BTreeMap<String, String>) -> Vec<CiteSentence> {
+    found["sentences"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|item| CiteSentence {
+            sentence: item["sentence"].as_str().unwrap_or("").to_string(),
+            candidates: item["candidates"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|c| {
+                    let key = keys.get(c["paperId"].as_str()?)?.clone();
+                    Some(Citable { key, title: c["title"].as_str().unwrap_or("").to_string(), year: c["year"].as_i64(), page: c["page"].as_u64().map(|page| page as usize), snippet: c["snippet"].as_str().unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ") })
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+/// What a request for citations is made of: the instructions and the
+/// message. The model only chooses among the candidates and places them;
+/// it is told to leave the words alone, and the card shows what it changed.
+pub fn cite_prompt(language: &str, paragraph: &str, sentences: &[CiteSentence]) -> Result<(String, String), String> {
+    let paragraph = paragraph.trim();
+    if paragraph.is_empty() { return Err("没有要处理的文字：先选中一段，或把光标放在要处理的段落里。".into()) }
+    if paragraph.len() > ASSIST_LIMIT { return Err("选中的文字太长，一次处理一两段就好。".into()) }
+    if sentences.iter().all(|sentence| sentence.candidates.is_empty()) { return Err("文献库里没有找到和这段文字相近的文献，没有可配的引用。".into()) }
+    let language = language_name(language);
+    let system = format!(
+        "你是学术写作助手，帮用户给他正在写的论文稿件配引用。稿件语言是{language}。\n\
+         只输出配好引用的文字本身：不加解释、不加标题、不加引号，不用 Markdown。段落之间空一行。\n\
+         不要编造文献：只能使用用户给出的候选。"
+    );
+    let listed: Vec<String> = sentences
+        .iter()
+        .enumerate()
+        .map(|(n, sentence)| {
+            let candidates: Vec<String> = sentence
+                .candidates
+                .iter()
+                .map(|c| {
+                    let year = c.year.map(|year| format!("（{year}）")).unwrap_or_default();
+                    match c.page {
+                        Some(page) => format!("  - [@{}] {}{year}，全文第 {page} 页：{}", c.key, c.title.trim(), c.snippet),
+                        None => format!("  - [@{}] {}{year}，只匹配到题目和摘要", c.key, c.title.trim()),
+                    }
+                })
+                .collect();
+            format!("句 {}：{}\n{}", n + 1, sentence.sentence.trim(), if candidates.is_empty() { "  （没有候选）".to_string() } else { candidates.join("\n") })
+        })
+        .collect();
+    let message = format!(
+        "给下面这段文字配引用。我已经在文献库里为每句话找了候选文献，按匹配程度排列；匹配只看用词，不保证内容相符，由你判断。\n\n\
+         要求：\n\
+         1. 原文一个字都不改，只在需要引用的句子末尾、句号之前加上引用。\n\
+         2. 引用写成 [@Key]；依据是全文某一页时写 [@Key, p. 5]；一句配几篇时写 [@A; @B]。Key 照候选里的写，不要改。\n\
+         3. 只在候选的题目或片段确实支持这句话时才用；拿不准就不加。宁可少配，不要错配。\n\
+         4. 已有的引用保持原样，同一句不重复引同一篇。\n\
+         5. 我自己的论断、过渡句和没有合适候选的句子不加引用。没有一句可配时，原样输出这段文字。\n\n\
+         候选：\n{}\n\n要配引用的段落：\n{paragraph}",
+        listed.join("\n")
+    );
+    Ok((system, message))
+}
+
+/// The request that places citations in a paragraph.
+pub fn cite_request(profile: &Profile, language: &str, paragraph: &str, sentences: &[CiteSentence]) -> Result<HttpRequest, String> {
+    let (system, message) = cite_prompt(language, paragraph, sentences)?;
+    plain_request(profile, &system, &message)
 }
 
 /// A manuscript language as it reads in a sentence: `English` is 英文, others as they are given.
@@ -1389,6 +1491,8 @@ pub fn assist_prompt(assist: &Assist, language: &str, paragraph: &str, examples:
             "润色下面这段{language}文字：改得越少越好，只改语法错误、不准确或不地道的用词、冗余和不通顺的地方。\n\
              不改变意思，不增删论断，不调整段落的结构；本来就好的句子原样保留。\n\n{paragraph}"
         ),
+        // Its candidates come from the library, not from this function's arguments.
+        Assist::Cite => return Err("配引用要先在文献库里查找候选：用 cite_request。".into()),
         Assist::Own(name) => {
             let Some(command) = own.iter().find(|command| command.name == *name) else { return Err(format!("没有 /{name} 这个命令了，可能已在「设置 › 命令」里删掉。")) };
             return Ok((
@@ -1896,6 +2000,22 @@ mod tests {
         assert!(assist_prompt(&Assist::Own("gone".into()), "English", "Roots.", &[], &own).is_err());
         // Nothing to work on, and too much, are refused before anything is sent.
         assert!(assist_prompt(&Assist::Polish, "English", " \n ", &[], &[]).is_err());
+
+        // 配引用: the candidates are named by their keys, a paper without one is left out, and nothing to cite is said at once.
+        let found = json!({"sentences": [
+            {"sentence": "Roots sense compaction.", "candidates": [{"paperId": "a", "title": "Root atlas", "year": 2021, "page": 5, "snippet": "roots  sense\nsoil compaction"}, {"paperId": "gone", "title": "No key"}]},
+            {"sentence": "We extend this.", "candidates": []},
+        ]});
+        let keys = BTreeMap::from([("a".to_string(), "Zhang2021".to_string())]);
+        let sentences = cite_candidates(&found, &keys);
+        assert_eq!(sentences[0].candidates, vec![Citable { key: "Zhang2021".into(), title: "Root atlas".into(), year: Some(2021), page: Some(5), snippet: "roots sense soil compaction".into() }]);
+        let (system, message) = cite_prompt("en", "Roots sense compaction. We extend this.", &sentences).unwrap();
+        assert!(system.contains("只能使用用户给出的候选"));
+        assert!(message.contains("句 1：Roots sense compaction.\n  - [@Zhang2021] Root atlas（2021），全文第 5 页：roots sense soil compaction"));
+        assert!(message.contains("句 2：We extend this.\n  （没有候选）"));
+        assert!(message.ends_with("要配引用的段落：\nRoots sense compaction. We extend this."));
+        assert!(cite_prompt("en", "We extend this.", &sentences[1..]).unwrap_err().contains("没有可配的引用"));
+        assert!(assist_prompt(&Assist::Cite, "en", "x", &[], &[]).is_err());
         assert!(assist_prompt(&Assist::Polish, "English", &"a".repeat(ASSIST_LIMIT + 1), &[], &[]).is_err());
     }
 
@@ -2123,6 +2243,10 @@ mod tests {
         let mut unknown = json!({"id": "P9"});
         resolve_labels(&mut unknown, &ctx.sources);
         assert_eq!(unknown, json!({"id": "P9"}));
+        // A list of changes names its papers the same way.
+        let mut changes = json!({"changes": [{"id": "P1", "addTags": ["P2"]}, {"id": "zzz", "starred": true}]});
+        resolve_labels(&mut changes, &ctx.sources);
+        assert_eq!(changes, json!({"changes": [{"id": "a", "addTags": ["P2"]}, {"id": "zzz", "starred": true}]}));
         let mut result = json!({"total": 1, "hits": [{"paperId": "c", "page": 1}], "papers": [{"id": "a"}, {"id": "zzz"}]});
         add_labels(&mut result, &ctx.sources);
         assert_eq!(result, json!({"total": 1, "hits": [{"paperId": "c", "page": 1, "label": "P3"}], "papers": [{"id": "a", "label": "P1"}, {"id": "zzz"}]}));

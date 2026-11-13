@@ -614,9 +614,10 @@ impl Workspace {
             Command(&'static str),
         }
         use Start::*;
-        let groups: [(&str, &str, &[Start]); 3] = [
+        let groups: [(&str, &str, &[Start]); 4] = [
             ("search", "找文献", &[Say("按这个文献库的主题在 PubMed 和 Europe PMC 试检索，看看还有哪些文献没有收进来。"), Say("给还没有 PDF 的文献查找开放全文。"), Command("search")]),
             ("file-text", "读文献", &[Say("这些文献主要在研究哪些问题？按主题归类。"), Say("哪些文献的结论相互支持或矛盾？"), Say("我还没读的文献里，哪几篇最值得先读？为什么？"), Command("compare")]),
+            ("list-todo", "整理", &[Say("给这些文献按主题打上标签，优先用已有的标签。"), Say("把我还没读的文献里最值得先读的几篇加上星标。"), Say("读一遍这些文献，为自定义词条提出取值。")]),
             ("pen-line", "写", &[Command("review"), Command("write"), Command("cite")]),
         ];
         let cards = groups.into_iter().map(|(icon, title, starts)| {
@@ -656,12 +657,13 @@ impl Workspace {
             .overflow_y_scroll()
             .gap(px(8.))
             .px(px(24.))
-            .pt(px(56.))
+            .pt(px(40.))
             .pb(px(24.))
             .child(ui::icon("sparkle", 30., Theme::text_placeholder()))
             .child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("交给助手")))
             .child(div().max_w(px(600.)).text_size(px(12.)).line_height(px(18.)).text_center().text_color(Theme::text_tertiary()).child(t("交代一件事，或者提一个问题。助手会自己检索和翻阅文献库，回答标出出处；要改动文献库时先问你。")))
-            .child(div().flex().flex_wrap().justify_center().items_start().gap(px(12.)).w_full().max_w(px(1080.)).pt(px(20.)).children(cards))
+            // Two cards to a row, one where the page is narrow.
+            .child(div().flex().flex_wrap().justify_center().items_start().gap(px(12.)).w_full().max_w(px(720.)).pt(px(20.)).children(cards))
             .into_any_element()
     }
 
@@ -745,6 +747,8 @@ impl Workspace {
     fn render_messages(&self, about_paper: bool, chat: &Chat, review: Option<&wisp_core::review::Review>, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let side = if about_paper { "paper" } else { "library" };
         let mut items: Vec<AnyElement> = vec![];
+        // An answer can be added to a manuscript once there is one.
+        let has_manuscript = self.lib.as_ref().is_some_and(|lib| !lib.writing.manuscripts.is_empty());
         // A citation clicked where it stands in the text.
         let workspace = cx.entity().downgrade();
         let cite: crate::markdown::OnCite = std::rc::Rc::new(move |citation, window, cx| {
@@ -874,6 +878,7 @@ impl Workspace {
                                 .gap(px(2.))
                                 .child(ui::ghost_button(SharedString::from(format!("picked-copy-{side}-{i}")), Some("copy"), Some(t("复制所选").into())).h(px(24.)).text_size(px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::CopyPicked(about_paper), cx)))
                                 .child(ui::ghost_button(SharedString::from(format!("picked-quote-{side}-{i}")), Some("pen-line"), Some(t("引用到输入框").into())).h(px(24.)).text_size(px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::QuotePicked(about_paper), cx)))
+                                .when(!about_paper && review.is_none() && has_manuscript, |d| d.child(ui::ghost_button(SharedString::from(format!("picked-insert-{side}-{i}")), Some("plus"), Some(t("所选插入稿件").into())).h(px(24.)).text_size(px(12.)).text_color(Theme::accent()).on_click(self.on_menu(MenuKind::InsertInto(None), cx))))
                                 // In a review's conversation, the part selected can be kept in place of the whole answer.
                                 .when_some(review, |d, review| {
                                     let text = chat.picked_text().unwrap_or_default();
@@ -894,6 +899,7 @@ impl Workspace {
                                 .child(ui::ghost_button(SharedString::from(format!("copy-{side}-{i}")), Some("copy"), None).h(px(24.)).min_w(px(24.)).opacity(0.7).on_click(self.on(Cmd::CopyText(whole.clone()), cx)))
                                 // A review's answers go to its record, step by step; any other answer about the library can become a manuscript as it is.
                                 .when(!about_paper && review.is_none() && !whole.trim().is_empty(), |d| d.child(ui::ghost_button(SharedString::from(format!("manuscript-{side}-{i}")), Some("pen-line"), Some(t("保存为新稿件").into())).h(px(24.)).text_size(px(12.)).opacity(0.7).on_click(self.on(Cmd::AnswerToManuscript(question.clone(), whole.clone()), cx))))
+                                .when(!about_paper && review.is_none() && has_manuscript && !whole.trim().is_empty(), |d| d.child(ui::ghost_button(SharedString::from(format!("insert-{side}-{i}")), Some("plus"), Some(t("插入到稿件").into())).h(px(24.)).text_size(px(12.)).opacity(0.7).on_click(self.on_menu(MenuKind::InsertInto(Some(whole.clone())), cx))))
                                 .when_some(review, |d, review| {
                                     use crate::app::ReviewDo;
                                     let mut button = |key: &'static str, label: &'static str, what: ReviewDo| ui::ghost_button(SharedString::from(format!("review-{key}-{side}-{i}")), Some("check"), Some(label.into())).h(px(24.)).text_size(px(12.)).opacity(0.7).on_click(self.on(Cmd::Review(what, whole.clone()), cx));
@@ -933,7 +939,16 @@ impl Workspace {
                     .border_color(Theme::line_strong())
                     .bg(Theme::bg_sunken())
                     .child(div().flex().items_center().gap(px(6.)).font_weight(FontWeight::MEDIUM).child(ui::icon("info", 14., Theme::accent())).child(t("助手想改动文献库，等你同意")))
-                    .children(pending.calls.iter().filter(|call| call.confirm).map(|call| div().pl(px(20.)).text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_secondary()).child(call.line.clone())))
+                    .children(pending.calls.iter().enumerate().filter(|(_, call)| call.confirm).map(|(n, call)| {
+                        let line = div().text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_secondary()).child(call.line.clone());
+                        if call.details.is_empty() { return div().pl(px(20.)).child(line) }
+                        // What it would change, paper by paper: all of it, in a box that scrolls when it is long.
+                        let rows = call.details.iter().map(|detail| {
+                            let (title, change) = detail.split_once('：').unwrap_or((detail.as_str(), ""));
+                            div().flex().flex_col().py(px(3.)).text_size(px(12.)).line_height(px(18.)).child(div().truncate().text_color(Theme::text_tertiary()).child(title.to_string())).child(div().text_color(Theme::text()).child(change.to_string()))
+                        });
+                        div().pl(px(20.)).flex().flex_col().gap(px(4.)).child(line).child(div().id(SharedString::from(format!("consent-details-{side}-{n}"))).flex().flex_col().max_h(px(240.)).overflow_y_scroll().px(px(10.)).py(px(4.)).rounded(px(8.)).bg(Theme::bg_body()).border_1().border_color(Theme::line()).children(rows))
+                    }))
                     .child(
                         div()
                             .flex()

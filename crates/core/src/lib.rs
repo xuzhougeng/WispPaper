@@ -42,6 +42,7 @@ pub mod markdown;
 pub mod mcp;
 pub mod model;
 pub mod openaccess;
+pub mod organise;
 pub mod pdftext;
 pub mod retrieval;
 pub mod review;
