@@ -140,7 +140,7 @@ fn basis(proposal: &Proposal) -> &'static str {
     }
 }
 
-fn tick_box(ticked: bool, able: bool) -> Div {
+pub(crate) fn tick_box(ticked: bool, able: bool) -> Div {
     div().flex().flex_none().items_center().justify_center().size(px(16.)).rounded(px(4.)).border_1().when(ticked, |d| d.bg(Theme::accent()).border_color(Theme::accent()).child(ui::icon("check", 11., Theme::on_accent()))).when(!ticked, |d| d.border_color(Theme::line_strong()).bg(Theme::bg_body())).when(!able, |d| d.opacity(0.4))
 }
 

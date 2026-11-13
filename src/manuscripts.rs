@@ -362,6 +362,38 @@ impl Workspace {
                 if let Err(err) = lib.store.remove_section(&id) { return self.fail(format!("{err:#}"), cx) }
                 self.write_reload(staying, cx);
             }
+            Cmd::SplitSection(heading) => {
+                let Some(lib) = self.lib.as_mut() else { return };
+                let writing = &lib.writing;
+                let (text, caret) = {
+                    let editor = writing.editor.read(cx);
+                    (editor.text().to_string(), editor.selection().start)
+                };
+                let at = wisp_core::ai::paragraph_at(&text, caret);
+                let section = writing.section_id.clone();
+                // What is typed is saved as it is typed; this is the text the store cuts.
+                if let Err(err) = lib.store.save_section_body(&section, &text) { return self.fail(format!("{err:#}"), cx) }
+                match lib.store.split_section(&section, at, heading) {
+                    Ok(made) => {
+                        lib.writing.search.asked = None;
+                        self.write_reload(Some(made.id.clone()), cx);
+                        // A section cut off without a heading is given its name by the person.
+                        if heading { if let Some(lib) = self.lib.as_ref() { lib.writing.editor.read(cx).focus(window) } } else { return self.run_manuscript(Cmd::EditSection(Some(made.id)), window, cx) }
+                    }
+                    Err(err) => self.fail(format!("{err:#}"), cx),
+                }
+            }
+            Cmd::MergeSection(id) => {
+                self.write_snapshot("leave");
+                let Some(lib) = self.lib.as_mut() else { return };
+                match lib.store.merge_section(&id) {
+                    Ok(merged) => {
+                        lib.writing.search.asked = None;
+                        self.write_reload(Some(merged.id), cx);
+                    }
+                    Err(err) => self.fail(format!("{err:#}"), cx),
+                }
+            }
             Cmd::WriteReading(reading) => {
                 if let Some(lib) = self.lib.as_mut() {
                     lib.writing.reading = reading;
@@ -526,6 +558,7 @@ impl Workspace {
                 if at > 0 { items.push(item(t("前移").into(), false, Cmd::MoveSection(id.clone(), -1))) }
                 if at + 1 < m.sections.len() { items.push(item(t("后移").into(), false, Cmd::MoveSection(id.clone(), 1))) }
                 items.push(item(t("历史版本…").into(), false, Cmd::WriteHistory));
+                if at > 0 { items.push(item(t("并入上一节").into(), false, Cmd::MergeSection(id.clone()))) }
                 if m.sections.len() > 1 { items.push(item(t("删除这一节…").into(), false, Cmd::AskRemoveSection(id.clone()))) }
             }
             MenuKind::ManuscriptExport => {
@@ -833,6 +866,8 @@ impl Workspace {
             "pause" => t("停笔时"),
             "leave" => t("离开时"),
             "restore" => t("恢复前"),
+            "split" => t("拆分前"),
+            "merge" => t("并入前"),
             _ => "",
         };
         let rows: Vec<AnyElement> = snapshots

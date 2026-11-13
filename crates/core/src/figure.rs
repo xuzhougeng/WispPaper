@@ -365,7 +365,7 @@ const OPENERS: [&str; 16] = [
 /// Whether a line opens a caption: the bytes of its number ("Fig. 2",
 /// "Table S1", "图 3"), and where the legend starts after it. A line of
 /// running text that merely begins with "Figure 2 shows" does not.
-fn opening(text: &str) -> Option<(usize, usize)> {
+pub(crate) fn opening(text: &str) -> Option<(usize, usize)> {
     let text_start = text.len() - text.trim_start().len();
     let rest = &text[text_start..];
     let opener = OPENERS.iter().find(|opener| rest.get(..opener.len()).is_some_and(|start| start.eq_ignore_ascii_case(opener)))?;
