@@ -260,10 +260,12 @@ impl Workspace {
             .flex_wrap()
             .gap(px(2.))
             .when(floating, |d| d.p(px(4.)).text_color(Theme::text()))
-            .when(!floating, |d| d.px(px(20.)).pb(px(6.)).child(div().flex_none().mr(px(4.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(t("对光标所在的段落："))))
+            .when(!floating, |d| d.px(px(20.)).pb(px(6.)))
             .when(configured, |d| d.children(buttons))
             .child(ui::ghost_button("write-comment", Some("message-square"), Some(t("批注").into())).h(px(if floating { 30. } else { 24. })).px(px(7.)).text_size(px(12.)).on_click(self.on(Cmd::Comment(crate::comments::Do::Write), cx)))
-            .when(!configured, |d| d.child(ui::ghost_button("write-assist-settings", Some("settings-gear"), Some(t("配置模型后可以改写、翻译和润色").into())).h(px(if floating { 30. } else { 24. })).text_size(px(12.)).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx))))
+            .when(!configured, |d| d.child(ui::ghost_button("write-assist-settings", Some("settings-gear"), Some(t("配置模型").into())).h(px(if floating { 30. } else { 24. })).text_size(px(12.)).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx)).tooltip(|_, cx| cx.new(|_| Tip(t("配置模型后可以改写、翻译和润色").into())).into())))
+            // What the bar under the manuscript works on, said on hover instead of in front of it.
+            .when(!floating, |d| d.child(ui::hint("write-assist-about", t("对光标所在的段落。选中文字时，这些按钮出现在选区旁，对选中的文字。"))))
     }
 
     /// The result of the last action, over the candidates; `None` without one for this part.

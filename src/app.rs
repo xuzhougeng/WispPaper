@@ -108,6 +108,8 @@ pub enum MenuKind {
     Section(String),
     ManuscriptExport,
     WriteLanguage,
+    /// 写作: which papers the candidates come from.
+    WriteNarrow,
     /// The menus a right click opens (`src/context.rs`): on a paper of a list, a paper in the trash, a file
     /// of the selected paper, a tag of the sidebar, a past conversation (of the paper or the library), a
     /// text that can be selected (the whole of it), an answer (of which conversation, and its text).
@@ -1619,6 +1621,7 @@ impl Workspace {
                 items.push(item(t("手动录入…"), Cmd::AddManual));
             }
             MenuKind::Manuscripts | MenuKind::Section(_) | MenuKind::ManuscriptExport | MenuKind::WriteLanguage => items = self.manuscript_menu(&kind),
+            MenuKind::WriteNarrow => items = self.narrowing_menu(),
             MenuKind::Export => {
                 items.push(item("BibTeX（.bib）", Cmd::Export(ExportKind::Bibtex)));
                 items.push(item(t("表格（.csv）"), Cmd::Export(ExportKind::Csv)));
