@@ -229,12 +229,11 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The actions under the manuscript, for the selection or the caret's paragraph.
-    pub fn render_assist_bar(&self, cx: &mut Context<Self>) -> Div {
+    /// Shared actions for the selection popover and the current-paragraph footer.
+    pub fn render_assist_bar(&self, floating: bool, cx: &mut Context<Self>) -> Div {
         let lib = self.lib.as_ref().unwrap();
         let writing = &lib.writing;
         let language = self.manuscript_language();
-        let selected = !writing.editor.read(cx).selection().is_empty();
         let busy = writing.assist.card.as_ref().is_some_and(|card| card.busy);
         let configured = self.settings.profile_for_or_default(Task::Chat).missing().is_none();
         let mut actions = vec![Assist::Rewrite, Assist::Translate, Assist::Polish, Assist::Cite];
@@ -246,7 +245,7 @@ impl Workspace {
                 _ => String::new(),
             };
             ui::ghost_button(("write-assist", n), (n == 0).then_some("sparkle"), Some(crate::i18n::assist_title(assist, &language).into()))
-                .h(px(24.))
+                .h(px(if floating { 30. } else { 24. }))
                 .px(px(7.))
                 .text_size(px(12.))
                 .when(busy, |d| d.opacity(0.45).cursor_default())
@@ -260,12 +259,11 @@ impl Workspace {
             .items_center()
             .flex_wrap()
             .gap(px(2.))
-            .px(px(20.))
-            .pb(px(6.))
-            .child(div().flex_none().mr(px(4.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(if selected { t("对选中的文字：") } else { t("对光标所在的段落：") }))
+            .when(floating, |d| d.p(px(4.)).text_color(Theme::text()))
+            .when(!floating, |d| d.px(px(20.)).pb(px(6.)).child(div().flex_none().mr(px(4.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(t("对光标所在的段落："))))
             .when(configured, |d| d.children(buttons))
-            .child(ui::ghost_button("write-comment", Some("message-square"), Some(t("批注").into())).h(px(24.)).px(px(7.)).text_size(px(12.)).on_click(self.on(Cmd::Comment(crate::comments::Do::Write), cx)))
-            .when(!configured, |d| d.child(ui::ghost_button("write-assist-settings", Some("settings-gear"), Some(t("配置模型后可以改写、翻译和润色").into())).h(px(24.)).text_size(px(12.)).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx))))
+            .child(ui::ghost_button("write-comment", Some("message-square"), Some(t("批注").into())).h(px(if floating { 30. } else { 24. })).px(px(7.)).text_size(px(12.)).on_click(self.on(Cmd::Comment(crate::comments::Do::Write), cx)))
+            .when(!configured, |d| d.child(ui::ghost_button("write-assist-settings", Some("settings-gear"), Some(t("配置模型后可以改写、翻译和润色").into())).h(px(if floating { 30. } else { 24. })).text_size(px(12.)).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx))))
     }
 
     /// The result of the last action, over the candidates; `None` without one for this part.

@@ -91,6 +91,10 @@ pub struct TextInput {
     typing: bool,
     /// Stretches of the text drawn on a tint (bytes, and the tint): the words a comment is about.
     marks: Vec<(Range<usize>, Hsla)>,
+    /// Updated during prepaint, so a selection toolbar follows wrapping and scrolling in this frame.
+    selection_geometry: Option<SelectionGeometry>,
+    selection_toolbar_visible: bool,
+    selection_toolbar_dismissed: bool,
 }
 
 /// The most changes a field can go back through.
@@ -129,6 +133,9 @@ impl TextInput {
             redo: vec![],
             typing: false,
             marks: vec![],
+            selection_geometry: None,
+            selection_toolbar_visible: false,
+            selection_toolbar_dismissed: false,
         }
     }
 
@@ -149,6 +156,7 @@ impl TextInput {
     }
 
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.selection_toolbar_dismissed = false;
         self.text = if self.multiline { text.replace("\r\n", "\n") } else { text.replace(['\n', '\r'], " ") };
         self.sel = self.text.len()..self.text.len();
         self.marked = None;
@@ -176,6 +184,7 @@ impl TextInput {
 
     /// Select `range` (bytes, kept within the text).
     pub fn select_range(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+        self.selection_toolbar_dismissed = false;
         let at = |o: usize| self.text.floor_char_boundary(o.min(self.text.len()));
         (self.sel, self.reversed, self.typing) = (at(range.start)..at(range.end.max(range.start)), false, false);
         cx.notify();
@@ -228,6 +237,7 @@ impl TextInput {
     }
 
     fn move_to(&mut self, o: usize, cx: &mut Context<Self>) {
+        self.selection_toolbar_dismissed = false;
         self.typing = false;
         self.sel = o..o;
         self.reversed = false;
@@ -235,6 +245,7 @@ impl TextInput {
     }
 
     fn select_to(&mut self, o: usize, cx: &mut Context<Self>) {
+        self.selection_toolbar_dismissed = false;
         if self.reversed { self.sel.start = o } else { self.sel.end = o }
         if self.sel.end < self.sel.start {
             self.reversed = !self.reversed;
@@ -369,6 +380,7 @@ impl TextInput {
     }
 
     fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        self.selection_toolbar_dismissed = false;
         self.sel = 0..self.text.len();
         self.reversed = false;
         cx.notify();
@@ -415,6 +427,7 @@ impl TextInput {
     }
 
     fn escape(&mut self, _: &Escape, _: &mut Window, cx: &mut Context<Self>) {
+        if self.selection_toolbar_visible { return self.dismiss_selection_toolbar(cx) }
         cx.emit(InputEvent::Cancel);
         // The dialog or panel around the field handles Escape too, unless it only closes the list.
         if !self.choosing { cx.propagate() }
@@ -494,6 +507,7 @@ impl TextInput {
     }
 
     fn on_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.selection_toolbar_dismissed = false;
         window.focus(&self.focus);
         if ev.click_count >= 2 {
             self.sel = 0..self.text.len();
@@ -512,8 +526,17 @@ impl TextInput {
         }
     }
 
-    fn on_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
-        self.selecting = false;
+    fn on_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.selecting {
+            self.selecting = false;
+            cx.notify();
+        }
+    }
+
+    fn dismiss_selection_toolbar(&mut self, cx: &mut Context<Self>) {
+        self.selection_toolbar_dismissed = true;
+        self.selection_toolbar_visible = false;
+        cx.notify();
     }
 
     // ---- UTF-16 offsets, which the platform's input methods speak
@@ -641,6 +664,100 @@ struct InputElement {
     input: Entity<TextInput>,
 }
 
+#[derive(Clone, Copy)]
+struct SelectionGeometry {
+    first: Bounds<Pixels>,
+    last: Bounds<Pixels>,
+    viewport: Bounds<Pixels>,
+}
+
+impl SelectionGeometry {
+    fn toolbar_origin(self, toolbar: Size<Pixels>) -> Point<Pixels> {
+        let inset = px(6.);
+        let gap = px(8.);
+        // Above the first selected line; below the last when the top has no room.
+        let above = self.first.top() - gap - toolbar.height;
+        let (line, y) = if above >= self.viewport.top() + inset {
+            (self.first, above)
+        } else {
+            (self.last, self.last.bottom() + gap)
+        };
+        let left = self.viewport.left() + inset;
+        let top = self.viewport.top() + inset;
+        point(
+            (line.center().x - toolbar.width / 2.).clamp(left, (self.viewport.right() - inset - toolbar.width).max(left)),
+            y.clamp(top, (self.viewport.bottom() - inset - toolbar.height).max(top)),
+        )
+    }
+}
+
+/// Draw the editor normally, then place its toolbar using this frame's selection geometry.
+/// Deferring the toolbar keeps it above the text and outside the scroll area's clipping layer.
+pub fn with_selection_toolbar(input: &Entity<TextInput>, toolbar: impl IntoElement) -> impl IntoElement {
+    SelectionToolbar { input: input.clone(), editor: input.clone().into_any_element(), toolbar: Some(toolbar.into_any_element()) }
+}
+
+struct SelectionToolbar {
+    input: Entity<TextInput>,
+    editor: AnyElement,
+    toolbar: Option<AnyElement>,
+}
+
+impl IntoElement for SelectionToolbar {
+    type Element = Self;
+    fn into_element(self) -> Self { self }
+}
+
+impl Element for SelectionToolbar {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> { None }
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> { None }
+
+    fn request_layout(&mut self, _: Option<&GlobalElementId>, _: Option<&InspectorElementId>, window: &mut Window, cx: &mut App) -> (LayoutId, ()) {
+        (self.editor.request_layout(window, cx), ())
+    }
+
+    fn prepaint(&mut self, _: Option<&GlobalElementId>, _: Option<&InspectorElementId>, _: Bounds<Pixels>, _: &mut (), window: &mut Window, cx: &mut App) {
+        self.editor.prepaint(window, cx);
+        let input = self.input.read(cx);
+        if input.selecting || input.selection_toolbar_dismissed || !input.focus.is_focused(window) || input.selected().trim().is_empty() { return }
+        let Some(geometry) = input.selection_geometry else { return };
+        let available = geometry.viewport.size - size(px(12.), px(12.));
+        if available.width <= px(0.) || available.height <= px(0.) { return }
+        let Some(toolbar) = self.toolbar.take() else { return };
+        let outside = self.input.clone();
+        let clicked = self.input.clone();
+        let mut toolbar = div()
+            .id("text-selection-toolbar")
+            .max_w(available.width)
+            .max_h(available.height)
+            .overflow_y_scroll()
+            .rounded(px(10.))
+            .border_1()
+            .border_color(Theme::line_strong())
+            .bg(Theme::bg_body())
+            .shadow(crate::theme::shadow_panel())
+            .occlude()
+            .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                window.prevent_default();
+                cx.stop_propagation();
+            })
+            .on_mouse_down_out(move |_, _, cx| outside.update(cx, |input, cx| input.dismiss_selection_toolbar(cx)))
+            .on_click(move |_, _, cx| clicked.update(cx, |input, cx| input.dismiss_selection_toolbar(cx)))
+            .child(toolbar)
+            .into_any_element();
+        let measured = toolbar.layout_as_root(size(AvailableSpace::MaxContent, AvailableSpace::MaxContent), window, cx);
+        window.defer_draw(toolbar, geometry.toolbar_origin(measured), 1);
+        self.input.update(cx, |input, _| input.selection_toolbar_visible = true);
+    }
+
+    fn paint(&mut self, _: Option<&GlobalElementId>, _: Option<&InspectorElementId>, _: Bounds<Pixels>, _: &mut (), _: &mut (), window: &mut Window, cx: &mut App) {
+        self.editor.paint(window, cx);
+    }
+}
+
 struct Prepaint {
     lines: Vec<(WrappedLine, usize, Pixels)>,
     /// Under the text whether the field has the keyboard or not.
@@ -765,6 +882,13 @@ impl Element for InputElement {
         let selection = if input.sel.is_empty() { vec![] } else { rows(input.to_display(input.sel.start), input.to_display(input.sel.end), Theme::selection()) };
         let marks = input.marks.iter().filter(|(range, _)| range.start < range.end && range.end <= input.text.len() && !input.masked).flat_map(|(range, color)| rows(range.start, range.end, *color)).collect();
         let caret = input.sel.is_empty().then(|| fill(Bounds::new(origin + point(caret_at.x, caret_at.y + px(1.)), size(px(1.5), line_height - px(2.))), Theme::text()));
+        let viewport = bounds.intersect(&window.content_mask().bounds);
+        let visible: Vec<_> = selection.iter().map(|quad| quad.bounds.intersect(&viewport)).filter(|bounds| !bounds.is_empty()).collect();
+        let geometry = visible.first().zip(visible.last()).map(|(&first, &last)| SelectionGeometry { first, last, viewport });
+        self.input.update(cx, |input, _| {
+            input.selection_geometry = geometry;
+            input.selection_toolbar_visible = false;
+        });
         Prepaint { lines: probe.lines, marks, selection, caret, scroll_x }
     }
 
