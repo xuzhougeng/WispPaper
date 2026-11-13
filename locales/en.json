@@ -1074,5 +1074,15 @@
   "在回收站中，未导入": "In trash; not imported",
   "新增文献": "Paper added",
   "已有文献，保留原记录": "Existing paper; original record kept",
-  "文献未导入": "Paper not imported"
+  "文献未导入": "Paper not imported",
+  "设置…": "Settings…",
+  "隐藏 Wisp Paper": "Hide Wisp Paper",
+  "隐藏其他": "Hide Others",
+  "全部显示": "Show All",
+  "退出 Wisp Paper": "Quit Wisp Paper",
+  "打开 Wisp Paper": "Open Wisp Paper",
+  "后台": "Background",
+  "关闭窗口后在后台运行": "Keep running after the window closes",
+  "关闭窗口后应用留在程序坞中，检索同步、筛选和导入照常进行；点程序坞图标回到窗口，⌘Q 退出。": "Closing the window leaves the app in the Dock; search syncs, screening and imports carry on. Click the Dock icon to bring the window back, ⌘Q to quit.",
+  "关闭窗口后应用留在通知区域，检索同步、筛选和导入照常进行；点托盘图标回到窗口，在它的菜单里退出。": "Closing the window leaves the app in the notification area; search syncs, screening and imports carry on. Click the tray icon to bring the window back; quit from its menu."
 }

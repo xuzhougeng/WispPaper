@@ -163,6 +163,7 @@ pub enum Cmd {
     ResetDataDir,
     RevealDataDir,
     ToggleAutoUpdate,
+    ToggleKeepRunning,
     CheckUpdate,
     SetAppearance(String),
     SetLanguage(Language),
@@ -1736,6 +1737,10 @@ impl Workspace {
                 self.save_settings(cx);
                 if self.settings.auto_update { self.check_update(false, cx) }
             }
+            Cmd::ToggleKeepRunning => {
+                self.settings.keep_running = !self.settings.keep_running;
+                self.save_settings(cx);
+            }
             Cmd::CheckUpdate => self.check_update(true, cx),
             Cmd::SetAppearance(value) => {
                 self.settings.appearance = value;
@@ -1749,6 +1754,7 @@ impl Workspace {
             Cmd::SetLanguage(language) => {
                 self.settings.language = language;
                 crate::i18n::set_language(language);
+                crate::background::set_menus(cx);
                 self.save_settings(cx);
                 cx.refresh_windows();
             }
@@ -5043,6 +5049,11 @@ impl Workspace {
                 "language" => Some(Cmd::SetLanguage(if arg == "en" { Language::En } else { Language::Zh })),
                 "record" => Some(Cmd::RecordShortcut(arg.to_string())),
                 "update" => Some(Cmd::CheckUpdate),
+                // The window's close button: put away while 设置 › 通用 › 后台 is on, else closed (and the app quits).
+                "close" => {
+                    if crate::background::close(self.settings.keep_running, window, cx) { window.remove_window() }
+                    return;
+                }
                 "modal" => match arg {
                     "fields" => Some(Cmd::ManageFields),
                     "library" => Some(Cmd::NewLibrary),

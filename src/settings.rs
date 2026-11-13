@@ -744,6 +744,10 @@ impl Workspace {
                 group(Some(t("数据")), vec![row(t("数据目录"), Some(self.root.display().to_string().into()), folder).into_any_element()])
                     .child(note(t("所有文献库都在这个文件夹下，每个文献库是其中的一个子文件夹。改到别的目录后，首页显示那个目录里的文献库；原目录里的文献库不会被移动。"))),
             )
+            .when(crate::background::SUPPORTED, |d| {
+                let detail = if cfg!(target_os = "macos") { t("关闭窗口后应用留在程序坞中，检索同步、筛选和导入照常进行；点程序坞图标回到窗口，⌘Q 退出。") } else { t("关闭窗口后应用留在通知区域，检索同步、筛选和导入照常进行；点托盘图标回到窗口，在它的菜单里退出。") };
+                d.child(group(Some(t("后台")), vec![row(t("关闭窗口后在后台运行"), Some(detail.into()), switch("keep-running", self.settings.keep_running).on_click(self.on(Cmd::ToggleKeepRunning, cx))).into_any_element()]))
+            })
             .child(group(
                 Some(t("更新")),
                 vec![

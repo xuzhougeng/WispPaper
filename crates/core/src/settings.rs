@@ -58,11 +58,13 @@ pub struct Settings {
     pub ask_list_width: f32,
     /// The paper's conversation over its PDF instead of beside it, and where its window was left.
     pub floating: crate::floating::Floating,
+    /// Closing the window keeps the app running in the background (macOS: the Dock, Windows: the tray) instead of quitting.
+    pub keep_running: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { data_dir: String::new(), profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translation_prompt: String::new(), commands: vec![], auto_update: true, appearance: String::new(), language: Language::default(), density: String::new(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., floating: Default::default() }
+        Settings { data_dir: String::new(), profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translation_prompt: String::new(), commands: vec![], auto_update: true, appearance: String::new(), language: Language::default(), density: String::new(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., floating: Default::default(), keep_running: true }
     }
 }
 
@@ -281,7 +283,7 @@ mod tests {
         // A file from before a setting existed takes that setting's default.
         std::fs::write(&path, r#"{"dataDir":"/x","shortcuts":{"search":""}}"#).unwrap();
         let old = Settings::load(&path).unwrap();
-        assert!(old.auto_update && old.appearance.is_empty());
+        assert!(old.auto_update && old.appearance.is_empty() && old.keep_running);
         assert_eq!((old.data_dir.as_str(), old.shortcuts.get("search").map(String::as_str)), ("/x", Some("")));
         assert_eq!(s.data_root(Path::new("/d")), PathBuf::from("/d"));
         assert!(old.proxy.is_empty() && old.commands.is_empty());
