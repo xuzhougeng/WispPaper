@@ -107,6 +107,21 @@ impl Theme {
     pub fn segment() -> Hsla { pick(0xFFFFFF, 0x5A5C63) }
 }
 
+/// The tile a model provider's mark is drawn on (设置 › AI): the service's
+/// own colour, from the top of the tile to its bottom, the same in both sets.
+/// The mark on it is white.
+pub fn provider_tile(preset: &str) -> (Hsla, Hsla) {
+    let (top, bottom) = match preset {
+        "deepseek" => (0x6A86FF, 0x3D5AF1),
+        "kimi" => (0x3A3D45, 0x111216),
+        "glm" => (0x7B6BFF, 0x4338E0),
+        "claude" => (0xE69477, 0xC9603E),
+        "openai" => (0x19B48E, 0x0B7A5F),
+        _ => (0x9AA0AA, 0x6E737D),
+    };
+    (c(top), c(bottom))
+}
+
 /// The (text, fill) of a status chip.
 pub fn status_colors(value: &str) -> (Hsla, Hsla) {
     let (light, fill, bright) = match value {

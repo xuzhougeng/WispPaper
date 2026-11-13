@@ -36,10 +36,14 @@ pub struct Profile {
     /// profile is added or first read from an older settings file.
     pub id: String,
     pub name: String,
+    /// The name of the provider it belongs to, for where it is listed.
+    pub provider: String,
     pub protocol: Protocol,
     pub base_url: String,
-    /// Empty means the ANTHROPIC_API_KEY / OPENAI_API_KEY environment variable.
+    /// Empty means the environment variable `key_env`, else ANTHROPIC_API_KEY / OPENAI_API_KEY.
     pub api_key: String,
+    /// The environment variable the provider's key is read from when none is stored.
+    pub key_env: String,
     pub model: String,
     /// How hard this model thinks, a key of `EFFORTS`: empty leaves it to the
     /// service, `off` asks for no thinking, the rest are levels.
@@ -56,7 +60,7 @@ pub const DEFAULT_MODEL: &str = "claude-opus-5-5";
 
 impl Default for Profile {
     fn default() -> Self {
-        Profile { id: String::new(), name: "Claude".into(), protocol: Protocol::Anthropic, base_url: ANTHROPIC_BASE.into(), api_key: String::new(), model: DEFAULT_MODEL.into(), effort: String::new(), proxy: String::new() }
+        Profile { id: String::new(), name: "Claude".into(), provider: String::new(), protocol: Protocol::Anthropic, base_url: ANTHROPIC_BASE.into(), api_key: String::new(), key_env: String::new(), model: DEFAULT_MODEL.into(), effort: String::new(), proxy: String::new() }
     }
 }
 
@@ -67,6 +71,11 @@ impl Profile {
         if name.is_empty() { "未命名模型".into() } else { name.to_string() }
     }
 
+    /// The model with its provider: `deepseek-v4-pro · DeepSeek`.
+    pub fn labelled(&self) -> String {
+        if self.provider.trim().is_empty() { self.title() } else { format!("{} · {}", self.title(), self.provider.trim()) }
+    }
+
     /// What is still missing before a request can be made, if anything.
     pub fn missing(&self) -> Option<&'static str> {
         if self.key().is_empty() { Some("还缺 API Key") } else if self.model.trim().is_empty() { Some("还缺模型名称") } else { None }
@@ -75,6 +84,7 @@ impl Profile {
     /// The key to send: the stored one, else the protocol's environment variable.
     pub fn key(&self) -> String {
         if !self.api_key.trim().is_empty() { return self.api_key.trim().to_string() }
+        if !self.key_env.trim().is_empty() { return std::env::var(self.key_env.trim()).unwrap_or_default() }
         std::env::var(match self.protocol {
             Protocol::Anthropic => "ANTHROPIC_API_KEY",
             Protocol::OpenAI | Protocol::Responses => "OPENAI_API_KEY",
