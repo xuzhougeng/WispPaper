@@ -31,6 +31,16 @@ pub const MAX_SENTENCES: usize = 40;
 /// abbreviation or inside a number does not, and nothing inside brackets
 /// does (`[@A; @B]`, `(p < 0.05; n = 3)`).
 pub fn sentences(text: &str) -> Vec<Range<usize>> {
+    cut(text, true)
+}
+
+/// The sentences as a reader takes them: a semicolon goes on with the
+/// sentence it stands in. What a click selects (`selection::sentence`).
+pub fn whole_sentences(text: &str) -> Vec<Range<usize>> {
+    cut(text, false)
+}
+
+fn cut(text: &str, semicolons: bool) -> Vec<Range<usize>> {
     let chars: Vec<(usize, char)> = text.char_indices().collect();
     let byte = |i: usize| chars.get(i).map_or(text.len(), |(at, _)| *at);
     let mut out: Vec<Range<usize>> = vec![];
@@ -53,8 +63,9 @@ pub fn sentences(text: &str) -> Vec<Range<usize>> {
             _ => {}
         }
         let between_digits = at > 0 && chars[at - 1].1.is_ascii_digit() && chars.get(at + 1).is_some_and(|(_, c)| c.is_ascii_digit());
+        let semicolon = matches!(c, ';' | '；');
         let wide = matches!(c, '。' | '！' | '？' | '；') || (c == '．' && !between_digits);
-        if depth == 0 && (wide || matches!(c, '.' | '!' | '?' | ';')) {
+        if depth == 0 && (semicolons || !semicolon) && (wide || matches!(c, '.' | '!' | '?' | ';')) {
             // A closing quotation mark belongs to the sentence it closes.
             let mut end = at + 1;
             while end < chars.len() && matches!(chars[end].1, '"' | '”' | '’' | '\'' | '」' | '』') { end += 1 }

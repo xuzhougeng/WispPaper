@@ -17,6 +17,7 @@ pdf-extract = "0.9"
 hayro-interpret = "0.9"
 # Word files are zip archives, packed with deflate (`docx.rs`); the PDF readers bring it along already.
 flate2 = "1"
+icu_segmenter = "2"
 
 [lints]
 workspace = true

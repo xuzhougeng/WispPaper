@@ -5087,21 +5087,21 @@ impl Workspace {
                     return;
                 }
                 // The pointer, as the window hears of it: `press:x;y`, `move:x;y` (the button held), `release:x;y`,
-                // `click:x;y`, `click2:x;y` (the second click of a double click), and `wheel:x;y;dy;cmd` (dy in pixels;
+                // `click:x;y`, `click2:x;y` / `click3:x;y` (the second click of a double click, the third of a triple), and `wheel:x;y;dy;cmd` (dy in pixels;
                 // `cmd` or `shift` held, or nothing).
                 // A key as the window hears it (`key:down`, `key:cmd-backspace`).
                 "key" => {
                     if let Ok(stroke) = Keystroke::parse(arg) { window.defer(cx, move |window, cx| { window.dispatch_keystroke(stroke, cx); }) }
                     return;
                 }
-                "press" | "move" | "release" | "click" | "click2" | "rclick" | "wheel" => {
+                "press" | "move" | "release" | "click" | "click2" | "click3" | "rclick" | "wheel" => {
                     let mut numbers = arg.split(';');
                     let mut number = || numbers.next().and_then(|n| n.parse::<f32>().ok()).unwrap_or(0.);
                     let position = point(px(number()), px(number()));
                     let turned = number();
                     let held = arg.rsplit(';').next().unwrap_or("");
                     let modifiers = Modifiers { platform: held == "cmd", control: held == "ctrl", shift: held == "shift", ..Default::default() };
-                    let count = if name == "click2" { 2 } else { 1 };
+                    let count = match name { "click2" => 2, "click3" => 3, _ => 1 };
                     let events = match name {
                         "press" => vec![PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Left, position, modifiers, click_count: 1, first_mouse: false })],
                         "move" => vec![PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: Some(MouseButton::Left), modifiers })],
