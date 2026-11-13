@@ -135,6 +135,7 @@ pub fn rebuild(custom: &BTreeMap<String, String>, cx: &mut App) {
             _ => KeyBinding::new(&key, ToggleDetail, context),
         });
     }
+    bindings.extend(crate::background::bindings());
     cx.bind_keys(bindings);
 }
 
