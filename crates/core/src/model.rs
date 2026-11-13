@@ -107,6 +107,8 @@ pub struct FieldDef {
     pub options: Vec<String>,
     /// Shown as a column of the paper table.
     pub in_table: bool,
+    /// What the field is for, in the person's words: what the assistant is told to look for (提取).
+    pub hint: String,
 }
 
 /// A file stored under the library's `papers/` folder.

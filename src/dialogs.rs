@@ -53,6 +53,7 @@ impl Workspace {
             Modal::ReviewEvidence(_) => self.render_review_evidence_dialog(window, cx)?,
             Modal::ReviewText { .. } => self.render_review_text_dialog(window, cx)?,
             Modal::Figure(_) => self.render_figure_dialog(window, cx)?,
+            Modal::Extract(_) => self.render_extract_dialog(cx)?,
             Modal::Zotero => ui::dialog(560.)
                 .child(ui::dialog_title(t("从 Zotero 导入")))
                 .child(body()
@@ -470,7 +471,7 @@ impl Workspace {
                 )
                 .child(footer(t("保存"), false, self, cx)),
 
-            Modal::Fields { editing, name, options, kind, in_table } => {
+            Modal::Fields { editing, name, options, hint, kind, in_table } => {
                 let lib = self.lib.as_ref()?;
                 let count = lib.fields.len();
                 let rows: Vec<AnyElement> = lib
@@ -520,6 +521,7 @@ impl Workspace {
                                     .child(ui::field(name, window, cx))
                                     .child(div().flex().items_center().gap(px(6.)).children(FieldKind::ALL.iter().map(|k| option_chip(k.as_str(), t(k.label()), k == kind).on_click(self.on(Cmd::PickKind(*k), cx)))).child(div().flex_1()).child(option_chip("new-in-table", t("显示为表格列"), *in_table).on_click(self.on(Cmd::ToggleInTable, cx))))
                                     .when(*kind != FieldKind::Text, |d| d.child(ui::field(options, window, cx)))
+                                    .child(ui::field(hint, window, cx))
                                     .child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(match kind {
                                         FieldKind::Text => t("文本：一行自由文字，例如“实验室”“备注编号”。"),
                                         FieldKind::Tags => t("多值：一篇文献可以有多个值，例如物种、方法；可按值筛选。"),
@@ -536,6 +538,9 @@ impl Workspace {
                             .gap(px(8.))
                             .px(px(20.))
                             .py(px(14.))
+                            // The assistant can fill them: the dialog that says for which papers and fields.
+                            .when(count > 0, |d| d.child(ui::ghost_button("fields-extract", Some("sparkle"), Some(t("让助手填写…").into())).on_click(self.on(Cmd::Extract(crate::extract::Do::Open(None)), cx))))
+                            .child(div().flex_1())
                             .child(ui::secondary_button("modal-cancel", t("完成")).on_click(self.on(Cmd::CloseModal, cx)))
                             .child(ui::primary_button("modal-ok", if editing.is_some() { t("保存修改") } else { t("添加词条") }).on_click(self.on(Cmd::SubmitModal, cx))),
                     )
