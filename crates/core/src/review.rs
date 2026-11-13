@@ -515,6 +515,15 @@ impl Store {
         body.map(|body| self.evidence_availability(serde_json::from_str(&body)?)).transpose()
     }
 
+    /// The reviews that have sections written, each with the conversation it belongs to, newest first: what 写作 can take in as a manuscript.
+    pub fn reviews_written(&self) -> Result<Vec<(String, Review)>> {
+        let mut stmt = self.db.prepare("SELECT c.conversation_id, p.body FROM review_projects p JOIN review_conversations c ON c.review_id = p.id")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut found: Vec<(String, Review)> = rows.into_iter().filter_map(|(conversation, body)| Some((conversation, serde_json::from_str::<Review>(&body).ok()?))).filter(|(_, review)| review.sections.iter().any(|section| !section.body.trim().is_empty())).collect();
+        found.sort_by(|a, b| b.1.updated_at.cmp(&a.1.updated_at));
+        Ok(found)
+    }
+
     /// Reject a stale editor rather than silently overwriting another window's work.
     pub fn apply_review(&mut self, id: &str, expected_revision: i64, mut action: ReviewAction) -> Result<Review> {
         let mut review = self.review(id)?.ok_or_else(|| anyhow::anyhow!("综述不存在"))?;

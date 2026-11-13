@@ -1553,7 +1553,7 @@ pub enum Change {
 
 /// The words a comparison goes by: runs of letters and digits, every other
 /// character (a Chinese character, a space, a mark) on its own.
-fn diff_tokens(text: &str) -> Vec<&str> {
+pub(crate) fn diff_tokens(text: &str) -> Vec<&str> {
     let mut tokens = vec![];
     let mut start = None;
     for (at, c) in text.char_indices() {

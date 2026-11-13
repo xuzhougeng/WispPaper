@@ -438,6 +438,7 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("structures", "language", "TEXT NOT NULL DEFAULT ''"),
     ("structures", "pages_read", "INTEGER NOT NULL DEFAULT 0"),
     ("structures", "page_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("manuscript_sections", "bare", "INTEGER NOT NULL DEFAULT 0"),
 ];
 
 /// Add the columns added to a table after it was first made: `CREATE TABLE IF NOT
@@ -487,6 +488,7 @@ impl Store {
         check_schema_version(version, SCHEMA_VERSION)?;
         db.execute_batch(SCHEMA)?;
         db.execute_batch(crate::manuscript::SCHEMA)?;
+        db.execute_batch(crate::comment::SCHEMA)?;
         db.execute_batch(crate::review::SCHEMA)?;
         db.execute_batch(crate::figure::SCHEMA)?;
         db.execute_batch(crate::extract::SCHEMA)?;

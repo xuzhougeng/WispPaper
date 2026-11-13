@@ -11,6 +11,7 @@ mod assets;
 mod background;
 mod chat;
 mod cite;
+mod comments;
 mod context;
 mod detail;
 mod extract;

@@ -18,6 +18,8 @@ use wisp_core::structure::SECTIONS;
 pub enum ManuscriptExport {
     Markdown,
     Docx,
+    /// A Word file with what changed since the file the manuscript came from written as revisions.
+    DocxTracked,
     /// The whole text to the clipboard.
     Copy,
 }
@@ -96,7 +98,8 @@ impl Workspace {
     /// existing draft. Conversation-local citation labels travel with it.
     pub(crate) fn answer_to_manuscript(&mut self, question: String, answer: String, window: &mut Window, cx: &mut Context<Self>) {
         let title: String = question.trim().strip_prefix("/review").unwrap_or(question.trim()).trim().chars().take(80).collect();
-        self.draft_to_manuscript(title, vec![(t("正文").into(), answer)], window, cx);
+        let sources = self.lib.as_ref().map(|lib| lib.library_chat.sources().to_vec()).unwrap_or_default();
+        self.draft_to_manuscript(title, vec![(t("正文").into(), answer)], sources, window, cx);
     }
 
     /// Add an answer, or part of one, at the end of a section of a
@@ -128,10 +131,12 @@ impl Workspace {
     /// Assemble every recorded section in its saved order into a new manuscript.
     pub(crate) fn review_to_manuscript(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(review) = self.lib.as_ref().and_then(|lib| lib.library_chat.review.clone()).filter(|review| review.outline_confirmed && !review.sections.is_empty()) else { return self.fail(t("请先确认大纲并保存正文。"), cx) };
-        self.draft_to_manuscript(review.title, review.sections.into_iter().map(|s| (s.name, s.body)).collect(), window, cx);
+        let sources = self.lib.as_ref().map(|lib| lib.library_chat.sources().to_vec()).unwrap_or_default();
+        self.draft_to_manuscript(review.title, review.sections.into_iter().map(|s| (s.name, s.body)).collect(), sources, window, cx);
     }
 
-    fn draft_to_manuscript(&mut self, title: String, sections: Vec<(String, String)>, window: &mut Window, cx: &mut Context<Self>) {
+    /// A new manuscript of text the assistant wrote. `sources` are the papers its labels (`P3`) name: those of the conversation it was written in.
+    pub(crate) fn draft_to_manuscript(&mut self, title: String, sections: Vec<(String, String)>, sources: Vec<wisp_core::ai::Source>, window: &mut Window, cx: &mut Context<Self>) {
         if sections.is_empty() || sections.iter().all(|(_, body)| body.trim().is_empty()) { return }
         let Some(lib) = self.lib.as_mut() else { return };
         // Resolve only unambiguous labels using the same citation keys as the
@@ -141,12 +146,12 @@ impl Workspace {
         let known = match lib.store.cite_keys() { Ok(keys) => keys, Err(err) => return self.fail(tf!("无法读取引用记录：{err:#}", "Cannot read citation records: {err:#}"), cx) };
         let converted = {
             let index = wisp_core::cite::Index::new(&lib.papers, lib.trash.iter().map(|entry| &entry.paper), &known);
-            sections.iter().map(|(name, body)| (name.clone(), wisp_core::cite::convert_ai_citations(body, lib.library_chat.sources(), &index))).collect::<Vec<_>>()
+            sections.iter().map(|(name, body)| (name.clone(), wisp_core::cite::convert_ai_citations(body, &sources, &index))).collect::<Vec<_>>()
         };
         let keys: Vec<(String, String)> = converted.iter().flat_map(|(_, part)| part.keys.clone()).collect();
         let mut sections: Vec<(String, String)> = converted.into_iter().map(|(name, part)| (name, part.text)).collect();
         let answer = sections.iter().map(|(_, body)| body.as_str()).collect::<Vec<_>>().join("\n\n");
-        let labels = answer_source_labels(&answer, lib.library_chat.sources(), &lib.papers);
+        let labels = answer_source_labels(&answer, &sources, &lib.papers);
         if !labels.is_empty() { sections.push((t("来源标签（请核对）").into(), labels)) }
         let language = lib.writing.language().to_string();
         // Creating all sections and pinning keys are a single database transaction.
@@ -207,6 +212,10 @@ impl Workspace {
         writing.assist.leave();
         writing.editor.update(cx, |input, cx| input.set_text(&body, cx));
         writing.title.update(cx, |input, cx| input.set_text(&title, cx));
+        // A comment being written was about the section left.
+        writing.comments.drafting = None;
+        writing.editor_scroll.set_offset(point(px(0.), px(0.)));
+        self.comments_load();
         self.write_openers(cx);
         cx.notify();
     }
@@ -423,13 +432,21 @@ impl Workspace {
     fn export_manuscript(&mut self, kind: ManuscriptExport, cx: &mut Context<Self>) {
         let Some(manuscript) = self.lib.as_ref().and_then(|l| l.writing.current()).cloned() else { return };
         if manuscript.sections.iter().all(|s| s.body.trim().is_empty()) { return self.fail(t("这份稿件还没有写什么。"), cx) }
+        // What a Word file was made of: said once it is written.
+        let mut note = String::new();
         let (bytes, extension) = match kind {
             ManuscriptExport::Copy => {
                 cx.write_to_clipboard(ClipboardItem::new_string(manuscript::plain_text(&manuscript)));
                 return self.say(t("已复制整份稿件。"), cx);
             }
             ManuscriptExport::Markdown => (manuscript::markdown(&manuscript).into_bytes(), "md"),
-            ManuscriptExport::Docx => (manuscript::docx(&manuscript), "docx"),
+            ManuscriptExport::Docx | ManuscriptExport::DocxTracked => match self.manuscript_word(&manuscript, kind == ManuscriptExport::DocxTracked) {
+                Ok((bytes, said)) => {
+                    note = said;
+                    (bytes, "docx")
+                }
+                Err(error) => return self.fail(error, cx),
+            },
         };
         let name = format!("{}.{extension}", file_name(crate::i18n::manuscript_title(&manuscript)));
         let directory = dirs::document_dir().or_else(dirs::home_dir).unwrap_or_else(|| self.root.clone());
@@ -439,13 +456,41 @@ impl Workspace {
                 if path.extension().is_none() { path.set_extension(extension); }
                 let result = std::fs::write(&path, bytes);
                 this.update(cx, |this, cx| match result {
-                    Ok(()) => this.say(tf!("已导出到 {}", "Exported to {}", path.display()), cx),
+                    Ok(()) => this.say(tf!("已导出到 {}{note}", "Exported to {}{note}", path.display()), cx),
                     Err(err) => this.fail(tf!("无法写入 {}：{err}", "Cannot write {}: {err}", path.display()), cx),
                 })
                 .ok();
             }
         })
         .detach();
+    }
+
+    /// The manuscript as a Word file with its comments, and what was done in words: one that came from a Word file is that file written again.
+    fn manuscript_word(&self, manuscript: &Manuscript, track: bool) -> Result<(Vec<u8>, String), String> {
+        let Some(lib) = self.lib.as_ref() else { return Err(String::new()) };
+        let comments = lib.store.comments(&manuscript.id).map_err(|err| format!("{err:#}"))?;
+        let (done, from_file) = lib.store.manuscript_word(manuscript, &comments, track, &self.settings.author_name()).map_err(|err| tf!("没有导出：{err:#}", "Not exported: {err:#}"))?;
+        let mut said = vec![];
+        if from_file {
+            if done.changed + done.added + done.removed == 0 { said.push(t("文字与原文件相同").to_string()) }
+            if done.changed > 0 { said.push(tf!("改动 {} 段", "{} paragraphs changed", done.changed)) }
+            if done.added > 0 { said.push(tf!("新增 {} 段", "{} added", done.added)) }
+            if done.removed > 0 { said.push(tf!("删去 {} 段", "{} removed", done.removed)) }
+            if track && done.changed + done.added + done.removed > 0 { said.push(t("都记为修订").to_string()) }
+        } else if lib.writing.comments.source.as_ref().is_some_and(|source| source.kind == "docx") {
+            said.push(t("原来的 Word 文件不在了，按新文档导出").to_string());
+        }
+        if done.comments > 0 { said.push(tf!("批注 {} 条", "{} comments", done.comments)) }
+        Ok((done.bytes, if said.is_empty() { String::new() } else { tf!("（{}）", " ({})", said.join(if crate::i18n::is_english() { ", " } else { "，" })) }))
+    }
+
+    /// Write the manuscript on show as a Word file at `path`, without asking where: a scripted run's export.
+    pub(crate) fn write_word_to(&mut self, path: std::path::PathBuf, track: bool, cx: &mut Context<Self>) {
+        let Some(manuscript) = self.lib.as_ref().and_then(|l| l.writing.current()).cloned() else { return };
+        match self.manuscript_word(&manuscript, track).and_then(|(bytes, said)| std::fs::write(&path, bytes).map(|_| said).map_err(|err| err.to_string())) {
+            Ok(said) => self.say(tf!("已导出到 {}{said}", "Exported to {}{said}", path.display()), cx),
+            Err(error) => self.fail(error, cx),
+        }
     }
 
     /// The items of the writing page's menus.
@@ -460,6 +505,12 @@ impl Workspace {
                     items.push(MenuItem { label: crate::i18n::manuscript_title(m).to_string().into(), checked: m.id == writing.manuscript, note: Some(tf!("{words} 词", "{words} words").into()), cmd: Cmd::WriteManuscript(m.id.clone()) });
                 }
                 items.push(item(t("新建稿件").into(), false, Cmd::NewManuscript));
+                items.push(item(t("导入 Word / Markdown 文件…").into(), false, Cmd::Comment(crate::comments::Do::Import)));
+                // What the assistant wrote as a review can be gone on with here.
+                for (conversation, title, sections) in self.reviews_written().into_iter().take(5) {
+                    let short: String = title.chars().take(24).collect();
+                    items.push(MenuItem { label: tf!("从助手的综述新建：{short}", "From the assistant's review: {short}").into(), checked: false, note: Some(tf!("{sections} 节", "{sections} sections").into()), cmd: Cmd::Comment(crate::comments::Do::FromReview(conversation)) });
+                }
                 if writing.manuscripts.len() > 1 || writing.current().is_some_and(|m| m.sections.iter().any(|s| !s.body.trim().is_empty())) {
                     items.push(item(t("移除这份稿件…").into(), false, Cmd::AskRemoveManuscript(writing.manuscript.clone())));
                 }
@@ -475,7 +526,13 @@ impl Workspace {
             }
             MenuKind::ManuscriptExport => {
                 items.push(item("Markdown（.md）".into(), false, Cmd::ExportManuscript(ManuscriptExport::Markdown)));
-                items.push(item("Word（.docx）".into(), false, Cmd::ExportManuscript(ManuscriptExport::Docx)));
+                // A manuscript that came from a Word file goes back into that file.
+                if writing.comments.source.as_ref().is_some_and(|source| source.kind == "docx") {
+                    items.push(item(t("Word（.docx）：原文件的版式，带批注").into(), false, Cmd::ExportManuscript(ManuscriptExport::Docx)));
+                    items.push(item(t("Word（.docx）：改动记为修订，带批注").into(), false, Cmd::ExportManuscript(ManuscriptExport::DocxTracked)));
+                } else {
+                    items.push(item(if writing.comments.list.is_empty() { "Word（.docx）".into() } else { t("Word（.docx），带批注").into() }, false, Cmd::ExportManuscript(ManuscriptExport::Docx)));
+                }
                 items.push(item(t("复制全文").into(), false, Cmd::ExportManuscript(ManuscriptExport::Copy)));
             }
             MenuKind::WriteLanguage => {
@@ -502,6 +559,7 @@ impl Workspace {
             .map(|(n, section)| {
                 let on = section.id == writing.section_id && !writing.reading;
                 let empty = section.body.trim().is_empty();
+                let noted = writing.comments.open_in(&section.id);
                 div()
                     .id(("write-part", n))
                     .flex()
@@ -518,6 +576,8 @@ impl Workspace {
                     .when(!on, |d| d.border_color(Theme::line()).text_color(if empty { Theme::text_tertiary() } else { Theme::text_secondary() }).hover(|s| s.bg(Theme::hover())))
                     .on_click(self.on(Cmd::WriteSection(section.id.clone()), cx))
                     .child(section.name.clone())
+                    // How many comments wait in the section.
+                    .when(noted > 0, |d| d.child(div().flex().flex_none().items_center().justify_center().min_w(px(16.)).h(px(16.)).px(px(4.)).rounded(px(8.)).bg(Theme::note_strong()).text_size(px(10.)).text_color(Theme::text()).child(noted.to_string())))
                     .when(on, |d| d.child(div().id("write-part-menu").flex().items_center().justify_center().size(px(18.)).rounded(px(9.)).hover(|s| s.bg(Theme::accent().opacity(0.12))).on_click(self.on_menu(MenuKind::Section(section.id.clone()), cx)).child(ui::icon("chevron-down", 12., Theme::accent()))))
                     .into_any_element()
             })

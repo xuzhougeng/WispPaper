@@ -25,6 +25,12 @@ impl Workspace {
         let lib = self.lib.as_ref().unwrap();
         let writing = &lib.writing;
         let text = writing.editor.read(cx).text();
+        // The words comments are about, drawn on a tint in the manuscript.
+        let marks = self.comment_marks(text);
+        writing.editor.update(cx, |input, _| input.set_marks(marks));
+        let lib = self.lib.as_ref().unwrap();
+        let writing = &lib.writing;
+        let text = writing.editor.read(cx).text();
         let (words, characters) = (text.split_whitespace().filter(|word| word.chars().any(char::is_alphanumeric)).count(), text.chars().filter(|c| !c.is_whitespace()).count());
         let focused = writing.editor.focus_handle(cx).is_focused(window);
         let stacked = width < 680.;
@@ -56,6 +62,7 @@ impl Workspace {
                         .flex_1()
                         .min_h_0()
                         .overflow_y_scroll()
+                        .track_scroll(&writing.editor_scroll)
                         .rounded(px(10.))
                         .border_1()
                         .border_color(if focused { Theme::accent().opacity(0.55) } else { Theme::line() })
@@ -134,15 +141,9 @@ impl Workspace {
         let key = self.find_key();
         let find_button = ui::secondary_button("write-find", t("查找候选句")).h(px(28.)).px(px(10.)).text_size(px(12.)).child(div().text_size(px(11.)).text_color(Theme::text_tertiary()).child(key)).on_click(self.on(Cmd::WriteFind, cx));
 
-        div()
-            .flex()
-            .flex_col()
-            .flex_none()
-            .w(px(width))
-            .h_full()
-            .border_l_1()
-            .border_color(Theme::line())
-            .bg(Theme::bg_sunken())
+        let side = div().flex().flex_col().flex_none().w(px(width)).h_full().border_l_1().border_color(Theme::line()).bg(Theme::bg_sunken()).child(self.render_side_switch(cx));
+        if writing.comments.open { return side.child(self.render_comments(width, window, cx)) }
+        side
             .child(
                 div()
                     .flex()
@@ -150,7 +151,7 @@ impl Workspace {
                     .flex_none()
                     .gap(px(8.))
                     .px(px(14.))
-                    .pt(px(16.))
+                    .pt(px(12.))
                     .pb(px(10.))
                     .child(
                         div()
