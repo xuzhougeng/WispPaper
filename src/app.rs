@@ -446,6 +446,8 @@ pub enum Cmd {
     RemoveSection(String),
     /// The whole manuscript to read (true), or one section to write.
     WriteReading(bool),
+    /// While writing, the sidebar shows the library's own navigation (true) or the manuscript's outline.
+    WriteNav(bool),
     ExportManuscript(ManuscriptExport),
     /// The section's earlier versions.
     WriteHistory,
@@ -693,6 +695,8 @@ pub struct Writing {
     pub comments: crate::comments::Commenting,
     /// Where the manuscript's editor is scrolled to.
     pub editor_scroll: ScrollHandle,
+    /// The sidebar shows the library's navigation instead of the manuscript's outline, until 写作 is opened again.
+    pub library_nav: bool,
 }
 
 /// A run of the screening assistant gives up after this many papers in a
@@ -1927,13 +1931,15 @@ impl Workspace {
                     lib.reading = false;
                     if page == Page::Ask { lib.library_chat.input.read(cx).focus(window) }
                     if page == Page::Write {
+                        // Opening 写作, even from its own row in the library's navigation, brings the outline back.
+                        lib.writing.library_nav = false;
                         lib.writing.editor.read(cx).focus(window);
                         lib.writing.structures = lib.store.structures().unwrap_or_default();
                         self.write_texts_changed(cx);
                     }
                 }
             }
-            Cmd::WriteSection(_) | Cmd::WriteManuscript(_) | Cmd::NewManuscript | Cmd::AskRemoveManuscript(_) | Cmd::RemoveManuscript(_) | Cmd::WriteLanguage(_) | Cmd::EditSection(_) | Cmd::PickSectionKind(_) | Cmd::MoveSection(..) | Cmd::AskRemoveSection(_) | Cmd::RemoveSection(_) | Cmd::WriteReading(_) | Cmd::ExportManuscript(_) | Cmd::WriteHistory | Cmd::HistoryPick(_) => self.run_manuscript(cmd, window, cx),
+            Cmd::WriteSection(_) | Cmd::WriteManuscript(_) | Cmd::NewManuscript | Cmd::AskRemoveManuscript(_) | Cmd::RemoveManuscript(_) | Cmd::WriteLanguage(_) | Cmd::EditSection(_) | Cmd::PickSectionKind(_) | Cmd::MoveSection(..) | Cmd::AskRemoveSection(_) | Cmd::RemoveSection(_) | Cmd::WriteReading(_) | Cmd::WriteNav(_) | Cmd::ExportManuscript(_) | Cmd::WriteHistory | Cmd::HistoryPick(_) => self.run_manuscript(cmd, window, cx),
             Cmd::FigureTag(_) | Cmd::OpenFigure(_) | Cmd::FigureSource(_) | Cmd::AskFigure(_) | Cmd::CopyFigure(_) | Cmd::SaveFigure(_) | Cmd::AskRemoveFigure(_) | Cmd::RemoveFigure(_) | Cmd::FigureAddTag(_) | Cmd::FigureInfer(_) => self.run_figures(cmd, window, cx),
             Cmd::WriteCite(id) => {
                 self.cite_paper(&id, cx);
@@ -2736,6 +2742,7 @@ impl Workspace {
         let editor = cx.new(|cx| TextInput::new("在这里写。写好一段，按「查找候选句」的快捷键，右边就列出文献库里的文献在同一部分相近的写法；中文或别的语言也可以，先写下想表达的意思。", cx).multiline(14).with_text(&draft));
         let find = cx.new(|cx| TextInput::new("找句子：输入词或短语，例如 remains unclear", cx));
         subscriptions.push(cx.subscribe(&editor, |this, input, event: &InputEvent, cx| {
+            if let InputEvent::MarkClicked(n) = *event { return this.comment_mark_clicked(n, cx) }
             if *event != InputEvent::Changed { return }
             let text = input.read(cx).text().to_string();
             this.write_typed(text, cx);
@@ -2744,7 +2751,7 @@ impl Workspace {
         subscriptions.push(cx.subscribe(&find, |this, _, event: &InputEvent, cx| if *event == InputEvent::Submit { this.write_find(true, cx) }));
         let (comments, heard) = crate::comments::Commenting::new(store.comments(&manuscript).unwrap_or_default(), store.manuscript_source(&manuscript).ok().flatten(), cx);
         subscriptions.extend(heard);
-        let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new(), assist: Default::default(), comments, editor_scroll: ScrollHandle::new() };
+        let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new(), assist: Default::default(), comments, editor_scroll: ScrollHandle::new(), library_nav: false };
         let citing = crate::cite::Citing::new(&store, &mut subscriptions, cx);
         let gallery = crate::figures::Gallery::new(&mut subscriptions, cx);
         let mut lib = Library {

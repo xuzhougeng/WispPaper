@@ -23,6 +23,9 @@ const NARROWING_TAGS: usize = 24;
 /// The widest the manuscript's text is set, padding included.
 const EDITOR_MEASURE: f32 = 720.;
 
+/// The manuscript's right margin while comments mark it: room for their markers.
+const MARGIN: f32 = 36.;
+
 /// How long a text is, as a writer counts it: a Chinese, Japanese or Korean
 /// letter is one, and so is every word of a language that spaces them.
 /// The second is whether letters were counted, which is what to call the number.
@@ -42,12 +45,15 @@ pub(crate) fn length_label(text: &str) -> String {
 
 impl Workspace {
     pub fn render_write(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        self.comment_reveal(window, cx);
         let lib = self.lib.as_ref().unwrap();
         let writing = &lib.writing;
-        let text = writing.editor.read(cx).text();
-        // The words comments are about, drawn on a tint in the manuscript.
-        let marks = self.comment_marks(text);
-        writing.editor.update(cx, |input, _| input.set_marks(marks));
+        let text = writing.editor.read(cx).text().to_string();
+        // The words comments are about, drawn on a tint in the manuscript, and a marker in its margin on each line that has some.
+        let marks = self.comment_marks(&text);
+        writing.editor.update(cx, |input, _| input.set_marks(marks.iter().map(|(range, tint, _)| (range.clone(), *tint)).collect()));
+        let tops = writing.editor.read(cx).mark_tops().to_vec();
+        let markers = self.render_comment_markers(&marks, &tops, cx);
         let lib = self.lib.as_ref().unwrap();
         let writing = &lib.writing;
         let text = writing.editor.read(cx).text();
@@ -86,7 +92,7 @@ impl Workspace {
                         .border_1()
                         .border_color(if focused { Theme::accent().opacity(0.55) } else { Theme::line() })
                         .bg(Theme::bg_body())
-                        .child(div().w_full().max_w(px(EDITOR_MEASURE)).mx_auto().px(px(18.)).py(px(14.)).text_size(px(15.)).line_height(px(26.)).text_color(Theme::text()).child(crate::input::with_selection_toolbar(&writing.editor, self.render_assist_bar(true, cx))))
+                        .child(div().relative().w_full().max_w(px(EDITOR_MEASURE)).mx_auto().pl(px(18.)).pr(px(if markers.is_empty() { 18. } else { MARGIN })).py(px(14.)).text_size(px(15.)).line_height(px(26.)).text_color(Theme::text()).child(crate::input::with_selection_toolbar(&writing.editor, self.render_assist_bar(true, cx))).children(markers))
                         .into_any_element()
                 }),
             )
