@@ -4,22 +4,37 @@
 //!     cargo run -p wisp_core --example docx -- a.docx same out.docx    written again with nothing changed
 //!     cargo run -p wisp_core --example docx -- a.docx edit out.docx    every third paragraph changed, one taken out, one put in, comments added
 //!     cargo run -p wisp_core --example docx -- a.docx track out.docx   the same, as tracked changes
+//!     cargo run -p wisp_core --example docx -- a.docx guessed out.docx written again with the headings guessed in a file
+//!                                                                      without heading styles as the sections' names, as an export does
+//!
+//! In a file without heading styles the listing marks the headings guessed
+//! by their look (`?h1` ticked beforehand, `?h2` offered) and why, and the
+//! sections the import would make of the ticked ones.
 
 use wisp_core::docx::{self, Note, Options, Role, Wanted};
+use wisp_core::manuscript;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(path) = args.first() else { anyhow::bail!("which file?") };
     let bytes = std::fs::read(path)?;
     let read = docx::read(&bytes)?;
+    let draft = manuscript::from_word(&read, path);
     let Some(mode) = args.get(1) else {
         for (n, para) in read.paragraphs.iter().enumerate() {
-            let what = match (para.title, para.level) {
-                (true, _) => "title".to_string(),
-                (_, Some(level)) => format!("h{level}"),
+            let guess = draft.headings.iter().find(|guess| guess.paragraph == n);
+            let what = match (para.title, para.level, guess) {
+                (true, _, _) => "title".to_string(),
+                (_, Some(level), _) => format!("h{level}"),
+                (_, _, Some(guess)) => format!("?h{}", if guess.likely { 1 } else { guess.level.max(2) }),
                 _ => String::new(),
             };
-            println!("{n:>4} {what:<6}{}", para.text);
+            let why = guess.map_or(String::new(), |guess| format!("  ({:?}{})", guess.sign, guess.kind.map_or(String::new(), |kind| format!(", {kind}"))));
+            println!("{n:>4} {what:<6}{}{}{why}", if para.bold { "*" } else { "" }, para.text);
+        }
+        if !draft.headings.is_empty() {
+            println!("no heading styles: {} headings guessed, {} ticked; the sections:", draft.headings.len(), draft.headings.iter().filter(|guess| guess.likely).count());
+            for section in &draft.sections { println!("  {} [{}{}]: {} paragraphs", section.name, section.kind, if section.bare { ", bare" } else { "" }, section.paragraphs.len()) }
         }
         for comment in &read.comments {
             println!("comment by {} ({}) on paragraph {:?} 「{}」: {}", comment.author, comment.date, comment.paragraph, comment.quote, comment.body.replace('\n', " / "));
@@ -28,8 +43,9 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     };
     let out = args.get(2).map(String::as_str).unwrap_or("out.docx");
-    let mut wanted: Vec<Wanted> = read.paragraphs.iter().map(|para| Wanted { text: para.text.clone(), role: if para.title { Role::Title } else if para.level.is_some() { Role::Heading } else { Role::Body }, notes: vec![] }).collect();
-    if mode != "same" {
+    let guessed = |n: usize| mode == "guessed" && draft.headings.iter().any(|guess| guess.paragraph == n && guess.likely);
+    let mut wanted: Vec<Wanted> = read.paragraphs.iter().enumerate().map(|(n, para)| Wanted { text: para.text.clone(), role: if para.title { Role::Title } else if para.level.is_some() || guessed(n) { Role::Heading } else { Role::Body }, notes: vec![] }).collect();
+    if mode != "same" && mode != "guessed" {
         let author = std::env::var("DOCX_AUTHOR").unwrap_or_else(|_| "Wisp Paper 助手".into());
         let note = |range: std::ops::Range<usize>, body: &str| Note { range, author: author.clone(), date: "2026-11-12T08:00:00Z".into(), body: body.into() };
         let bodies: Vec<usize> = (0..wanted.len()).filter(|n| wanted[*n].role == Role::Body && wanted[*n].text.chars().count() > 30).collect();
@@ -59,6 +75,11 @@ fn main() -> anyhow::Result<()> {
     if got == want { println!("read again: the {} paragraphs wanted, {} comments", got.len(), again.comments.len()) } else {
         println!("READ AGAIN DIFFERS: {} paragraphs, wanted {}", got.len(), want.len());
         for (n, (a, b)) in got.iter().zip(&want).enumerate().filter(|(_, (a, b))| a != b).take(5) { println!("  {n}: got  {a}\n     want {b}") }
+    }
+    if mode == "guessed" {
+        // A heading that was a plain paragraph stays one: no heading style is put on it.
+        let styled = again.paragraphs.iter().zip(&read.paragraphs).filter(|(now, was)| now.level != was.level || now.title != was.title).count();
+        println!("{} guessed headings written as sections' names; paragraphs whose style changed: {styled}", wanted.iter().enumerate().filter(|(n, _)| guessed(*n)).count());
     }
     Ok(())
 }

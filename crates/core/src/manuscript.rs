@@ -17,6 +17,7 @@
 
 use crate::comment::{self, Comment};
 use crate::docx;
+use crate::headings;
 use crate::markdown;
 use crate::model::new_id;
 use crate::store::Store;
@@ -448,6 +449,8 @@ pub struct Draft {
     pub pictures: usize,
     /// The Word file had tracked changes: it was read as if they were accepted.
     pub tracked: bool,
+    /// A Word file without heading styles: the paragraphs that look like headings, for the person to confirm (`from_word_with`).
+    pub headings: Vec<headings::Guess>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -495,10 +498,19 @@ fn manuscript_language(text: &str) -> String {
     if code.is_empty() && cjk * 2 > letters { "zh".to_string() } else { DEFAULT_LANGUAGE.to_string() }
 }
 
-/// The manuscript a file's paragraphs make, and the section each of them went to (none for the title).
-fn outline(mut lines: Vec<Line>, file_name: &str) -> (Draft, Vec<Option<usize>>) {
+/// The paragraph that is the file's title: the one styled as one, else a short first line that is not a sentence.
+fn title_of(lines: &[Line]) -> Option<usize> {
+    let styled = lines.iter().position(|line| line.title);
+    if styled.is_none() && lines.len() > 1 && lines[0].level.is_none() && structure::width(&lines[0].text) <= TITLE_WIDTH && !lines[0].text.ends_with(['。', '.', '；', ';', '：', ':', '，', ',']) { return Some(0) }
+    styled
+}
+
+/// The manuscript a file's paragraphs make, and the section each of them
+/// went to (none for the title). With `by_name`, a file without headings
+/// is cut at the names every paper has.
+fn outline(mut lines: Vec<Line>, file_name: &str, by_name: bool) -> (Draft, Vec<Option<usize>>) {
     // A file without heading styles: the headings every paper has are told by their names.
-    if lines.iter().all(|line| line.level.is_none()) {
+    if by_name && lines.iter().all(|line| line.level.is_none()) {
         for line in &mut lines {
             if structure::width(&line.text) <= HEADING_WIDTH && structure::canonical(&line.text).is_some() { line.level = Some(1) }
         }
@@ -506,9 +518,7 @@ fn outline(mut lines: Vec<Line>, file_name: &str) -> (Draft, Vec<Option<usize>>)
     let language = manuscript_language(&lines.iter().filter(|line| line.level.is_none()).map(|line| line.text.as_str()).collect::<Vec<_>>().join("\n"));
     let stem = file_name.rsplit(['/', '\\']).next().unwrap_or(file_name);
     let stem = stem.rsplit_once('.').map_or(stem, |(stem, _)| stem).trim();
-    // The title: the paragraph styled as one, else a short first line that is not a sentence.
-    let mut title = lines.iter().position(|line| line.title);
-    if title.is_none() && lines.len() > 1 && lines[0].level.is_none() && structure::width(&lines[0].text) <= TITLE_WIDTH && !lines[0].text.ends_with(['。', '.', '；', ';', '：', ':', '，', ',']) { title = Some(0) }
+    let title = title_of(&lines);
     let top = lines.iter().enumerate().filter(|(n, _)| Some(*n) != title).filter_map(|(_, line)| line.level).min();
     let mut draft = Draft { title: title.map_or(stem.to_string(), |n| lines[n].text.clone()), titled: title.is_some(), language, ..Default::default() };
     let chinese = draft.language == "zh";
@@ -539,11 +549,36 @@ fn outline(mut lines: Vec<Line>, file_name: &str) -> (Draft, Vec<Option<usize>>)
     (draft, places)
 }
 
-/// The manuscript a Word file makes: sections at its highest headings, the comments it came with.
+/// The manuscript a Word file makes: sections at its highest headings, the
+/// comments it came with. A file without heading styles is cut at the
+/// headings guessed by their look that are likely ones (`Draft::headings`
+/// lists them all, for the person to choose with `from_word_with`).
 pub fn from_word(read: &docx::Read, file_name: &str) -> Draft {
+    from_word_with(read, file_name, None)
+}
+
+/// `from_word`, with the paragraphs of a file without heading styles that
+/// start a section chosen by the person (by their place in
+/// `read.paragraphs`). They stay plain paragraphs in the file: written
+/// back, a section's name is that paragraph as it was.
+pub fn from_word_with(read: &docx::Read, file_name: &str, chosen: Option<&[usize]>) -> Draft {
     // What a paragraph says is its words: Markdown's characters in it stay characters (`escape_markdown`).
-    let lines = read.paragraphs.iter().map(|para| Line { text: para.text.clone(), kept: escape_markdown(&para.text), level: para.level, title: para.title }).collect();
-    let (mut draft, places) = outline(lines, file_name);
+    let mut lines: Vec<Line> = read.paragraphs.iter().map(|para| Line { text: para.text.clone(), kept: escape_markdown(&para.text), level: para.level, title: para.title }).collect();
+    let mut guesses = vec![];
+    if lines.iter().all(|line| line.level.is_none()) {
+        let title = title_of(&lines);
+        let looks: Vec<(&str, bool)> = read.paragraphs.iter().map(|para| (para.text.as_str(), para.bold)).collect();
+        guesses = headings::guess(&looks, title);
+        let starts: Vec<usize> = match chosen {
+            Some(chosen) => chosen.to_vec(),
+            None => guesses.iter().filter(|guess| guess.likely).map(|guess| guess.paragraph).collect(),
+        };
+        for n in starts {
+            if Some(n) != title && let Some(line) = lines.get_mut(n) { line.level = Some(1) }
+        }
+    }
+    let (mut draft, places) = outline(lines, file_name, false);
+    draft.headings = guesses;
     (draft.tables, draft.pictures, draft.tracked) = (read.tables, read.pictures, read.tracked);
     draft.comments = read.comments.iter().filter(|comment| !comment.body.trim().is_empty()).map(|comment| DraftComment { section: comment.paragraph.and_then(|n| places[n]).unwrap_or(0), quote: comment.quote.clone(), author: comment.author.clone(), date: comment.date.clone(), body: comment.body.clone() }).collect();
     draft
@@ -609,7 +644,7 @@ pub fn from_markdown(text: &str, file_name: &str) -> Draft {
     // With a title from the header, no line is taken for one.
     let guard = named.is_some();
     if guard { lines.insert(0, Line { text: named.unwrap_or_default(), kept: String::new(), level: None, title: true }) }
-    let (mut draft, _) = outline(lines, file_name);
+    let (mut draft, _) = outline(lines, file_name, true);
     draft.titled = false;
     draft
 }
@@ -907,6 +942,86 @@ impl Store {
         self.touch_manuscript(&manuscript)
     }
 
+    /// Cut a section in two at the paragraph `at` (its bytes in the section's
+    /// text). With `heading` that paragraph is the new section's name, as a
+    /// heading typed without a heading style is: written back to a Word
+    /// file it stays the paragraph it was. Without, the paragraph opens the
+    /// new section, whose name is the manuscript's own (`bare`) and goes into
+    /// no file. The comments on what moved go with it. The section's text is
+    /// kept as a snapshot first. The new section; the heading of a `bare`
+    /// section's first paragraph names that section instead, which leaves
+    /// none empty behind.
+    pub fn split_section(&mut self, id: &str, at: Range<usize>, heading: bool) -> Result<Section> {
+        let (manuscript, section) = self.section_row(id)?;
+        let body = section.body.as_str();
+        if at.start > at.end || at.end > body.len() || !body.is_char_boundary(at.start) || !body.is_char_boundary(at.end) { bail!("这一段已经不在这一节里了。") }
+        let before = body[..at.start].trim_end();
+        let (name, after) = if heading {
+            // The paragraph's words, not its Markdown: `**Methods**` or `## Methods` names the section Methods.
+            let name = markdown::plain(body[at.clone()].trim()).trim().to_string();
+            if name.is_empty() { bail!("光标所在的段落是空的。") }
+            if structure::width(&name) > headings::LONGEST * 2 { bail!("这一段太长，不能作为标题。") }
+            (name, body[at.end..].trim_start())
+        } else {
+            let after = body[at.start..].trim_start();
+            if after.is_empty() { bail!("这里之后没有文字可以拆成新的一节。") }
+            if before.is_empty() { bail!("这已经是这一节的开头。") }
+            let first = markdown::plain(paragraphs(after).next().unwrap_or(""));
+            let first = first.trim();
+            let short: String = first.chars().take(16).collect();
+            (if short.len() < first.len() { format!("{short}…") } else { short }, after)
+        };
+        let kind = if heading { structure::canonical(&name).filter(|kind| is_kind(kind)).unwrap_or(&section.kind).to_string() } else { section.kind.clone() };
+        if heading && section.bare && before.is_empty() {
+            self.take_snapshot(id, "split")?;
+            self.db.execute("UPDATE manuscript_sections SET name = ?2, kind = ?3, body = ?4, bare = 0, updated_at = ?5 WHERE id = ?1", params![id, name, kind, after, now_iso()])?;
+            self.touch_manuscript(&manuscript)?;
+            return Ok(self.section_row(id)?.1);
+        }
+        let position: i64 = self.db.query_row("SELECT position FROM manuscript_sections WHERE id = ?1", [id], |r| r.get(0))?;
+        let quotes: Vec<(String, String)> = {
+            let mut stmt = self.db.prepare("SELECT id, quote FROM manuscript_comments WHERE section_id = ?1")?;
+            stmt.query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
+        };
+        self.take_snapshot(id, "split")?;
+        let (new, now) = (new_id("S"), now_iso());
+        let tx = self.db.transaction()?;
+        tx.execute("UPDATE manuscript_sections SET body = ?2, updated_at = ?3 WHERE id = ?1", params![id, before, now])?;
+        tx.execute("UPDATE manuscript_sections SET position = position + 1 WHERE manuscript_id = ?1 AND position > ?2", params![manuscript, position])?;
+        tx.execute("INSERT INTO manuscript_sections(id, manuscript_id, position, name, kind, body, updated_at, bare) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)", params![new, manuscript, position + 1, name, kind, after, now, !heading])?;
+        // A comment goes where its words are now: one about the heading's words goes with the heading.
+        for (comment, quote) in quotes {
+            let stays = quote.trim().is_empty() || comment::locate(before, &quote, None).is_some();
+            let goes = comment::locate(after, &quote, None).is_some() || (heading && name.contains(quote.trim()));
+            if !stays && goes { tx.execute("UPDATE manuscript_comments SET section_id = ?2 WHERE id = ?1", params![comment, new])?; }
+        }
+        tx.commit()?;
+        self.touch_manuscript(&manuscript)?;
+        Ok(self.section_row(&new)?.1)
+    }
+
+    /// Put a section back into the one before it, its name a paragraph
+    /// again (the name of a `bare` section was never one, and goes), with
+    /// its comments; the undoing of `split_section`. The section before,
+    /// whose text is kept as a snapshot first.
+    pub fn merge_section(&mut self, id: &str) -> Result<Section> {
+        let (manuscript, section) = self.section_row(id)?;
+        let order = self.sections_of(&manuscript)?;
+        let Some(at) = order.iter().position(|other| other.id == id) else { bail!("没有这一节：{id}") };
+        let Some(previous) = at.checked_sub(1).map(|n| &order[n]) else { bail!("这是第一节，前面没有可以并入的一节。") };
+        let name = (!section.bare).then_some(section.name.trim());
+        let body = [previous.body.trim(), name.unwrap_or(""), section.body.trim()].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n\n");
+        let previous = previous.id.clone();
+        self.take_snapshot(&previous, "merge")?;
+        let tx = self.db.transaction()?;
+        tx.execute("UPDATE manuscript_sections SET body = ?2, updated_at = ?3 WHERE id = ?1", params![previous, body, now_iso()])?;
+        tx.execute("UPDATE manuscript_comments SET section_id = ?2 WHERE section_id = ?1", params![id, previous])?;
+        tx.execute("DELETE FROM manuscript_sections WHERE id = ?1", [id])?;
+        tx.commit()?;
+        self.touch_manuscript(&manuscript)?;
+        Ok(self.section_row(&previous)?.1)
+    }
+
     /// Keep what is typed in a section.
     pub fn save_section_body(&mut self, id: &str, body: &str) -> Result<()> {
         let changed = self.db.execute("UPDATE manuscript_sections SET body = ?2, updated_at = ?3 WHERE id = ?1", params![id, body, now_iso()])?;
@@ -1200,12 +1315,98 @@ mod tests {
 
     #[test]
     fn a_word_file_without_heading_styles_is_cut_at_the_names_every_paper_has() {
-        let para = |text: &str| docx::ReadPara { text: text.into(), level: None, title: false };
+        let para = |text: &str| docx::ReadPara { text: text.into(), ..Default::default() };
         let read = docx::Read { paragraphs: vec![para("植物单细胞组学的现状"), para("张三，李四"), para("摘要"), para("单细胞技术正在改变植物学研究的方式，本文对此作一综述。"), para("1 引言"), para("植物器官由多种细胞类型组成。"), para("参考文献"), para("[1] Zhang 2021.")], comments: vec![docx::ReadComment { author: "Li".into(), body: "补充".into(), paragraph: Some(5), quote: "多种细胞类型".into(), ..Default::default() }, docx::ReadComment { body: "on a table".into(), ..Default::default() }], ..Default::default() };
         let draft = from_word(&read, "稿子.docx");
         assert_eq!((draft.title.as_str(), draft.titled, draft.language.as_str()), ("植物单细胞组学的现状", true, "zh"));
         assert_eq!(draft.sections.iter().map(|s| (s.name.as_str(), s.kind.as_str(), s.bare, s.paragraphs.len())).collect::<Vec<_>>(), [("开头", "other", true, 1), ("摘要", "abstract", false, 1), ("1 引言", "introduction", false, 1), ("参考文献", "other", false, 1)]);
         assert_eq!(draft.comments.iter().map(|c| (c.section, c.quote.as_str())).collect::<Vec<_>>(), [(2, "多种细胞类型"), (0, "")]);
+    }
+
+    /// A Word file typed without heading styles: its headings are plain paragraphs, one of them in bold.
+    fn styleless_word_file() -> Vec<u8> {
+        let body = ["单细胞转录组测序技术能够在单个细胞水平上解析基因表达，为研究植物发育提供了新的视角。", "单细胞转录组测序技术的发展（图1）", "自2009年首次报道以来，单细胞转录组测序技术经历了快速的发展，通量不断提高，成本不断下降。", "原生质体的制备", "植物细胞有细胞壁，需要先酶解制备原生质体，这一步骤可能改变部分基因的表达。", "展望", "随着空间转录组等技术的发展，单细胞水平的研究将更加深入。"].join("\n\n");
+        let written = Manuscript { title: "单细胞转录组测序技术在植物发育生物学上的应用及进展".into(), language: "zh".into(), sections: vec![Section { name: "摘要".into(), kind: "abstract".into(), body, ..Default::default() }], ..Default::default() };
+        let mut zip = docx::Zip::read(&docx(&written)).unwrap();
+        let xml = zip.text("word/document.xml").unwrap().replace("<w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr>", "").replace("<w:pPr><w:pStyle w:val=\"Title\"/></w:pPr>", "").replace("<w:r><w:t xml:space=\"preserve\">原生质体的制备", "<w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">原生质体的制备");
+        zip.set("word/document.xml", xml.as_bytes());
+        zip.write()
+    }
+
+    #[test]
+    fn a_word_file_without_heading_styles_is_cut_where_the_person_chose_and_written_back_unchanged() {
+        let bytes = styleless_word_file();
+        let read = docx::read(&bytes).unwrap();
+        assert!(read.paragraphs.iter().all(|p| p.level.is_none() && !p.title));
+        assert_eq!(read.paragraphs.iter().filter(|p| p.bold).map(|p| p.text.as_str()).collect::<Vec<_>>(), ["原生质体的制备"]);
+        // The guesses, all likely here; taken as they are, each starts a section.
+        let draft = from_word(&read, "综述.docx");
+        let guessed: Vec<(usize, &str, headings::Sign, bool)> = draft.headings.iter().map(|g| (g.paragraph, g.text.as_str(), g.sign, g.likely)).collect();
+        assert_eq!(guessed, [(1, "摘要", headings::Sign::Named, true), (3, "单细胞转录组测序技术的发展（图1）", headings::Sign::Figure, true), (5, "原生质体的制备", headings::Sign::Bold, true), (7, "展望", headings::Sign::Named, true)]);
+        assert_eq!((draft.title.as_str(), draft.titled), ("单细胞转录组测序技术在植物发育生物学上的应用及进展", true));
+        assert_eq!(draft.sections.iter().map(|s| (s.name.as_str(), s.kind.as_str(), s.paragraphs.len())).collect::<Vec<_>>(), [("摘要", "abstract", 1), ("单细胞转录组测序技术的发展（图1）", "other", 1), ("原生质体的制备", "other", 1), ("展望", "discussion", 1)]);
+        // The person keeps two of them: the others stay paragraphs of their section.
+        let draft = from_word_with(&read, "综述.docx", Some(&[1, 3]));
+        assert_eq!(draft.sections.iter().map(|s| (s.name.as_str(), s.paragraphs.len())).collect::<Vec<_>>(), [("摘要", 1), ("单细胞转录组测序技术的发展（图1）", 5)]);
+        // None at all: one section, as before.
+        assert_eq!(from_word_with(&read, "综述.docx", Some(&[])).sections.iter().map(|s| (s.name.as_str(), s.bare)).collect::<Vec<_>>(), [("正文", true)]);
+
+        let dir = std::env::temp_dir().join(format!("wisp-manuscript-{}", new_id("T")));
+        let mut store = Store::open(&dir).unwrap();
+        let made = store.import_manuscript(&draft, "docx", "综述.docx", Some(&bytes)).unwrap();
+        let unchanged = |store: &Store| {
+            let now = store.manuscript(&made.id).unwrap().unwrap();
+            let (out, from_file) = store.manuscript_word(&now, &store.comments(&made.id).unwrap(), true, "Xu").unwrap();
+            assert!(from_file);
+            // Every paragraph as it was: no heading style put on the headings guessed, nothing tracked.
+            assert_eq!((out.kept, out.changed, out.added, out.removed), (9, 0, 0, 0));
+            let read = docx::read(&out.bytes).unwrap();
+            assert!(read.paragraphs.iter().all(|p| p.level.is_none()) && !read.tracked);
+            assert_eq!(read.paragraphs.iter().map(|p| p.text.clone()).collect::<Vec<_>>(), docx::read(&bytes).unwrap().paragraphs.iter().map(|p| p.text.clone()).collect::<Vec<_>>());
+        };
+        unchanged(&store);
+
+        // In the editor: 设为标题 on the paragraph in bold, with a comment on words after it.
+        let section = made.sections[1].clone();
+        store.add_comment(&made.id, &section.id, "酶解", "哪种酶？", "Xu", comment::PERSON).unwrap();
+        store.add_comment(&made.id, &section.id, "快速的发展", "多快？", "Xu", comment::PERSON).unwrap();
+        let start = section.body.find("原生质体的制备").unwrap();
+        let split = store.split_section(&section.id, start..start + "原生质体的制备".len(), true).unwrap();
+        assert_eq!((split.name.as_str(), split.kind.as_str(), split.bare), ("原生质体的制备", "other", false));
+        let now = store.manuscript(&made.id).unwrap().unwrap();
+        assert_eq!(now.sections.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["摘要", "单细胞转录组测序技术的发展（图1）", "原生质体的制备"]);
+        assert!(now.sections[1].body.ends_with("成本不断下降。") && split.body.starts_with("植物细胞有细胞壁"));
+        let placed: Vec<(String, bool)> = store.comments(&made.id).unwrap().into_iter().map(|c| (c.quote, c.section_id == split.id)).collect();
+        assert_eq!(placed, [("酶解".to_string(), true), ("快速的发展".to_string(), false)]);
+        assert_eq!(store.snapshots(&section.id).unwrap()[0].why, "split");
+        unchanged(&store);
+
+        // Put back, and cut again without a heading: the new section's name goes into no file.
+        let merged = store.merge_section(&split.id).unwrap();
+        assert_eq!(merged.body, section.body);
+        assert!(store.comments(&made.id).unwrap().iter().all(|c| c.section_id == section.id));
+        unchanged(&store);
+        let start = merged.body.find("植物细胞").unwrap();
+        let cut = store.split_section(&merged.id, start..start + 3, false).unwrap();
+        assert_eq!((cut.name.as_str(), cut.bare, cut.body.as_str()), ("植物细胞有细胞壁，需要先酶解制备…", true, "植物细胞有细胞壁，需要先酶解制备原生质体，这一步骤可能改变部分基因的表达。\n\n展望\n\n随着空间转录组等技术的发展，单细胞水平的研究将更加深入。"));
+        unchanged(&store);
+        assert!(store.split_section(&made.sections[0].id, 0..0, false).is_err() && store.merge_section(&made.sections[0].id).is_err());
+
+        // Taken in without a section: the first paragraph set as a heading names the one there is.
+        let whole = store.import_manuscript(&from_word_with(&read, "综述.docx", Some(&[])), "docx", "综述.docx", Some(&bytes)).unwrap();
+        let named = store.split_section(&whole.sections[0].id, 0.."摘要".len(), true).unwrap();
+        assert_eq!((named.id == whole.sections[0].id, named.name.as_str(), named.kind.as_str(), named.bare, named.body.starts_with("单细胞转录组测序技术能够")), (true, "摘要", "abstract", false, true));
+        let now = store.manuscript(&whole.id).unwrap().unwrap();
+        let (out, _) = store.manuscript_word(&now, &[], false, "Xu").unwrap();
+        assert_eq!((out.kept, out.changed, out.added, out.removed), (9, 0, 0, 0));
+        // A paragraph written in Markdown names the section by its words.
+        let typed = store.create_manuscript("Typed", "en").unwrap();
+        let first = &typed.sections[0];
+        store.save_section_body(&first.id, "Opening words.\n\n**Methods**\n\nWe grew roots.").unwrap();
+        let start = "Opening words.\n\n".len();
+        let methods = store.split_section(&first.id, start..start + "**Methods**".len(), true).unwrap();
+        assert_eq!((methods.name.as_str(), methods.kind.as_str(), methods.body.as_str()), ("Methods", "methods", "We grew roots."));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
