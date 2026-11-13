@@ -914,7 +914,7 @@ impl Workspace {
         let workers: Vec<(&'static str, Cmd)> = ["1", "2", "3", "4", "6", "8"].into_iter().zip(WORKERS).map(|(name, count)| (name, Cmd::SetScreenWorkers(count))).collect();
         let tasks = vec![
             row(t(Task::Chat.label()), Some(t("助手和单篇文献的对话。向导拟检索式、图片库里看图写图注和标签、写作页的改写和润色也用它；看图需要能读图片的模型。").into()), pick(0, Task::Chat, self, cx)).into_any_element(),
-            row(t(Task::Screen.label()), Some(t("筛选页里逐篇阅读文献：批量建议、复核和单篇再问。文献多的时候，可以给它一个更快、更便宜的模型。").into()), pick(1, Task::Screen, self, cx)).into_any_element(),
+            row(t(Task::Screen.label()), Some(t("逐篇阅读文献：筛选页的批量建议、复核和单篇再问，以及提取页按词条填写。文献多的时候，可以给它一个更快、更便宜的模型。").into()), pick(1, Task::Screen, self, cx)).into_any_element(),
             row(t("同时阅读的篇数"), Some(t("批量筛选时同时发出的请求数。服务限速时调小。").into()), segmented("workers", workers, WORKERS.iter().position(|count| *count == settings.screen_workers).unwrap_or(usize::MAX), self, cx)).into_any_element(),
             row(t(Task::Translate.label()), Some(t("翻译题目、摘要和 PDF 里选中的文字；写作页把你写的话变成候选句的检索词也用它。翻译用不着思考：可以给它一个把「思考」设为关闭的小模型。").into()), pick(2, Task::Translate, self, cx)).into_any_element(),
             row(t(Task::Structure.label()), Some(t("写作页的准备工作：把全文按导言、方法、结果、讨论分开，以及读出扫描件页面上的文字（需要能看图的模型）。").into()), pick(3, Task::Structure, self, cx)).into_any_element(),

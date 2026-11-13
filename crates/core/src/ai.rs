@@ -328,7 +328,7 @@ pub fn build_context(library_name: &str, topic: &str, papers: &[&Paper], fields:
 - 只列出题目的文献没有摘要，对它们的内容不要下结论。\n\
 - 有的文献存了 PDF 却没读出文字，工具会给出读取时得到的原因。照原因转述即可，不要自己推测它是扫描件、加了密或者损坏了；全文检索看不到这些文献的正文，没有命中不等于文中没有。\n\
 - 上面的材料不够时使用工具：search_fulltext 在已保存的全文里找短语或关键词，read_fulltext 按页读原文核对上下文，list_papers 和 get_paper 查文献记录。工具查的是整个文献库，不限于上面列出的文献。\n\
-- search_online 可以在 PubMed、Europe PMC、Crossref、arXiv 里试检索，不写入文献库。保存或删除检索式、运行导入、撤销导入会改动文献库：只在用户明确要求时使用，并说明做了什么。收录判断由用户本人做出：你可以用 suggest_screening 提出建议，它会出现在筛选页等用户确认。
+- search_online 可以在 PubMed、Europe PMC、Crossref、arXiv 里试检索，不写入文献库。保存或删除检索式、运行导入、撤销导入会改动文献库：只在用户明确要求时使用，并说明做了什么。收录判断由用户本人做出：你可以用 suggest_screening 提出建议，它会出现在筛选页等用户确认。自定义词条也一样由用户写入：你可以用 suggest_field 为一篇文献的一个词条提出取值和原文依据，它会出现在提取页等用户确认。
 \n- 工具结果里每篇文献带有 label，就是引用它时用的标签；工具的 paperId 和 id 参数可以直接填标签（如 P3）。没有保存全文的文献只有记录和摘要，回答依据的只是摘要时要说明。\n\
 - 用用户提问的语言回答，直接回答问题，不必复述材料。"
     );
@@ -1553,7 +1553,7 @@ pub fn parse_queries(reply: &str) -> Result<Vec<QueryIdea>, String> {
 
 // ---- screening suggestions
 
-/// Room for a paper's full text in one screening request, in bytes.
+/// Room for a paper's full text in one screening or extraction request, in bytes.
 const SCREEN_BUDGET: usize = 240_000;
 
 const SCREEN_SYSTEM: &str = "你是文献筛选助手。用户正在为一个文献库逐篇筛选文献，会给出筛选标准和一篇文献的信息（题目、书目信息、摘要，可能还有全文）。\n\
@@ -1576,7 +1576,16 @@ pub fn screen_prompt(topic: &str, criteria: &str, paper: &Paper, pages: Option<&
     let mut prompt = String::new();
     if !criteria.trim().is_empty() { prompt.push_str(&format!("筛选标准：{}\n", criteria.trim())) }
     if !topic.trim().is_empty() { prompt.push_str(&format!("文献库的主题：{}\n", topic.trim())) }
-    prompt.push_str(&format!("\n## 文献\n题目：{}\n", paper.title));
+    let (text, basis) = paper_to_read(paper, pages);
+    prompt.push_str(&text);
+    (SCREEN_SYSTEM.to_string(), prompt, basis)
+}
+
+/// A paper as a model reads it one at a time (筛选, 提取): its record, its
+/// abstract and, when stored, its full text page by page; and what that
+/// comes to: "fulltext", "abstract", or "none" when there is neither.
+pub fn paper_to_read(paper: &Paper, pages: Option<&[String]>) -> (String, &'static str) {
+    let mut prompt = format!("\n## 文献\n题目：{}\n", paper.title);
     for (name, value) in [("作者", paper.authors.clone()), ("期刊", paper.journal.clone()), ("年份", paper.year.map(|y| y.to_string()).unwrap_or_default())] {
         if !value.trim().is_empty() { prompt.push_str(&format!("{name}：{}\n", value.trim())) }
     }
@@ -1595,7 +1604,7 @@ pub fn screen_prompt(topic: &str, criteria: &str, paper: &Paper, pages: Option<&
         }
     }
     let basis = if pages.is_some() { "fulltext" } else if paper.abstract_text.trim().is_empty() { "none" } else { "abstract" };
-    (SCREEN_SYSTEM.to_string(), prompt, basis)
+    (prompt, basis)
 }
 
 /// Where a quotation stands: `Some(None)` in the abstract or title,

@@ -8,6 +8,7 @@
 //! - `import`   BibTeX and RIS readers
 //! - `zotero`   read-only local Zotero import, with notes, tags and PDF copies
 //! - `export`   BibTeX and CSV writers
+//! - `extract`  提取: a model's proposals for the custom fields of a paper, each with a sentence of the source
 //! - `figure`   图片库: pieces of PDF pages kept as pictures, and the caption a page gives each
 //! - `lookup`   Crossref / Europe PMC records → `Paper`
 //! - `fulltext` page text of a stored PDF
@@ -28,6 +29,7 @@ pub mod ai;
 pub mod cite;
 pub mod complete;
 pub mod export;
+pub mod extract;
 pub mod figure;
 pub mod filter;
 pub mod floating;

@@ -158,6 +158,7 @@ impl Workspace {
                 if p.doi.is_empty() && p.pmid.is_empty() { items.push(item(t("按题目补全…"), Cmd::CompletePaper(id.clone()))) }
                 items.push(item(if pdf.is_some() { t("再添加一个文件…") } else { t("添加 PDF 或附件…") }, Cmd::AttachPdf(id.clone())));
                 if pdf.is_none() && wisp_core::openaccess::lookable(p) { items.push(item(t("查找开放全文"), Cmd::FindPdfs(Some(id.clone())))) }
+                if !lib.fields.is_empty() { items.push(item(t("让助手填写词条…"), Cmd::Extract(crate::extract::Do::Open(Some(vec![id.clone()]))))) }
 
                 breaks.push(items.len());
                 items.push(item(t("复制题目"), Cmd::CopyText(p.title.clone())));
@@ -190,6 +191,7 @@ impl Workspace {
                 breaks.push(items.len());
                 items.push(item(t("批量翻译标题"), Cmd::TranslatePapers(ids.clone(), wisp_core::translation::Field::Title)));
                 items.push(item(t("批量翻译摘要"), Cmd::TranslatePapers(ids.clone(), wisp_core::translation::Field::Abstract)));
+                items.push(item(t("让助手填写词条…"), Cmd::Extract(crate::extract::Do::Open(Some(ids.clone())))));
 
                 breaks.push(items.len());
                 items.push(item(t("复制题目"), Cmd::CopyText(papers.iter().map(|p| p.title.as_str()).collect::<Vec<_>>().join("\n"))));
@@ -274,6 +276,8 @@ impl Workspace {
         }
         // 逐篇 and 确认 have their own places to move between.
         if lib.page == Page::Screen && lib.screen.mode != crate::app::ScreenMode::Batch { return self.screen_nav(nav, window, cx) }
+        // 提取 moves along its rows.
+        if lib.page == Page::Extract { return self.extract_nav(nav, window, cx) }
         // The papers in the order the page shows them.
         let ids: Vec<String> = match lib.page {
             Page::Papers => lib.shown.iter().map(|&i| lib.papers[i].id.clone()).collect(),

@@ -155,6 +155,8 @@ impl Workspace {
     /// back. It is about the round's paper, or the one open in the queue.
     pub fn screen_key(&mut self, key: &'static str, window: &mut Window, cx: &mut Context<Self>) {
         if self.modal.is_some() || self.menu.is_some() || self.settings_view.is_some() { return }
+        // 提取 hears the same keys for its own rows.
+        if self.lib.as_ref().is_some_and(|lib| lib.page == Page::Extract) { return self.extract_key(key, window, cx) }
         let Some(lib) = self.lib.as_ref().filter(|lib| lib.page == Page::Screen) else { return };
         if lib.screen.mode == ScreenMode::Confirm { return self.confirm_key(key, window, cx) }
         let single = lib.screen.mode == ScreenMode::Single;

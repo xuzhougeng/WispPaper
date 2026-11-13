@@ -44,6 +44,8 @@ pub enum Page {
     Write,
     /// 图片库: the figures cut out of the library's PDFs, the other half of 收藏 (`src/figures.rs`).
     Figures,
+    /// 提取: what the assistant proposes for the custom fields, looked over and written together (`src/extract.rs`).
+    Extract,
 }
 
 /// An edge between two columns of a library that the pointer can hold and move.
@@ -465,6 +467,8 @@ pub enum Cmd {
     FigureAddTag(String),
     /// Have a model that sees pictures write a field of the dialog: the legend, tags, or a reading for the notes.
     FigureInfer(wisp_core::figure::Ask),
+    /// 提取: everything the page, its dialog and the sparkles by a paper's fields do (`src/extract.rs`).
+    Extract(crate::extract::Do),
     // Dialogs
     CloseModal,
     SubmitModal,
@@ -1010,7 +1014,7 @@ pub enum Modal {
     AddById { input: Entity<TextInput>, busy: bool },
     Paper(Box<PaperForm>),
     Complete(Box<CompleteForm>),
-    Fields { editing: Option<String>, name: Entity<TextInput>, options: Entity<TextInput>, kind: FieldKind, in_table: bool },
+    Fields { editing: Option<String>, name: Entity<TextInput>, options: Entity<TextInput>, hint: Entity<TextInput>, kind: FieldKind, in_table: bool },
     Search { editing: Option<String>, kind: String, name: Entity<TextInput>, query: Entity<TextInput>, max: Entity<TextInput> },
     Confirm { title: String, message: String, action: String, cmd: Cmd },
     /// Another name for a tag, on every paper that has it.
@@ -1035,6 +1039,8 @@ pub enum Modal {
     ReviewText { what: ReviewText, input: Entity<TextInput> },
     /// A figure of the figure library, or a piece of a PDF page about to become one.
     Figure(Box<crate::figures::FigureForm>),
+    /// 提取: which fields to ask the assistant about, for which papers.
+    Extract(Box<crate::extract::Form>),
 }
 
 pub struct Library {
@@ -1115,6 +1121,8 @@ pub struct Library {
     pub citing: crate::cite::Citing,
     /// 图片库: the figures cut out of the library's PDFs.
     pub gallery: crate::figures::Gallery,
+    /// 提取: the assistant's proposals for the custom fields, its run over the papers, and their confirmation.
+    pub extract: crate::extract::Extract,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -1456,6 +1464,8 @@ impl Library {
         self.writing.structures = self.store.structures()?;
         self.origins = self.store.file_origins()?;
         self.gallery.items = self.store.list_figures()?;
+        self.extract.proposals = wisp_core::extract::Proposals::new(self.store.list_proposals()?);
+        self.extract_settle();
         // Filters on a field that no longer exists would hide everything.
         let known: HashSet<&str> = self.fields.iter().map(|f| f.id.as_str()).collect();
         self.filters.fields.retain(|id, _| known.contains(id.as_str()));
@@ -1836,6 +1846,8 @@ impl Workspace {
             }
             Cmd::SetPage(page) => {
                 if self.lib.as_ref().is_some_and(|l| l.page == Page::Write && page != Page::Write) { self.write_snapshot("leave") }
+                // What 提取 last wrote is on show, with the way back, until the page is left.
+                if let Some(lib) = self.lib.as_mut().filter(|l| l.page == Page::Extract && page != Page::Extract) { lib.extract.last = None }
                 if page == Page::Write { self.write_ensure(cx) }
                 if let Some(lib) = self.lib.as_mut() {
                     lib.page = page;
@@ -2034,6 +2046,7 @@ impl Workspace {
                 if let Some(lib) = self.lib.as_mut().filter(|lib| lib.translation_run.as_ref().is_some_and(|run| !run.batch.running())) { lib.translation_run = None }
             }
 
+            Cmd::Extract(what) => self.run_extract(what, window, cx),
             Cmd::ManageFields => self.fields_dialog(None, window, cx),
             Cmd::EditField(id) => self.fields_dialog(Some(id), window, cx),
             Cmd::DeleteField(id) => {
@@ -2709,6 +2722,7 @@ impl Workspace {
             writing,
             citing,
             gallery,
+            extract: crate::extract::Extract::new(),
             _subscriptions: subscriptions,
         };
         if let Err(err) = lib.reload() {
@@ -3928,7 +3942,8 @@ impl Workspace {
         let field = editing.as_ref().and_then(|id| self.lib.as_ref()?.fields.iter().find(|f| &f.id == id).cloned()).unwrap_or(FieldDef { in_table: true, kind: FieldKind::Tags, ..Default::default() });
         let name = self.modal_input("词条名称，例如：物种、研究方法、所属课题", &field.name, false, window, cx);
         let options = self.modal_input("可选值，用逗号分隔（单选必填）", &field.options.join(", "), false, window, cx);
-        self.modal = Some(Modal::Fields { editing, name, options, kind: field.kind, in_table: field.in_table });
+        let hint = self.modal_input("说明（可留空）：让助手提取时找什么，例如“研究用的物种，写学名”", &field.hint, false, window, cx);
+        self.modal = Some(Modal::Fields { editing, name, options, hint, kind: field.kind, in_table: field.in_table });
     }
 
     fn search_dialog(&mut self, editing: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
@@ -4508,8 +4523,9 @@ impl Workspace {
                     Err(err) => self.modal_error = format!("{err:#}"),
                 }
             }
-            Modal::Fields { editing, name, options, kind, in_table } => {
-                let mut field = FieldDef { id: editing.clone().unwrap_or_default(), name: text(name, cx), kind: *kind, options: split_list(&text(options, cx)), in_table: *in_table };
+            Modal::Extract(_) => self.submit_extract(window, cx),
+            Modal::Fields { editing, name, options, hint, kind, in_table } => {
+                let mut field = FieldDef { id: editing.clone().unwrap_or_default(), name: text(name, cx), kind: *kind, options: split_list(&text(options, cx)), in_table: *in_table, hint: text(hint, cx) };
                 let Some(lib) = self.lib.as_mut() else { return };
                 match lib.store.save_field(&mut field) {
                     Ok(()) => {
@@ -4625,7 +4641,7 @@ impl Workspace {
                 "open" => self.libraries.get(arg.parse::<usize>().unwrap_or(0)).map(|l| Cmd::OpenLibrary(l.id.clone())),
                 "select" => self.lib.as_ref().and_then(|l| l.shown.get(arg.parse::<usize>().unwrap_or(0)).map(|&i| Cmd::Select(l.papers[i].id.clone()))),
                 "tab" => Some(Cmd::SetTab(match arg { "pdf" => Tab::Pdf, "ask" => Tab::Ask, _ => Tab::Info })),
-                "page" => Some(Cmd::SetPage(match arg { "ask" => Page::Ask, "trash" => Page::Trash, "sources" => Page::Sources, "screen" => Page::Screen, "write" => Page::Write, "figures" => Page::Figures, _ => Page::Papers })),
+                "page" => Some(Cmd::SetPage(match arg { "ask" => Page::Ask, "trash" => Page::Trash, "sources" => Page::Sources, "screen" => Page::Screen, "write" => Page::Write, "figures" => Page::Figures, "extract" => Page::Extract, _ => Page::Papers })),
                 // `write:methods` shows another part of the manuscript; `draft:<text>` leaves text in it, as if typed.
                 "write" => Some(Cmd::WriteSection(arg.to_string())),
                 // `manuscript:new` makes another manuscript, `manuscript:<title>` gives the current one its title;
@@ -4841,6 +4857,9 @@ impl Workspace {
                     go if go.starts_with("go;") => Cmd::ScreenGo(go[3..].parse().unwrap_or(0)),
                     _ => Cmd::ScreenStart,
                 }),
+                // 提取: `extract` is the dialog for the list on show (`extract:marked` for the marked papers), `submit` starts it;
+                // the rest are the steps of `Workspace::extract_dev` (extract.rs).
+                "extract" => self.extract_dev(arg),
                 // `goal:<text>` writes the screening goal, as if typed.
                 "goal" => {
                     if let Some(lib) = self.lib.as_mut() {

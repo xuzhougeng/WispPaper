@@ -9,6 +9,7 @@
 mod local;
 
 use crate::complete;
+use crate::extract::{self, Proposal};
 use crate::filter::{Filters, filter_papers};
 use crate::fulltext::{self, terms};
 use crate::libraries::{self, LibraryInfo};
@@ -38,10 +39,11 @@ pub struct ToolDef {
 
 /// A tool that works inside one library: it also takes `library`.
 /// The tools that change the library.
-const WRITING: [&str; 11] = ["create_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "sync_searches", "find_pdf"];
+const WRITING: [&str; 12] = ["create_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "suggest_field", "sync_searches", "find_pdf"];
 /// Of those, the ones the window's assistant runs only with the person's
-/// consent. Saving a search or suggesting a screening decision changes
-/// nothing a person has not yet to act on, so they run as asked.
+/// consent. Saving a search, suggesting a screening decision or proposing
+/// a field's value changes nothing a person has not yet to act on, so they
+/// run as asked.
 const CONFIRMING: [&str; 7] = ["import_pdf", "import_references", "import_zotero", "run_search", "undo_import", "remove_search", "find_pdf"];
 
 fn scoped(name: &'static str, title: &'static str, description: &'static str, mut properties: Value, required: &[&str]) -> ToolDef {
@@ -257,6 +259,19 @@ pub fn catalog() -> Vec<ToolDef> {
             }),
             &["id", "verdict", "reason"],
         ),
+        scoped(
+            "suggest_field",
+            "提出词条取值",
+            "为一篇文献的一个自定义词条提出取值，供用户在提取页确认。这不会改动词条：词条只由用户本人写入。同一篇文献同一词条的新建议会替换旧的。词条的名称、类型、说明和选项见 library_status 的 fields。提出前先读这篇文献的记录（get_paper），有全文时读全文（read_fulltext）；只依据文中写明的内容，文中没有说明时 value 留空。",
+            json!({
+                "id": {"type": "string", "description": "文献 ID。"},
+                "field": {"type": "string", "description": "词条的名称或 ID。"},
+                "value": {"type": "string", "description": "取值。多值词条的几个值用分号隔开；单选词条必须是它的选项之一；留空表示文中没有说明。"},
+                "excerpt": {"type": "string", "description": "支持这个取值的一句原文，逐字摘自摘要或全文。不在原文中的引文不会被保存，没有原文依据的取值不会默认勾选。"},
+                "author": {"type": "string", "description": "提出建议的是谁，例如模型或 agent 的名字。"},
+            }),
+            &["id", "field"],
+        ),
     ]
 }
 
@@ -373,6 +388,7 @@ fn dispatch(store: &mut Store, info: &LibraryInfo, name: &str, args: &Value, fet
         "list_imports" => Ok(json!({"imports": store.list_batches(number(args, "limit", 20, 200)?)?})),
         "undo_import" => undo_import(store, args),
         "suggest_screening" => suggest_screening(store, info, args),
+        "suggest_field" => suggest_field(store, args),
         "library_status" => library_status(store, info),
         "list_papers" => list_papers(store, info, args),
         "list_figures" => list_figures(store, info, args),
@@ -436,7 +452,7 @@ fn tally(papers: &[Paper], table: &[(&str, &str)], value: impl Fn(&Paper) -> &st
 fn library_status(store: &mut Store, info: &LibraryInfo) -> Result<Value> {
     let papers = store.list_papers()?;
     let labels = |table: &[(&str, &str)]| Value::Object(table.iter().map(|(key, label)| (key.to_string(), json!(label))).collect());
-    let fields: Vec<Value> = store.list_fields()?.iter().map(|f| json!({"name": f.name, "kind": f.kind.as_str(), "options": f.options})).collect();
+    let fields: Vec<Value> = store.list_fields()?.iter().map(|f| json!({"id": f.id, "name": f.name, "kind": f.kind.as_str(), "options": f.options, "hint": f.hint})).collect();
     Ok(json!({
         "id": info.id,
         "name": info.name,
@@ -512,11 +528,17 @@ fn get_paper(store: &mut Store, args: &Value) -> Result<Value> {
     let paper = store.get_paper(text(args, "id")?)?;
     let mut out = serde_json::to_value(&paper)?;
     // Custom fields by the name a person gave them, in the library's order.
-    let mut fields = Map::new();
+    let (mut fields, mut proposed) = (Map::new(), vec![]);
+    let proposals = extract::Proposals::new(store.list_proposals()?);
     for field in store.list_fields()? {
+        // What an assistant has proposed for a field and the person has yet to look at.
+        if let Some(proposal) = proposals.get(&paper.id, &field.id).filter(|proposal| extract::standing(proposal, &field, &paper) == extract::Standing::Open) {
+            proposed.push(json!({"field": field.name, "values": proposal.values, "excerpt": proposal.excerpt, "page": proposal.page, "author": proposal.author}));
+        }
         if let Some(values) = paper.fields.get(&field.id) { fields.insert(field.name, json!(values)); }
     }
     out["fields"] = Value::Object(fields);
+    out["fieldProposals"] = json!(proposed);
     out["link"] = json!(paper.link());
     out["suggestion"] = json!(store.suggestion(&paper.id)?);
     let mut files = vec![];
@@ -1104,6 +1126,52 @@ fn suggest_screening(store: &mut Store, info: &LibraryInfo, args: &Value) -> Res
     }))
 }
 
+// ---- extraction
+
+/// Record what an agent thinks a custom field of a paper should hold. The
+/// field itself is the person's to write and is not touched here; a
+/// quotation the paper's text does not hold is not kept as evidence, and a
+/// Select field is proposed one of its options or nothing.
+fn suggest_field(store: &mut Store, args: &Value) -> Result<Value> {
+    let paper = store.get_paper(text(args, "id")?)?;
+    let wanted = text(args, "field")?;
+    let fields = store.list_fields()?;
+    let Some(field) = fields.iter().find(|f| f.id == wanted || f.name == wanted) else {
+        if fields.is_empty() { bail!("这个文献库还没有自定义词条。") }
+        bail!("没有名为「{wanted}」的词条。现有：{}", fields.iter().map(|f| format!("「{}」", f.name)).collect::<Vec<_>>().join("、"))
+    };
+    let values = extract::coerce(field, &[text(args, "value")?.to_string()]);
+    if !values.is_empty() && !extract::fits(field, &values) { bail!("「{}」是单选词条，取值应为 {} 之一；文中没有合适的就把 value 留空。", field.name, field.options.join("、")) }
+    extract_missing(store, Some(&paper.id))?;
+    let pages = store.paper_pages(&paper.id)?;
+    let quote = text(args, "excerpt")?;
+    let found = if quote.is_empty() || values.is_empty() { None } else { crate::ai::locate_quote(quote, &paper, pages.as_deref()) };
+    let author = text(args, "author")?;
+    let mut proposal = Proposal {
+        paper_id: paper.id.clone(),
+        field_id: field.id.clone(),
+        values,
+        excerpt: if found.is_some() { quote.into() } else { String::new() },
+        page: found.flatten(),
+        basis: if pages.is_some() { "fulltext" } else if paper.abstract_text.is_empty() { "none" } else { "abstract" }.into(),
+        author: if author.is_empty() { "agent".into() } else { author.into() },
+        asked: extract::asked_as(field),
+        ..Default::default()
+    };
+    store.save_proposal(&mut proposal)?;
+    Ok(json!({
+        "saved": true,
+        "paperId": paper.id,
+        "field": field.name,
+        "values": proposal.values,
+        "excerptKept": quote.is_empty() || found.is_some(),
+        "page": proposal.page,
+        // Said every time: an agent that reads this knows the field is as it was.
+        "current": paper.fields.get(&field.id).cloned().unwrap_or_default(),
+        "note": "建议已保存，词条没有改动，由用户在提取页确认。",
+    }))
+}
+
 // ---- the command line
 
 /// `paperId` as a flag: `paper-id`.
@@ -1612,6 +1680,37 @@ pub(crate) mod tests {
         }
         let schema = &catalog().into_iter().find(|t| t.name == "suggest_screening").unwrap().input_schema;
         assert_eq!(cli_args(schema, &["P-1".into(), "included".into(), "理由".into(), "--confidence".into(), "0.7".into()]).unwrap(), json!({"id": "P-1", "verdict": "included", "reason": "理由", "confidence": 0.7}));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn proposals_are_not_values() {
+        let (root, id) = sample();
+        let info = find_library(&root, "").unwrap();
+        let mut store = Store::open(&info.dir).unwrap();
+        store.save_field(&mut FieldDef { name: "方法".into(), kind: crate::model::FieldKind::Select, options: vec!["scRNA-seq".into(), "snRNA-seq".into()], hint: "测序方法".into(), ..Default::default() }).unwrap();
+        drop(store);
+        let status = call(&root, "library_status", &json!({})).unwrap();
+        assert_eq!((status["fields"][1]["name"].as_str(), status["fields"][1]["hint"].as_str(), status["fields"][1]["options"][1].as_str()), (Some("方法"), Some("测序方法"), Some("snRNA-seq")));
+        // An option in another spelling is taken as that option; the quotation is found on its page.
+        let said = call(&root, "suggest_field", &json!({"id": id, "field": "方法", "value": "ScRNA seq", "excerpt": "Libraries were prepared with 10x Genomics Chromium", "author": "codex"})).unwrap();
+        assert_eq!((said["values"][0].as_str(), said["excerptKept"].as_bool(), said["page"].as_u64(), said["current"].as_array().map(Vec::len)), (Some("scRNA-seq"), Some(true), Some(2), Some(0)));
+        // The field is as it was; the proposal waits beside it.
+        let paper = call(&root, "get_paper", &json!({"id": id})).unwrap();
+        assert!(paper["fields"]["方法"].is_null());
+        assert_eq!((paper["fieldProposals"][0]["field"].as_str(), paper["fieldProposals"][0]["values"][0].as_str(), paper["fieldProposals"][0]["author"].as_str()), (Some("方法"), Some("scRNA-seq"), Some("codex")));
+        // What the field holds already does not wait; an invented quotation is dropped; nothing found is kept as that.
+        let held = call(&root, "suggest_field", &json!({"id": id, "field": "物种", "value": "Arabidopsis", "excerpt": "This paper is about leaves only."})).unwrap();
+        assert_eq!((held["excerptKept"].as_bool(), held["current"][0].as_str()), (Some(false), Some("Arabidopsis")));
+        assert_eq!(call(&root, "get_paper", &json!({"id": id})).unwrap()["fieldProposals"].as_array().map(Vec::len), Some(1));
+        assert_eq!(call(&root, "suggest_field", &json!({"id": id, "field": "方法"})).unwrap()["values"], json!([]));
+        assert_eq!(call(&root, "get_paper", &json!({"id": id})).unwrap()["fieldProposals"], json!([]));
+        for (args, message) in [(json!({"id": id, "field": "方法", "value": "Smart-seq2"}), "单选词条"), (json!({"id": id, "field": "产地", "value": "x"}), "没有名为「产地」的词条"), (json!({"id": id, "value": "x"}), "需要参数 field"), (json!({"id": "P-none", "field": "物种", "value": "x"}), "文献不存在")] {
+            let error = call(&root, "suggest_field", &args).unwrap_err();
+            assert!(error.contains(message), "{error}");
+        }
+        let schema = &catalog().into_iter().find(|t| t.name == "suggest_field").unwrap().input_schema;
+        assert_eq!(cli_args(schema, &["P-1".into(), "物种".into(), "--value".into(), "拟南芥；水稻".into()]).unwrap(), json!({"id": "P-1", "field": "物种", "value": "拟南芥；水稻"}));
         std::fs::remove_dir_all(root).ok();
     }
 
