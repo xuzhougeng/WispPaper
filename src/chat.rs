@@ -8,7 +8,7 @@
 //! library's past conversations in place of the one in hand.
 
 use crate::i18n::t;
-use crate::app::{Chat, ChatImage, ChatItem, Cmd, Consent, MenuKind, Workspace};
+use crate::app::{Chat, ChatImage, ChatItem, Cmd, Consent, MenuKind, ScopeDo, Workspace};
 use crate::input::TextInput;
 use crate::settings::SettingsPage;
 use crate::theme::{self, Theme};
@@ -18,6 +18,44 @@ use wisp_core::{ai, time};
 
 /// The sources shown under an answer before the rest is asked for.
 const SOURCES_SHOWN: usize = 8;
+
+/// The papers the first question is kept to that are named over the question box; the rest are counted.
+const PINNED_SHOWN: usize = 8;
+
+/// A paper's row of the scope panel on its way into the conversation: what
+/// is held, and the card drawn under the pointer meanwhile.
+#[derive(Clone)]
+pub struct PaperDrag {
+    pub id: String,
+    title: String,
+    /// Where in its row the pointer took hold of it.
+    held: Point<Pixels>,
+}
+
+impl Render for PaperDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        // What is dragged is drawn from the row's corner, and the row is as wide as the panel: the card is moved to the pointer.
+        div().pl((self.held.x - px(16.)).max(px(0.))).pt((self.held.y - px(12.)).max(px(0.))).child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .w(px(280.))
+                .h(px(30.))
+                .px(px(10.))
+                .rounded(px(8.))
+                .border_1()
+                .border_color(Theme::accent())
+                .bg(Theme::bg_body())
+                .shadow(theme::shadow_panel())
+                .font_family(theme::UI_FONT)
+                .text_size(px(12.))
+                .text_color(Theme::text())
+                .child(ui::icon("file-text", 13., Theme::accent()))
+                .child(div().w(px(238.)).truncate().child(self.title.clone())),
+        )
+    }
+}
 
 /// The dialog for a claim and its source; nothing is written until it is saved.
 pub struct EvidenceForm {
@@ -481,6 +519,8 @@ impl Workspace {
 
     pub fn render_chat(&mut self, about_paper: bool, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if let Some(lib) = self.lib.as_mut() { lib.check_quotes(about_paper) }
+        // A drag that ended anywhere but in the conversation says nothing: the flag is put right here.
+        if !cx.has_active_drag() { self.pinning = false }
         let lib = self.lib.as_ref().unwrap();
         let chat = lib.chat(about_paper);
         let profile = self.settings.profile_for_or_default(wisp_core::settings::Task::Chat);
@@ -517,7 +557,8 @@ impl Workspace {
                     None => t("这篇文献没有 PDF，将只提供记录和摘要").to_string(),
                 }
             }
-            None if !about_paper && !lib.asked.is_empty() => tf!("范围：你在列表里选中的 {} 篇文献，以及其中已存 PDF 的相关页面{textless_note}。「新对话」回到当前列表", "Scope: {} selected papers and relevant saved PDF pages{textless_note}. “New chat” returns to the current list", in_scope.len()),
+            None if !about_paper && !lib.asked.is_empty() => tf!("范围：只读你选定的 {} 篇文献，以及其中已存 PDF 的相关页面{textless_note}。「新对话」回到当前列表", "Scope: only the {} papers you picked, with relevant saved PDF pages{textless_note}. “New chat” returns to the current list", in_scope.len()),
+            None if !about_paper && lib.scope_hits.is_some() => tf!("范围：当前列表里符合「{}」的 {} 篇文献，以及其中已存 PDF 的相关页面{textless_note}", "Scope: the {1} papers in the current list matching “{0}”, with relevant saved PDF pages{textless_note}", lib.scope_words.trim(), in_scope.len()),
             None => tf!("范围：当前列表的 {} 篇文献（受左侧视图、搜索和筛选影响），以及其中已存 PDF 的相关页面{textless_note}", "Scope: {} papers in the current list (affected by views, search and filters), with relevant saved PDF pages{textless_note}", lib.shown.len()),
         };
 
@@ -546,7 +587,9 @@ impl Workspace {
 
         // The papers behind the scope line can be looked through: in a conversation whose material was built, or before the first question.
         let listable = !about_paper && !listing && (chat.ctx.is_some() || chat.messages.is_empty());
-        let materials = (listable && chat.materials_open).then(|| self.render_materials(chat, cx));
+        let materials = (listable && chat.materials_open).then(|| self.render_materials(chat, window, cx));
+        // The first question can still be kept to a few papers: dragged from the panel into the conversation.
+        let pinnable = listable && chat.ctx.is_none();
         div()
             .flex()
             .flex_col()
@@ -582,7 +625,15 @@ impl Workspace {
                     .child(ui::ghost_button(SharedString::from(format!("chat-history-{side}")), Some(if listing { "arrow-left" } else { "history" }), Some(if listing { t("返回").into() } else { t("历史").into() })).on_click(self.on(Cmd::ToggleHistory(about_paper), cx)))
                     .when(!chat.messages.is_empty() && !listing, |d| d.child(ui::ghost_button(SharedString::from(format!("chat-new-{side}")), Some("plus"), Some(t("新对话").into())).on_click(self.on(Cmd::NewChat(about_paper), cx)))),
             )
-            .children(materials)
+            // Under the header, everything the panel of papers floats over: it pushes nothing down.
+            .child(div().relative().flex().flex_col().flex_1().min_h_0()
+            // A paper dragged out of the panel is let go anywhere in the conversation.
+            .when(pinnable, |d| d.on_drop(cx.listener(|this, drag: &PaperDrag, window, cx| this.run(Cmd::Scope(ScopeDo::Pin(drag.id.clone())), window, cx))))
+            // A press beside the panel puts it away, as with any floating thing; what it searched for stays.
+            .when(materials.is_some(), |d| d.on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                if let Some(lib) = this.lib.as_mut() { lib.library_chat.materials_open = false }
+                cx.notify();
+            })))
             // A review's conversation says where the review stands, and offers the step that is the person's to take.
             .when_some(review, |d, review| {
                 use crate::app::ReviewDo;
@@ -629,6 +680,7 @@ impl Workspace {
                         .child(ui::secondary_button(SharedString::from(format!("chat-settings-{side}")), t("打开设置")).h(px(28.)).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx))),
                 )
             })
+            .children(materials))
             .into_any_element()
     }
 
@@ -699,22 +751,38 @@ impl Workspace {
             .into_any_element()
     }
 
-    fn render_materials(&self, chat: &Chat, cx: &mut Context<Self>) -> AnyElement {
+    /// The papers the library's questions are put to, in a panel that
+    /// floats over the conversation: with the labels of this conversation
+    /// and what each was handed over as once the material is built; before
+    /// that the papers of the current list, which its search box narrows
+    /// (and the scope with them). A row opens the paper beside the
+    /// conversation; dragged into the conversation, or by its plus, the
+    /// paper is one of the few the first question is kept to.
+    fn render_materials(&self, chat: &Chat, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         /// The rows drawn; a library of thousands is not a list to scroll through here.
         const LISTED: usize = 300;
         let lib = self.lib.as_ref().unwrap();
         // (paper, its label in this conversation, how its record was given, pages of its text given)
         let rows: Vec<(&wisp_core::model::Paper, String, &str, usize)> = match &chat.ctx {
-            Some(ctx) => ctx.given.iter().filter_map(|given| Some((lib.paper(&given.paper_id)?, ctx.sources.iter().find(|source| source.paper_id == given.paper_id).map(|source| source.label.clone()).unwrap_or_default(), given.record, given.pages))).collect(),
-            None => lib.scope_papers().into_iter().map(|paper| (paper, String::new(), "", 0)).collect(),
+            Some(ctx) => ctx.given.iter().filter(|given| lib.scope_has(&given.paper_id)).filter_map(|given| Some((lib.paper(&given.paper_id)?, ctx.sources.iter().find(|source| source.paper_id == given.paper_id).map(|source| source.label.clone()).unwrap_or_default(), given.record, given.pages))).collect(),
+            None => lib.scope_listed().into_iter().map(|paper| (paper, String::new(), "", 0)).collect(),
         };
         let total = rows.len();
+        let all = chat.ctx.as_ref().map_or(lib.shown.len(), |ctx| ctx.given.len());
+        let searching = lib.scope_hits.is_some();
+        // Before the material is built a paper can be picked for the first question.
+        let pinnable = chat.ctx.is_none();
         let note = if chat.ctx.is_some() {
-            t("这次对话开始时交给模型的材料。助手还能用工具查到库里的其他文献；在这里点开一篇不会改变范围。")
+            t("这次对话开始时交给模型的材料。助手还能用工具查到库里的其他文献；在这里点开一篇不会改变范围。").to_string()
+        } else if !lib.asked.is_empty() {
+            tf!("第一个问题只读选定的 {} 篇。再拖进对话可以添加，在输入框上方可以移除。", "The first question reads only the {} picked papers. Drag more into the conversation to add them; remove them above the question box.", lib.asked.len())
+        } else if searching {
+            t("第一个问题默认带上找到的这些文献。把其中几篇拖进下面的对话，就只读那几篇。").to_string()
         } else {
-            t("第一个问题会带上这些文献：范围就是文献列表现在的样子，由视图、搜索和筛选决定。点开一篇不会改变范围。")
+            t("第一个问题默认带上当前列表的这些文献。在上面输入可以缩小范围；把其中几篇拖进下面的对话，就只读那几篇。").to_string()
         };
-        let listed = rows.into_iter().take(LISTED).enumerate().map(|(n, (paper, label, record, pages))| {
+        let workspace = cx.entity().downgrade();
+        let listed: Vec<Stateful<Div>> = rows.into_iter().take(LISTED).map(|(paper, label, record, pages)| {
             let by = [paper.authors.split([';', ',']).next().unwrap_or("").trim().to_string(), paper.year.map(|year| year.to_string()).unwrap_or_default()].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" · ");
             // What the model has of it: the record, and how much of the text.
             let mut state = vec![];
@@ -731,9 +799,12 @@ impl Workspace {
                 _ => (t("无全文"), Theme::text_placeholder()),
             };
             let selected = lib.selected.as_deref() == Some(paper.id.as_str());
+            let pinned = pinnable && lib.asked.contains(&paper.id);
             div()
-                .id(("material", n))
+                // By the paper, not the row's place: the list changes under a held row as the search is typed.
+                .id(SharedString::from(format!("material-{}", paper.id)))
                 .flex()
+                .flex_none()
                 .items_center()
                 .gap(px(8.))
                 .h(px(30.))
@@ -743,20 +814,79 @@ impl Workspace {
                 .when(selected, |d| d.bg(Theme::accent_soft()))
                 .when(!selected, |d| d.hover(|s| s.bg(Theme::hover())))
                 .on_click(self.on(Cmd::Select(paper.id.clone()), cx))
+                .when(pinnable, |d| {
+                    let workspace = workspace.clone();
+                    d.on_drag(PaperDrag { id: paper.id.clone(), title: paper.title.clone(), held: Point::default() }, move |drag, held, _, cx| {
+                        workspace.update(cx, |this, cx| {
+                            this.pinning = true;
+                            cx.notify();
+                        }).ok();
+                        cx.new(|_| PaperDrag { held, ..drag.clone() })
+                    })
+                })
                 .when(!label.is_empty(), |d| d.child(div().flex_none().w(px(34.)).text_size(px(12.)).font_weight(FontWeight::MEDIUM).text_color(Theme::accent()).child(label)))
                 .child(div().flex_1().min_w_0().truncate().child(paper.title.clone()))
                 .when(!by.is_empty(), |d| d.child(div().flex_none().max_w(px(150.)).truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(by)))
                 .when(!state.is_empty(), |d| d.child(div().flex_none().text_size(px(12.)).text_color(if record == "full" { Theme::text_secondary() } else { Theme::warning() }).child(state.join(" · "))))
                 .child(div().flex_none().w(px(68.)).text_right().text_size(px(12.)).text_color(color).child(text))
-        });
-        div()
+                // The same as dragging the row into the conversation, for a hand that would rather click.
+                .when(pinnable, |d| {
+                    let (id, tip) = (paper.id.clone(), if pinned { t("不再限定这一篇") } else { t("只读这一篇（也可以把这一行拖进对话）") });
+                    d.child(
+                        div()
+                            .id(SharedString::from(format!("material-pin-{}", paper.id)))
+                            .flex()
+                            .flex_none()
+                            .items_center()
+                            .justify_center()
+                            .size(px(22.))
+                            .rounded(px(6.))
+                            .when(pinned, |d| d.bg(Theme::accent_soft()))
+                            .hover(|s| s.bg(Theme::pressed()))
+                            .tooltip(move |_, cx| cx.new(|_| crate::write_assist::Tip(tip.to_string())).into())
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                // Not the row's click as well, which would open the paper.
+                                cx.stop_propagation();
+                                this.run(Cmd::Scope(if pinned { ScopeDo::Unpin(id.clone()) } else { ScopeDo::Pin(id.clone()) }), window, cx)
+                            }))
+                            .child(ui::icon(if pinned { "check" } else { "plus" }, 13., if pinned { Theme::accent() } else { Theme::text_tertiary() })),
+                    )
+                })
+        }).collect();
+        let panel = div()
+            .absolute()
+            .top(px(6.))
+            .left(px(12.))
+            .right(px(12.))
+            .max_h(relative(0.62))
+            // The conversation under it hears nothing through it.
+            .occlude()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .flex()
             .flex_col()
-            .flex_none()
-            .max_h(relative(0.45))
-            .border_b_1()
+            .rounded(px(12.))
+            .border_1()
             .border_color(Theme::line())
-            .bg(Theme::bg_sunken())
+            .bg(Theme::bg_body())
+            .shadow(theme::shadow_panel())
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(px(8.))
+                    .h(px(34.))
+                    .mx(px(8.))
+                    .mt(px(8.))
+                    .px(px(10.))
+                    .rounded(px(8.))
+                    .bg(Theme::bg_sunken())
+                    .border_1()
+                    .border_color(if lib.scope_find.focus_handle(cx).is_focused(window) { Theme::accent() } else { Theme::bg_sunken() })
+                    .child(ui::icon("search", 15., Theme::text_tertiary()))
+                    .child(div().flex().flex_1().min_w_0().child(lib.scope_find.clone()))
+                    .when(searching, |d| d.child(div().flex_none().text_size(px(12.)).text_color(Theme::text_tertiary()).child(format!("{total} / {all}"))).child(ui::ghost_button("materials-find-clear", Some("x"), None).h(px(22.)).min_w(px(22.)).on_click(self.on(Cmd::Scope(ScopeDo::ClearFind), cx)))),
+            )
             .child(div().flex_none().px(px(16.)).pt(px(8.)).pb(px(4.)).text_size(px(12.)).line_height(px(17.)).text_color(Theme::text_tertiary()).child(note))
             .child(
                 div()
@@ -769,9 +899,10 @@ impl Workspace {
                     .px(px(8.))
                     .pb(px(8.))
                     .children(listed)
-                    .when(total > LISTED, |d| d.child(div().px(px(8.)).py(px(6.)).text_size(px(12.)).text_color(Theme::text_tertiary()).child(tf!("另有 {} 篇没有列出；在文献列表里可以看到全部。", "{} more papers not listed here; see the paper list for all of them.", total - LISTED)))),
-            )
-            .into_any_element()
+                    .when(total == 0, |d| d.child(div().px(px(8.)).py(px(10.)).text_color(Theme::text_tertiary()).child(if searching { t("没有符合的文献。换个词，或清空搜索。") } else { t("当前列表里没有文献。") })))
+                    .when(total > LISTED, |d| d.child(div().px(px(8.)).py(px(6.)).text_size(px(12.)).text_color(Theme::text_tertiary()).child(tf!("另有 {} 篇没有列出；再输入几个词可以找到。", "{} more papers not listed here; type a few more words to find them.", total - LISTED)))),
+            );
+        ui::fade_in("materials-in", panel).into_any_element()
     }
 
     /// What was said, in order: questions, the assistant's tool calls
@@ -1126,6 +1257,10 @@ impl Workspace {
         let commands = if focused { chat.slash_list(&self.settings.commands, cx) } else { vec![] };
         let ready = !chat.input.read(cx).text().trim().is_empty() || !chat.attachments.is_empty() || !chat.quotes.is_empty();
         let lib = self.lib.as_ref().unwrap();
+        // The papers the first question is kept to, while it is still to come; and a paper on its way in.
+        let open = !about_paper && chat.ctx.is_none() && chat.messages.is_empty() && chat.history.is_none();
+        let kept: Vec<&wisp_core::model::Paper> = if open { lib.asked.iter().take(PINNED_SHOWN).filter_map(|id| lib.paper(id)).collect() } else { vec![] };
+        let dropping = open && self.pinning && cx.has_active_drag();
         let round = |id: String, icon_name: &'static str, lit: bool| {
             div().id(SharedString::from(id)).flex().flex_none().items_center().justify_center().size(px(30.)).rounded(px(15.)).bg(if lit { Theme::accent() } else { Theme::groove() }).cursor_pointer().hover(|s| s.opacity(0.88)).child(ui::icon(icon_name, 15., if lit { Theme::on_accent() } else { Theme::text_tertiary() }))
         };
@@ -1176,9 +1311,42 @@ impl Workspace {
                     .p(px(8.))
                     .rounded(px(16.))
                     .border_1()
-                    .border_color(if focused { Theme::accent() } else { Theme::line_strong() })
-                    .bg(Theme::bg_body())
+                    .border_color(if focused || dropping { Theme::accent() } else { Theme::line_strong() })
+                    .bg(if dropping { Theme::accent_soft() } else { Theme::bg_body() })
                     .shadow(theme::shadow_card())
+                    // A paper held over the conversation: what letting go of it does.
+                    .when(dropping, |d| d.child(div().flex().items_center().gap(px(6.)).px(px(4.)).pt(px(2.)).text_size(px(12.)).text_color(Theme::accent()).child(ui::icon("plus", 13., Theme::accent())).child(t("松开，第一个问题只读拖进来的文献"))))
+                    // The papers the first question is kept to: each can be let go again, and without any the list on show is back.
+                    .when(!kept.is_empty(), |d| {
+                        let more = lib.asked.len().saturating_sub(kept.len());
+                        d.child(
+                            div()
+                                .flex()
+                                .flex_wrap()
+                                .items_center()
+                                .gap(px(6.))
+                                .px(px(2.))
+                                .pt(px(2.))
+                                .child(div().flex_none().text_size(px(12.)).text_color(Theme::text_tertiary()).child(tf!("只读这 {} 篇", "Only these {}", lib.asked.len())))
+                                .children(kept.iter().map(|paper| {
+                                    div()
+                                        .flex()
+                                        .flex_none()
+                                        .items_center()
+                                        .gap(px(2.))
+                                        .h(px(24.))
+                                        .pl(px(8.))
+                                        .pr(px(2.))
+                                        .rounded(px(6.))
+                                        .bg(Theme::accent_soft())
+                                        .text_size(px(12.))
+                                        .child(div().max_w(px(226.)).truncate().child(paper.title.clone()))
+                                        .child(ui::ghost_button(SharedString::from(format!("scope-unpin-{}", paper.id)), Some("x"), None).h(px(20.)).min_w(px(20.)).on_click(self.on(Cmd::Scope(ScopeDo::Unpin(paper.id.clone())), cx)))
+                                }))
+                                .when(more > 0, |d| d.child(div().flex_none().text_size(px(12.)).text_color(Theme::text_tertiary()).child(tf!("另外 {more} 篇", "{more} more"))))
+                                .child(ui::ghost_button("scope-unpin-all", None, Some(t("清除").into())).h(px(22.)).text_size(px(12.)).on_click(self.on(Cmd::Scope(ScopeDo::UnpinAll), cx))),
+                        )
+                    })
                     // The passages selected in a PDF that go with the question: where each is from, its opening, and a way to take it back.
                     .when(!chat.quotes.is_empty(), |d| {
                         d.child(div().flex().flex_col().gap(px(4.)).px(px(2.)).pt(px(2.)).children(chat.quotes.iter().enumerate().map(|(n, quote)| {
