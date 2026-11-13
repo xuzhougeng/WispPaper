@@ -19,7 +19,8 @@ pub struct Import {
     pub other_attachments: usize,
 }
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Row {
     pub title: String,
     pub paper_id: Option<String>,
@@ -27,6 +28,7 @@ pub struct Row {
     pub in_trash: bool,
     pub files_added: usize,
     pub files_existing: usize,
+    pub file_ids: Vec<String>,
     pub problems: Vec<String>,
 }
 
@@ -172,6 +174,7 @@ pub fn import_entry(store: &mut Store, entry: Entry) -> Row {
             match saved {
                 Ok(file) => {
                     fulltext |= file.kind == "fulltext";
+                    row.file_ids.push(file.id.clone());
                     if known.insert(file.id) { row.files_added += 1 } else { row.files_existing += 1 }
                 }
                 Err(err) => row.problems.push(format!("{err:#}")),
@@ -244,6 +247,22 @@ mod tests {
             drop(db);
             let _ = std::fs::remove_dir_all(&self.root);
         }
+    }
+
+    #[test]
+    fn tool_import_reports_partial_failures_and_repeated_attachments() {
+        let fixture = Fixture::new();
+        let before = std::fs::read(fixture.root.join("zotero.sqlite")).unwrap();
+        let root = fixture.root.join("wisp");
+        let call = |name: &str, args: serde_json::Value| crate::tools::call(&root, name, &args, &crate::tools::tests::offline, &crate::tools::tests::no_download).unwrap();
+        call("create_library", serde_json::json!({"name": "Imported Zotero"}));
+        let args = serde_json::json!({"path": fixture.root.join("zotero.sqlite")});
+        let first = call("import_zotero", args.clone());
+        assert_eq!((first["total"].as_u64(), first["added"].as_u64(), first["filesAdded"].as_u64(), first["failed"].as_u64(), first["otherAttachments"].as_u64()), (Some(2), Some(2), Some(1), Some(1), Some(1)));
+        assert!(first["results"][0]["problems"][0].as_str().unwrap().contains("找不到 PDF"));
+        let second = call("import_zotero", args);
+        assert_eq!((second["added"].as_u64(), second["skipped"].as_u64(), second["filesAdded"].as_u64(), second["filesExisting"].as_u64()), (Some(0), Some(2), Some(0), Some(1)));
+        assert_eq!(before, std::fs::read(fixture.root.join("zotero.sqlite")).unwrap());
     }
 
     #[test]

@@ -296,25 +296,46 @@ pub fn parse_ris(text: &str) -> Vec<Paper> {
 /// folders are skipped, and a linked folder is not followed (it may lead back
 /// up). Sorted by path, so a folder is imported in the order it shows.
 pub fn folder_pdfs(root: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<String>)> {
-    fn walk(dir: &std::path::Path, tags: &[String], out: &mut Vec<(std::path::PathBuf, Vec<String>)>) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
-        let mut entries: Vec<_> = entries.flatten().collect();
+    scan_pdf_folder(root).files
+}
+
+#[derive(Default)]
+pub struct PdfFolder {
+    pub files: Vec<(std::path::PathBuf, Vec<String>)>,
+    pub errors: Vec<(std::path::PathBuf, String)>,
+}
+
+/// Like the window's folder picker, with traversal failures retained for a
+/// batch caller instead of silently reporting an unreadable folder as empty.
+pub fn scan_pdf_folder(root: &std::path::Path) -> PdfFolder {
+    fn walk(dir: &std::path::Path, tags: &[String], out: &mut PdfFolder) {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) => { out.errors.push((dir.to_path_buf(), error.to_string())); return }
+        };
+        let mut entries: Vec<_> = entries.filter_map(|entry| match entry {
+            Ok(entry) => Some(entry),
+            Err(error) => { out.errors.push((dir.to_path_buf(), error.to_string())); None }
+        }).collect();
         entries.sort_by_key(|entry| entry.file_name());
         for entry in entries {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with('.') { continue }
-            let Ok(kind) = entry.file_type() else { continue };
             let path = entry.path();
+            let kind = match entry.file_type() {
+                Ok(kind) => kind,
+                Err(error) => { out.errors.push((path, error.to_string())); continue }
+            };
             if kind.is_dir() {
                 let mut inner = tags.to_vec();
                 inner.push(name);
                 walk(&path, &clean_strings(inner), out);
             } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) && (kind.is_file() || path.is_file()) {
-                out.push((path, tags.to_vec()));
+                out.files.push((path, tags.to_vec()));
             }
         }
     }
-    let mut out = vec![];
+    let mut out = PdfFolder::default();
     walk(root, &[], &mut out);
     out
 }

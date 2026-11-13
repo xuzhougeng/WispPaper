@@ -3,8 +3,10 @@
 //! server (`mcp`) and the assistant inside the app. All of them end in
 //! `call`, so a rule written here holds everywhere.
 //!
-//! Every tool here only reads. Extracting the page text of a stored PDF the
-//! first time it is searched fills a cache; it changes nothing a person sees.
+//! Mutating tools are marked for the read-only MCP mode and the window's
+//! confirmation flow. Reading a stored PDF may also fill its text cache.
+
+mod local;
 
 use crate::complete;
 use crate::filter::{Filters, filter_papers};
@@ -36,11 +38,11 @@ pub struct ToolDef {
 
 /// A tool that works inside one library: it also takes `library`.
 /// The tools that change the library.
-const WRITING: [&str; 7] = ["save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "sync_searches", "find_pdf"];
+const WRITING: [&str; 11] = ["create_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "sync_searches", "find_pdf"];
 /// Of those, the ones the window's assistant runs only with the person's
 /// consent. Saving a search or suggesting a screening decision changes
 /// nothing a person has not yet to act on, so they run as asked.
-const CONFIRMING: [&str; 4] = ["run_search", "undo_import", "remove_search", "find_pdf"];
+const CONFIRMING: [&str; 7] = ["import_pdf", "import_references", "import_zotero", "run_search", "undo_import", "remove_search", "find_pdf"];
 
 fn scoped(name: &'static str, title: &'static str, description: &'static str, mut properties: Value, required: &[&str]) -> ToolDef {
     properties["library"] = json!({"type": "string", "description": "文献库的 ID 或名称；只有一个文献库时可以省略。"});
@@ -62,6 +64,28 @@ pub fn catalog() -> Vec<ToolDef> {
             writes: false,
             confirm: false,
         },
+        ToolDef {
+            name: "create_library",
+            title: "新建文献库",
+            description: "在数据根目录中新建独立文献库，返回真实 ID、名称、主题和目录。每次调用都会创建一个新库，导入时用返回的 id 指定 library。",
+            input_schema: json!({"type": "object", "properties": {
+                "name": {"type": "string", "description": "文献库名称，必填，最多 60 个字符。"},
+                "topic": {"type": "string", "description": "主题描述，最多 2000 个字符。"},
+                "color": {"type": "string", "enum": libraries::COLORS, "description": "标识色，默认 blue。"},
+            }, "required": ["name"], "additionalProperties": false}),
+            writes: true,
+            confirm: true,
+        },
+        scoped("import_pdf", "导入本地 PDF", "复制本地 PDF 到文献库；path 也可以是文件夹，递归导入其中的 PDF，子文件夹名称转为标签。离线读取前两页中的 DOI，未补全的题目使用文件名；不联网查询元数据。已有文献保留原记录并补附件，回收站条目跳过。返回逐项结果；failed 表示存在导入问题的项数，textless 表示已保存但没有读出全文的项数。", json!({
+            "path": {"type": "string", "description": "本机 PDF 或文件夹路径，建议使用绝对路径。"},
+            "paperId": {"type": "string", "description": "把单个 PDF 附到这篇已有文献；不能与文件夹一起使用。"},
+        }), &["path"]),
+        scoped("import_references", "导入 BibTeX / RIS", "读取本地 BibTeX 或 RIS 文件，按内容自动识别格式并导入参考文献记录。按 DOI、PMID、题目去重，回收站条目也会跳过；不自动导入 PDF，不联网。返回新增和跳过的数量及文献 ID。", json!({
+            "path": {"type": "string", "description": "本机 BibTeX / RIS 文件路径，建议使用绝对路径。"},
+        }), &["path"]),
+        scoped("import_zotero", "导入 Zotero", "从本机 Zotero 6 / 7 的 zotero.sqlite 导入个人库和群组库的文献、标签、笔记及可访问的本地 PDF。只读源数据库、复制附件；已有文献保留原记录并补 PDF，回收站条目跳过。不联网。建议先退出 Zotero；返回逐项结果，必须检查 failed 和 results 中的 problems。", json!({
+            "path": {"type": "string", "description": "本机 Zotero 数据目录中的 zotero.sqlite 路径；storage 目录应在它旁边。"},
+        }), &["path"]),
         ToolDef {
             name: "sync_searches",
             title: "更新检索式",
@@ -240,7 +264,7 @@ pub fn catalog() -> Vec<ToolDef> {
 pub fn library_catalog() -> Vec<ToolDef> {
     let mut tools = catalog();
     // The tools that range over every library have no place inside one.
-    tools.retain(|t| t.name != "list_libraries" && t.name != "sync_searches");
+    tools.retain(|t| !["list_libraries", "create_library", "sync_searches"].contains(&t.name));
     for tool in &mut tools {
         if let Some(properties) = tool.input_schema["properties"].as_object_mut() { properties.remove("library"); }
     }
@@ -314,6 +338,7 @@ pub fn describe_result(result: &Result<Value, String>) -> String {
 /// whoever called: a person at a terminal or a model.
 pub fn call(root: &Path, name: &str, args: &Value, fetch: Fetch, download: Download) -> Result<Value, String> {
     checked(name, args)?;
+    if name == "create_library" { return local::create_library(root, args).map_err(|e| format!("{e:#}")) }
     if name == "sync_searches" { return sync_searches(root, args, fetch, crate::time::now_millis()).map_err(|e| format!("{e:#}")) }
     if name == "list_libraries" {
         let all: Vec<Value> = libraries::list(root).iter().map(|l| json!({"id": l.id, "name": l.name, "topic": l.topic, "papers": l.paper_count, "autoSyncHours": l.auto_sync_hours})).collect();
@@ -332,6 +357,9 @@ pub fn call_in(store: &mut Store, info: &LibraryInfo, name: &str, args: &Value, 
 
 fn dispatch(store: &mut Store, info: &LibraryInfo, name: &str, args: &Value, fetch: Fetch, download: Download) -> Result<Value> {
     match name {
+        "import_pdf" => local::import_pdf(store, args),
+        "import_references" => local::import_references(store, args),
+        "import_zotero" => local::import_zotero(store, args),
         "find_pdf" => find_pdf(store, args, fetch, download),
         "find_citations" => find_citations(store, args),
         "find_sentences" => find_sentences(store, args),
@@ -1602,7 +1630,8 @@ pub(crate) mod tests {
         // Inside a library there is no library to choose.
         let inside = library_catalog();
         assert!(inside.iter().all(|t| t.name != "list_libraries" && t.input_schema["properties"].get("library").is_none()));
-        assert_eq!(inside.len(), catalog().len() - 2);
+        assert!(inside.iter().all(|t| t.name != "create_library"));
+        assert_eq!(inside.len(), catalog().len() - 3);
     }
 
     #[test]
@@ -1657,7 +1686,7 @@ pub(crate) mod tests {
             // Only a tool that changes the library has anything to ask the person about.
             assert!(tool.writes || !tool.confirm, "{}", tool.name);
         }
-        assert_eq!(library_catalog().iter().filter(|tool| tool.confirm).map(|tool| tool.name).collect::<Vec<_>>().len(), 4);
+        assert_eq!(library_catalog().iter().filter(|tool| tool.confirm).map(|tool| tool.name).collect::<Vec<_>>().len(), 7);
         std::fs::remove_dir_all(root).ok();
     }
 }

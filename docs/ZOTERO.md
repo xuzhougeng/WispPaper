@@ -4,6 +4,14 @@
 
 这个入口读取 Zotero 6 / 7 的本地 `zotero.sqlite`，不需要 Zotero API Key，也不需要配置 AI 模型。它会导入本机个人库和群组库中已同步的文献，不会持续同步后续修改。如果当前安装版本没有这个菜单，需要更新到包含此功能的版本，或从当前源码构建。
 
+也可以通过 CLI / MCP 导入，迁移范围和去重规则相同：
+
+```sh
+wisp import_zotero -l "植物单细胞" --path /path/to/Zotero/zotero.sqlite
+```
+
+需要新库时先运行 `wisp create_library --name "植物单细胞"`，再用返回的 ID 指定 `-l`。命令返回 JSON；检查 `failed` 和 `results[].problems`，缺失 PDF 不会阻止其他记录入库。完整示例见 [CLI 文档](CLI.md) 和 [SKILL.md](../SKILL.md)。
+
 ## 1. 找到 Zotero 数据目录
 
 在 Zotero 中打开「设置 › 高级 › 文件和文件夹」，点「打开数据目录」。旧版本的设置入口可能叫「首选项」。以这里打开的位置为准，不要选择浏览器配置目录。

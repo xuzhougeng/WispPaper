@@ -2,6 +2,32 @@
 
 `wisp` 是不开窗口的入口，读写和应用同一个数据目录，应用开着时也能用。它提供的每个工具既是一个子命令，也是一个 MCP 工具，应用内的助手用的也是同一张工具表。
 
+供外部智能体使用的完整操作说明见 [SKILL.md](../SKILL.md)，包括能力边界、PowerShell 示例、导入结果核对和 MCP 配置。
+
+## 建库与导入
+
+当前 CLI / MCP 可以向**已有文献库**导入在线检索结果，流程是 `search_online` 试检索、`save_search` 保存检索式、`run_search` 执行导入；PDF 可再用 `find_pdf` 获取开放版本。
+
+也可以完全通过 CLI 从零建库并导入本地资料：
+
+```sh
+wisp create_library --name "植物单细胞" --topic "细胞图谱与发育轨迹" --color green
+# 用上一步返回的真实 id 替换 L-实际ID
+wisp import_references -l L-实际ID --path references.bib
+wisp import_references -l L-实际ID --path references.ris
+wisp import_pdf -l L-实际ID --path paper.pdf
+wisp import_pdf -l L-实际ID --path "PDF collection"
+wisp import_zotero -l L-实际ID --path /path/to/Zotero/zotero.sqlite
+```
+
+`import_pdf` 支持递归导入文件夹，子文件夹名称转为标签；`--paper-id` 可将单个 PDF 附到已有文献。离线提取 DOI 和全文，未补全的题目用文件名，不自动联网查询元数据。已有记录保留，回收站条目跳过，相同条目的相同附件内容只保存一次。
+
+`import_references` 按内容识别 BibTeX / RIS，不自动携带 PDF。`import_zotero` 复用桌面的只读迁移流程，复制可访问的本地 PDF；建议先退出 Zotero，详见 [Zotero 导入](ZOTERO.md)。这些本地导入不联网、不移动源文件。
+
+PDF / Zotero 的 JSON 含新增、跳过、附件数量和逐项 `results`。必须检查 `failed` 和 `results[].problems`：有些记录已入库，但附件可能缺失，部分失败仍可能退出 0。PDF 的 `textless` / `textError` 表示文件已保存但未提取出文字。Zotero 附件的文本在阅读时提取。本地导入不生成在线检索的批次号，不能用 `undo_import` 撤销。
+
+`--data-dir` 只选择数据根目录，建库用 `create_library`；`save_search --name` 命名的是检索式。直接按 DOI / PMID 添加条目仍使用桌面入口。旧发布包缺少新命令时需更新或从源码构建。
+
 ## 命令行
 
 ```sh
@@ -23,6 +49,10 @@ wisp search_fulltext --help             # 一个工具的参数
 | 工具 | 用途 |
 |---|---|
 | `list_libraries` | 所有文献库的 ID、名称、主题和文献数量 |
+| `create_library` | 新建文献库；`--name` 必填，`--topic`、`--color` 可选，返回新库 ID（会创建文件和数据库） |
+| `import_pdf` | 复制本地 PDF 或递归导入文件夹，`--path` 必填；单文件可用 `--paper-id` 附到已有条目（会改动文献库） |
+| `import_references` | 导入本地 BibTeX / RIS 文件，`--path` 必填，按内容识别格式（会改动文献库） |
+| `import_zotero` | 从本机 `zotero.sqlite` 迁移文献、笔记、标签和 PDF，`--path` 必填（会改动目标文献库） |
 | `library_status` | 一个库的概况：各状态的数量、自定义词条、状态值的显示名称 |
 | `list_papers` | 搜索、筛选、翻页；规则与界面上的列表相同 |
 | `get_paper` | 一篇文献的完整记录、词条和附件 |

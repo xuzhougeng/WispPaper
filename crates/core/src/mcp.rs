@@ -10,7 +10,8 @@ use std::path::Path;
 /// Protocol revisions this server speaks, newest first.
 const VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
-const INSTRUCTIONS: &str = "Wisp Paper 的本地文献库。先用 list_libraries 看有哪些文献库，再用 library 参数指定其中一个。\
+const INSTRUCTIONS: &str = "Wisp Paper 的本地文献库。先用 list_libraries 看有哪些文献库，再用 library 参数指定其中一个；需要建库时用 create_library，使用返回的 id。\
+import_pdf 导入本机 PDF 或文件夹，import_references 导入 BibTeX / RIS，import_zotero 读取本机 Zotero 数据库；这些操作不联网，PDF 和 Zotero 导入后必须检查 failed 及 results 中的 problems。\
 查出处时先 search_fulltext，再用 read_fulltext 读命中的页面核对上下文；没有保存全文的文献只有书目信息和摘要。\
 收录判断（screening）由用户本人决定；它的存储值不等于界面上的名称（excluded 显示为「相关」），名称见 library_status 的 labels。\nsearch_online 只是试检索，不写入；save_search、run_search、undo_import 会改动文献库，新导入的文献都是「待判断」。\n筛选文献时，逐篇读记录和全文后用 suggest_screening 提出建议（附理由和逐字引文）；建议不会改变收录判断，用户在窗口里确认。";
 
@@ -112,6 +113,13 @@ mod tests {
         let refused = handle(&root, &json!({"id": 10, "method": "tools/call", "params": {"name": "save_search", "arguments": {"source": "pubmed", "query": "x"}}}), &reader).unwrap();
         assert_eq!(refused["result"]["isError"], true);
         assert!(refused["result"]["content"][0]["text"].as_str().unwrap().contains("只读"));
+        for name in ["create_library", "import_pdf", "import_references", "import_zotero"] {
+            assert!(!names.contains(&name));
+            let refused = handle(&root, &json!({"id": 11, "method": "tools/call", "params": {"name": name, "arguments": {"name": "Blocked", "path": "unused"}}}), &reader).unwrap();
+            assert_eq!(refused["result"]["isError"], true);
+            assert!(refused["result"]["content"][0]["text"].as_str().unwrap().contains("只读"));
+        }
+        assert_eq!(crate::libraries::list(&root).len(), 1);
         std::fs::remove_dir_all(root).ok();
     }
 }
