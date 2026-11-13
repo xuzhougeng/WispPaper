@@ -38,6 +38,8 @@ pub struct Card {
     /// Why the answer ended early, or that it is being asked again.
     pub note: String,
     pub model: String,
+    /// 配引用: the papers that could be cited and their keys (paper, key), kept with their papers once the result is used.
+    pub keys: Vec<(String, String)>,
 }
 
 /// What the person does with a result.
@@ -91,8 +93,15 @@ impl Workspace {
             .collect();
         writing.assist.generation += 1;
         let generation = writing.assist.generation;
-        let mut card = Card { language: language.clone(), assist: assist.clone(), section: writing.section_id.clone(), original, range, result: String::new(), busy: true, error: String::new(), note: String::new(), model: format!("{} · {}", profile.title(), profile.model) };
-        let request = ai::assist_request(&profile, &assist, &language, &card.original, &examples, &own);
+        let mut card = Card { language: language.clone(), assist: assist.clone(), section: writing.section_id.clone(), original, range, result: String::new(), busy: true, error: String::new(), note: String::new(), model: format!("{} · {}", profile.title(), profile.model), keys: vec![] };
+        // 配引用 looks for candidates in the whole library first, which is not work for this thread: its request is made where the search runs.
+        let request = if assist == Assist::Cite {
+            let index = wisp_core::cite::Index::new(&lib.papers, lib.trash.iter().map(|entry| &entry.paper), &lib.citing.kept);
+            card.keys = lib.papers.iter().filter_map(|paper| Some((paper.id.clone(), index.key(&paper.id)?.to_string()))).collect();
+            if card.original.trim().is_empty() { Err(t("没有要处理的文字：先选中一段，或把光标放在要处理的段落里。").to_string()) } else if profile.missing().is_some() { ai::plain_request(&profile, "s", "p").map(|_| None) } else { Ok(None) }
+        } else {
+            ai::assist_request(&profile, &assist, &language, &card.original, &examples, &own).map(Some)
+        };
         let request = match request {
             Ok(request) => request,
             Err(error) => {
@@ -102,11 +111,26 @@ impl Workspace {
             }
         };
         let (section, library, protocol) = (card.section.clone(), lib.info.id.clone(), profile.protocol);
+        let (info, paragraph, keys) = (lib.info.clone(), card.original.clone(), card.keys.iter().cloned().collect::<std::collections::BTreeMap<String, String>>());
         writing.assist.card = Some(card);
         cx.notify();
 
         let (sender, events) = async_channel::unbounded();
-        cx.background_executor().spawn(async move { wisp_net::stream_chat(request, protocol, sender) }).detach();
+        cx.background_executor()
+            .spawn(async move {
+                let request = match request {
+                    Some(request) => Ok(request),
+                    None => wisp_core::store::Store::open(&info.dir)
+                        .map_err(|e| format!("{e:#}"))
+                        .and_then(|mut store| wisp_core::tools::call_in(&mut store, &info, "find_citations", &serde_json::json!({"text": paragraph, "perSentence": 3}), &wisp_net::get_text, &wisp_net::download))
+                        .and_then(|found| ai::cite_request(&profile, &language, &paragraph, &ai::cite_candidates(&found, &keys))),
+                };
+                match request {
+                    Ok(request) => wisp_net::stream_chat(request, protocol, sender),
+                    Err(error) => drop(sender.send_blocking(ChatEvent::Error(error))),
+                }
+            })
+            .detach();
         cx.spawn(async move |this, cx| {
             while let Ok(event) = events.recv().await {
                 let alive = this.update(cx, |this, cx| {
@@ -178,6 +202,8 @@ impl Workspace {
             cx.write_to_clipboard(ClipboardItem::new_string(result));
             return self.say(t("已复制"), cx);
         }
+        // The keys the result cites stay with their papers from now on, as when a paper is cited by hand.
+        let pins: Vec<(String, String)> = if card.assist == Assist::Cite { card.keys.iter().filter(|(_, key)| result.contains(&format!("@{key}"))).cloned().collect() } else { vec![] };
         // The draft may have been edited meanwhile: the paragraph is found again by what it says.
         let text = writing.editor.read(cx).text().to_string();
         let found = if text.get(card.range.clone()) == Some(card.original.as_str()) { Some(card.range.clone()) } else { text.find(&card.original).map(|at| at..at + card.original.len()) };
@@ -193,6 +219,10 @@ impl Workspace {
         }
         writing.assist.card = None;
         writing.editor.read(cx).focus(window);
+        for (paper, key) in pins {
+            if lib.citing.kept.contains_key(&key) { continue }
+            if lib.store.keep_cite_key(&paper, &key).is_ok() { lib.citing.kept.insert(key, paper); }
+        }
         cx.notify();
     }
 
@@ -204,11 +234,12 @@ impl Workspace {
         let selected = !writing.editor.read(cx).selection().is_empty();
         let busy = writing.assist.card.as_ref().is_some_and(|card| card.busy);
         let configured = self.settings.profile_for_or_default(Task::Chat).missing().is_none();
-        let mut actions = vec![Assist::Rewrite, Assist::Translate, Assist::Polish];
+        let mut actions = vec![Assist::Rewrite, Assist::Translate, Assist::Polish, Assist::Cite];
         actions.extend(self.settings.commands.iter().filter(|command| !command.template.trim().is_empty()).map(|command| Assist::Own(command.name.clone())));
         let mut button = |n: usize, assist: &Assist| {
             let tip = match assist {
                 Assist::Own(name) => self.settings.commands.iter().find(|command| command.name == *name).map(|command| command.about.clone()).unwrap_or_default(),
+                Assist::Cite => t("在文献库里为每句话找可引用的文献，只加引用，不改文字").to_string(),
                 _ => String::new(),
             };
             ui::ghost_button(("write-assist", n), (n == 0).then_some("sparkle"), Some(crate::i18n::assist_title(assist, &language).into()))

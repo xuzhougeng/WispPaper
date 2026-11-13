@@ -43,6 +43,7 @@ pub fn assist_title(assist: &wisp_core::ai::Assist, language: &str) -> String {
     match assist {
         Assist::Rewrite => t("参照候选句改写").into(),
         Assist::Polish => t("润色").into(),
+        Assist::Cite => t("配引用").into(),
         Assist::Translate if is_english() => format!("Translate to {}", t(&wisp_core::ai::language_name(language))),
         _ => assist.title(language),
     }

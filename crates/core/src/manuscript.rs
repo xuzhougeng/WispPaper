@@ -451,6 +451,26 @@ impl Store {
         Ok(())
     }
 
+    /// Add text at the end of a section, after keeping what it held as a
+    /// snapshot, and keep the citation keys the text uses with their papers
+    /// (`keys`: paper and key). The text the section now has.
+    pub fn append_to_section(&mut self, id: &str, text: &str, keys: &[(String, String)]) -> Result<String> {
+        if text.trim().is_empty() { bail!("没有可以加进稿件的文字") }
+        self.take_snapshot(id, "insert")?;
+        let now = now_iso();
+        let tx = self.db.transaction()?;
+        let Some(body) = tx.query_row("SELECT body FROM manuscript_sections WHERE id = ?1", [id], |r| r.get::<_, String>(0)).optional()? else { bail!("没有这一节：{id}") };
+        for (paper_id, key) in keys {
+            tx.execute("INSERT OR IGNORE INTO cite_keys(key, paper_id, made_at) VALUES (?1, ?2, ?3)", params![key, paper_id, now])?;
+            let actual: String = tx.query_row("SELECT paper_id FROM cite_keys WHERE key = ?1", [key], |r| r.get(0))?;
+            if &actual != paper_id { bail!("引用键与其他文献冲突：{key}") }
+        }
+        let body = if body.trim().is_empty() { text.trim().to_string() } else { format!("{}\n\n{}", body.trim_end(), text.trim()) };
+        tx.execute("UPDATE manuscript_sections SET body = ?2, updated_at = ?3 WHERE id = ?1", params![id, body, now])?;
+        tx.commit()?;
+        Ok(body)
+    }
+
     /// A section's snapshots, newest first.
     pub fn snapshots(&self, section_id: &str) -> Result<Vec<Snapshot>> {
         let mut stmt = self.db.prepare("SELECT id, section_id, body, why, taken_at FROM section_snapshots WHERE section_id = ?1 ORDER BY id DESC")?;
@@ -487,6 +507,25 @@ mod tests {
 
     fn store() -> Store {
         Store::in_memory(Path::new("/tmp/wisp-manuscript-test")).unwrap()
+    }
+
+    #[test]
+    fn text_is_added_at_a_sections_end_with_its_keys() {
+        let mut store = store();
+        let paper = store.add_paper(crate::model::Paper { title: "Roots".into(), ..Default::default() }).unwrap();
+        let other = store.add_paper(crate::model::Paper { title: "Leaves".into(), ..Default::default() }).unwrap();
+        let made = store.create_manuscript("Draft", "en").unwrap();
+        let section = made.sections[1].id.clone();
+        assert_eq!(store.append_to_section(&section, " First [@Root2024]. \n", &[(paper.id.clone(), "Root2024".into())]).unwrap(), "First [@Root2024].");
+        assert_eq!(store.append_to_section(&section, "Second.", &[]).unwrap(), "First [@Root2024].\n\nSecond.");
+        assert_eq!(store.cite_keys().unwrap().get("Root2024"), Some(&paper.id));
+        // What the section held before the second addition can be brought back.
+        assert_eq!(store.snapshots(&section).unwrap()[0].body, "First [@Root2024].");
+        // A key that is another paper's stops the whole addition.
+        assert!(store.append_to_section(&section, "Third [@Root2024].", &[(other.id.clone(), "Root2024".into())]).is_err());
+        assert_eq!(store.manuscript(&made.id).unwrap().unwrap().sections[1].body, "First [@Root2024].\n\nSecond.");
+        assert!(store.append_to_section(&section, "  ", &[]).is_err());
+        assert!(store.append_to_section("nowhere", "Text.", &[]).is_err());
     }
 
     #[test]

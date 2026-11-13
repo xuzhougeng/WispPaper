@@ -93,6 +93,8 @@ pub enum MenuKind {
     Reading(String),
     Screening(String),
     LibraryCard(String),
+    /// The sections of the manuscript an answer can be added to: the text, or `None` for what is selected in the library's conversation.
+    InsertInto(Option<String>),
     /// Which model a task uses (设置 › AI).
     TaskModel(Task),
     /// How large the PDF's pages are drawn.
@@ -309,6 +311,8 @@ pub enum Cmd {
     CopyText(String),
     /// Save an answer and its source labels to a new manuscript, at the person's request.
     AnswerToManuscript(String, String),
+    /// Add this text (an answer, or what is selected in one) at the end of a section of the manuscript.
+    InsertInto(String, String),
     /// Start the review record of the conversation with the library (`src/chat.rs`; `/review` does it by itself).
     StartReview,
     ReviewToManuscript,
@@ -738,6 +742,8 @@ pub struct PreparedCall {
     pub confirm: bool,
     /// The call as the window words it.
     pub line: String,
+    /// What it would change, a line per paper (`tools::preview_call`), for the card that asks.
+    pub details: Vec<String>,
 }
 
 /// The calls of a turn that wait for the person's consent, and where their lines stand in the conversation.
@@ -1620,6 +1626,15 @@ impl Workspace {
                     items.push(MenuItem { label: t(label).into(), checked: current == value, note: None, cmd: Cmd::SetReading(id.clone(), value.into()) });
                 }
             }
+            MenuKind::InsertInto(text) => {
+                let Some(lib) = self.lib.as_ref() else { return };
+                let Some(text) = text.or_else(|| lib.library_chat.picked_text()) else { return };
+                let Some(manuscript) = lib.writing.current().or(lib.writing.manuscripts.first()) else { return };
+                for section in &manuscript.sections {
+                    let length = section.body.chars().count();
+                    items.push(MenuItem { label: section.name.clone().into(), checked: false, note: Some(if length == 0 { t("空").into() } else { tf!("{length} 字", "{length} chars").into() }), cmd: Cmd::InsertInto(section.id.clone(), text.clone()) });
+                }
+            }
             MenuKind::TaskModel(task) => {
                 let bound = self.settings.tasks.get(task).to_string();
                 // Questions always have a model: the first one until another is chosen.
@@ -2190,6 +2205,7 @@ impl Workspace {
                 }
             }
             Cmd::AnswerToManuscript(question, answer) => self.answer_to_manuscript(question, answer, window, cx),
+            Cmd::InsertInto(section, text) => self.insert_into_section(section, text, cx),
             Cmd::StartReview => self.start_review(cx),
             Cmd::ReviewToManuscript => self.review_to_manuscript(window, cx),
             Cmd::ToggleReview => {
@@ -3586,7 +3602,8 @@ impl Workspace {
     /// papers in, take them out, or drop a saved search.
     fn run_tools(&mut self, about_paper: bool, calls: Vec<ToolCall>, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
-        let chat = lib.chat_mut(about_paper);
+        let store = &lib.store;
+        let chat = if about_paper { &mut lib.paper_chat } else { &mut lib.library_chat };
         let first = chat.messages.len();
         let catalog = tools::catalog();
         let mut prepared = vec![];
@@ -3600,8 +3617,14 @@ impl Workspace {
                 args
             });
             // A call that cannot run as written has nothing to ask about: it fails by itself.
-            let confirm = args.is_ok() && tool.is_some_and(|t| t.confirm);
-            prepared.push(PreparedCall { id: call.id, name: call.name, args, writes: tool.is_some_and(|t| t.writes), confirm, line });
+            let asks = args.is_ok() && tool.is_some_and(|t| t.confirm);
+            // What it would change, for the card that asks; one that would be refused anyway is not asked about.
+            let details = match &args {
+                Ok(args) if asks => tools::preview_call(store, &call.name, args).ok(),
+                _ => Some(vec![]),
+            };
+            let (confirm, details) = (asks && details.is_some(), details.unwrap_or_default());
+            prepared.push(PreparedCall { id: call.id, name: call.name, args, writes: tool.is_some_and(|t| t.writes), confirm, line, details });
         }
         chat.scroll.scroll_to_bottom();
         if prepared.iter().any(|call| call.confirm) && !chat.allow_changes {
@@ -4873,7 +4896,7 @@ impl Workspace {
                 "sort" => Some(Cmd::WriteRun(false)),
                 // `assist:rewrite|translate|polish|<own command>` asks the model about the caret's paragraph;
                 // `assisted:replace|below|copy|drop` uses the result, `assiststop` stops it; `caret:<byte>` / `pick:<from>;<to>` place the caret / select.
-                "assist" => Some(Cmd::WriteAssist(match arg { "rewrite" => ai::Assist::Rewrite, "translate" => ai::Assist::Translate, "polish" => ai::Assist::Polish, own => ai::Assist::Own(own.to_string()) })),
+                "assist" => Some(Cmd::WriteAssist(match arg { "rewrite" => ai::Assist::Rewrite, "translate" => ai::Assist::Translate, "polish" => ai::Assist::Polish, "cite" => ai::Assist::Cite, own => ai::Assist::Own(own.to_string()) })),
                 "assiststop" => Some(Cmd::WriteAssistStop),
                 "assisted" => Some(Cmd::WriteAssistUse(match arg { "replace" => crate::write_assist::Use::Replace, "below" => crate::write_assist::Use::Below, "copy" => crate::write_assist::Use::Copy, _ => crate::write_assist::Use::Drop })),
                 "undo" => {

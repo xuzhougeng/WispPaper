@@ -12,11 +12,14 @@
 //! option, a Tags field's first usual value) and quotes the start of the
 //! abstract; for a paper whose text says "Few-Shot" it gives a Select answer
 //! that is none of the options and a quotation the paper does not hold;
+//! asked by 写作 to place citations it cites the first candidate after the first sentence,
 //! asked to translate, it hands the text back marked as translated. In a chat, asked a question, it calls `list_papers` and
 //! `library_status`; given their results, it answers and cites the first
 //! paper the search returned, saying how many pictures came with the
 //! conversation. A question containing 「试试撤销」 makes it call
-//! `undo_import` instead, a tool the window asks the person about first.
+//! `undo_import` instead, a tool the window asks the person about first;
+//! one containing 「试试整理」 makes it call `organise_papers` for the first
+//! two papers, whose changes the window lists before it asks.
 //! Asked to work on a paragraph of the manuscript (写作), it streams the
 //! paragraph back in pieces with a few words changed (a translation is
 //! marked as one), so the result card and its marks can be watched.
@@ -100,8 +103,14 @@ fn answer(mut stream: TcpStream, delay: u64) {
             // The paragraph is the message's last block; the rewrite marks itself as one.
             let value: serde_json::Value = serde_json::from_str(&request).unwrap_or_default();
             let message = value["messages"][0]["content"].as_str().unwrap_or("").to_string();
-            let paragraph = message.rsplit("\n\n").next().unwrap_or("").trim().trim_start_matches("要改写的段落：\n").to_string();
-            let reply = if message.contains("译成") { format!("(mock translation) {paragraph}") } else { paragraph.replacen(" is ", " remains ", 1).replacen(" very ", " ", 1) + " (mock edit)" };
+            let paragraph = message.rsplit("\n\n").next().unwrap_or("").trim().trim_start_matches("要改写的段落：\n").trim_start_matches("要配引用的段落：\n").to_string();
+            // Asked for citations, it cites the first candidate at the end of the first sentence and changes nothing else.
+            let cited = message.contains("要配引用的段落：").then(|| {
+                let key: String = message.split("候选：").nth(1).unwrap_or("").split("[@").nth(1).unwrap_or("").chars().take_while(|c| *c != ']').collect();
+                let end = paragraph.find(['.', '。']).unwrap_or(paragraph.len());
+                format!("{} [@{key}]{}", &paragraph[..end], &paragraph[end..])
+            });
+            let reply = if let Some(cited) = cited { cited } else if message.contains("译成") { format!("(mock translation) {paragraph}") } else { paragraph.replacen(" is ", " remains ", 1).replacen(" very ", " ", 1) + " (mock edit)" };
             events.push_str(&event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#));
             let mut sent = 0;
             let chars: Vec<char> = reply.chars().collect();
@@ -181,6 +190,13 @@ fn answer(mut stream: TcpStream, delay: u64) {
             events.push_str(&event(r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"我来撤销那次导入。"}}"#));
             events.push_str(&event(r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_3","name":"undo_import","input":{}}}"#));
             events.push_str(&event(r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"id\": \"B-demo\"}"}}"#));
+            events.push_str(&event(r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"}}"#));
+        } else if request.rfind("试试整理").is_some_and(|at| request.rfind("\"role\":\"user\"").is_some_and(|user| user < at)) {
+            // A tool that changes papers the library holds: the window lists what it would change and asks first.
+            events.push_str(&event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#));
+            events.push_str(&event(r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"我来给这两篇加上标签。"}}"#));
+            events.push_str(&event(r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_4","name":"organise_papers","input":{}}}"#));
+            events.push_str(&event(r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"changes\": [{\"id\": \"P1\", \"addTags\": [\"假模型加的\"], \"starred\": true}, {\"id\": \"P2\", \"reading\": \"skimmed\", \"note\": \"方法部分可以借鉴。\"}]}"}}"#));
             events.push_str(&event(r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"}}"#));
         } else {
             events.push_str(&event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#));
