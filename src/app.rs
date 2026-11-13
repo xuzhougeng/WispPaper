@@ -157,6 +157,16 @@ pub enum ReviewText {
     Section(String),
 }
 
+/// The scope of the library's next conversation, as the panel over it changes it: a paper kept to
+/// (dragged into the conversation, or its plus clicked), let go again, all let go, the panel's search emptied.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ScopeDo {
+    Pin(String),
+    Unpin(String),
+    UnpinAll,
+    ClearFind,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Cmd {
     // Home
@@ -201,6 +211,7 @@ pub enum Cmd {
     /// Bind a task to a profile id; an empty id follows the default.
     SetTaskModel(Task, String),
     SetScreenWorkers(usize),
+    SetTranslateWorkers(usize),
     ResetTranslationPrompt,
     /// One more slash command of the person's own, on 设置 › 命令.
     AddCommand,
@@ -365,8 +376,10 @@ pub enum Cmd {
     QuotePicked(bool),
     /// Make a note of the selected paper out of an answer about it: the question, and the answer.
     AnswerToNote(String, String),
-    /// Unfold or fold the list of the papers the library's questions are put to.
+    /// Show or put away the panel of the papers the library's questions are put to.
     ToggleMaterials,
+    /// What that panel does to the scope of the next conversation (`ScopeDo`).
+    Scope(ScopeDo),
     /// Show every source of an answer (by its place in the conversation), or the first few again.
     ToggleSources(bool, usize),
     /// Open a paper; with a page, its PDF there; with a quoted sentence too, that sentence highlighted.
@@ -791,6 +804,8 @@ pub struct PendingTools {
 
 /// The PDFs of an import read at the same time.
 const IMPORT_WORKERS: usize = 3;
+/// Full texts read again at the same time (`extract_missing`), at most one per core.
+const READ_WORKERS: usize = 4;
 
 /// What became of one PDF of an import.
 #[derive(Clone, Debug, PartialEq)]
@@ -1106,8 +1121,15 @@ pub struct Library {
     /// Where a stretch marked with Shift starts, and where it reaches to.
     pub anchor: Option<String>,
     pub cursor: Option<String>,
-    /// The papers the library's next conversation is about, when they were picked in the list; none means the list on show.
+    /// The papers the library's next conversation is kept to: picked in the list, or dragged into the
+    /// conversation from the panel over it. None means the list on show, narrowed by that panel's search.
     pub asked: Vec<String>,
+    /// The search box of the panel over the library's conversation, and what it holds.
+    pub scope_find: Entity<TextInput>,
+    pub scope_words: String,
+    /// The papers of the library that hold those words; `None` while nothing is typed. Kept, since a
+    /// frame cannot search every abstract: `scope_refilter` makes it anew when the words or the papers change.
+    pub scope_hits: Option<HashSet<String>>,
     pub tab: Tab,
     /// The detail panel takes most of the window (reading a PDF).
     pub wide: bool,
@@ -1193,6 +1215,8 @@ pub struct Workspace {
     pub resizing: Option<Edge>,
     /// What is selected in a text of the window that is not an answer or a text field.
     pub picked: Option<crate::select::Picked>,
+    /// A paper of the scope panel is held and on its way into the conversation (`chat::PaperDrag`).
+    pub pinning: bool,
 }
 
 impl Chat {
@@ -1364,11 +1388,41 @@ impl Library {
         self.papers.iter().find(|p| p.id == id)
     }
 
-    /// The papers a question to the library is put to: those picked for it in the list, else the list on show.
+    /// The papers a question to the library is put to: those it is kept to, else what the panel over the conversation lists.
     pub fn scope_papers(&self) -> Vec<&Paper> {
-        if self.asked.is_empty() { return self.shown.iter().map(|&i| &self.papers[i]).collect() }
+        if self.asked.is_empty() { return self.scope_listed() }
         let asked: HashSet<&str> = self.asked.iter().map(String::as_str).collect();
         self.papers.iter().filter(|p| asked.contains(p.id.as_str())).collect()
+    }
+
+    /// The list on show, narrowed by the search of the panel over the library's conversation.
+    pub fn scope_listed(&self) -> Vec<&Paper> {
+        self.shown.iter().map(|&i| &self.papers[i]).filter(|p| self.scope_has(&p.id)).collect()
+    }
+
+    /// Whether a paper holds the words of that panel's search.
+    pub fn scope_has(&self, id: &str) -> bool {
+        self.scope_hits.as_ref().is_none_or(|hits| hits.contains(id))
+    }
+
+    /// Look the panel's words up in the papers again.
+    pub fn scope_refilter(&mut self) {
+        let words = self.scope_words.trim();
+        self.scope_hits = (!words.is_empty()).then(|| self.papers.iter().filter(|p| filter::says(p, words)).map(|p| p.id.clone()).collect());
+    }
+
+    /// A new conversation with the library is about the list on show again: nothing kept to, nothing searched for.
+    pub fn scope_reset(&mut self, cx: &mut App) {
+        self.asked.clear();
+        self.scope_words.clear();
+        self.scope_hits = None;
+        self.scope_find.update(cx, |input, cx| input.set_text("", cx));
+    }
+
+    /// The panel of the papers in scope is on show over the library's conversation.
+    pub fn materials_shown(&self) -> bool {
+        let chat = &self.library_chat;
+        self.page == Page::Ask && chat.materials_open && chat.history.is_none() && (chat.ctx.is_some() || chat.messages.is_empty())
     }
 
     pub fn selected_paper(&self) -> Option<&Paper> {
@@ -1495,6 +1549,7 @@ impl Library {
 
     pub fn refilter(&mut self) {
         self.shown = filter::filter_papers(&self.papers, &self.filters, time::now_millis());
+        self.scope_refilter();
     }
 
     /// Read everything again after a change.
@@ -1550,7 +1605,7 @@ impl Workspace {
         theme::set_accent("blue");
         shortcuts::rebuild(&settings.shortcuts, cx);
         let libraries = libraries::list(&root);
-        let mut this = Workspace { focus, settings, settings_path, root, libraries, lib: None, settings_view: None, update: UpdateState::Idle, update_told: None, modal: None, modal_error: String::new(), modal_subscriptions: vec![], menu: None, toast, home_scroll: ScrollHandle::new(), resizing: None, picked: None };
+        let mut this = Workspace { focus, settings, settings_path, root, libraries, lib: None, settings_view: None, update: UpdateState::Idle, update_told: None, modal: None, modal_error: String::new(), modal_subscriptions: vec![], menu: None, toast, home_scroll: ScrollHandle::new(), resizing: None, picked: None, pinning: false };
         this.apply_appearance(window);
         cx.observe_window_appearance(window, |this, window, _| this.apply_appearance(window)).detach();
         this.watch_updates(cx);
@@ -1849,6 +1904,10 @@ impl Workspace {
             }
             Cmd::SetScreenWorkers(count) => {
                 self.settings.screen_workers = count.clamp(1, wisp_core::settings::MAX_SCREEN_WORKERS);
+                self.save_settings(cx);
+            }
+            Cmd::SetTranslateWorkers(count) => {
+                self.settings.translate_workers = count.clamp(1, wisp_core::settings::MAX_SCREEN_WORKERS);
                 self.save_settings(cx);
             }
             Cmd::ResetTranslationPrompt => self.reset_translation_prompt(cx),
@@ -2192,7 +2251,7 @@ impl Workspace {
                     chat.reset(cx);
                     chat.input.read(cx).focus(window);
                     // A new conversation with the library is about the list on show again.
-                    if !paper { lib.asked.clear() }
+                    if !paper { lib.scope_reset(cx) }
                 }
                 if kept { self.say(t("上一段对话已保存，在「历史」里可以找到。"), cx) }
             }
@@ -2400,8 +2459,13 @@ impl Workspace {
                 chat.input.read(cx).focus(window);
             }
             Cmd::ToggleMaterials => {
-                if let Some(lib) = self.lib.as_mut() { lib.library_chat.materials_open = !lib.library_chat.materials_open }
+                if let Some(lib) = self.lib.as_mut() {
+                    lib.library_chat.materials_open = !lib.library_chat.materials_open;
+                    // The panel is a place to search: its box has the keyboard while it is open, the question's after.
+                    if lib.library_chat.materials_open { lib.scope_find.read(cx).focus(window) } else { lib.library_chat.input.read(cx).focus(window) }
+                }
             }
+            Cmd::Scope(what) => self.scope(what, cx),
             Cmd::ToggleSources(paper, at) => {
                 if let Some(lib) = self.lib.as_mut() {
                     let chat = if paper { &mut lib.paper_chat } else { &mut lib.library_chat };
@@ -2632,6 +2696,12 @@ impl Workspace {
         } else if self.settings_view.is_some() {
             self.close_settings(window, cx);
         } else if self.picked.take().is_some() {
+        } else if self.lib.as_ref().is_some_and(|l| l.materials_shown()) {
+            // The panel floating over the conversation is put away first; what it searched for stays.
+            if let Some(lib) = self.lib.as_mut() {
+                lib.library_chat.materials_open = false;
+                lib.library_chat.input.read(cx).focus(window);
+            }
         } else if self.lib.as_ref().is_some_and(|l| !l.marked.is_empty()) {
             if let Some(lib) = self.lib.as_mut() { lib.marked.clear() }
         } else if self.lib.as_ref().is_some_and(|l| l.reading && l.selected.is_some()) {
@@ -2711,7 +2781,12 @@ impl Workspace {
         window.set_window_title(&format!("{} — Wisp Paper", info.name));
         let search = cx.new(|cx| TextInput::new("搜索题目、作者、DOI、标签、词条、笔记…", cx));
         let notes = cx.new(|cx| TextInput::new("读这篇文献时想到的…", cx).multiline(4));
+        let scope_find = cx.new(|cx| TextInput::new("在这些文献里找：题目、作者、标签、摘要…", cx));
         let subscriptions = vec![
+            // The panel over the conversation searches the papers in scope as it is typed into.
+            cx.subscribe(&scope_find, |this, input, event: &InputEvent, cx| {
+                if *event == InputEvent::Changed { this.scope_typed(input.read(cx).text().to_string(), cx) }
+            }),
             cx.subscribe(&search, |this, input, event: &InputEvent, cx| {
                 if *event == InputEvent::Changed && let Some(lib) = this.lib.as_mut() {
                     lib.filters.search = input.read(cx).text().to_string();
@@ -2799,6 +2874,9 @@ impl Workspace {
             anchor: None,
             cursor: None,
             asked: vec![],
+            scope_find,
+            scope_words: String::new(),
+            scope_hits: None,
             table_scroll: UniformListScrollHandle::new(),
             detail_scroll: ScrollHandle::new(),
             extracting: HashSet::new(),
@@ -3339,7 +3417,7 @@ impl Workspace {
     }
 
     /// Read the text of the stored full texts that have not been read and
-    /// sorted into parts yet, one at a time: new files, and those an
+    /// sorted into parts yet, a few side by side: new files, and those an
     /// earlier build read without telling headings from paragraphs.
     pub fn extract_missing(&mut self, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
@@ -3354,24 +3432,32 @@ impl Workspace {
         if todo.is_empty() { return }
         lib.extracting.extend(todo.iter().map(|(id, ..)| id.clone()));
         let library = lib.info.id.clone();
-        cx.spawn(async move |this, cx| {
-            for (id, path, known) in todo {
-                let pages = cx.background_executor().spawn(async move { fulltext::reread(&path, known) }).await;
-                let same = this.update(cx, |this, cx| {
-                    let Some(lib) = this.lib.as_mut().filter(|l| l.info.id == library) else { return false };
-                    lib.extracting.remove(&id);
-                    let _ = lib.store.save_fulltext_pages(&id, &pages);
-                    // Whether a text came of it shows in the list.
-                    let _ = lib.reload();
-                    // The candidates on show were found without this paper.
-                    if lib.extracting.is_empty() { this.write_texts_changed(cx) }
-                    cx.notify();
-                    true
-                });
-                if !matches!(same, Ok(true)) { break }
-            }
-        })
-        .detach();
+        todo.reverse();
+        let queue = std::rc::Rc::new(std::cell::RefCell::new(todo));
+        // Reading is the processor's work: one file per core, up to a few.
+        let workers = std::thread::available_parallelism().map_or(2, |n| n.get()).clamp(1, READ_WORKERS).min(queue.borrow().len());
+        for _ in 0..workers {
+            let (queue, library) = (queue.clone(), library.clone());
+            cx.spawn(async move |this, cx| {
+                loop {
+                    let Some((id, path, known)) = queue.borrow_mut().pop() else { break };
+                    let pages = cx.background_executor().spawn(async move { fulltext::reread(&path, known) }).await;
+                    let same = this.update(cx, |this, cx| {
+                        let Some(lib) = this.lib.as_mut().filter(|l| l.info.id == library) else { return false };
+                        lib.extracting.remove(&id);
+                        let _ = lib.store.save_fulltext_pages(&id, &pages);
+                        // Whether a text came of it shows in the list.
+                        let _ = lib.reload();
+                        // The candidates on show were found without this paper.
+                        if lib.extracting.is_empty() { this.write_texts_changed(cx) }
+                        cx.notify();
+                        true
+                    });
+                    if !matches!(same, Ok(true)) { break }
+                }
+            })
+            .detach();
+        }
     }
 
     fn export(&mut self, kind: ExportKind, cx: &mut Context<Self>) {
@@ -3508,6 +3594,7 @@ impl Workspace {
             Ok(ai::Input::Ask(prompt)) => prompt,
             Ok(ai::Input::NewChat) => {
                 chat.reset(cx);
+                if !about_paper { lib.scope_reset(cx) }
                 return cx.notify();
             }
             Err(err) => {
@@ -3516,6 +3603,8 @@ impl Workspace {
             }
         };
         chat.history = None;
+        // The panel of papers floats over the place the answer comes to.
+        if !about_paper { chat.materials_open = false }
 
         // A changed context or protocol starts the wire again from the text of what was said:
         // the model's own turns are only valid in the conversation that produced them.
@@ -3538,7 +3627,7 @@ impl Workspace {
                 Scope::Paper(_) => lib.papers.iter().collect(),
                 // As `Library::scope_papers`, field by field: the conversation is held meanwhile.
                 Scope::Library if !lib.asked.is_empty() => lib.papers.iter().filter(|p| lib.asked.contains(&p.id)).collect(),
-                Scope::Library => lib.shown.iter().map(|&i| &lib.papers[i]).collect(),
+                Scope::Library => lib.shown.iter().map(|&i| &lib.papers[i]).filter(|p| lib.scope_hits.as_ref().is_none_or(|hits| hits.contains(&p.id))).collect(),
             };
             if papers.is_empty() {
                 chat.error = t("当前列表里没有文献。先添加文献，或清空筛选条件。").into();
@@ -3549,6 +3638,11 @@ impl Workspace {
             // The tools reach every paper of the library, so every paper can be cited.
             ctx.add_sources(&lib.papers);
             chat.ctx = Some(ctx);
+            // The panel over the conversation lists what was handed over from here on: all of it, not what its search had narrowed the list to.
+            if !about_paper && lib.scope_hits.take().is_some() {
+                lib.scope_words.clear();
+                lib.scope_find.update(cx, |input, cx| input.set_text("", cx));
+            }
         }
         if replay {
             // Questions with their pictures, as they were sent (what a slash command stood for then); the pieces of one answer as one turn.
@@ -3865,6 +3959,35 @@ impl Workspace {
         if !about_paper && let Some(Err(err)) = self.lib.as_mut().map(|lib| lib.load_review()) { self.fail(tf!("无法读取综述记录：{err:#}", "Cannot read review record: {err:#}"), cx) }
     }
 
+    /// The search box of the panel over the library's conversation was typed into.
+    pub fn scope_typed(&mut self, words: String, cx: &mut Context<Self>) {
+        let Some(lib) = self.lib.as_mut() else { return };
+        lib.scope_words = words;
+        lib.scope_refilter();
+        cx.notify();
+    }
+
+    /// The panel over the library's conversation changes what the first question is put to.
+    fn scope(&mut self, what: ScopeDo, cx: &mut Context<Self>) {
+        self.pinning = false;
+        let Some(lib) = self.lib.as_mut() else { return };
+        // The material is handed over with the first question; after that the scope is the conversation's.
+        let open = lib.library_chat.ctx.is_none() && lib.library_chat.messages.is_empty();
+        match what {
+            ScopeDo::ClearFind => {
+                lib.scope_find.update(cx, |input, cx| input.set_text("", cx));
+                return self.scope_typed(String::new(), cx);
+            }
+            _ if !open => return self.say(t("这次对话的材料已经交给模型。在「新对话」里可以重新限定文献。"), cx),
+            ScopeDo::Pin(id) => {
+                if lib.paper(&id).is_some() && !lib.asked.contains(&id) { lib.asked.push(id) }
+            }
+            ScopeDo::Unpin(id) => lib.asked.retain(|asked| *asked != id),
+            ScopeDo::UnpinAll => lib.asked.clear(),
+        }
+        cx.notify();
+    }
+
     fn open_chat_said(&mut self, about_paper: bool, id: &str, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
         let conversation = match lib.store.conversation(id) {
@@ -3872,7 +3995,7 @@ impl Workspace {
             Ok(None) => return self.fail(t("这次对话已经不在了。"), cx),
             Err(err) => return self.fail(format!("{err:#}"), cx),
         };
-        if !about_paper { lib.asked.clear() }
+        if !about_paper { lib.scope_reset(cx) }
         let chat = if about_paper { &mut lib.paper_chat } else { &mut lib.library_chat };
         chat.reset(cx);
         for item in conversation.transcript.items {
@@ -4966,6 +5089,16 @@ impl Workspace {
                     None
                 }
                 "materials" => Some(Cmd::ToggleMaterials),
+                // `scopefind:xylem` searches in the panel over the library's conversation, as if typed; `pin:2` keeps the next conversation to the third paper it lists (again lets it go).
+                "scopefind" => {
+                    if let Some(lib) = self.lib.as_ref() { lib.scope_find.update(cx, |input, cx| input.set_text(arg, cx)) }
+                    self.scope_typed(arg.to_string(), cx);
+                    None
+                }
+                "pin" => self.lib.as_ref().and_then(|lib| {
+                    let id = lib.scope_listed().get(arg.parse::<usize>().unwrap_or(0))?.id.clone();
+                    Some(Cmd::Scope(if lib.asked.contains(&id) { ScopeDo::Unpin(id) } else { ScopeDo::Pin(id) }))
+                }),
                 // `review:requirements|framework|outline|section|checks` takes the last answer for that step, `review:confirm` confirms what the step waits for, `review:skip` goes on without a framework,
                 // `review:record` shows the record or the conversation, `review:judge` says the first row of evidence is borne out, `review:manuscript` makes the manuscript.
                 "review" => self.lib.as_ref().and_then(|lib| {
