@@ -641,6 +641,7 @@ impl Workspace {
                     .into_any_element()
             })
             .collect();
+        let (cited, unresolved, references_on) = self.references_row();
         let small_row = |id: &'static str, icon: &'static str, name: String, on: bool| {
             row(id.into(), on).h(px(30.)).text_size(px(13.)).text_color(if on { Theme::accent() } else { Theme::text_secondary() }).child(div().flex().flex_none().w(px(16.)).justify_center().child(ui::icon(icon, 14., if on { Theme::accent() } else { Theme::text_tertiary() }))).child(div().flex_1().min_w_0().truncate().child(name))
         };
@@ -701,6 +702,13 @@ impl Workspace {
                     .pt(px(6.))
                     .border_t_1()
                     .border_color(Theme::line())
+                    // The manuscript's reference list, where a paper has it: after its sections.
+                    .child(
+                        small_row("outline-references", "library", t("参考文献").into(), references_on)
+                            .on_click(self.on(Cmd::WriteReferences, cx))
+                            .when(unresolved, |d| d.child(div().flex_none().size(px(6.)).rounded(px(3.)).bg(Theme::danger())))
+                            .when(cited > 0, |d| d.child(div().flex_none().text_size(px(11.)).text_color(Theme::text_tertiary()).child(cited.to_string()))),
+                    )
                     .child(small_row("outline-reading", "eye", t("通读全文").into(), writing.reading).on_click(self.on(Cmd::WriteReading(!writing.reading), cx)))
                     .child(small_row("outline-manuscripts", "list", tf!("稿件 {}", "Manuscripts {}", writing.manuscripts.len()), false).on_click(self.on_menu(MenuKind::Manuscripts, cx))),
             )
@@ -818,11 +826,12 @@ impl Workspace {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
+            .track_scroll(&lib.citing.read_scroll)
             .rounded(px(10.))
             .border_1()
             .border_color(Theme::line())
             .bg(Theme::bg_body())
-            .child(div().flex().justify_center().px(px(28.)).py(px(24.)).child(div().flex().flex_col().gap(px(26.)).w_full().max_w(px(720.)).child(div().text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).line_height(px(30.)).child(crate::i18n::manuscript_title(manuscript).to_string())).children(sections)))
+            .child(div().flex().justify_center().px(px(28.)).py(px(24.)).child(div().flex().flex_col().gap(px(26.)).w_full().max_w(px(720.)).child(div().text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).line_height(px(30.)).child(crate::i18n::manuscript_title(manuscript).to_string())).children(sections).children(self.render_references_read(cx))))
             .into_any_element()
     }
 

@@ -1,9 +1,10 @@
 //! 出处 on the writing page: where in its paper each citation of the
 //! manuscript is from (`wisp_core::passage`). Under every entry of the
-//! reference list stand the paper's own sentences that the sentences citing
-//! it rest on, with their part and page; a click shows one where it stands
-//! in the PDF. With the caret in a citation, its paper's entry is brought
-//! into view and the passage of that sentence stands out.
+//! reference list beside the manuscript stand the paper's own sentences
+//! that the sentences citing it rest on, with their part and page; a click
+//! shows one where it stands in the PDF. With the caret in a citation, a
+//! line under the manuscript names its paper and shows the passage of that
+//! sentence, and in the list its paper's entry is brought into view.
 //!
 //! A passage is kept when the person cites from a sentence (引用 on a
 //! candidate, a paper ticked in 配引用), and can be looked for afterwards
@@ -92,10 +93,10 @@ impl Standing {
     }
 }
 
-/// The citations of the texts on show (section, text, its citations), each with the passage kept for it.
-pub fn standing(found: &[(&str, &str, Vec<Cited>)], kept: &[Passage]) -> Vec<Standing> {
+/// The citations of a manuscript's sections (section, text, its citations), each with the passage kept for it.
+pub fn standing<'a>(found: impl IntoIterator<Item = (&'a str, &'a str, &'a [Cited])>, kept: &[Passage]) -> Vec<Standing> {
     found
-        .iter()
+        .into_iter()
         .flat_map(|(section, text, cited)| {
             let citations = passage::citations(text, cited);
             let rests = passage::assign(&citations, section, kept);
@@ -310,7 +311,7 @@ impl Workspace {
         {
             let index = crate::cite::index(lib);
             let found: Vec<(&str, &str, Vec<Cited>)> = texts.iter().map(|(section, text)| (section.as_str(), text.as_str(), wisp_core::cite::find(text, &index))).collect();
-            for one in standing(&found, &lib.citing.sources.kept) {
+            for one in standing(found.iter().map(|(section, text, cited)| (*section, *text, cited.as_slice())), &lib.citing.sources.kept) {
                 if one.rests.is_some() || only.as_ref().is_some_and(|paper| *paper != one.citation.paper) { continue }
                 // A paper in the trash is not looked through.
                 let Some(paper) = lib.paper(&one.citation.paper) else { continue };
@@ -399,7 +400,7 @@ impl Workspace {
     }
 
     /// In the reference list's header: the passages still to look for, or the run that looks for them.
-    pub(crate) fn render_source_actions(&self, standing: &[Standing], cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(crate) fn render_source_actions(&self, standing: &[&Standing], cx: &mut Context<Self>) -> Option<AnyElement> {
         let lib = self.lib.as_ref()?;
         if let Some(run) = &lib.citing.sources.run {
             let stage = match run.stage {
@@ -439,7 +440,7 @@ impl Workspace {
         )
     }
 
-    /// The citation the caret is in or right after, among those on show: its paper's entry is where the list goes.
+    /// The citation the caret is in or right after, among the manuscript's: its paper's entry is where the list goes.
     pub(crate) fn source_at<'a>(&self, standing: &'a [Standing], cx: &App) -> Option<&'a Standing> {
         let lib = self.lib.as_ref()?;
         let editor = lib.writing.editor.read(cx);
@@ -458,9 +459,49 @@ impl Workspace {
         sources.at.replace(now);
     }
 
+    /// With the caret in a citation, under the manuscript: the paper it names and the passage that sentence rests on,
+    /// or, without one, the way to look for it. `width` is the manuscript's column.
+    pub(crate) fn render_source_strip(&self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let lib = self.lib.as_ref()?;
+        let listed = &lib.citing.listed;
+        let at = self.source_at(&listed.standing, cx)?;
+        let entry = listed.whole.iter().find(|entry| entry.reference.paper_id == at.citation.paper)?;
+        let paper = lib.paper(&at.citation.paper);
+        let named = paper.map(|paper| format!("{} · {}", paper.citation(), paper.title)).unwrap_or_else(|| entry.reference.text.clone());
+        let passages = self.render_passages("strip", &[at], None, width - 22., cx);
+        let busy = lib.citing.sources.run.is_some();
+        let id = at.citation.paper.clone();
+        let head = div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .child(div().id("source-strip-paper").flex().flex_1().min_w_0().items_center().gap(px(6.)).rounded(px(4.)).cursor_pointer().hover(|s| s.bg(Theme::hover())).text_size(px(11.)).child(div().flex_none().text_color(Theme::accent()).child(format!("@{}", entry.reference.key))).child(div().flex_1().min_w_0().truncate().text_color(Theme::text_secondary()).child(named)).on_click(self.on(Cmd::GotoSource(id.clone(), None, String::new()), cx)))
+            .when(passages.is_empty() && busy, |d| d.child(ui::spinner("source-strip-busy", 11., Theme::accent())))
+            .when(passages.is_empty() && !busy && at.askable() && paper.is_some(), |d| d.child(ui::icon_action("source-strip-find", "sparkle", Theme::accent(), t("在这篇文献里找出这句话依据的原文。不改稿件的文字。")).size(px(20.)).on_click(self.on(Cmd::Source(Do::Find(Some(id.clone()))), cx))));
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .flex_none()
+                .gap(px(4.))
+                .mx(px(20.))
+                .mb(px(8.))
+                .px(px(10.))
+                .py(px(6.))
+                .rounded(px(8.))
+                .border_1()
+                .border_color(Theme::line())
+                .bg(Theme::bg_body())
+                .child(head)
+                .when(passages.is_empty(), |d| d.child(div().text_size(px(11.)).text_color(Theme::text_tertiary()).child(t("这处引用还没有记下出处。"))))
+                .children(passages)
+                .into_any_element(),
+        )
+    }
+
     /// Under an entry of the reference list: the passages its citations on show rest on, and what was looked for and not found.
-    /// `own` are the citations of this paper, `at` the one the caret is in.
-    pub(crate) fn render_passages(&self, own: &[&Standing], at: Option<&Standing>, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    /// `own` are the citations of this paper, `at` the one the caret is in; `place` tells the list's lines from the strip's, `width` is what a line has.
+    pub(crate) fn render_passages(&self, place: &str, own: &[&Standing], at: Option<&Standing>, width: f32, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let Some(lib) = self.lib.as_ref() else { return vec![] };
         let kept = &lib.citing.sources.kept;
         // One line for a passage, however many citations rest on it; loose when it is that for all of them.
@@ -477,7 +518,7 @@ impl Workspace {
             .filter_map(|(n, loose)| {
                 let passage = kept.get(n)?;
                 let lit = here == Some(n);
-                let group = SharedString::from(format!("cite-passage-{}", passage.id));
+                let group = SharedString::from(format!("cite-passage-{place}-{}", passage.id));
                 let mut about = vec![];
                 if !passage.claim.is_empty() { about.push(tf!("引用它的句子：{}", "Cited by: {}", passage.claim)) }
                 if loose { about.push(t("这句话后来改写过，出处是为原来的句子记下的").to_string()) }
@@ -488,7 +529,8 @@ impl Workspace {
                     _ => t("引用时记下的"),
                 }.to_string());
                 let about = about.join(if crate::i18n::is_english() { " · " } else { "；" });
-                let line = div().id(SharedString::from(format!("cite-passage-line-{}", passage.id))).flex().items_start().gap(px(8.)).ml(px(2.)).pl(px(7.)).pr(px(4.)).py(px(1.)).border_l_2().rounded_r(px(4.)).when(lit, |d| d.bg(Theme::accent_soft())).tooltip(move |_, cx| cx.new(|_| Tip(about.clone())).into());
+                // A column of a width in pixels: a text that shares a row is measured narrower than it is drawn.
+                let line = div().id(SharedString::from(format!("cite-passage-line-{place}-{}", passage.id))).flex().flex_col().w(px(width)).gap(px(1.)).pl(px(8.)).pr(px(6.)).py(px(2.)).border_l_2().rounded_r(px(4.)).when(lit, |d| d.bg(Theme::accent_soft())).tooltip(move |_, cx| cx.new(|_| Tip(about.clone())).into());
                 let line = if passage.found() {
                     let mut from = vec![];
                     if !passage.part.is_empty() { from.push(label(&SECTIONS, &passage.part).to_string()) }
@@ -497,19 +539,28 @@ impl Workspace {
                     line.border_color(if lit { Theme::accent() } else { Theme::line() })
                         .cursor_pointer()
                         .hover(|s| s.bg(Theme::hover()))
-                        .child(div().flex_1().min_w_0().text_size(px(11.)).line_height(px(16.)).text_color(if loose { Theme::text_tertiary() } else { Theme::text_secondary() }).line_clamp(2).text_ellipsis().child(passage.passage.clone()))
-                        .when(passage.origin != passage::CITED, |d| d.child(div().flex_none().pt(px(2.)).child(ui::icon("sparkle", 11., if passage.origin == passage::MODEL { Theme::accent() } else { Theme::text_tertiary() }))))
-                        .child(div().flex_none().text_size(px(10.)).line_height(px(16.)).text_color(Theme::text_tertiary()).child(from.join(" · ")))
+                        .child(div().text_size(px(11.)).line_height(px(17.)).text_color(if loose { Theme::text_tertiary() } else { Theme::text_secondary() }).child(passage.passage.clone()))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(4.))
+                                .text_size(px(10.))
+                                .text_color(Theme::text_tertiary())
+                                .when(passage.origin != passage::CITED, |d| d.child(ui::icon("sparkle", 10., if passage.origin == passage::MODEL { Theme::accent() } else { Theme::text_tertiary() })))
+                                .child(from.join(" · "))
+                                .when(loose, |d| d.child(t("· 句子已改写"))),
+                        )
                         // With a page, the sentence is shown where it stands in the PDF; an abstract's opens the record.
                         .on_click(self.on(Cmd::GotoSource(passage.paper_id.clone(), page, if page.is_some() { passage.passage.clone() } else { String::new() }), cx))
                 } else {
-                    line.border_color(Theme::warning()).child(div().flex_1().min_w_0().text_size(px(11.)).line_height(px(16.)).text_color(Theme::warning()).line_clamp(2).text_ellipsis().child(if passage.claim.is_empty() { t("这篇文献里没有找到这处引用的依据").to_string() } else { tf!("这篇文献里没有找到这句话的依据：{}", "No support found in this paper for: {}", passage.claim) }))
+                    line.border_color(Theme::warning()).child(div().text_size(px(11.)).line_height(px(17.)).text_color(Theme::warning()).child(if passage.claim.is_empty() { t("这篇文献里没有找到这处引用的依据").to_string() } else { tf!("这篇文献里没有找到这句话的依据：{}", "No support found in this paper for: {}", passage.claim) }))
                 };
                 // Letting go of it stands over the end of its line and takes the click for itself.
                 let drop = div().absolute().top(px(0.)).right(px(0.)).occlude().rounded(px(6.)).bg(Theme::bg_body()).opacity(0.).group_hover(group.clone(), |s| s.opacity(1.)).child(
-                    ui::icon_action(SharedString::from(format!("cite-passage-drop-{}", passage.id)), "x", Theme::text_tertiary(), t("不要这条出处；之后可以再找")).size(px(18.)).on_click(self.on(Cmd::Source(Do::Drop(passage.id.clone())), cx)),
+                    ui::icon_action(SharedString::from(format!("cite-passage-drop-{place}-{}", passage.id)), "x", Theme::text_tertiary(), t("不要这条出处；之后可以再找")).size(px(18.)).on_click(self.on(Cmd::Source(Do::Drop(passage.id.clone())), cx)),
                 );
-                Some(div().relative().group(group).child(line).child(drop).into_any_element())
+                Some(div().relative().w(px(width)).group(group).child(line).child(drop).into_any_element())
             })
             .collect()
     }
@@ -529,9 +580,10 @@ mod tests {
         let nothing = BTreeMap::new();
         let index = cite::Index::new(&papers, [], &nothing);
         let (first, second) = ("Roots sense compaction [@Zhang2021; @Lee2020].", "Atlases resolve cell types [@Zhang2021]. [@Lee2020]");
-        let found = vec![("s1", first, cite::find(first, &index)), ("s2", second, cite::find(second, &index))];
+        let cited = [cite::find(first, &index), cite::find(second, &index)];
+        let found = [("s1", first, cited[0].as_slice()), ("s2", second, cited[1].as_slice())];
         let kept = [Passage { id: "1".into(), section_id: "s1".into(), paper_id: "a".into(), claim: "Roots sense compaction.".into(), passage: "Roots sense soil compaction.".into(), origin: passage::CITED.into(), ..Default::default() }];
-        let all = standing(&found, &kept);
+        let all = standing(found, &kept);
         assert_eq!(all.iter().map(|one| (one.section.as_str(), one.citation.paper.as_str(), one.rests.map(|rests| rests.passage), one.askable())).collect::<Vec<_>>(), [("s1", "a", Some(0), false), ("s1", "b", None, true), ("s2", "a", None, true), ("s2", "b", None, true)]);
     }
 }
