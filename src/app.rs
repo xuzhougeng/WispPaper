@@ -129,6 +129,11 @@ pub enum MenuKind {
 pub enum ReviewDo {
     Requirements,
     ConfirmRequirements,
+    /// The framework drawn from the reviews already published, which the outline is built against.
+    Framework,
+    ConfirmFramework,
+    /// On to the outline without one.
+    SkipFramework,
     Outline,
     ConfirmOutline,
     /// Keep a text as a section; its citations become rows of evidence.
@@ -141,6 +146,7 @@ pub enum ReviewDo {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ReviewText {
     Requirements,
+    Framework,
     Outline,
     /// The free notes on the evidence.
     Notes,
@@ -4848,17 +4854,19 @@ impl Workspace {
                     None
                 }
                 "materials" => Some(Cmd::ToggleMaterials),
-                // `review:requirements|outline|section|checks` takes the last answer for that step, `review:confirm` confirms what the step waits for,
+                // `review:requirements|framework|outline|section|checks` takes the last answer for that step, `review:confirm` confirms what the step waits for, `review:skip` goes on without a framework,
                 // `review:record` shows the record or the conversation, `review:judge` says the first row of evidence is borne out, `review:manuscript` makes the manuscript.
                 "review" => self.lib.as_ref().and_then(|lib| {
                     let answer = lib.library_chat.messages.iter().rev().find_map(|item| if let ChatItem::Answer(text) = item { Some(text.clone()) } else { None }).unwrap_or_default();
                     let review = lib.library_chat.review.as_ref();
                     match arg {
                         "requirements" => Some(Cmd::Review(ReviewDo::Requirements, answer)),
+                        "framework" => Some(Cmd::Review(ReviewDo::Framework, answer)),
+                        "skip" => Some(Cmd::Review(ReviewDo::SkipFramework, String::new())),
                         "outline" => Some(Cmd::Review(ReviewDo::Outline, answer)),
                         "section" => Some(Cmd::Review(ReviewDo::Section, answer)),
                         "checks" => Some(Cmd::Review(ReviewDo::Checks, answer)),
-                        "confirm" => Some(Cmd::Review(if review.is_some_and(|review| review.step() == 1) { ReviewDo::ConfirmRequirements } else { ReviewDo::ConfirmOutline }, String::new())),
+                        "confirm" => Some(Cmd::Review(match review.map_or(1, |review| review.step()) { 1 => ReviewDo::ConfirmRequirements, 2 => ReviewDo::ConfirmFramework, _ => ReviewDo::ConfirmOutline }, String::new())),
                         "complete" => Some(Cmd::Review(ReviewDo::Complete, String::new())),
                         "record" => Some(Cmd::ToggleReview),
                         "judge" => review.and_then(|review| review.evidence_rows.first()).map(|row| Cmd::JudgeReviewEvidence(row.id.clone(), wisp_core::review::EvidenceJudgment::Supports)),
