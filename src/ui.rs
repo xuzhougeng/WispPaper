@@ -183,6 +183,11 @@ pub fn status_chip(value: &str, label: &str) -> Div {
     chip(label.to_string(), text, fill)
 }
 
+/// A key as it is on the keyboard, beside what it does.
+pub fn keycap(key: impl Into<SharedString>) -> Div {
+    div().flex().flex_none().items_center().justify_center().min_w(px(18.)).h(px(18.)).px(px(4.)).rounded(px(4.)).border_1().border_color(Theme::line_strong()).bg(Theme::bg_sunken()).text_size(px(11.)).line_height(px(14.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text_secondary()).child(key.into())
+}
+
 /// The bordered shell around a text input.
 pub fn field(input: &Entity<TextInput>, window: &Window, cx: &App) -> Div {
     let focused = input.focus_handle(cx).is_focused(window);

@@ -19,6 +19,7 @@ use wisp_core::libraries::{self, LibraryInfo};
 use wisp_core::lookup::{self, Identifier};
 use wisp_core::model::*;
 pub(crate) use wisp_core::settings::default_root;
+use wisp_core::screening::{Before, Confirming, Round};
 use wisp_core::settings::{Settings, Task, settings_file};
 use wisp_core::store::{Conversation, ConversationInfo, ImportBatch, SavedSearch, Store, StructureInfo, Suggestion, TrashEntry};
 use wisp_core::manuscript::{Manuscript, Snapshot};
@@ -370,9 +371,27 @@ pub enum Cmd {
     ScreenDecide(String, String),
     /// Show only the queue's papers with this suggestion (a key of `SCREENINGS`), those without one (`none`), or all (empty).
     ScreenFilter(String),
-    /// Take the assistant's suggestion for every waiting paper it gave this verdict, after asking.
-    AskScreenAccept(String),
-    ScreenAccept(String),
+    /// How the queue is worked through: with the assistant's run over it (批量), one paper at a time (逐篇), or its suggestions confirmed together (确认).
+    ScreenMode(ScreenMode),
+    /// 逐篇: show the paper at this place of the round; one past the last is the round's summary.
+    ScreenGo(usize),
+    /// 逐篇: take the round's last decision back.
+    ScreenUndo,
+    /// Ask the assistant about this one paper.
+    ScreenAskOne(String),
+    /// The paper being screened beside the page: its PDF when it has one, else its record.
+    ScreenBeside,
+    /// 确认: count a paper in or leave it out; give it another status; the suggested verdict on show; all of
+    /// those on show in or out; the least sure first; the paper the keys act on.
+    ConfirmTick(String),
+    ConfirmChoose(String, String),
+    ConfirmPart(String),
+    ConfirmTickAll(bool),
+    ConfirmSort,
+    ConfirmCursor(String),
+    /// Write what is ticked; take that back.
+    ConfirmApply,
+    ConfirmUndo,
     /// How often the open library runs its searches on its own, in hours; 0 turns it off.
     SetAutoSync(u32),
     ToggleSearch(String),
@@ -506,16 +525,47 @@ pub struct Screen {
     /// The model the run was started with.
     pub model: String,
     /// Which part of the queue is on show: a suggested verdict, `none` for the papers without a suggestion, empty for all.
-    filter: String,
+    pub filter: String,
     pub error: String,
     /// Bumped when a run starts or stops, so answers to an earlier one are dropped.
     run: u64,
+    /// How the queue is worked through.
+    pub mode: ScreenMode,
+    /// 逐篇: the papers of this round and the one on show (`screen_single.rs`).
+    pub round: Round,
+    /// 确认: what the person changed in the list of suggestions (`screen_confirm.rs`).
+    pub confirm: Confirming,
+    /// What the last confirmation wrote, until the page is left: shown in place of the list, and how it is taken back.
+    pub confirmed: Option<Confirmed>,
+    pub rail_scroll: UniformListScrollHandle,
+    pub confirm_scroll: UniformListScrollHandle,
+    pub paper_scroll: ScrollHandle,
+}
+
+/// The three faces of 筛选.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ScreenMode {
+    /// The queue as a list, with the assistant's run over it.
+    #[default]
+    Batch,
+    /// One paper at a time, decided with a key.
+    Single,
+    /// The assistant's suggestions looked over and written together.
+    Confirm,
+}
+
+/// What a confirmation wrote.
+pub struct Confirmed {
+    /// The papers as they were, to take it back.
+    pub before: Vec<Before>,
+    /// How many papers got each status, in the order of `SCREENINGS`.
+    pub counts: [usize; 5],
 }
 
 impl Screen {
     fn new(criteria: &str, cx: &mut App) -> Screen {
         let criteria = cx.new(|cx| TextInput::new("例如：只收以人类样本做单细胞测序的原始研究；综述、方法学文章不收。留空则按文献库的主题判断。", cx).multiline(3).with_text(criteria));
-        Screen { criteria, todo: vec![], reading: vec![], total: 0, done: 0, failed: 0, streak: 0, model: String::new(), filter: String::new(), error: String::new(), run: 0 }
+        Screen { criteria, todo: vec![], reading: vec![], total: 0, done: 0, failed: 0, streak: 0, model: String::new(), filter: String::new(), error: String::new(), run: 0, mode: ScreenMode::Batch, round: Round::default(), confirm: Confirming::default(), confirmed: None, rail_scroll: UniformListScrollHandle::new(), confirm_scroll: UniformListScrollHandle::new(), paper_scroll: ScrollHandle::new() }
     }
 
     /// Whether the assistant is working through the papers right now.
@@ -1383,6 +1433,7 @@ impl Library {
             self.pdf = None;
         }
         let held: HashSet<&str> = self.papers.iter().map(|p| p.id.as_str()).collect();
+        self.screen.round.keep(|id| held.contains(id));
         let gone = |ids: &Vec<String>| ids.iter().any(|id| !held.contains(id.as_str()));
         if gone(&self.marked) || gone(&self.asked) {
             let held: HashSet<String> = held.into_iter().map(str::to_string).collect();
@@ -2313,8 +2364,8 @@ impl Workspace {
                     lib.store.save_search(&mut search)
                 });
             }
-            Cmd::ScreenStart => self.screen_start(false, cx),
-            Cmd::ScreenRecheck => self.screen_start(true, cx),
+            Cmd::ScreenStart => self.screen_start(false, None, cx),
+            Cmd::ScreenRecheck => self.screen_start(true, None, cx),
             Cmd::ScreenStop => {
                 if let Some(lib) = self.lib.as_mut() {
                     // Answers still on their way belong to a run that is over.
@@ -2323,49 +2374,11 @@ impl Workspace {
                     lib.screen.reading.clear();
                 }
             }
-            Cmd::ScreenDecide(id, verdict) => {
-                let Some(lib) = self.lib.as_ref() else { return };
-                // The paper after this one in the queue on show comes up next; the one before when it was the last.
-                let queue: Vec<&str> = lib.screen_view().0.iter().map(|p| p.id.as_str()).collect();
-                let next = queue.iter().position(|p| *p == id).and_then(|at| queue.get(at + 1).or(at.checked_sub(1).and_then(|before| queue.get(before)))).map(|p| p.to_string());
-                // Agreeing with the assistant takes its reason along; keeping one's own decision keeps its reason; deciding otherwise leaves the reason to the person.
-                let kept = lib.paper(&id).filter(|p| p.screening == verdict).map(|p| p.screening_reason.clone());
-                let reason = lib.current_suggestion(&id).filter(|s| s.verdict == verdict).map(|s| s.reason.clone()).or(kept).unwrap_or_default();
-                if self.edit_paper(&id, cx, |p| p.decide(&verdict, &reason)) { self.select(next, window, cx) }
-            }
             Cmd::ScreenFilter(filter) => {
                 if let Some(lib) = self.lib.as_mut() { lib.screen.filter = filter }
             }
-            Cmd::AskScreenAccept(verdict) => {
-                let Some(lib) = self.lib.as_ref() else { return };
-                let count = lib.screen_queue().iter().filter(|p| lib.screen_group(&p.id) == verdict).count();
-                if count == 0 { return }
-                let name = label(&SCREENINGS, &verdict);
-                self.modal_error.clear();
-                self.modal = Some(Modal::Confirm {
-                    title: format!("把这 {count} 篇都判断为「{name}」？"),
-                    message: format!("助手对这 {count} 篇待判断文献的建议都是「{name}」。采纳后，它们的收录判断改为「{name}」，判断理由用助手给出的理由。之后仍然可以在每篇文献的详情里改回来。"),
-                    action: format!("采纳 {count} 篇"),
-                    cmd: Cmd::ScreenAccept(verdict),
-                });
-            }
-            Cmd::ScreenAccept(verdict) => {
-                self.run(Cmd::CloseModal, window, cx);
-                let Some(lib) = self.lib.as_ref() else { return };
-                let agreed: Vec<(String, String)> = lib.screen_queue().iter().filter(|p| lib.screen_group(&p.id) == verdict).map(|p| (p.id.clone(), lib.suggestions[&p.id].reason.clone())).collect();
-                let done = self.change(cx, |lib| {
-                    for (id, reason) in &agreed {
-                        let mut paper = lib.store.get_paper(id)?;
-                        paper.decide(&verdict, reason);
-                        lib.store.save_paper(&mut paper)?;
-                    }
-                    Ok(())
-                });
-                if done {
-                    self.select(None, window, cx);
-                    self.say(format!("已把 {} 篇判断为「{}」。", agreed.len(), label(&SCREENINGS, &verdict)), cx);
-                }
-            }
+            Cmd::ScreenDecide(..) | Cmd::ScreenMode(_) | Cmd::ScreenGo(_) | Cmd::ScreenUndo | Cmd::ScreenAskOne(_) | Cmd::ScreenBeside => self.run_screen(cmd, window, cx),
+            Cmd::ConfirmTick(_) | Cmd::ConfirmChoose(..) | Cmd::ConfirmPart(_) | Cmd::ConfirmTickAll(_) | Cmd::ConfirmSort | Cmd::ConfirmCursor(_) | Cmd::ConfirmApply | Cmd::ConfirmUndo => self.run_confirm(cmd, window, cx),
 
             Cmd::OpenGuide(choosing) => {
                 if let Some(lib) = self.lib.as_mut() {
@@ -2474,6 +2487,9 @@ impl Workspace {
             self.run(Cmd::LeaveAsk, window, cx);
         } else if self.lib.as_ref().is_some_and(|l| l.selected.is_some()) {
             self.select(None, window, cx);
+        } else if self.lib.as_ref().is_some_and(|l| l.page == Page::Screen && l.screen.mode != ScreenMode::Batch) {
+            // Out of a round or the confirmation, back to the queue.
+            self.run(Cmd::ScreenMode(ScreenMode::Batch), window, cx);
         }
         cx.notify();
     }
@@ -2787,7 +2803,7 @@ impl Workspace {
         })
     }
 
-    fn edit_paper(&mut self, id: &str, cx: &mut Context<Self>, edit: impl FnOnce(&mut Paper)) -> bool {
+    pub(crate) fn edit_paper(&mut self, id: &str, cx: &mut Context<Self>, edit: impl FnOnce(&mut Paper)) -> bool {
         self.change(cx, |lib| {
             let mut paper = lib.store.get_paper(id)?;
             edit(&mut paper);
@@ -3960,7 +3976,8 @@ impl Workspace {
     /// several at a time (设置 › AI says how many, and with which model).
     /// What it says is saved as a suggestion; the decision stays with the
     /// person, and a decided paper it sees otherwise comes back to the queue.
-    fn screen_start(&mut self, decided: bool, cx: &mut Context<Self>) {
+    /// With `only`, it is asked about those papers, whatever it said of them before.
+    pub(crate) fn screen_start(&mut self, decided: bool, only: Option<Vec<String>>, cx: &mut Context<Self>) {
         let profile = self.settings.profile_for_or_default(Task::Screen);
         let workers = self.settings.screen_workers;
         let Some(lib) = self.lib.as_mut() else { return };
@@ -3971,7 +3988,7 @@ impl Workspace {
             lib.screen.error = err;
             return cx.notify();
         }
-        let mut todo: Vec<String> = lib.screen_unasked(decided).iter().map(|p| p.id.clone()).collect();
+        let mut todo: Vec<String> = only.unwrap_or_else(|| lib.screen_unasked(decided).iter().map(|p| p.id.clone()).collect());
         if todo.is_empty() {
             lib.screen.error = if decided { "已判断的文献都有按当前目标的建议了。" } else { "待判断的文献都已经有按当前目标的建议了。" }.into();
             return cx.notify();
@@ -4729,7 +4746,17 @@ impl Workspace {
                 }
                 "zotero-report" => Some(Cmd::ShowZotero),
                 // `screen` starts the assistant on the pending papers, `screen:decided` on the decided ones.
-                "screen" => Some(if arg == "decided" { Cmd::ScreenRecheck } else { Cmd::ScreenStart }),
+                // `screen:single`, `screen:confirm` and `screen:batch` are the page's three faces; `screen:go;<n>` the n-th paper of a round.
+                "screen" => Some(match arg {
+                    "decided" => Cmd::ScreenRecheck,
+                    "single" => Cmd::ScreenMode(ScreenMode::Single),
+                    "confirm" => Cmd::ScreenMode(ScreenMode::Confirm),
+                    "batch" => Cmd::ScreenMode(ScreenMode::Batch),
+                    "apply" => Cmd::ConfirmApply,
+                    "unconfirm" => Cmd::ConfirmUndo,
+                    go if go.starts_with("go;") => Cmd::ScreenGo(go[3..].parse().unwrap_or(0)),
+                    _ => Cmd::ScreenStart,
+                }),
                 // `goal:<text>` writes the screening goal, as if typed.
                 "goal" => {
                     if let Some(lib) = self.lib.as_mut() {

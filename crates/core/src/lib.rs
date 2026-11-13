@@ -15,6 +15,7 @@
 //! - `cite`     citations in a manuscript: keys, finding them, the reference list and BibTeX
 //! - `markdown` the Markdown of an answer → blocks to draw
 //! - `ai`       context building, request bodies and stream parsing for 文献库提问
+//! - `screening` the person's side of 筛选: the keys, a round of papers one by one, suggestions confirmed together
 //! - `sources`  literature database searches: URLs to ask, records read from the replies
 //! - `openaccess` where a paper's full text can be had for free: addresses to ask, candidates read from the replies
 //! - `settings` settings.json, and where it and the libraries live
@@ -40,6 +41,7 @@ pub mod openaccess;
 pub mod pdftext;
 pub mod retrieval;
 pub mod review;
+pub mod screening;
 pub mod settings;
 pub mod sources;
 pub mod store;

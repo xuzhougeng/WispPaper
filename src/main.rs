@@ -21,6 +21,8 @@ mod markdown;
 mod pdf;
 mod picture;
 mod screen;
+mod screen_confirm;
+mod screen_single;
 mod searches;
 mod select;
 mod settings;

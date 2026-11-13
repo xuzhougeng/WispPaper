@@ -205,7 +205,7 @@ fn switch(id: &'static str, on: bool) -> Stateful<Div> {
 }
 
 /// A choice among a few: a groove with the chosen one raised.
-fn segmented(id: &'static str, choices: Vec<(&'static str, Cmd)>, chosen: usize, this: &Workspace, cx: &mut Context<Workspace>) -> Div {
+pub(crate) fn segmented(id: &'static str, choices: Vec<(&'static str, Cmd)>, chosen: usize, this: &Workspace, cx: &mut Context<Workspace>) -> Div {
     div().flex().flex_none().gap(px(2.)).h(px(28.)).p(px(2.)).rounded(px(9.)).bg(Theme::groove()).children(choices.into_iter().enumerate().map(|(i, (label, cmd))| {
         div()
             .id((id, i))
@@ -814,6 +814,9 @@ impl Workspace {
             .gap(px(24.))
             .children(GROUPS.iter().zip(groups).map(|(title, rows)| group(Some(*title), rows)))
             .child(note("点一个快捷键，再按下新的组合键。文本框里的编辑按键（复制、粘贴、全选等）是固定的。"))
+            // The keys of 筛选 are bare letters, and fixed: shown so that they can be found.
+            .child(group(Some("筛选"), shortcuts::SCREEN_KEYS.iter().map(|(key, what)| div().flex().items_center().w_full().px(px(16.)).py(px(8.)).min_h(px(44.)).child(div().flex_1().min_w_0().child(*what)).child(div().min_w(px(148.)).text_size(px(12.)).text_color(Theme::text_tertiary()).flex().justify_center().child(*key)).into_any_element()).collect()))
+            .child(note("筛选页里的按键是固定的：在批量的队列里对点开的那一篇、在逐篇里对当前这一篇、在确认建议里对光标所在的一行生效。正在输入文字时它们不起作用。"))
             .into_any_element()
     }
 
