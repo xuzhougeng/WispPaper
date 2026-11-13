@@ -130,6 +130,12 @@ pub struct Review {
     pub title: String,
     pub requirements: String,
     pub requirements_confirmed: bool,
+    /// What the reviews already published make of the topic and the chapters proposed from them:
+    /// a working framework, not yet borne out by anything. The outline is built against it
+    /// from the library's own papers.
+    pub framework: String,
+    /// The person takes the framework as the starting point, or goes on without one.
+    pub framework_confirmed: bool,
     pub outline: String,
     pub outline_confirmed: bool,
     pub evidence: String,
@@ -144,9 +150,15 @@ pub struct Review {
 }
 
 impl Review {
-    /// Where the review stands: 1 the requirements, 2 the outline, 3 writing.
+    /// Where the review stands: 1 the requirements, 2 the framework from the reviews already published, 3 the outline, 4 writing.
     pub fn step(&self) -> usize {
-        if !self.requirements_confirmed { 1 } else if !self.outline_confirmed { 2 } else { 3 }
+        if !self.requirements_confirmed { 1 } else if !self.framework_settled() { 2 } else if !self.outline_confirmed { 3 } else { 4 }
+    }
+
+    /// The framework is confirmed, or the review goes on without one. A record with an outline and
+    /// no framework went on without: every record from before there was a framework is such a one.
+    pub fn framework_settled(&self) -> bool {
+        self.framework_confirmed || (self.framework.is_empty() && !self.outline.is_empty())
     }
 
     /// The row's claim still stands in the section it was taken from (a row without a section is on its own).
@@ -159,6 +171,10 @@ impl Review {
 pub enum ReviewAction {
     SetRequirements(String),
     ConfirmRequirements,
+    SetFramework(String),
+    ConfirmFramework,
+    /// Go on to the outline without a framework: no review of the topic to read, or none wanted.
+    SkipFramework,
     SetOutline(String),
     ConfirmOutline,
     SetEvidence(String),
@@ -254,6 +270,7 @@ impl Review {
                 if self.requirements != text {
                     self.requirements = text;
                     self.requirements_confirmed = false;
+                    self.framework_confirmed = false;
                     self.outline_confirmed = false;
                     self.checks_current = false;
                     self.completed = false;
@@ -263,9 +280,42 @@ impl Review {
                 nonempty(&self.requirements, "写作要求")?;
                 self.requirements_confirmed = true;
             }
+            ReviewAction::SetFramework(text) => {
+                if !self.requirements_confirmed {
+                    bail!("请先确认写作要求")
+                }
+                nonempty(&text, "初步框架")?;
+                if self.framework != text {
+                    self.framework = text;
+                    self.framework_confirmed = false;
+                    // The outline was built against the framework as it was.
+                    self.outline_confirmed = false;
+                    self.checks_current = false;
+                    self.completed = false;
+                }
+            }
+            ReviewAction::ConfirmFramework => {
+                if !self.requirements_confirmed {
+                    bail!("请先确认写作要求")
+                }
+                nonempty(&self.framework, "初步框架")?;
+                self.framework_confirmed = true;
+            }
+            ReviewAction::SkipFramework => {
+                if !self.requirements_confirmed {
+                    bail!("请先确认写作要求")
+                }
+                if !self.framework.is_empty() {
+                    bail!("已经记下初步框架，请确认它")
+                }
+                self.framework_confirmed = true;
+            }
             ReviewAction::SetOutline(text) => {
                 if !self.requirements_confirmed {
                     bail!("请先确认写作要求")
+                }
+                if !self.framework_settled() {
+                    bail!("请先确认初步框架，或跳过这一步")
                 }
                 nonempty(&text, "大纲")?;
                 if self.outline != text {
@@ -278,6 +328,9 @@ impl Review {
             ReviewAction::ConfirmOutline => {
                 if !self.requirements_confirmed {
                     bail!("请先确认写作要求")
+                }
+                if !self.framework_settled() {
+                    bail!("请先确认初步框架")
                 }
                 nonempty(&self.outline, "大纲")?;
                 self.outline_confirmed = true;
@@ -528,11 +581,12 @@ mod tests {
         store.create_review_for_conversation(title, &conversation.id).unwrap()
     }
 
-    /// A review with its requirements and outline confirmed.
+    /// A review with its requirements and outline confirmed, gone on without a framework.
     fn writing(store: &mut Store) -> Review {
         let r = review(store, "Review");
         let r = action(store, &r, ReviewAction::SetRequirements("Requirements".into()));
         let r = action(store, &r, ReviewAction::ConfirmRequirements);
+        let r = action(store, &r, ReviewAction::SkipFramework);
         let r = action(store, &r, ReviewAction::SetOutline("Outline".into()));
         action(store, &r, ReviewAction::ConfirmOutline)
     }
@@ -778,9 +832,11 @@ mod tests {
         let r = action(&mut s, &r, ReviewAction::SetRequirements("Audience: researchers".into()));
         let r = action(&mut s, &r, ReviewAction::ConfirmRequirements);
         assert_eq!(r.step(), 2);
+        let r = action(&mut s, &r, ReviewAction::SkipFramework);
+        assert_eq!(r.step(), 3);
         let r = action(&mut s, &r, ReviewAction::SetOutline("A. Roots".into()));
         let r = action(&mut s, &r, ReviewAction::ConfirmOutline);
-        assert_eq!(r.step(), 3);
+        assert_eq!(r.step(), 4);
         let r = action(&mut s, &r, ReviewAction::SetEvidence("P1: abstract only".into()));
         let r = action(&mut s, &r, section("A", "Draft [P1]"));
         assert!(s.apply_review(&r.id, r.revision, ReviewAction::Complete).is_err());
@@ -802,6 +858,62 @@ mod tests {
     }
 
     #[test]
+    fn the_outline_is_built_against_the_framework() {
+        let mut s = Store::in_memory(Path::new("/tmp/review-framework-test")).unwrap();
+        let r = review(&mut s, "Roots");
+        assert!(s.apply_review(&r.id, r.revision, ReviewAction::SetFramework("Too early".into())).is_err());
+        assert!(s.apply_review(&r.id, r.revision, ReviewAction::SkipFramework).is_err());
+        let r = action(&mut s, &r, ReviewAction::SetRequirements("Audience: researchers".into()));
+        let r = action(&mut s, &r, ReviewAction::ConfirmRequirements);
+        // No outline before the framework is settled, one way or the other.
+        assert!(s.apply_review(&r.id, r.revision, ReviewAction::SetOutline("An outline from memory".into())).is_err());
+        assert!(s.apply_review(&r.id, r.revision, ReviewAction::ConfirmFramework).is_err(), "nothing to confirm yet");
+        let r = action(&mut s, &r, ReviewAction::SetFramework("Reviews A and B go by organ; neither covers sensing".into()));
+        assert_eq!((r.step(), r.framework_confirmed), (2, false));
+        assert!(s.apply_review(&r.id, r.revision, ReviewAction::SkipFramework).is_err(), "one that is written down is confirmed, not skipped");
+        assert!(s.apply_review(&r.id, r.revision, ReviewAction::SetOutline("Outline".into())).is_err());
+        let r = action(&mut s, &r, ReviewAction::ConfirmFramework);
+        assert_eq!(r.step(), 3);
+        let r = action(&mut s, &r, ReviewAction::SetOutline("1. Sensing; 2. Response".into()));
+        let r = action(&mut s, &r, ReviewAction::ConfirmOutline);
+        assert_eq!(r.step(), 4);
+        let r = action(&mut s, &r, section("Sensing", "Draft"));
+        // The framework worded anew: it and the outline built against it are confirmed again, and what was written stays.
+        let r = action(&mut s, &r, ReviewAction::SetFramework("Reviews A, B and C".into()));
+        assert_eq!((r.step(), r.framework_confirmed, r.outline_confirmed), (2, false, false));
+        assert!(s.apply_review(&r.id, r.revision, ReviewAction::ConfirmOutline).is_err());
+        assert!(s.apply_review(&r.id, r.revision, section("Response", "Draft")).is_err());
+        let r = action(&mut s, &r, ReviewAction::ConfirmFramework);
+        let r = action(&mut s, &r, ReviewAction::ConfirmOutline);
+        assert_eq!((r.step(), r.sections.len(), r.outline.as_str()), (4, 1, "1. Sensing; 2. Response"));
+        // Other requirements ask for all three confirmations.
+        let r = action(&mut s, &r, ReviewAction::SetRequirements("Audience: students".into()));
+        assert!(!r.requirements_confirmed && !r.framework_confirmed && !r.outline_confirmed);
+        let r = action(&mut s, &r, ReviewAction::ConfirmRequirements);
+        assert_eq!(r.step(), 2);
+
+        // Without a review to read, the person goes on: the outline is then all there is.
+        let other = review(&mut s, "Leaves");
+        let other = action(&mut s, &other, ReviewAction::SetRequirements("Requirements".into()));
+        let other = action(&mut s, &other, ReviewAction::ConfirmRequirements);
+        let other = action(&mut s, &other, ReviewAction::SkipFramework);
+        assert_eq!((other.step(), other.framework.as_str()), (3, ""));
+        let other = action(&mut s, &other, ReviewAction::SetOutline("Outline".into()));
+        // Requirements worded anew do not ask again whether to go without.
+        let other = action(&mut s, &other, ReviewAction::SetRequirements("Requirements, reworded".into()));
+        let other = action(&mut s, &other, ReviewAction::ConfirmRequirements);
+        assert_eq!(other.step(), 3);
+
+        // A record from before the framework stands where it stood.
+        let old: Review = serde_json::from_str(r#"{"requirements":"R","requirements_confirmed":true,"outline":"O","outline_confirmed":true}"#).unwrap();
+        assert_eq!(old.step(), 4);
+        let old: Review = serde_json::from_str(r#"{"requirements":"R","requirements_confirmed":true,"outline":"O"}"#).unwrap();
+        assert_eq!(old.step(), 3);
+        let old: Review = serde_json::from_str(r#"{"requirements":"R","requirements_confirmed":true}"#).unwrap();
+        assert_eq!(old.step(), 2, "one that had no outline yet reads the reviews first");
+    }
+
+    #[test]
     fn record_survives_close_and_reopen_and_goes_with_its_conversation() {
         let root = std::env::temp_dir().join(new_id("wisp-review"));
         let count = |s: &Store| s.db.query_row("SELECT count(*) FROM review_projects", [], |r| r.get::<_, i64>(0)).unwrap();
@@ -816,6 +928,8 @@ mod tests {
             assert_eq!(count(&s), 1, "duplicate link rolls back the project");
             let r = action(&mut s, &r, ReviewAction::SetRequirements("English, 3000 words".into()));
             let r = action(&mut s, &r, ReviewAction::ConfirmRequirements);
+            let r = action(&mut s, &r, ReviewAction::SetFramework("Two reviews, by organ".into()));
+            let r = action(&mut s, &r, ReviewAction::ConfirmFramework);
             let r = action(&mut s, &r, ReviewAction::SetOutline("1. Context".into()));
             (r.id, r.revision, conversation.id)
         };
@@ -824,8 +938,8 @@ mod tests {
             let r = s.review(&id).unwrap().unwrap();
             assert_eq!(r.revision, revision);
             assert_eq!(r.requirements, "English, 3000 words");
-            assert!(r.requirements_confirmed && !r.outline_confirmed);
-            assert_eq!(r.outline, "1. Context");
+            assert!(r.requirements_confirmed && r.framework_confirmed && !r.outline_confirmed);
+            assert_eq!((r.framework.as_str(), r.outline.as_str()), ("Two reviews, by organ", "1. Context"));
             assert_eq!(s.review_for_conversation(&conversation_id).unwrap(), Some(r));
             // A build that knows nothing of reviews removes the conversation: the next open clears what it left.
             let mut other = crate::store::Conversation::default();
@@ -881,6 +995,7 @@ mod tests {
             let r = store.create_review_for_conversation("A review", &conversation.id).unwrap();
             let r = action(&mut store, &r, ReviewAction::SetRequirements("English; researchers".into()));
             let r = action(&mut store, &r, ReviewAction::ConfirmRequirements);
+            let r = action(&mut store, &r, ReviewAction::SkipFramework);
             let r = action(&mut store, &r, ReviewAction::SetOutline("1. Roots; 2. Leaves".into()));
             let r = action(&mut store, &r, ReviewAction::ConfirmOutline);
             let r = action(&mut store, &r, ReviewAction::SetEvidence("P1 full text; P2 abstract only".into()));
