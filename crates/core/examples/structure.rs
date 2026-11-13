@@ -1,12 +1,13 @@
 //! What the structuring makes of a file, for looking at a PDF that comes out wrong:
 //!
-//!     cargo run -p wisp_core --example structure -- a.pdf [blocks|sentences|pages|outline|apply <reply.txt>]
+//!     cargo run -p wisp_core --example structure -- a.pdf [blocks|sentences|pages|outline|captions|apply <reply.txt>]
 //!
 //! Prints the text's language, how many sentences each part got and how
 //! each part opens; with `blocks`, every block and its label; with
 //! `sentences`, every sentence kept; with `pages`, the page text; with
 //! `outline`, what a model is asked when it sorts the parts; with `apply`,
-//! the parts a model's answer (in a file) gives.
+//! the parts a model's answer (in a file) gives; with `captions`, the
+//! captions of figures and tables each page shows, as the figure library reads them.
 
 use wisp_core::structure;
 
@@ -14,6 +15,15 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let path = std::path::PathBuf::from(args.next().expect("usage: structure <a.pdf> [blocks|pages]"));
     let mode = args.next().unwrap_or_default();
+    if mode == "captions" {
+        let Some(pages) = std::fs::read(&path).ok().and_then(wisp_core::pdftext::file_marks) else { return println!("cannot read {}", path.display()) };
+        for (index, marks) in pages.iter().enumerate() {
+            for caption in wisp_core::figure::captions(marks) {
+                println!("p{:<3} [{}] {}", index + 1, caption.label, caption.legend);
+            }
+        }
+        return;
+    }
     let pages = match wisp_core::fulltext::file_pages(&path) {
         Ok(pages) => pages,
         Err(err) => return println!("{err}"),

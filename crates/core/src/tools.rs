@@ -75,6 +75,19 @@ pub fn catalog() -> Vec<ToolDef> {
         },
         scoped("library_status", "文献库概况", "一个文献库的概况：主题、文献数量、收录判断和阅读状态的分布、自定义词条，以及各状态值在界面上的显示名称。", json!({}), &[]),
         scoped(
+            "list_figures",
+            "查询图片库",
+            "查询图片库：从文献 PDF 里截下来收藏的图片，各自的图号、图注、标签、备注，以及它出自哪篇文献的哪一页。file 是图片文件在本机的路径。回收站中文献的图片不返回。",
+            json!({
+                "query": {"type": "string", "description": "在图号、图注、标签、备注，以及所属文献的题目、作者、期刊和年份中搜索；空格分开的每个词都必须出现。"},
+                "tag": {"type": "string", "description": "只返回带这个图片标签的图片。"},
+                "paper": {"type": "string", "description": "只返回这篇文献（ID）的图片。"},
+                "limit": {"type": "integer", "description": "最多返回多少张，默认 50，最多 500。"},
+                "offset": {"type": "integer", "description": "跳过前面多少张，用于翻页。"},
+            }),
+            &[],
+        ),
+        scoped(
             "list_papers",
             "查询文献",
             "查询文献库中的文献，返回简要记录和匹配总数。规则与界面上的列表相同：不指定 screening 时不包含判为「不相关」的文献，回收站中的文献不返回。",
@@ -334,6 +347,7 @@ fn dispatch(store: &mut Store, info: &LibraryInfo, name: &str, args: &Value, fet
         "suggest_screening" => suggest_screening(store, info, args),
         "library_status" => library_status(store, info),
         "list_papers" => list_papers(store, info, args),
+        "list_figures" => list_figures(store, info, args),
         "get_paper" => get_paper(store, args),
         "search_fulltext" => search_fulltext(store, args),
         "read_fulltext" => read_fulltext(store, args),
@@ -441,6 +455,29 @@ fn list_papers(store: &mut Store, info: &LibraryInfo, args: &Value) -> Result<Va
         })
         .collect();
     Ok(json!({"library": info.name, "total": shown.len(), "offset": offset, "papers": page}))
+}
+
+fn list_figures(store: &mut Store, info: &LibraryInfo, args: &Value) -> Result<Value> {
+    let (words, tag, paper) = (crate::figure::search_words(text(args, "query")?), text(args, "tag")?, text(args, "paper")?);
+    let (limit, offset) = (number(args, "limit", 50, 500)?, number(args, "offset", 0, usize::MAX)?);
+    let papers = store.list_papers()?;
+    let by_id: BTreeMap<&str, &Paper> = papers.iter().map(|p| (p.id.as_str(), p)).collect();
+    let figures = store.list_figures()?;
+    let found: Vec<&crate::figure::Figure> = figures
+        .iter()
+        .filter(|f| (tag.is_empty() || f.tags.iter().any(|t| t == tag)) && (paper.is_empty() || f.paper_id == paper) && f.matches(by_id.get(f.paper_id.as_str()).copied(), &words))
+        .collect();
+    let page: Vec<Value> = found
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .map(|f| {
+            let source = by_id.get(f.paper_id.as_str()).map(|p| json!({"id": p.id, "title": p.title, "authors": p.short_authors(), "year": p.year}));
+            json!({"id": f.id, "label": f.label, "legend": f.legend, "tags": f.tags, "notes": f.notes, "paper": source, "page": (f.page > 0).then_some(f.page),
+                "width": f.width, "height": f.height, "file": store.figure_path(f), "addedAt": f.added_at})
+        })
+        .collect();
+    Ok(json!({"library": info.name, "total": found.len(), "offset": offset, "figures": page, "tags": crate::figure::tag_counts(&figures).into_iter().map(|(tag, count)| json!({"tag": tag, "count": count})).collect::<Vec<_>>()}))
 }
 
 fn get_paper(store: &mut Store, args: &Value) -> Result<Value> {
@@ -1142,6 +1179,31 @@ pub(crate) mod tests {
         let file = store.import_file(&atlas.id, &source, "fulltext").unwrap();
         store.save_fulltext_pages(&file.id, &Ok(vec!["Introduction.\nThe root tip of Arabidopsis.".into(), "Libraries were prepared with\n10x Genomics Chromium. WOX5 marks the quiescent centre.".into()])).unwrap();
         (root, atlas.id)
+    }
+
+    #[test]
+    fn figures_are_listed_with_their_source() {
+        let (root, atlas) = sample();
+        let info = find_library(&root, "").unwrap();
+        let mut store = Store::open(&info.dir).unwrap();
+        let png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x02\x80\x00\x00\x01\xe0\x08\x02\x00\x00\x00";
+        let mut niche = crate::figure::Figure { paper_id: atlas.clone(), page: 2, label: "Fig. 1".into(), legend: "The quiescent centre under the confocal microscope.".into(), tags: vec!["confocal".into()], ..Default::default() };
+        store.add_figure(&mut niche, png).unwrap();
+        let mut blot = crate::figure::Figure { paper_id: atlas.clone(), label: "Fig. 3".into(), legend: "Western blot.".into(), tags: vec!["western".into(), "confocal".into()], ..Default::default() };
+        store.add_figure(&mut blot, png).unwrap();
+        drop(store);
+        let all = call(&root, "list_figures", &json!({})).unwrap();
+        assert_eq!((all["total"].as_u64(), all["tags"][0]["tag"].as_str(), all["tags"][0]["count"].as_u64()), (Some(2), Some("confocal"), Some(2)));
+        // By its own words, by its paper's, by tag; with the page and the paper it leads back to.
+        let found = call(&root, "list_figures", &json!({"query": "quiescent zhang"})).unwrap();
+        let figure = &found["figures"][0];
+        assert_eq!((found["total"].as_u64(), figure["id"].as_str(), figure["page"].as_u64(), figure["paper"]["title"].as_str(), figure["width"].as_u64()), (Some(1), Some(niche.id.as_str()), Some(2), Some("Root stem cell niche"), Some(640)));
+        assert!(Path::new(figure["file"].as_str().unwrap()).is_file());
+        let western = call(&root, "list_figures", &json!({"tag": "western"})).unwrap();
+        assert_eq!((western["total"].as_u64(), western["figures"][0]["page"].is_null()), (Some(1), true));
+        assert_eq!(call(&root, "list_figures", &json!({"paper": "nobody"})).unwrap()["total"], 0);
+        assert_eq!(call(&root, "list_figures", &json!({"limit": 1, "offset": 1})).unwrap()["figures"].as_array().unwrap().len(), 1);
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]

@@ -20,9 +20,21 @@ pub enum PdfEvent {
     Quote(usize, String, bool),
     /// A piece of a page as a picture (PNG) for the next question, and whether for the library's conversation.
     Picture(Vec<u8>, bool),
+    /// A piece of a page to keep in the figure library. It stays marked on the page until `PdfView::cut_kept`.
+    Figure(Piece),
     /// Translate the selected text: the text, and the model service (its id) asked for this once, else the one translation is bound to.
     /// The answer comes back through `PdfView::show_translation`.
     Translate(String, Option<String>),
+}
+
+/// A piece cut out of a page, for the figure library.
+pub struct Piece {
+    pub png: Vec<u8>,
+    /// The 1-based page it stands on, and its box there in the page's points.
+    pub page: usize,
+    pub bbox: [f32; 4],
+    /// What the page says about it, when a caption stands by it.
+    pub caption: Option<wisp_core::figure::Caption>,
 }
 
 /// The translation of the selected text, on a card beside it. It lasts as long as that selection.
@@ -556,6 +568,14 @@ impl PdfView {
         cx.notify();
     }
 
+    /// Go to a place on a 1-based page: what stands `top` points below the page's top comes a little under the top of the view.
+    pub fn go_to_place(&mut self, page: usize, top: f32, cx: &mut Context<Self>) {
+        if self.sizes.is_empty() { return self.go_to(page, cx) }
+        let index = page.clamp(1, self.sizes.len()) - 1;
+        self.list.scroll_to(ListOffset { item_ix: index, offset_in_item: px((top * self.scale_of(index) - 48.).max(0.)) });
+        cx.notify();
+    }
+
     fn receive(&mut self, reply: Reply, cx: &mut Context<Self>) {
         match reply {
             Reply::Opened(sizes) => {
@@ -752,6 +772,27 @@ impl PdfView {
         let Some(png) = self.cut_picture() else { return };
         (self.cut, self.cutting) = (None, false);
         cx.emit(PdfEvent::Picture(png, to_library));
+        cx.notify();
+    }
+
+    /// Hand the piece cut out to the figure library, with the caption the page gives it. The piece stays
+    /// marked, so a dialog put away leaves it to be used otherwise; `cut_kept` lets go of it.
+    pub fn collect_cut(&mut self, cx: &mut Context<Self>) {
+        let (Some(png), Some((page, [x0, y0, x1, y1]))) = (self.cut_picture(), self.cut) else { return };
+        let bbox = [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)];
+        let caption = self.marks.get(&page).and_then(|marks| wisp_core::figure::caption(marks, bbox));
+        cx.emit(PdfEvent::Figure(Piece { png, page: page + 1, bbox, caption }));
+    }
+
+    /// The piece cut out is in the figure library: the next one can be cut.
+    pub fn cut_kept(&mut self, cx: &mut Context<Self>) {
+        self.cut = None;
+        cx.notify();
+    }
+
+    /// Mark a piece of a 0-based page as cut out, as a drag would.
+    pub fn set_cut(&mut self, page: usize, bbox: [f32; 4], cx: &mut Context<Self>) {
+        (self.cutting, self.cut, self.selection, self.selecting, self.translation) = (true, Some((page, bbox)), None, false, None);
         cx.notify();
     }
 
@@ -969,7 +1010,7 @@ impl PdfView {
         Some(
             div()
                 .absolute()
-                .left(px(left.clamp(8., (self.width - if self.library_chat { 330. } else { 250. }).max(8.))))
+                .left(px(left.clamp(8., (self.width - if !piece { 250. } else if self.library_chat { 440. } else { 290. }).max(8.))))
                 .top(px(top.clamp(8., (self.height - 44.).max(8.))))
                 .flex()
                 .items_center()
@@ -988,9 +1029,10 @@ impl PdfView {
                 .when(!piece && self.library_chat, |d| d.child(button("pdf-quote-library", "加到文献库对话").text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.quote(true, cx)))).child(button("pdf-quote-paper", "加到这篇的对话").text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.quote(false, cx)))))
                 .when(!piece && !self.library_chat, |d| d.child(button("pdf-quote-paper", "添加到对话").text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.quote(false, cx)))))
                 .when(!piece, |d| d.child(button("pdf-translate", "翻译").on_click(cx.listener(|this, _, _, cx| this.translate(None, cx)))))
-                // A piece of the page: a picture for the next question.
-                .when(piece && self.library_chat, |d| d.child(button("pdf-cut-library", "截图加到文献库对话").text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.send_cut(true, cx)))).child(button("pdf-cut-paper", "截图加到这篇的对话").text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.send_cut(false, cx)))))
-                .when(piece && !self.library_chat, |d| d.child(button("pdf-cut-paper", "用这张截图提问").text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.send_cut(false, cx)))))
+                // A piece of the page: a figure to keep, or a picture for the next question.
+                .when(piece, |d| d.child(button("pdf-cut-keep", "收藏到图片库").text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.collect_cut(cx)))))
+                .when(piece && self.library_chat, |d| d.child(button("pdf-cut-library", "截图加到文献库对话").on_click(cx.listener(|this, _, _, cx| this.send_cut(true, cx)))).child(button("pdf-cut-paper", "截图加到这篇的对话").on_click(cx.listener(|this, _, _, cx| this.send_cut(false, cx)))))
+                .when(piece && !self.library_chat, |d| d.child(button("pdf-cut-paper", "用这张截图提问").on_click(cx.listener(|this, _, _, cx| this.send_cut(false, cx)))))
                 .when(piece, |d| d.child(button("pdf-cut-cancel", "取消").on_click(cx.listener(|this, _, _, cx| this.toggle_cutting(cx)))))
                 .into_any_element(),
         )

@@ -30,6 +30,7 @@ fn option_chip(id: impl Into<ElementId>, label: impl Into<SharedString>, chosen:
 
 impl Workspace {
     pub fn render_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        self.tend_figure_dialog(window, cx);
         let modal = self.modal.as_ref()?;
         let error = ui::error_line(&self.modal_error);
         let footer = |confirm: &str, danger: bool, this: &Self, cx: &mut Context<Self>| {
@@ -50,6 +51,7 @@ impl Workspace {
             Modal::History { .. } => self.render_history_dialog(cx)?,
             Modal::ReviewEvidence(_) => self.render_review_evidence_dialog(window, cx)?,
             Modal::ReviewText { .. } => self.render_review_text_dialog(window, cx)?,
+            Modal::Figure(_) => self.render_figure_dialog(window, cx)?,
             Modal::Zotero => ui::dialog(560.)
                 .child(ui::dialog_title("从 Zotero 导入"))
                 .child(body()

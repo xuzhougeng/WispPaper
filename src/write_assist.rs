@@ -343,7 +343,7 @@ fn marked(pieces: &[(Change, String)]) -> StyledText {
 }
 
 /// The description of one of the person's commands, over its button.
-struct Tip(String);
+pub(crate) struct Tip(pub(crate) String);
 
 impl Render for Tip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {

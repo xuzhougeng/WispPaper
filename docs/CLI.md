@@ -26,6 +26,7 @@ wisp search_fulltext --help             # 一个工具的参数
 | `library_status` | 一个库的概况：各状态的数量、自定义词条、状态值的显示名称 |
 | `list_papers` | 搜索、筛选、翻页；规则与界面上的列表相同 |
 | `get_paper` | 一篇文献的完整记录、词条和附件 |
+| `list_figures` | 图片库：从 PDF 里截下来收藏的图片，各自的图号、图注、标签、备注、出处（文献和页码）和图片文件的路径；可按 `--query`、`--tag`、`--paper` 筛选 |
 | `search_fulltext` | 在已保存的全文里找短语或关键词，返回页码和逐字片段 |
 | `read_fulltext` | 按页读取全文，一次最多 8 页 |
 | `find_citations` | 为一段文字逐句找出库里可能支持它的文献（按词语匹配的候选） |
