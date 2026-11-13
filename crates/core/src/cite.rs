@@ -42,17 +42,31 @@ pub fn written(key: &str) -> String {
 pub struct AiCitationConversion {
     pub text: String,
     pub keys: Vec<(String, String)>,
+    /// The sentences the answer quoted for a citation of one paper: what that citation rests on (`passage::quoted`).
+    pub quoted: Vec<Quoted>,
+}
+
+/// A sentence a chat citation quoted: `[P3 p.5 "…"]`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Quoted {
+    /// Where the citation stands in the converted text: its opening bracket.
+    pub at: usize,
+    pub paper_id: String,
+    pub page: Option<usize>,
+    pub quote: String,
 }
 
 /// Convert only complete, unambiguous chat citation groups. Unrecognised
 /// text and groups with an unavailable source remain exactly as written.
-/// The sentence a citation quotes (`[P3 p.5 "…"]`) is left out, the page
-/// kept: a manuscript cites, and the quotation was the conversation's way of
-/// showing where (a review keeps it in its evidence). Conversion is not
-/// verification of the claim or page.
+/// The sentence a citation quotes (`[P3 p.5 "…"]`) is left out of the text,
+/// the page kept: a manuscript cites, and the quotation was the
+/// conversation's way of showing where. It is handed back beside the text
+/// (`quoted`), for the caller to keep as the passage the citation rests on.
+/// Conversion is not verification of the claim or page.
 pub fn convert_ai_citations(answer: &str, sources: &[crate::ai::Source], index: &Index<'_>) -> AiCitationConversion {
     let mut text = String::new();
     let mut keys = Vec::new();
+    let mut quoted = Vec::new();
     let mut end = 0;
     for (range, _) in crate::ai::citation_spans(answer) {
         if range.start < end { continue }
@@ -70,6 +84,7 @@ pub fn convert_ai_citations(answer: &str, sources: &[crate::ai::Source], index: 
                     Some(page) => format!("@{key}, p. {page}"),
                     None => format!("@{key}"),
                 }).collect();
+                if let ([(id, _, page)], Some(quote)) = (resolved.as_slice(), quotation(original)) { quoted.push(Quoted { at: text.len(), paper_id: id.clone(), page: *page, quote }) }
                 text.push_str(&format!("[{}]", pieces.join("; ")));
                 for (id, key, _) in resolved {
                     if !keys.iter().any(|pair| pair == &(id.clone(), key.clone())) { keys.push((id, key)) }
@@ -79,7 +94,17 @@ pub fn convert_ai_citations(answer: &str, sources: &[crate::ai::Source], index: 
         end = range.end;
     }
     text.push_str(&answer[end..]);
-    AiCitationConversion { text, keys }
+    AiCitationConversion { text, keys, quoted }
+}
+
+/// The sentence a citation group quotes, without its quotation marks: one that runs to the closing bracket.
+fn quotation(group: &str) -> Option<String> {
+    let at = group.find(['"', '“', '「'])?;
+    let inner = group.strip_suffix(']')?.trim_end();
+    let open = group[at..].chars().next()?.len_utf8();
+    let close = inner.chars().last().filter(|c| ['"', '”', '」'].contains(c))?.len_utf8();
+    let quote = inner.get(at + open..inner.len() - close)?.trim();
+    (!quote.is_empty()).then(|| quote.to_string())
 }
 
 /// A citation group without the sentence it quotes: `[P3 p.5 "…"]` as `[P3 p.5]`.
@@ -618,6 +643,9 @@ mod tests {
         let converted = convert_ai_citations(original, &sources, &index);
         assert_eq!(converted.text, "测试 [@Zhang2024, p. 5] and [@Zhang2024, p. 6; @Zhang2024b, p. 7] [P1, P9] [@Zhang2024] [@Zhang2024b, p. 3] [P1 p.5 extra] [P1 p.0].");
         assert_eq!(converted.keys, vec![("P1".into(), "Zhang2024".into()), ("P2".into(), "Zhang2024b".into())]);
+        // What was quoted is handed back with where its citation now stands.
+        assert_eq!(converted.quoted.iter().map(|q| (&converted.text[q.at..q.at + 2], q.paper_id.as_str(), q.page, q.quote.as_str())).collect::<Vec<_>>(), [("[@", "P1", None, "quote"), ("[@", "P2", Some(3), "a sentence. With a stop")]);
+        assert_eq!(&converted.text[converted.quoted[1].at..], "[@Zhang2024b, p. 3] [P1 p.5 extra] [P1 p.0].");
         let references = find(&converted.text, &index);
         assert_eq!(references.iter().filter(|citation| citation.found.paper().is_some()).count(), 5);
 

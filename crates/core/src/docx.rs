@@ -951,7 +951,7 @@ enum Step {
 const ALIKE: f32 = 0.45;
 
 /// How much two texts share, from 0 to 1: by their pairs of neighbouring characters, which works for words and for Chinese alike.
-fn likeness(a: &str, b: &str) -> f32 {
+pub(crate) fn likeness(a: &str, b: &str) -> f32 {
     let pairs = |text: &str| {
         let chars: Vec<char> = text.chars().filter(|c| !c.is_whitespace()).collect();
         let mut pairs: Vec<(char, char)> = chars.windows(2).map(|pair| (pair[0], pair[1])).collect();

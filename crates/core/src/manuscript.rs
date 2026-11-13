@@ -983,6 +983,10 @@ impl Store {
             let mut stmt = self.db.prepare("SELECT id, quote FROM manuscript_comments WHERE section_id = ?1")?;
             stmt.query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
         };
+        let claims: Vec<(String, String)> = {
+            let mut stmt = self.db.prepare("SELECT id, claim FROM cite_passages WHERE section_id = ?1")?;
+            stmt.query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
+        };
         self.take_snapshot(id, "split")?;
         let (new, now) = (new_id("S"), now_iso());
         let tx = self.db.transaction()?;
@@ -994,6 +998,11 @@ impl Store {
             let stays = quote.trim().is_empty() || comment::locate(before, &quote, None).is_some();
             let goes = comment::locate(after, &quote, None).is_some() || (heading && name.contains(quote.trim()));
             if !stays && goes { tx.execute("UPDATE manuscript_comments SET section_id = ?2 WHERE id = ?1", params![comment, new])?; }
+        }
+        // A citation's passage goes where the sentence that cites is now, known by how it begins.
+        for (passage, claim) in claims {
+            let opening: String = claim.chars().take(24).collect();
+            if !opening.is_empty() && !before.contains(&opening) && after.contains(&opening) { tx.execute("UPDATE cite_passages SET section_id = ?2 WHERE id = ?1", params![passage, new])?; }
         }
         tx.commit()?;
         self.touch_manuscript(&manuscript)?;
@@ -1016,6 +1025,7 @@ impl Store {
         let tx = self.db.transaction()?;
         tx.execute("UPDATE manuscript_sections SET body = ?2, updated_at = ?3 WHERE id = ?1", params![previous, body, now_iso()])?;
         tx.execute("UPDATE manuscript_comments SET section_id = ?2 WHERE section_id = ?1", params![id, previous])?;
+        tx.execute("UPDATE cite_passages SET section_id = ?2 WHERE section_id = ?1", params![id, previous])?;
         tx.execute("DELETE FROM manuscript_sections WHERE id = ?1", [id])?;
         tx.commit()?;
         self.touch_manuscript(&manuscript)?;

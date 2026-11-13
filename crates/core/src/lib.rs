@@ -54,6 +54,7 @@ pub mod mcp;
 pub mod model;
 pub mod openaccess;
 pub mod organise;
+pub mod passage;
 pub mod pdftext;
 pub mod provider;
 pub mod retrieval;

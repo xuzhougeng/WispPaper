@@ -62,6 +62,7 @@ wisp search_fulltext --help             # 一个工具的参数
 | `search_fulltext` | 在已保存的全文里找短语或关键词，返回页码和逐字片段 |
 | `read_fulltext` | 按页读取全文，一次最多 8 页 |
 | `find_citations` | 为一段文字逐句找出库里可能支持它的文献和它自己最贴近的一句原文（按词语找出的候选；文字和文献语言不同时用 `queries` 给各句配检索词） |
+| `find_passages` | 在一篇文献里找出最贴近给定句子的原文：稿件里引用它的那句话依据的是哪一句（摘要和全文里的句子，全文里的带页码；语言不同时用 `queries` 给出检索词） |
 | `find_sentences` | 写作参考：库里各篇文献在同一部分（摘要、导言、方法、结果、讨论）的句子；给 `--query` 时按相近程度排，不给时返回各篇这一部分的开头 |
 | `search_online` | 在 PubMed、Europe PMC、Crossref 或 arXiv 试运行一个检索式，不写入；标出每条结果是否已在库中 |
 | `find_metadata` | 为缺 DOI 或题目的文献按题目到 Crossref、Europe PMC 和 arXiv 查找可能对应的记录，不写入；返回各来源的情况和候选（相似度、一致与不一致之处、是否已是库里的另一篇）。`--paper-id` 必填，`--title`、`--author`、`--year` 可选。写入由人在窗口里核对后确认 |

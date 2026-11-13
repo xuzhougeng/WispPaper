@@ -198,6 +198,18 @@ pub fn catalog() -> Vec<ToolDef> {
             &["text"],
         ),
         scoped(
+            "find_passages",
+            "查找引用的出处",
+            "在一篇文献里找出最贴近给定句子的原文：稿件里的一句话引用了这篇文献，它依据的是文献的哪一句。按文献的摘要和全文里的句子检索，每句返回几句候选原文（in 是它所在的部分，全文里的附页码；fair 为 false 的只是有个别词相同）。只是按词语找出的候选，是否真的支持这句话需要读原文判断。句子和文献不是同一种语言时，在 queries 里给出文献所用语言的检索词。只读。",
+            json!({
+                "paperId": {"type": "string", "description": "文献 ID。"},
+                "texts": {"type": "array", "items": {"type": "string"}, "description": "稿件里引用这篇文献的句子，可以不止一句。"},
+                "queries": {"type": "array", "items": {"type": "string"}, "description": "各句的检索词，按 texts 的顺序，用文献的语言写；不需要的给空字符串。"},
+                "limit": {"type": "integer", "description": "每句最多几句候选原文，默认 5，最大 10。"},
+            }),
+            &["paperId", "texts"],
+        ),
+        scoped(
             "find_metadata",
             "按题目查找记录",
             "为一篇缺 DOI、题目或作者的文献，按题目到 Crossref、Europe PMC 和 arXiv 查找可能对应的记录，不向文献库写入任何内容。返回每个来源的情况（命中条数，或没查成的原因）和候选记录：题目、作者、年份、期刊、DOI、PMID、与所查题目的相似度、一致和不一致的地方、是否已是库里的另一篇文献。候选只是候选：题目相近不等于同一篇，预印本和正式版是两条记录。把候选和差异告诉用户，由用户在窗口里（文献详情的「按题目补全」）选定并确认写入的字段；这个工具和其他工具都不会替用户写入。不给 title 时用文献现有的题目；题目还是文件名时，用 PDF 首页读出的题目。",
@@ -317,7 +329,7 @@ pub fn catalog() -> Vec<ToolDef> {
         scoped(
             "read_manuscript",
             "读取稿件",
-            "读取用户在写作页写的稿件正文，可以只读其中一节。只读：稿件只由用户本人修改，你可以在回答里给出修改建议或可以插入的段落。稿件里的引用写作 [@Key]，Key 对应文献库里的一篇文献。",
+            "读取用户在写作页写的稿件正文，可以只读其中一节。只读：稿件只由用户本人修改，你可以在回答里给出修改建议或可以插入的段落。稿件里的引用写作 [@Key]，Key 对应文献库里的一篇文献；每节的 passages 是已记下的引用出处：稿件里的哪句话（sentence）依据文献的哪句原文（passage，page 为 0 时出自摘要）。",
             json!({
                 "manuscript": {"type": "string", "description": "稿件的 ID 或题目；只有一份稿件时可以省略。"},
                 "section": {"type": "string", "description": "只读这一节：节的 ID 或名称。省略时返回所有写了内容的节。"},
@@ -436,6 +448,7 @@ fn dispatch(store: &mut Store, info: &LibraryInfo, name: &str, args: &Value, fet
         "import_zotero" => local::import_zotero(store, args),
         "find_pdf" => find_pdf(store, args, fetch, download),
         "find_citations" => find_citations(store, args),
+        "find_passages" => find_passages(store, args),
         "find_sentences" => find_sentences(store, args),
         "find_metadata" => find_metadata(store, args, fetch),
         "search_online" => search_online(store, args, fetch),
@@ -992,6 +1005,42 @@ fn find_citations(store: &mut Store, args: &Value) -> Result<Value> {
     }))
 }
 
+/// The sentences of one paper closest to sentences of a manuscript that cite it (`passage`).
+fn find_passages(store: &mut Store, args: &Value) -> Result<Value> {
+    let paper = store.get_paper(text(args, "paperId")?)?;
+    let strings = |key: &str, what: &str| -> Result<Vec<String>> {
+        match &args[key] {
+            Value::Null => Ok(vec![]),
+            Value::Array(items) => Ok(items.iter().map(|item| item.as_str().unwrap_or("").trim().to_string()).collect()),
+            _ => bail!("{key} 应是一组字符串：{what}。"),
+        }
+    };
+    let texts = strings("texts", "稿件里引用这篇文献的句子")?;
+    if texts.iter().all(String::is_empty) { bail!("请在 texts 里提供稿件里引用这篇文献的句子。") }
+    let extra = strings("queries", "第 n 个是第 n 句的检索词")?;
+    let limit = number(args, "limit", 5, 10)?.max(1);
+    extract_missing(store, Some(&paper.id))?;
+    let held = crate::passage::sentences_of(&paper, &store.section_sentences("", &paper.id)?);
+    let results: Vec<Value> = texts
+        .iter()
+        .enumerate()
+        .map(|(n, text)| {
+            let queries: Vec<String> = std::iter::once(text.clone()).chain(extra.get(n).cloned()).filter(|query| !query.is_empty()).collect();
+            let candidates: Vec<Value> = crate::passage::nearest(&held, &queries, limit)
+                .into_iter()
+                .map(|(at, fair)| {
+                    let own = &held[at];
+                    let mut candidate = json!({"text": own.text, "in": own.part, "fair": fair});
+                    if own.page > 0 { candidate["page"] = json!(own.page) }
+                    candidate
+                })
+                .collect();
+            json!({"text": text, "candidates": candidates})
+        })
+        .collect();
+    Ok(json!({"paperId": paper.id, "title": paper.title, "year": paper.year, "sentences": held.len(), "results": results}))
+}
+
 // ---- searching the literature databases
 
 fn truth(args: &Value, key: &str, default: bool) -> Result<bool> {
@@ -1238,6 +1287,8 @@ fn read_manuscript(store: &mut Store, args: &Value) -> Result<Value> {
     let section = text(args, "section")?;
     // The comments that still wait: those a Word file came with, the person's and the assistant's.
     let comments = store.comments(&manuscript.id)?;
+    // Where its citations are from: the passages kept for them, by the sentence that cites.
+    let passages = store.passages(&manuscript.id)?;
     let sections: Vec<_> = if section.is_empty() {
         manuscript.sections.iter().filter(|s| !s.body.trim().is_empty()).collect()
     } else {
@@ -1249,7 +1300,7 @@ fn read_manuscript(store: &mut Store, args: &Value) -> Result<Value> {
         "id": manuscript.id,
         "title": manuscript.shown_title(),
         "language": manuscript.language,
-        "sections": sections.iter().map(|s| json!({"id": s.id, "name": s.name, "kind": s.kind, "body": s.body, "comments": comments.iter().filter(|c| c.section_id == s.id && c.state != crate::comment::DONE).map(|c| json!({"quote": c.quote, "comment": c.body, "by": c.author, "from": c.origin, "proposes": c.suggestion})).collect::<Vec<_>>()})).collect::<Vec<_>>(),
+        "sections": sections.iter().map(|s| json!({"id": s.id, "name": s.name, "kind": s.kind, "body": s.body, "comments": comments.iter().filter(|c| c.section_id == s.id && c.state != crate::comment::DONE).map(|c| json!({"quote": c.quote, "comment": c.body, "by": c.author, "from": c.origin, "proposes": c.suggestion})).collect::<Vec<_>>(), "passages": passages.iter().filter(|p| p.section_id == s.id && p.found()).map(|p| json!({"paperId": p.paper_id, "sentence": p.claim, "passage": p.passage, "in": p.part, "page": p.page, "from": p.origin})).collect::<Vec<_>>()})).collect::<Vec<_>>(),
     }))
 }
 
@@ -1699,6 +1750,15 @@ pub(crate) mod tests {
         let helped = call(&root, "find_citations", &json!({"text": chinese, "queries": ["libraries prepared Chromium platform"]})).unwrap();
         assert_eq!(helped["sentences"][0]["candidates"][0]["paperId"].as_str(), Some(id.as_str()));
         assert!(call(&root, "find_citations", &json!({"text": chinese, "queries": "x"})).is_err());
+        // In one paper: the sentences of its own closest to a sentence that cites it, the full text's with their page.
+        let within = call(&root, "find_passages", &json!({"paperId": id, "texts": ["Libraries were built on the Chromium platform from protoplasts.", chinese], "queries": ["", "libraries prepared Chromium platform"]})).unwrap();
+        for n in 0..2 {
+            let first = &within["results"][n]["candidates"][0];
+            assert!(first["text"].as_str().unwrap().starts_with("Protoplasts were isolated"), "{within}");
+            assert_eq!((first["in"].as_str(), first["page"].as_u64(), first["fair"].as_bool()), (Some("methods"), Some(2), Some(true)));
+        }
+        assert!(within["sentences"].as_u64().unwrap() >= 3);
+        assert!(call(&root, "find_passages", &json!({"paperId": id, "texts": []})).is_err());
         std::fs::remove_dir_all(root).ok();
     }
 
