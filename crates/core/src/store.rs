@@ -485,6 +485,7 @@ impl Store {
         db.execute_batch(SCHEMA)?;
         db.execute_batch(crate::manuscript::SCHEMA)?;
         db.execute_batch(crate::review::SCHEMA)?;
+        db.execute_batch(crate::figure::SCHEMA)?;
         add_columns(&db)?;
         crate::manuscript::migrate_drafts(&mut db)?;
         db.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -669,10 +670,11 @@ impl Store {
     /// inside the library folder rather than being unlinked.
     pub fn delete_paper(&mut self, id: &str) -> Result<()> {
         let files = self.paper_files(id)?;
+        let pictures = self.figure_files(id)?;
         self.db.execute("DELETE FROM papers WHERE id = ?1", [id])?;
         self.db.execute("DELETE FROM conversations WHERE paper_id = ?1", [id])?;
-        for file in files {
-            self.set_aside(&file.local_path);
+        for path in files.iter().map(|file| &file.local_path).chain(&pictures) {
+            self.set_aside(path);
         }
         Ok(())
     }
@@ -824,7 +826,7 @@ impl Store {
         Ok(())
     }
 
-    fn set_aside(&self, relative: &str) {
+    pub(crate) fn set_aside(&self, relative: &str) {
         let from = self.root.join(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
         let Some(name) = from.file_name() else { return };
         let dir = self.root.join("removed");

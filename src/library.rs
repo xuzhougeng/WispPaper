@@ -224,6 +224,7 @@ impl Workspace {
             Page::Guide => self.render_guide(window, cx),
             Page::Screen => self.render_screen(main_width, window, cx),
             Page::Write => self.render_write(main_width, window, cx),
+            Page::Figures => self.render_figures(main_width, window, cx),
         };
         let shown = sidebar_width > 0.;
         // The sidebar's right edge: drag it for a wider or narrower sidebar, click it twice to put the sidebar away.
@@ -317,7 +318,12 @@ impl Workspace {
         let on_papers = lib.page == Page::Papers;
         let view_rows: Vec<AnyElement> = VIEWS
             .into_iter()
-            .map(|(id, icon, label, view)| nav(id, icon, label, Some(filter::view_count(&lib.papers, view, now)), on_papers && lib.filters.view == view, Cmd::SetView(view), self, cx).into_any_element())
+            .map(|(id, icon, label, view)| {
+                // 收藏 holds the starred papers and the figure library: both count, and either page is its own.
+                let collected = if view == View::Starred { lib.gallery.items.len() } else { 0 };
+                let active = (on_papers && lib.filters.view == view) || (view == View::Starred && lib.page == Page::Figures);
+                nav(id, icon, label, Some(filter::view_count(&lib.papers, view, now) + collected), active, Cmd::SetView(view), self, cx).into_any_element()
+            })
             .collect();
         let tags = filter::tag_counts(&lib.papers);
         let tag_rows: Vec<AnyElement> = tags
@@ -540,6 +546,8 @@ impl Workspace {
                     .gap(px(8.))
                     .px(px(16.))
                     .pt(px(14.))
+                    // 收藏: the starred papers here, the figure library beside them.
+                    .when(lib.filters.view == View::Starred, |d| d.child(self.render_collection_switch(cx)))
                     .child(
                         div()
                             .flex()

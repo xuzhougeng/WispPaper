@@ -80,13 +80,19 @@ fn main() {
 fn answer(mut stream: TcpStream, delay: u64) {
     {
         let request = body(&mut stream);
-        let kind = if request.contains("学术写作助手") { "write" } else if request.contains("文献筛选助手") { "screen" } else if request.contains("写作检索词助手") { "search words" } else if request.contains("翻译助手") { "translate" } else if request.contains("\"tools\"") { "chat" } else { "queries" };
+        let kind = if request.contains("图片库助手") { "figure" } else if request.contains("学术写作助手") { "write" } else if request.contains("文献筛选助手") { "screen" } else if request.contains("写作检索词助手") { "search words" } else if request.contains("翻译助手") { "translate" } else if request.contains("\"tools\"") { "chat" } else { "queries" };
         println!("{kind}: model {} thinking {} output_config {}", sent(&request, "model"), sent(&request, "thinking"), sent(&request, "output_config"));
         std::thread::sleep(std::time::Duration::from_millis(delay));
         // The last message decides the step: tool results get the answer, a question gets the calls.
         let answered = request.rfind("\"tool_result\"").is_some_and(|at| request.rfind("\"role\":\"user\"").is_some_and(|user| user < at));
         let mut events = String::new();
-        if request.contains("学术写作助手") {
+        if request.contains("图片库助手") {
+            // The figure library asking about a picture: a legend with its number, tags, or a reading of it.
+            let reply = if request.contains("只输出标签") { "示意图, 流程图, 配色" } else if request.contains("解读") { "（假模型的解读）这张图用流程示意说明方法的步骤，配色克制，可以借鉴它的排版。" } else { "Fig. 9\n\n（假模型的图注）A schematic of the method. a, Steps. b, Setup." };
+            events.push_str(&event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#));
+            events.push_str(&event(&format!(r#"{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":{}}}}}"#, quoted(reply).replace('\n', "\\n"))));
+            events.push_str(&event(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#));
+        } else if request.contains("学术写作助手") {
             // The paragraph is the message's last block; the rewrite marks itself as one.
             let value: serde_json::Value = serde_json::from_str(&request).unwrap_or_default();
             let message = value["messages"][0]["content"].as_str().unwrap_or("").to_string();

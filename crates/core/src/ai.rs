@@ -1252,8 +1252,13 @@ pub const READ_PAGE_PROMPT: &str = "这是一篇学术论文的一页的图像�
 
 /// A request for the text of one page, given as a picture.
 pub fn read_page_request(profile: &Profile, image: ImageData) -> Result<HttpRequest, String> {
-    let mut request = plain_request(profile, "你是一个准确的文字转写工具。", READ_PAGE_PROMPT)?;
-    let message = user_message_with(profile.protocol, READ_PAGE_PROMPT, &[image]);
+    picture_request(profile, "你是一个准确的文字转写工具。", READ_PAGE_PROMPT, image)
+}
+
+/// A one-off question about one picture, outside any conversation.
+pub fn picture_request(profile: &Profile, system: &str, prompt: &str, image: ImageData) -> Result<HttpRequest, String> {
+    let mut request = plain_request(profile, system, prompt)?;
+    let message = user_message_with(profile.protocol, prompt, &[image]);
     match profile.protocol {
         Protocol::Anthropic => request.body["messages"] = json!([message]),
         Protocol::OpenAI => request.body["messages"][1] = message,

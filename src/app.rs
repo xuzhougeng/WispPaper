@@ -41,6 +41,8 @@ pub enum Page {
     Sources,
     /// 写作: the manuscript, and beside it how the library's papers put the same part.
     Write,
+    /// 图片库: the figures cut out of the library's PDFs, the other half of 收藏 (`src/figures.rs`).
+    Figures,
 }
 
 /// An edge between two columns of a library that the pointer can hold and move.
@@ -109,6 +111,8 @@ pub enum MenuKind {
     Conversation(bool, String),
     Text(String),
     Answer(bool, String),
+    /// A figure of the figure library.
+    Figure(String),
 }
 
 /// What a person does to a review's record from the conversation.
@@ -439,6 +443,24 @@ pub enum Cmd {
     WriteAssist(ai::Assist),
     WriteAssistStop,
     WriteAssistUse(crate::write_assist::Use),
+    // The figure library (`src/figures.rs`)
+    /// Only the figures with this tag; the tag chosen already, or none, shows all of them.
+    FigureTag(String),
+    /// Look at a figure and change what is written about it: the dialog.
+    OpenFigure(String),
+    /// Open the PDF a figure was cut from, at its place.
+    FigureSource(String),
+    /// Ask about a figure's paper with the figure as a picture.
+    AskFigure(String),
+    CopyFigure(String),
+    /// Save a figure's picture somewhere else.
+    SaveFigure(String),
+    AskRemoveFigure(String),
+    RemoveFigure(String),
+    /// Add one of the tags on offer to the dialog's tags.
+    FigureAddTag(String),
+    /// Have a model that sees pictures write a field of the dialog: the legend, tags, or a reading for the notes.
+    FigureInfer(wisp_core::figure::Ask),
     // Dialogs
     CloseModal,
     SubmitModal,
@@ -1007,6 +1029,8 @@ pub enum Modal {
     ReviewEvidence(Box<crate::chat::EvidenceForm>),
     /// A text of a review's record, to change by hand.
     ReviewText { what: ReviewText, input: Entity<TextInput> },
+    /// A figure of the figure library, or a piece of a PDF page about to become one.
+    Figure(Box<crate::figures::FigureForm>),
 }
 
 pub struct Library {
@@ -1085,6 +1109,8 @@ pub struct Library {
     pub origins: BTreeMap<String, (String, String, String)>,
     pub writing: Writing,
     pub citing: crate::cite::Citing,
+    /// 图片库: the figures cut out of the library's PDFs.
+    pub gallery: crate::figures::Gallery,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -1425,6 +1451,7 @@ impl Library {
         self.batches = self.store.list_batches(30)?;
         self.writing.structures = self.store.structures()?;
         self.origins = self.store.file_origins()?;
+        self.gallery.items = self.store.list_figures()?;
         // Filters on a field that no longer exists would hide everything.
         let known: HashSet<&str> = self.fields.iter().map(|f| f.id.as_str()).collect();
         self.filters.fields.retain(|id, _| known.contains(id.as_str()));
@@ -1538,6 +1565,7 @@ impl Workspace {
         };
         match kind {
             MenuKind::Paper(_) | MenuKind::Papers(_) | MenuKind::Trashed(_) | MenuKind::File(_) | MenuKind::Tag(_) | MenuKind::Conversation(..) | MenuKind::Text(_) | MenuKind::Answer(..) => (items, breaks) = self.context_menu(&kind),
+            MenuKind::Figure(id) => (items, breaks) = self.figure_menu(&id),
             MenuKind::Add => {
                 items.push(item("通过 DOI / PMID 添加…", Cmd::AddById));
                 items.push(item("导入 PDF 文件…", Cmd::ImportPdfs));
@@ -1810,6 +1838,7 @@ impl Workspace {
                 }
             }
             Cmd::WriteSection(_) | Cmd::WriteManuscript(_) | Cmd::NewManuscript | Cmd::AskRemoveManuscript(_) | Cmd::RemoveManuscript(_) | Cmd::WriteLanguage(_) | Cmd::EditSection(_) | Cmd::PickSectionKind(_) | Cmd::MoveSection(..) | Cmd::AskRemoveSection(_) | Cmd::RemoveSection(_) | Cmd::WriteReading(_) | Cmd::ExportManuscript(_) | Cmd::WriteHistory | Cmd::HistoryPick(_) => self.run_manuscript(cmd, window, cx),
+            Cmd::FigureTag(_) | Cmd::OpenFigure(_) | Cmd::FigureSource(_) | Cmd::AskFigure(_) | Cmd::CopyFigure(_) | Cmd::SaveFigure(_) | Cmd::AskRemoveFigure(_) | Cmd::RemoveFigure(_) | Cmd::FigureAddTag(_) | Cmd::FigureInfer(_) => self.run_figures(cmd, window, cx),
             Cmd::WriteCite(id) => {
                 self.cite_paper(&id, cx);
                 if let Some(lib) = self.lib.as_ref() { lib.writing.editor.read(cx).focus(window) }
@@ -2609,6 +2638,7 @@ impl Workspace {
         subscriptions.push(cx.subscribe(&find, |this, _, event: &InputEvent, cx| if *event == InputEvent::Submit { this.write_find(true, cx) }));
         let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new(), assist: Default::default() };
         let citing = crate::cite::Citing::new(&store, &mut subscriptions, cx);
+        let gallery = crate::figures::Gallery::new(&mut subscriptions, cx);
         let mut lib = Library {
             info,
             store,
@@ -2660,6 +2690,7 @@ impl Workspace {
             origins: BTreeMap::new(),
             writing,
             citing,
+            gallery,
             _subscriptions: subscriptions,
         };
         if let Err(err) = lib.reload() {
@@ -2746,6 +2777,7 @@ impl Workspace {
         match event {
             PdfEvent::Copied => self.say("已复制", cx),
             PdfEvent::Translate(text, profile) => self.translate_passage(text.clone(), profile.clone(), cx),
+            PdfEvent::Figure(piece) => self.collect_piece(piece, cx),
             PdfEvent::Picture(png, to_library) => {
                 self.attach_images(!*to_library, vec![Picture::Bytes(png.clone())], cx);
                 if *to_library { self.say("截图已加到文献库对话的输入框上方。", cx) } else { self.show_paper_chat(cx) }
@@ -3261,7 +3293,7 @@ impl Workspace {
 
     /// Read pictures in and put them with the next question. Each is made
     /// one a model takes (`picture::prepare`) off the main thread.
-    fn attach_images(&mut self, about_paper: bool, mut pictures: Vec<Picture>, cx: &mut Context<Self>) {
+    pub(crate) fn attach_images(&mut self, about_paper: bool, mut pictures: Vec<Picture>, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
         let (library, selected) = (lib.info.id.clone(), lib.selected.clone());
         let chat = lib.chat_mut(about_paper);
@@ -4300,6 +4332,7 @@ impl Workspace {
             Modal::Section { .. } | Modal::History { .. } => self.submit_manuscript_modal(window, cx),
             Modal::ReviewEvidence(_) => self.submit_review_evidence(window, cx),
             Modal::ReviewText { .. } => self.submit_review_text(window, cx),
+            Modal::Figure(_) => self.submit_figure(window, cx),
             Modal::Complete(form) => {
                 if form.chosen.is_some() { self.complete_apply(window, cx) } else { self.complete_find(cx) }
             }
@@ -4541,7 +4574,7 @@ impl Workspace {
                 "open" => self.libraries.get(arg.parse::<usize>().unwrap_or(0)).map(|l| Cmd::OpenLibrary(l.id.clone())),
                 "select" => self.lib.as_ref().and_then(|l| l.shown.get(arg.parse::<usize>().unwrap_or(0)).map(|&i| Cmd::Select(l.papers[i].id.clone()))),
                 "tab" => Some(Cmd::SetTab(match arg { "pdf" => Tab::Pdf, "ask" => Tab::Ask, _ => Tab::Info })),
-                "page" => Some(Cmd::SetPage(match arg { "ask" => Page::Ask, "trash" => Page::Trash, "sources" => Page::Sources, "screen" => Page::Screen, "write" => Page::Write, _ => Page::Papers })),
+                "page" => Some(Cmd::SetPage(match arg { "ask" => Page::Ask, "trash" => Page::Trash, "sources" => Page::Sources, "screen" => Page::Screen, "write" => Page::Write, "figures" => Page::Figures, _ => Page::Papers })),
                 // `write:methods` shows another part of the manuscript; `draft:<text>` leaves text in it, as if typed.
                 "write" => Some(Cmd::WriteSection(arg.to_string())),
                 // `manuscript:new` makes another manuscript, `manuscript:<title>` gives the current one its title;
@@ -4809,6 +4842,38 @@ impl Workspace {
                 "try" => self.lib.as_ref().and_then(|l| l.searches.get(arg.parse::<usize>().unwrap_or(0)).map(|s| Cmd::TrySearch(s.id.clone()))),
                 "wide" => Some(Cmd::ToggleWide),
                 "cut" => Some(Cmd::PdfCut),
+                // `pdfcut:<page>;<x0>;<y0>;<x1>;<y1>` marks a piece of a 1-based page of the PDF on show as cut out, in the page's
+                // points (after a `shot:` has drawn the page); `collect` hands it to the figure library, as 收藏到图片库 does.
+                "pdfcut" => {
+                    let numbers: Vec<f32> = arg.split(';').filter_map(|n| n.parse().ok()).collect();
+                    if let (Some(pdf), [page, x0, y0, x1, y1]) = (self.lib.as_ref().and_then(|l| l.pdf.clone()), numbers.as_slice()) { pdf.update(cx, |pdf, cx| pdf.set_cut((*page as usize).saturating_sub(1), [*x0, *y0, *x1, *y1], cx)) }
+                    return;
+                }
+                "collect" => {
+                    if let Some(pdf) = self.lib.as_ref().and_then(|l| l.pdf.clone()) { pdf.update(cx, |pdf, cx| pdf.collect_cut(cx)) }
+                    return;
+                }
+                // `figure:<n>` opens the n-th figure of the figure library, `figure:source:<n>` the place it was cut from;
+                // `figtag:<tag>` narrows the figures to a tag, `figfind:<words>` searches them.
+                "figure" => {
+                    let (source, n) = arg.strip_prefix("source:").map_or((false, arg), |n| (true, n));
+                    self.lib.as_ref().and_then(|l| l.gallery.items.get(n.parse::<usize>().unwrap_or(0))).map(|figure| if source { Cmd::FigureSource(figure.id.clone()) } else { Cmd::OpenFigure(figure.id.clone()) })
+                }
+                "figtag" => Some(Cmd::FigureTag(arg.to_string())),
+                "figfind" => {
+                    if let Some(lib) = self.lib.as_ref() { lib.gallery.search.update(cx, |input, cx| input.insert(arg, cx)) }
+                    return;
+                }
+                // `figinfer:legend|tags|notes` has the model write that field of the figure's dialog, as its sparkle does.
+                "figinfer" => Some(Cmd::FigureInfer(match arg { "tags" => wisp_core::figure::Ask::Tags, "notes" => wisp_core::figure::Ask::Notes, _ => wisp_core::figure::Ask::Legend })),
+                // `figlabel:` / `figlegend:` / `figtags:` / `fignotes:` leave text in a field of the figure's dialog, as if typed.
+                "figlabel" | "figlegend" | "figtags" | "fignotes" => {
+                    if let Some(Modal::Figure(form)) = self.modal.as_ref() {
+                        let field = match name { "figlabel" => &form.label, "figlegend" => &form.legend, "figtags" => &form.tags, _ => &form.notes };
+                        field.update(cx, |input, cx| input.set_text(arg, cx));
+                    }
+                    return;
+                }
                 "beside" => Some(Cmd::BesidePdf(arg != "off")),
                 // `float` / `float:off`: the paper's conversation over its PDF, or beside it; `fold` / `fold:off` folds it up or opens it.
                 "float" => Some(Cmd::FloatChat(arg != "off")),

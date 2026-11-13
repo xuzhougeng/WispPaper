@@ -463,8 +463,8 @@ impl Workspace {
                                 .child(tool("pdf-zoom-in", "plus").on_click(self.on(Cmd::PdfZoom(ZoomTo::In), cx))),
                         )
                     })
-                    // Cut a piece out of a page (a figure, a table) as a picture for the next question.
-                    .when(count > 0, |d| d.child(ui::ghost_button("pdf-cut", None, Some(if cutting { "取消截图".into() } else { "截图提问".into() })).h(px(24.)).px(px(6.)).text_size(px(12.)).when(cutting, |d| d.text_color(Theme::accent())).on_click(self.on(Cmd::PdfCut, cx))))
+                    // Cut a piece out of a page (a figure, a table): to keep in the figure library, or as a picture for the next question.
+                    .when(count > 0, |d| d.child(ui::ghost_button("pdf-cut", None, Some(if cutting { "取消截图".into() } else { "截图".into() })).h(px(24.)).px(px(6.)).text_size(px(12.)).when(cutting, |d| d.text_color(Theme::accent())).on_click(self.on(Cmd::PdfCut, cx))))
                     // The whole window for this paper; in reading mode the way back is at the top.
                     .when(!reading, |d| d.child(ui::ghost_button("pdf-reading", None, Some("阅读模式".into())).h(px(24.)).px(px(6.)).text_size(px(12.)).on_click(self.on(Cmd::ToggleReading, cx))))
                     .child(ui::ghost_button("pdf-open", Some("link"), (width >= 700.).then(|| "用系统应用打开".into())).h(px(24.)).on_click(self.on(Cmd::OpenFile(file_id), cx)))

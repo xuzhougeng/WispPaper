@@ -183,12 +183,12 @@ pub fn marks_text(marks: &[Mark]) -> String {
 
 /// A line of a page: its text, where it stands and how it is set.
 #[derive(Clone, Debug, PartialEq)]
-struct Line {
-    text: String,
-    x0: f32,
-    x1: f32,
-    y: f32,
-    size: f32,
+pub(crate) struct Line {
+    pub(crate) text: String,
+    pub(crate) x0: f32,
+    pub(crate) x1: f32,
+    pub(crate) y: f32,
+    pub(crate) size: f32,
     bold: bool,
     /// When the line opens in bold and goes on in regular: the bytes of the bold opening.
     bold_opening: usize,
@@ -252,7 +252,7 @@ fn line_of(marks: &[Mark]) -> Option<Line> {
 }
 
 /// The marks of a page, in the order they are drawn, as its lines.
-fn lines(marks: &[Mark]) -> Vec<Line> {
+pub(crate) fn lines(marks: &[Mark]) -> Vec<Line> {
     let mut out = vec![];
     let mut start = 0;
     for at in 1..=marks.len() {
@@ -379,6 +379,17 @@ pub fn title_of(marks: &[Mark]) -> Option<String> {
         title.push_str(line.text.trim());
     }
     Some(title.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// The glyphs of every page of a PDF, in the order each page draws them; none when the file cannot be read.
+pub fn file_marks(data: Vec<u8>) -> Option<Vec<Vec<Mark>>> {
+    std::panic::catch_unwind(|| {
+        let pdf = Pdf::new(data).ok()?;
+        let cache = InterpreterCache::new();
+        Some(pdf.pages().iter().map(|page| read_marks(page, &cache).marks).collect())
+    })
+    .ok()
+    .flatten()
 }
 
 /// The title on the first page of a PDF, when the page can be read and shows one.

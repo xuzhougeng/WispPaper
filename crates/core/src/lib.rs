@@ -8,6 +8,7 @@
 //! - `import`   BibTeX and RIS readers
 //! - `zotero`   read-only local Zotero import, with notes, tags and PDF copies
 //! - `export`   BibTeX and CSV writers
+//! - `figure`   图片库: pieces of PDF pages kept as pictures, and the caption a page gives each
 //! - `lookup`   Crossref / Europe PMC records → `Paper`
 //! - `fulltext` page text of a stored PDF
 //! - `pdftext`  that text read off a PDF's glyphs, with the breaks the page shows
@@ -27,6 +28,7 @@ pub mod ai;
 pub mod cite;
 pub mod complete;
 pub mod export;
+pub mod figure;
 pub mod filter;
 pub mod floating;
 pub mod fulltext;
