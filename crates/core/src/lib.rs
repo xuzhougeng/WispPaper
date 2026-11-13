@@ -32,6 +32,7 @@
 pub mod ai;
 pub mod annotation;
 pub mod cite;
+pub mod citefind;
 pub mod comment;
 pub mod complete;
 pub mod docx;

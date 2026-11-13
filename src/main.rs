@@ -40,6 +40,7 @@ mod ui;
 mod write;
 mod write_find;
 mod write_assist;
+mod write_cite;
 
 use gpui::*;
 

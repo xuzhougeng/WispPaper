@@ -12,7 +12,7 @@
 //! option, a Tags field's first usual value) and quotes the start of the
 //! abstract; for a paper whose text says "Few-Shot" it gives a Select answer
 //! that is none of the options and a quotation the paper does not hold;
-//! asked by 写作 to place citations it cites the first candidate after the first sentence,
+//! asked by 写作 for the papers a text can cite (配引用) it hands each sentence back as its search words and then takes the first paper found for every sentence,
 //! asked to translate, it hands the text back marked as translated. In a chat, asked a question, it calls `list_papers` and
 //! `library_status`; given their results, it answers and cites the first
 //! paper the search returned, saying how many pictures came with the
@@ -200,7 +200,7 @@ fn answer(mut stream: TcpStream, delay: u64) {
             let _ = stream.write_all(reply.as_bytes());
             return;
         }
-        let kind = if request.contains("图片库助手") { "figure" } else if request.contains("改稿助手") { "revise a section" } else if request.contains("审稿助手") { "review of a section" } else if request.contains("学术写作助手") { "write" } else if request.contains("文献筛选助手") { "screen" } else if request.contains("文献信息提取助手") { "extract" } else if request.contains("写作检索词助手") { "search words" } else if request.contains("翻译助手") { "translate" } else if request.contains("\"tools\"") { "chat" } else { "queries" };
+        let kind = if request.contains("图片库助手") { "figure" } else if request.contains("文献检索助手") { "search words for citations" } else if request.contains("只能从给出的候选里选") { "papers to cite" } else if request.contains("改稿助手") { "revise a section" } else if request.contains("审稿助手") { "review of a section" } else if request.contains("学术写作助手") { "write" } else if request.contains("文献筛选助手") { "screen" } else if request.contains("文献信息提取助手") { "extract" } else if request.contains("写作检索词助手") { "search words" } else if request.contains("翻译助手") { "translate" } else if request.contains("\"tools\"") { "chat" } else { "queries" };
         println!("{kind}: model {} thinking {} output_config {}", sent(&request, "model"), sent(&request, "thinking"), sent(&request, "output_config"));
         std::thread::sleep(std::time::Duration::from_millis(delay));
         // The last message decides the step: tool results get the answer, a question gets the calls.
@@ -211,6 +211,25 @@ fn answer(mut stream: TcpStream, delay: u64) {
             let reply = if request.contains("只输出标签") { "示意图, 流程图, 配色" } else if request.contains("解读") { "（假模型的解读）这张图用流程示意说明方法的步骤，配色克制，可以借鉴它的排版。" } else { "Fig. 9\n\n（假模型的图注）A schematic of the method. a, Steps. b, Setup." };
             events.push_str(&event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#));
             events.push_str(&event(&format!(r#"{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":{}}}}}"#, quoted(reply).replace('\n', "\\n"))));
+            events.push_str(&event(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#));
+        } else if request.contains("文献检索助手") || request.contains("只能从给出的候选里选") {
+            // 配引用. Asked for search words, it hands each numbered sentence back as its own words (it knows no other language);
+            // asked which of the papers found bear the sentences out, it takes the first candidate of every sentence that has one.
+            let value: serde_json::Value = serde_json::from_str(&request).unwrap_or_default();
+            let message = value["messages"][0]["content"].as_str().unwrap_or("").to_string();
+            let reply = if request.contains("文献检索助手") {
+                message
+            } else {
+                let mut chosen = vec![];
+                for part in message.split("\n句 ").skip(1) {
+                    let number: usize = part.chars().take_while(char::is_ascii_digit).collect::<String>().parse().unwrap_or(0);
+                    let key: String = part.split("\n  - [").nth(1).unwrap_or("").chars().take_while(|c| *c != ']').collect();
+                    if number > 0 && !key.is_empty() { chosen.push(serde_json::json!({"sentence": number, "cite": [{"key": key, "why": "（假模型）它的原句说的是这件事。"}]})) }
+                }
+                serde_json::Value::Array(chosen).to_string()
+            };
+            events.push_str(&event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#));
+            events.push_str(&event(&format!(r#"{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":{}}}}}"#, serde_json::Value::String(reply))));
             events.push_str(&event(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#));
         } else if request.contains("审稿助手") {
             // A review of a section of the manuscript (批注): it proposes a change to the first sentence, and remarks on the start of the second paragraph.
@@ -265,14 +284,8 @@ fn answer(mut stream: TcpStream, delay: u64) {
             // The paragraph is the message's last block; the rewrite marks itself as one.
             let value: serde_json::Value = serde_json::from_str(&request).unwrap_or_default();
             let message = value["messages"][0]["content"].as_str().unwrap_or("").to_string();
-            let paragraph = message.rsplit("\n\n").next().unwrap_or("").trim().trim_start_matches("要改写的段落：\n").trim_start_matches("要配引用的段落：\n").to_string();
-            // Asked for citations, it cites the first candidate at the end of the first sentence and changes nothing else.
-            let cited = message.contains("要配引用的段落：").then(|| {
-                let key: String = message.split("候选：").nth(1).unwrap_or("").split("[@").nth(1).unwrap_or("").chars().take_while(|c| *c != ']').collect();
-                let end = paragraph.find(['.', '。']).unwrap_or(paragraph.len());
-                format!("{} [@{key}]{}", &paragraph[..end], &paragraph[end..])
-            });
-            let reply = if let Some(cited) = cited { cited } else if message.contains("译成") { format!("(mock translation) {paragraph}") } else { paragraph.replacen(" is ", " remains ", 1).replacen(" very ", " ", 1) + " (mock edit)" };
+            let paragraph = message.rsplit("\n\n").next().unwrap_or("").trim().trim_start_matches("要改写的段落：\n").to_string();
+            let reply = if message.contains("译成") { format!("(mock translation) {paragraph}") } else { paragraph.replacen(" is ", " remains ", 1).replacen(" very ", " ", 1) + " (mock edit)" };
             events.push_str(&event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#));
             let mut sent = 0;
             let chars: Vec<char> = reply.chars().collect();

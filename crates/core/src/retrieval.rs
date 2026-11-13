@@ -78,7 +78,7 @@ pub fn parse_groups(reply: &str) -> Vec<Group> {
 }
 
 /// Search words as one line: separators a model may use become spaces, quotes go.
-fn clean(words: &str) -> String {
+pub(crate) fn clean(words: &str) -> String {
     words.replace([',', '，', ';', '；', '、', '"', '“', '”', '`'], " ").split_whitespace().collect::<Vec<_>>().join(" ")
 }
 

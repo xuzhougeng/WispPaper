@@ -1048,7 +1048,7 @@ pub const SLASH: [Slash; 7] = [
         name: "cite",
         about: "为一段文字逐句配引用",
         hint: "要配引用的文字",
-        template: "为下面这段文字逐句找出文献库中可以引用的文献：\n\n{}\n\n先调用 find_citations 取得每句的候选，再用 read_fulltext 或文献记录核对候选是否真的支持这句话。逐句给出结果：可以引用的文献（标签和页码）和它依据的原句；没有合适文献的句子直接说明没有，不要勉强配引用。",
+        template: "为下面这段文字逐句找出文献库中可以引用的文献：\n\n{}\n\n先调用 find_citations 取得每句的候选和它依据的原句（这段文字和文献不是同一种语言时，用 queries 给每句配上文献那种语言的检索词），再用 read_fulltext 或文献记录核对候选是否真的支持这句话。逐句给出结果：可以引用的文献（标签和页码）和它依据的原句；没有合适文献的句子直接说明没有，不要勉强配引用。",
         alone: "",
     },
     Slash {
@@ -1336,7 +1336,7 @@ pub enum Assist {
     Translate,
     /// Tighten it, changing as little as needed.
     Polish,
-    /// Add citations of the library's papers where they bear a sentence out, changing nothing else (`cite_request`).
+    /// Find the papers of the library each sentence can cite (`citefind`): the answer is a list of papers, not a version of the paragraph.
     Cite,
     /// One of the person's own commands (`Settings::commands`), by name.
     Own(String),
@@ -1346,106 +1346,13 @@ impl Assist {
     /// What the action is called on its button and over its result.
     pub fn title(&self, language: &str) -> String {
         match self {
-            Assist::Rewrite => "参照候选句改写".into(),
+            Assist::Rewrite => "仿写".into(),
             Assist::Translate => format!("译成{}", language_name(language)),
             Assist::Polish => "润色".into(),
             Assist::Cite => "配引用".into(),
             Assist::Own(name) => format!("/{name}"),
         }
     }
-}
-
-/// A paper that may be cited for a sentence, as `find_citations` found it.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Citable {
-    /// The paper's citation key, as the manuscript writes it: `Zhang2024`.
-    pub key: String,
-    pub title: String,
-    pub year: Option<i64>,
-    /// The page of its full text that holds most of the sentence's words, and a piece of it.
-    pub page: Option<usize>,
-    pub snippet: String,
-}
-
-/// A sentence of the paragraph and the papers that may bear it out, best first.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct CiteSentence {
-    pub sentence: String,
-    pub candidates: Vec<Citable>,
-}
-
-/// What `find_citations` answered, with each paper named by its key
-/// (`keys`: paper id to key). A paper without a key is left out.
-pub fn cite_candidates(found: &Value, keys: &BTreeMap<String, String>) -> Vec<CiteSentence> {
-    found["sentences"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|item| CiteSentence {
-            sentence: item["sentence"].as_str().unwrap_or("").to_string(),
-            candidates: item["candidates"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|c| {
-                    let key = keys.get(c["paperId"].as_str()?)?.clone();
-                    Some(Citable { key, title: c["title"].as_str().unwrap_or("").to_string(), year: c["year"].as_i64(), page: c["page"].as_u64().map(|page| page as usize), snippet: c["snippet"].as_str().unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ") })
-                })
-                .collect(),
-        })
-        .collect()
-}
-
-/// What a request for citations is made of: the instructions and the
-/// message. The model only chooses among the candidates and places them;
-/// it is told to leave the words alone, and the card shows what it changed.
-pub fn cite_prompt(language: &str, paragraph: &str, sentences: &[CiteSentence]) -> Result<(String, String), String> {
-    let paragraph = paragraph.trim();
-    if paragraph.is_empty() { return Err("没有要处理的文字：先选中一段，或把光标放在要处理的段落里。".into()) }
-    if paragraph.len() > ASSIST_LIMIT { return Err("选中的文字太长，一次处理一两段就好。".into()) }
-    if sentences.iter().all(|sentence| sentence.candidates.is_empty()) { return Err("文献库里没有找到和这段文字相近的文献，没有可配的引用。".into()) }
-    let language = language_name(language);
-    let system = format!(
-        "你是学术写作助手，帮用户给他正在写的论文稿件配引用。稿件语言是{language}。\n\
-         只输出配好引用的文字本身：不加解释、不加标题、不加引号，不用 Markdown。段落之间空一行。\n\
-         不要编造文献：只能使用用户给出的候选。"
-    );
-    let listed: Vec<String> = sentences
-        .iter()
-        .enumerate()
-        .map(|(n, sentence)| {
-            let candidates: Vec<String> = sentence
-                .candidates
-                .iter()
-                .map(|c| {
-                    let year = c.year.map(|year| format!("（{year}）")).unwrap_or_default();
-                    match c.page {
-                        Some(page) => format!("  - [@{}] {}{year}，全文第 {page} 页：{}", c.key, c.title.trim(), c.snippet),
-                        None => format!("  - [@{}] {}{year}，只匹配到题目和摘要", c.key, c.title.trim()),
-                    }
-                })
-                .collect();
-            format!("句 {}：{}\n{}", n + 1, sentence.sentence.trim(), if candidates.is_empty() { "  （没有候选）".to_string() } else { candidates.join("\n") })
-        })
-        .collect();
-    let message = format!(
-        "给下面这段文字配引用。我已经在文献库里为每句话找了候选文献，按匹配程度排列；匹配只看用词，不保证内容相符，由你判断。\n\n\
-         要求：\n\
-         1. 原文一个字都不改，只在需要引用的句子末尾、句号之前加上引用。\n\
-         2. 引用写成 [@Key]；依据是全文某一页时写 [@Key, p. 5]；一句配几篇时写 [@A; @B]。Key 照候选里的写，不要改。\n\
-         3. 只在候选的题目或片段确实支持这句话时才用；拿不准就不加。宁可少配，不要错配。\n\
-         4. 已有的引用保持原样，同一句不重复引同一篇。\n\
-         5. 我自己的论断、过渡句和没有合适候选的句子不加引用。没有一句可配时，原样输出这段文字。\n\n\
-         候选：\n{}\n\n要配引用的段落：\n{paragraph}",
-        listed.join("\n")
-    );
-    Ok((system, message))
-}
-
-/// The request that places citations in a paragraph.
-pub fn cite_request(profile: &Profile, language: &str, paragraph: &str, sentences: &[CiteSentence]) -> Result<HttpRequest, String> {
-    let (system, message) = cite_prompt(language, paragraph, sentences)?;
-    plain_request(profile, &system, &message)
 }
 
 /// A manuscript language as it reads in a sentence: `English` is 英文, others as they are given.
@@ -1461,8 +1368,10 @@ pub fn language_name(language: &str) -> String {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Example {
     pub text: String,
-    /// How the paper is cited in the draft, `Smith et al., 2020`.
+    /// How the paper is cited in running text, `Smith et al., 2020`.
     pub cite: String,
+    /// The key the manuscript cites the paper by (`Smith2020`); empty when it has none, and the rewrite then cites it as `cite`.
+    pub key: String,
     pub page: Option<usize>,
     pub heading: String,
 }
@@ -1482,13 +1391,13 @@ pub fn assist_prompt(assist: &Assist, language: &str, paragraph: &str, examples:
     let system = format!(
         "你是学术写作助手，帮用户修改他正在写的论文稿件。稿件语言是{language}。\n\
          只输出处理后的文字本身：不加解释、不加标题、不加引号，不用 Markdown。段落之间空一行。\n\
-         段落里已有的引用（如 (Smith et al., 2020)、[3]）保持原样，不删除、不改写；不要编造文献或数据。"
+         段落里已有的引用（如 [@Smith2020]、(Smith et al., 2020)、[3]）保持原样，不删除、不改写；不要编造文献或数据。"
     );
     let message = match assist {
         Assist::Rewrite => {
-            if examples.is_empty() { return Err("右边还没有候选句可参照。先写几句，或在右上角的框里找句子。".into()) }
+            if examples.is_empty() { return Err("文献库里没有找到与这段相近的句子可参照：可以换用「润色」，或先添加带全文的文献。".into()) }
             let listed: Vec<String> = examples.iter().take(ASSIST_EXAMPLES).enumerate().map(|(n, example)| {
-                let mut from = vec![example.cite.trim().to_string()];
+                let mut from = vec![if example.key.trim().is_empty() { example.cite.trim().to_string() } else { format!("[@{}]", example.key.trim()) }];
                 if let Some(page) = example.page { from.push(format!("p. {page}")) }
                 if !example.heading.trim().is_empty() { from.push(example.heading.trim().to_string()) }
                 from.retain(|part| !part.is_empty());
@@ -1500,7 +1409,7 @@ pub fn assist_prompt(assist: &Assist, language: &str, paragraph: &str, examples:
                  1. 意思以我的段落为准：不增加我没有写的论断，也不删掉我写了的。\n\
                  2. 借鉴候选句的结构、衔接和措辞习惯，但每句话都要自己写，不要照抄候选句（连续相同的词不超过五六个）。\n\
                  3. 我的段落里已有的引用一个都不能删、不能改，留在它所支持的那句话上。\n\
-                 4. 我的段落在陈述某篇候选论文的发现时，补上这篇论文的引用：用候选句前面括号里的出处，写成 (作者, 年份) 的样子。候选句正文里引用的其他文献不是这篇论文本身，不要搬过来；也不要给我自己的论断配引用。\n\n\
+                 4. 我的段落在陈述某篇候选论文的发现时，补上这篇论文的引用：照抄候选句前面括号里的出处，是 [@Key] 的就写成 [@Key]，放在句末的标点之前；否则写成 (作者, 年份) 的样子。候选句正文里引用的其他文献不是这篇论文本身，不要搬过来；也不要给我自己的论断配引用。\n\n\
                  候选句：\n{}\n\n要改写的段落：\n{paragraph}",
                 listed.join("\n")
             )
@@ -1513,8 +1422,8 @@ pub fn assist_prompt(assist: &Assist, language: &str, paragraph: &str, examples:
             "润色下面这段{language}文字：改得越少越好，只改语法错误、不准确或不地道的用词、冗余和不通顺的地方。\n\
              不改变意思，不增删论断，不调整段落的结构；本来就好的句子原样保留。\n\n{paragraph}"
         ),
-        // Its candidates come from the library, not from this function's arguments.
-        Assist::Cite => return Err("配引用要先在文献库里查找候选：用 cite_request。".into()),
+        // Its answer is a list of papers found in the library, not a version of the paragraph.
+        Assist::Cite => return Err("配引用不改写文字：它在文献库里查找，见 citefind。".into()),
         Assist::Own(name) => {
             let Some(command) = own.iter().find(|command| command.name == *name) else { return Err(format!("没有 /{name} 这个命令了，可能已在「设置 › 命令」里删掉。")) };
             return Ok((
@@ -1993,15 +1902,15 @@ mod tests {
     fn writing_requests() {
         let profile = Profile { api_key: "k".into(), model: "claude-opus-5-5".into(), ..Default::default() };
         let examples = vec![
-            Example { text: "Root growth is limited by soil strength.".into(), cite: "Smith et al., 2020".into(), page: Some(3), heading: "Introduction".into() },
-            Example { text: "Ethylene mediates the response.".into(), cite: "Lee, 2019".into(), page: None, heading: String::new() },
+            Example { text: "Root growth is limited by soil strength.".into(), cite: "Smith et al., 2020".into(), key: "Smith2020".into(), page: Some(3), heading: "Introduction".into() },
+            Example { text: "Ethylene mediates the response.".into(), cite: "Lee, 2019".into(), key: String::new(), page: None, heading: String::new() },
         ];
         let paragraph = "  Compacted soil slows roots (Smith et al., 2020).  ";
         let r = assist_request(&profile, &Assist::Rewrite, "English", paragraph, &examples, &[]).unwrap();
         let (system, message) = (r.body["system"].as_str().unwrap(), r.body["messages"][0]["content"].as_str().unwrap());
         // The language, the rule that citations stay, and every candidate with where it is from.
         assert!(system.contains("稿件语言是英文") && system.contains("保持原样"));
-        assert!(message.contains("[1] (Smith et al., 2020, p. 3, Introduction) Root growth is limited by soil strength."));
+        assert!(message.contains("[1] ([@Smith2020], p. 3, Introduction) Root growth is limited by soil strength."));
         assert!(message.contains("[2] (Lee, 2019) Ethylene mediates the response."));
         assert!(message.contains("已有的引用一个都不能删") && message.contains("候选句正文里引用的其他文献") && message.contains("不要照抄") && message.ends_with("要改写的段落：\nCompacted soil slows roots (Smith et al., 2020)."));
         // Without candidates there is nothing to rewrite after.
@@ -2024,20 +1933,7 @@ mod tests {
         // Nothing to work on, and too much, are refused before anything is sent.
         assert!(assist_prompt(&Assist::Polish, "English", " \n ", &[], &[]).is_err());
 
-        // 配引用: the candidates are named by their keys, a paper without one is left out, and nothing to cite is said at once.
-        let found = json!({"sentences": [
-            {"sentence": "Roots sense compaction.", "candidates": [{"paperId": "a", "title": "Root atlas", "year": 2021, "page": 5, "snippet": "roots  sense\nsoil compaction"}, {"paperId": "gone", "title": "No key"}]},
-            {"sentence": "We extend this.", "candidates": []},
-        ]});
-        let keys = BTreeMap::from([("a".to_string(), "Zhang2021".to_string())]);
-        let sentences = cite_candidates(&found, &keys);
-        assert_eq!(sentences[0].candidates, vec![Citable { key: "Zhang2021".into(), title: "Root atlas".into(), year: Some(2021), page: Some(5), snippet: "roots sense soil compaction".into() }]);
-        let (system, message) = cite_prompt("en", "Roots sense compaction. We extend this.", &sentences).unwrap();
-        assert!(system.contains("只能使用用户给出的候选"));
-        assert!(message.contains("句 1：Roots sense compaction.\n  - [@Zhang2021] Root atlas（2021），全文第 5 页：roots sense soil compaction"));
-        assert!(message.contains("句 2：We extend this.\n  （没有候选）"));
-        assert!(message.ends_with("要配引用的段落：\nRoots sense compaction. We extend this."));
-        assert!(cite_prompt("en", "We extend this.", &sentences[1..]).unwrap_err().contains("没有可配的引用"));
+        // 配引用 is not a version of the paragraph: it is `citefind`'s.
         assert!(assist_prompt(&Assist::Cite, "en", "x", &[], &[]).is_err());
         assert!(assist_prompt(&Assist::Polish, "English", &"a".repeat(ASSIST_LIMIT + 1), &[], &[]).is_err());
     }

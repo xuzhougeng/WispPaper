@@ -1211,11 +1211,11 @@ impl Store {
         Ok(out)
     }
 
-    /// The sentences of one part, of every paper outside the trash or of one paper, in reading order.
+    /// The sentences of one part (of every part, for an empty `section`), of every paper outside the trash or of one paper, in reading order.
     pub fn section_sentences(&self, section: &str, paper_id: &str) -> Result<Vec<PaperSentence>> {
         let mut stmt = self.db.prepare(
             "SELECT r.paper_id, s.section, s.heading, s.page, s.position, s.text, coalesce(t.language, '') FROM sentences s JOIN resources r ON r.id = s.resource_id LEFT JOIN structures t ON t.resource_id = s.resource_id \
-             WHERE s.section = ?1 AND r.resource_type = 'fulltext' AND (?2 = '' OR r.paper_id = ?2) AND r.paper_id NOT IN (SELECT paper_id FROM trashed_papers) \
+             WHERE (?1 = '' OR s.section = ?1) AND r.resource_type = 'fulltext' AND (?2 = '' OR r.paper_id = ?2) AND r.paper_id NOT IN (SELECT paper_id FROM trashed_papers) \
              ORDER BY r.paper_id, s.seq",
         )?;
         Ok(stmt
