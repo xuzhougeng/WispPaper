@@ -218,6 +218,8 @@ impl Workspace {
         let sidebar_width = self.sidebar_width(window);
         let main_width = f32::from(window.viewport_size().width) - sidebar_width - detail_width;
         let page = self.lib.as_ref().map_or(Page::Papers, |l| l.page);
+        // What the manuscript cites is read by the outline and the page alike: worked out once, before either is drawn.
+        if page == Page::Write { self.cite_refresh(cx) }
         let main = match page {
             Page::Papers => self.render_papers(main_width, window, cx),
             Page::Ask => self.render_chat(false, window, cx),

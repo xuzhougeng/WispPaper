@@ -480,6 +480,10 @@ pub enum Cmd {
     /// Put citations in the part being written right: (start, end, what is there, what replaces it), last first.
     WriteCiteFix(Vec<(usize, usize, String, String)>),
     WriteCopyReferences,
+    /// The page of the panel beside the manuscript: the candidates, the comments, or the reference list.
+    WriteSide(Side),
+    /// The reference list of the whole manuscript: beside it, or, while it is read through, at its end.
+    WriteReferences,
     /// The cited papers as BibTeX.
     WriteExportCited,
     /// Have the model sort the full texts into parts (false), or read the pages of the files that gave no text (true).
@@ -730,6 +734,17 @@ pub struct Writing {
     pub editor_scroll: ScrollHandle,
     /// The sidebar shows the library's navigation instead of the manuscript's outline, until 写作 is opened again.
     pub library_nav: bool,
+    /// Which page the panel beside the manuscript shows.
+    pub side: Side,
+}
+
+/// The pages of the panel beside the manuscript: what there is to draw on, what was said about the text, what it cites.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Side {
+    #[default]
+    Candidates,
+    Comments,
+    References,
 }
 
 /// A run of the screening assistant gives up after this many papers in a
@@ -2061,6 +2076,16 @@ impl Workspace {
             }
             Cmd::WriteCiteFix(pieces) => self.cite_fix(pieces, cx),
             Cmd::WriteCopyReferences => self.copy_references(cx),
+            Cmd::WriteSide(side) => {
+                if let Some(lib) = self.lib.as_mut() { lib.writing.side = side }
+            }
+            Cmd::WriteReferences => {
+                if let Some(lib) = self.lib.as_mut() {
+                    (lib.writing.side, lib.citing.whole) = (Side::References, true);
+                    // Read through, the manuscript ends in its references: there is no panel beside it.
+                    if lib.writing.reading { lib.citing.read_scroll.scroll_to_bottom() }
+                }
+            }
             Cmd::WriteExportCited => self.export_cited(cx),
             Cmd::WriteRun(reading) => self.write_run_start(reading, None, cx),
             Cmd::WriteFind => self.write_find(false, cx),
@@ -2884,7 +2909,7 @@ impl Workspace {
         let (comments, heard) = crate::comments::Commenting::new(store.comments(&manuscript).unwrap_or_default(), store.manuscript_source(&manuscript).ok().flatten(), cx);
         subscriptions.extend(heard);
         let revise = crate::revise::Revising::new(&mut subscriptions, cx);
-        let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new(), assist: Default::default(), revise, comments, editor_scroll: ScrollHandle::new(), library_nav: false };
+        let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new(), assist: Default::default(), revise, comments, editor_scroll: ScrollHandle::new(), library_nav: false, side: Side::default() };
         let citing = crate::cite::Citing::new(&store, &mut subscriptions, cx);
         let gallery = crate::figures::Gallery::new(&mut subscriptions, cx);
         let mut lib = Library {
@@ -4984,7 +5009,9 @@ impl Workspace {
                     self.import_manuscript_files(vec![PathBuf::from(arg)], cx);
                     None
                 }
-                "comments" => Some(Cmd::Comment(crate::comments::Do::Panel(arg != "off"))),
+                "comments" => Some(Cmd::WriteSide(if arg == "off" { Side::Candidates } else { Side::Comments })),
+                // `references` shows the reference list beside the manuscript (`references:off` the candidates), `references:whole` the whole manuscript's, as the outline's row does.
+                "references" => Some(match arg { "off" => Cmd::WriteSide(Side::Candidates), "whole" => Cmd::WriteReferences, _ => Cmd::WriteSide(Side::References) }),
                 "wish" | "commenttext" => {
                     if let Some(comments) = self.lib.as_ref().map(|lib| &lib.writing.comments) { (if step == "wish" { &comments.wish } else { &comments.draft }).update(cx, |input, cx| input.set_text(arg, cx)) }
                     None

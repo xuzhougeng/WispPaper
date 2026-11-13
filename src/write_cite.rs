@@ -198,7 +198,7 @@ fn work(send: &dyn Fn(Event), info: &LibraryInfo, text: &str, language: &str, ke
         return send(Event::Failed(if other_script && !worded {
             tf!("没有找到可引用的文献。这段文字和文献库里的文献（{}）不是同一种语言：在「设置 › AI › 任务」给翻译配一个模型，就能先把每句变成检索词再找。", "No papers to cite were found. This text and the library's papers ({}) are in different languages: give translation a model in Settings › AI › Tasks, and each sentence is turned into search terms first.", t(citefind::language_name(language)))
         } else {
-            t("文献库里没有找到说这些内容的文献。可以先在「检索与导入」里补充文献，或在下面的参考文献框里按作者、题目自己找。").to_string()
+            t("文献库里没有找到说这些内容的文献。可以先在「检索与导入」里补充文献，或在右边的「参考文献」页里按作者、题目自己找。").to_string()
         }));
     }
     match &judging {
