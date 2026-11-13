@@ -1,5 +1,7 @@
 //! 设置: a view of its own, with a sidebar of pages (通用, 外观, 快捷键, AI,
-//! 关于) and 返回 at the bottom. The library that was open stays open
+//! 网络, 关于) and 返回 at the bottom. AI has three tabs: 模型 (the providers,
+//! a list at the left and the one picked at the right), 任务 (which model
+//! does what, with its instructions) and 命令 (the person's own slash commands). The library that was open stays open
 //! underneath. Every change is saved at once; there is no 保存 button.
 //!
 //! The layout follows quiet-md's settings (MIT): grouped rows in rounded
@@ -15,13 +17,20 @@ use gpui::{prelude::FluentBuilder, *};
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
-use wisp_core::ai::{self, Profile, Protocol};
+use wisp_core::ai::{self, Protocol};
+use wisp_core::provider::{self, Provider};
 use wisp_core::libraries;
 use wisp_core::settings::{Language, Task};
 use wisp_core::update::{self, Release};
 
 const SIDEBAR_W: f32 = 224.;
 const COLUMN_W: f32 = 640.;
+/// The AI page is wider: 模型 sets its list beside the provider's fields.
+const AI_COLUMN_W: f32 = 880.;
+/// The list of providers on 模型.
+const PROVIDER_LIST_W: f32 = 232.;
+/// A model's name on 模型.
+const MODEL_W: f32 = 240.;
 const INPUT_W: f32 = 320.;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -31,13 +40,12 @@ pub enum SettingsPage {
     Appearance,
     Shortcuts,
     Ai,
-    Commands,
     Network,
     About,
 }
 
 impl SettingsPage {
-    const ALL: [SettingsPage; 7] = [SettingsPage::General, SettingsPage::Appearance, SettingsPage::Shortcuts, SettingsPage::Ai, SettingsPage::Commands, SettingsPage::Network, SettingsPage::About];
+    const ALL: [SettingsPage; 6] = [SettingsPage::General, SettingsPage::Appearance, SettingsPage::Shortcuts, SettingsPage::Ai, SettingsPage::Network, SettingsPage::About];
 
     fn title(self) -> &'static str {
         match self {
@@ -45,7 +53,6 @@ impl SettingsPage {
             SettingsPage::Appearance => t("外观"),
             SettingsPage::Shortcuts => t("快捷键"),
             SettingsPage::Ai => "AI",
-            SettingsPage::Commands => t("命令"),
             SettingsPage::Network => t("网络"),
             SettingsPage::About => t("关于"),
         }
@@ -57,25 +64,30 @@ impl SettingsPage {
             SettingsPage::Appearance => "palette",
             SettingsPage::Shortcuts => "keyboard",
             SettingsPage::Ai => "sparkle",
-            SettingsPage::Commands => "list",
             SettingsPage::Network => "link",
             SettingsPage::About => "info",
         }
     }
 }
 
+/// The tabs of 设置 › AI.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AiTab {
+    #[default]
+    Models,
+    Tasks,
+    Commands,
+}
+
 /// The open settings view.
 pub struct SettingsView {
     pub page: SettingsPage,
+    pub ai_tab: AiTab,
     scroll: ScrollHandle,
-    /// The model service the AI page shows the fields of, as an index into `Settings::profiles`.
-    editing: usize,
-    /// Whether those fields are on show, under the model's row.
-    expanded: bool,
+    /// The provider 模型 shows at the right, as an index into `Settings::providers`.
+    provider: usize,
     protocol: Protocol,
-    /// Its thinking setting, a key of `ai::EFFORTS`.
-    effort: String,
-    fields: ProfileFields,
+    fields: ProviderFields,
     /// The proxy for everything.
     proxy: Entity<TextInput>,
     translation_prompt: Entity<TextInput>,
@@ -89,36 +101,56 @@ pub struct SettingsView {
     _subscriptions: Vec<Subscription>,
 }
 
-/// The text fields of one model service. They are made anew for the
-/// service on show, so a change always belongs to that one.
-struct ProfileFields {
+impl SettingsView {
+    /// The provider on show on 模型.
+    pub(crate) fn provider(&self) -> usize {
+        self.provider
+    }
+}
+
+/// The text fields of one provider and of each of its models. They are made
+/// anew for the provider on show, so a change always belongs to that one.
+struct ProviderFields {
     name: Entity<TextInput>,
     base_url: Entity<TextInput>,
-    model: Entity<TextInput>,
     api_key: Entity<TextInput>,
     /// The service's own proxy.
     proxy: Entity<TextInput>,
+    /// The name of each model, in the order of `Provider::models`.
+    models: Vec<Entity<TextInput>>,
+    /// The name of the model to add.
+    new_model: Entity<TextInput>,
     _subscriptions: Vec<Subscription>,
 }
 
-impl ProfileFields {
-    fn new(profile: &Profile, cx: &mut Context<Workspace>) -> ProfileFields {
-        let mut input = |placeholder: &'static str, text: &str| cx.new(|cx| TextInput::new(placeholder, cx).with_text(text));
-        let name = input("留空则显示模型名称", &profile.name);
-        let base_url = input("https://…", &profile.base_url);
-        let model = input("模型名称", &profile.model);
-        let api_key = input("留空则读取环境变量", &profile.api_key);
-        let proxy = input("留空则使用全局代理", &profile.proxy);
+impl ProviderFields {
+    fn new(provider: &Provider, cx: &mut Context<Workspace>) -> ProviderFields {
+        let mut input = |placeholder: SharedString, text: &str| cx.new(|cx| TextInput::new(placeholder, cx).with_text(text));
+        let preset = provider.preset();
+        let name = input(preset.map_or_else(|| t("服务名称").into(), |p| p.name.into()), &provider.name);
+        let base_url = input("https://…/v1".into(), &provider.base_url);
+        let api_key = input(tf!("留空则读取环境变量 {}", "Leave blank to read {}", provider.key_env()).into(), &provider.api_key);
+        let proxy = input(t("留空则使用全局代理").into(), &provider.proxy);
+        let models: Vec<Entity<TextInput>> = provider.models.iter().map(|model| input(t("模型名称").into(), &model.model)).collect();
+        let example = preset.and_then(|p| p.models.first().copied()).unwrap_or("gpt-5.5");
+        let new_model = input(tf!("添加模型，例如 {example}", "Add a model, e.g. {example}").into(), "");
         api_key.update(cx, |input, _| input.masked = true);
-        let subscriptions = [&name, &base_url, &model, &api_key, &proxy]
+        let mut subscriptions: Vec<Subscription> = [&name, &base_url, &api_key, &proxy]
             .into_iter()
+            .chain(models.iter())
             .map(|input| {
                 cx.subscribe(input, |this, _, event: &InputEvent, cx| {
-                    if *event == InputEvent::Changed { this.save_profile(cx) }
+                    if *event == InputEvent::Changed { this.save_provider(cx) }
                 })
             })
             .collect();
-        ProfileFields { name, base_url, model, api_key, proxy, _subscriptions: subscriptions }
+        subscriptions.push(cx.subscribe(&new_model, |this, _, event: &InputEvent, cx| match event {
+            InputEvent::Submit => this.add_model(cx),
+            // The button beside it appears once there is something to add.
+            InputEvent::Changed => cx.notify(),
+            _ => {}
+        }));
+        ProviderFields { name, base_url, api_key, proxy, models, new_model, _subscriptions: subscriptions }
     }
 }
 
@@ -288,10 +320,11 @@ impl Workspace {
                 view.shortcut_error = None;
             }
             None => {
-                // The AI page opens on the model questions go to.
-                let profile = self.settings.profile_for_or_default(Task::Chat);
-                let editing = self.settings.profiles.iter().position(|p| p.id == profile.id).unwrap_or(0);
-                let fields = ProfileFields::new(&profile, cx);
+                // 模型 opens on the provider of the model questions go to.
+                let chat = self.settings.profile_for(Task::Chat).map(|p| p.id).unwrap_or_default();
+                let index = self.settings.providers.iter().position(|p| p.models.iter().any(|m| m.id == chat)).unwrap_or(0);
+                let shown = self.settings.providers.get(index).cloned().unwrap_or_default();
+                let fields = ProviderFields::new(&shown, cx);
                 let proxy = cx.new(|cx| TextInput::new("http://127.0.0.1:7890", cx).with_text(&self.settings.proxy));
                 let translation_prompt = cx.new(|cx| TextInput::new("留空则使用默认要求：译成简体中文，保留术语、基因名、物种学名和数字原样，只输出译文。", cx).multiline(3).with_text(&self.settings.translation_prompt));
                 let subscriptions = vec![
@@ -306,9 +339,7 @@ impl Workspace {
                         }
                     }),
                 ];
-                // A model that cannot answer yet opens with its fields showing.
-                let expanded = profile.missing().is_some();
-                self.settings_view = Some(SettingsView { page, scroll: ScrollHandle::new(), editing, expanded, protocol: profile.protocol, effort: profile.effort, fields, proxy, translation_prompt, command: None, recording: None, shortcut_error: None, _subscriptions: subscriptions });
+                self.settings_view = Some(SettingsView { page, ai_tab: AiTab::default(), scroll: ScrollHandle::new(), provider: index, protocol: shown.protocol, fields, proxy, translation_prompt, command: None, recording: None, shortcut_error: None, _subscriptions: subscriptions });
             }
         }
         window.focus(&self.focus);
@@ -505,66 +536,99 @@ impl Workspace {
 
     // ---- AI
 
+    /// 设置 › AI on one of its tabs, opening 设置 if it is not open.
+    pub fn open_ai_tab(&mut self, tab: AiTab, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_settings(SettingsPage::Ai, window, cx);
+        let Some(view) = self.settings_view.as_mut() else { return };
+        if view.ai_tab != tab { view.scroll = ScrollHandle::new() }
+        view.ai_tab = tab;
+        cx.notify();
+    }
+
     pub fn pick_protocol(&mut self, protocol: Protocol, cx: &mut Context<Self>) {
         let Some(view) = self.settings_view.as_mut() else { return };
         if view.protocol == protocol { return }
         let same_service = view.protocol != Protocol::Anthropic && protocol != Protocol::Anthropic;
         view.protocol = protocol;
-        // Chat completions and Responses are two interfaces of one service: its address and model stay.
-        if same_service { return self.save_profile(cx) }
-        // The other protocol's address and model would only fail: offer this one's defaults.
-        let (url, model) = match protocol {
-            Protocol::Anthropic => (ai::ANTHROPIC_BASE, ai::DEFAULT_MODEL),
-            Protocol::OpenAI | Protocol::Responses => ("https://api.openai.com/v1", ""),
+        // Chat completions and Responses are two interfaces of one service: its address and models stay.
+        if same_service { return self.save_provider(cx) }
+        // The other protocol's address would only fail: offer this one's default. The models stay to be renamed.
+        let url = match protocol {
+            Protocol::Anthropic => ai::ANTHROPIC_BASE,
+            Protocol::OpenAI | Protocol::Responses => "https://api.openai.com/v1",
         };
         view.fields.base_url.update(cx, |input, cx| input.set_text(url, cx));
-        view.fields.model.update(cx, |input, cx| input.set_text(model, cx));
-        self.save_profile(cx);
+        self.save_provider(cx);
     }
 
-    pub fn set_effort(&mut self, effort: String, cx: &mut Context<Self>) {
-        let Some(view) = self.settings_view.as_mut() else { return };
-        view.effort = effort;
-        self.save_profile(cx);
-    }
-
-    /// Show a model service's fields under its row; a click on the one
-    /// already open folds it up again.
-    pub fn select_profile(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(view) = self.settings_view.as_mut() else { return };
-        if index >= self.settings.profiles.len().max(1) { return }
-        if view.editing == index {
-            view.expanded = !view.expanded;
-            return cx.notify();
-        }
-        self.show_profile(index, cx);
-    }
-
-    fn show_profile(&mut self, index: usize, cx: &mut Context<Self>) {
-        let profile = self.settings.profiles.get(index).cloned().unwrap_or_default();
-        let fields = ProfileFields::new(&profile, cx);
-        if let Some(view) = self.settings_view.as_mut() { (view.editing, view.expanded, view.protocol, view.effort, view.fields) = (index, true, profile.protocol, profile.effort, fields) }
+    /// How hard the n-th model of the provider on show thinks.
+    pub fn set_effort(&mut self, index: usize, effort: String, cx: &mut Context<Self>) {
+        let Some(view) = self.settings_view.as_ref() else { return };
+        let Some(model) = self.settings.providers.get_mut(view.provider).and_then(|p| p.models.get_mut(index)) else { return };
+        if model.effort == effort { return }
+        model.effort = effort;
+        self.save_settings(cx);
         cx.notify();
     }
 
-    /// One more model service, starting from the defaults, and its fields on show.
-    pub fn add_profile(&mut self, cx: &mut Context<Self>) {
-        // The built-in default becomes a saved one first, so that it stays beside the new one.
-        if self.settings.profiles.is_empty() { self.settings.add_profile(Profile::default()); }
-        let name = tf!("模型 {}", "Model {}", self.settings.profiles.len() + 1);
-        let index = self.settings.add_profile(Profile { name, ..Default::default() });
-        self.save_settings(cx);
-        self.show_profile(index, cx);
+    /// Show a provider's fields at the right of 模型.
+    pub fn select_provider(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index >= self.settings.providers.len() { return }
+        if let Some(view) = self.settings_view.as_mut() { view.ai_tab = AiTab::Models }
+        self.show_provider(index, cx);
     }
 
-    pub fn remove_profile(&mut self, index: usize, cx: &mut Context<Self>) {
-        // The last one stays: something has to answer.
-        if index >= self.settings.profiles.len() || self.settings.profiles.len() < 2 { return }
-        self.settings.remove_profile(index);
+    fn show_provider(&mut self, index: usize, cx: &mut Context<Self>) {
+        let shown = self.settings.providers.get(index).cloned().unwrap_or_default();
+        let fields = ProviderFields::new(&shown, cx);
+        if let Some(view) = self.settings_view.as_mut() { (view.provider, view.protocol, view.fields) = (index, shown.protocol, fields) }
+        cx.notify();
+    }
+
+    /// One more provider, from a preset (`""` is a service set up by hand), and its fields on show.
+    pub fn add_provider(&mut self, preset: &str, cx: &mut Context<Self>) {
+        let provider = provider::preset(preset).map_or_else(|| Provider { name: tf!("服务 {}", "Provider {}", self.settings.providers.len() + 1), base_url: "https://".into(), ..Default::default() }, Provider::from_preset);
+        let index = self.settings.add_provider(provider);
         self.save_settings(cx);
-        let editing = self.settings_view.as_ref().map_or(0, |view| view.editing);
-        self.show_profile(if editing > index { editing - 1 } else { editing.min(self.settings.profiles.len() - 1) }, cx);
-        if let Some(view) = self.settings_view.as_mut() { view.expanded = false }
+        self.show_provider(index, cx);
+    }
+
+    pub fn remove_provider(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index >= self.settings.providers.len() { return }
+        self.settings.remove_provider(index);
+        self.save_settings(cx);
+        let shown = self.settings_view.as_ref().map_or(0, |view| view.provider);
+        self.show_provider(if shown > index { shown - 1 } else { shown.min(self.settings.providers.len().saturating_sub(1)) }, cx);
+    }
+
+    /// Add what the field under the models holds as one more model of the provider on show.
+    pub fn add_model(&mut self, cx: &mut Context<Self>) {
+        let Some(view) = self.settings_view.as_ref() else { return };
+        let (index, name) = (view.provider, view.fields.new_model.read(cx).text().trim().to_string());
+        if name.is_empty() { return }
+        // The same model twice would only be two rows to tell apart.
+        if self.settings.providers.get(index).is_some_and(|p| p.models.iter().any(|m| m.model == name)) {
+            return self.fail(tf!("{name} 已经在这个服务的模型里了。", "{name} is already one of this provider's models."), cx);
+        }
+        if self.settings.add_model(index, &name).is_none() { return }
+        self.save_settings(cx);
+        // The fields stay as they are, so the one typed in keeps the keyboard for the next model.
+        let input = cx.new(|cx| TextInput::new(t("模型名称"), cx).with_text(&name));
+        let subscription = cx.subscribe(&input, |this, _, event: &InputEvent, cx| {
+            if *event == InputEvent::Changed { this.save_provider(cx) }
+        });
+        let Some(view) = self.settings_view.as_mut() else { return };
+        view.fields.models.push(input);
+        view.fields._subscriptions.push(subscription);
+        view.fields.new_model.update(cx, |input, cx| input.set_text("", cx));
+        cx.notify();
+    }
+
+    pub fn remove_model(&mut self, model: usize, cx: &mut Context<Self>) {
+        let Some(index) = self.settings_view.as_ref().map(|view| view.provider) else { return };
+        self.settings.remove_model(index, model);
+        self.save_settings(cx);
+        self.show_provider(index, cx);
     }
 
     pub fn reset_translation_prompt(&mut self, cx: &mut Context<Self>) {
@@ -586,6 +650,7 @@ impl Workspace {
     /// Show a command's fields under its row; a click on the one already open folds it up again.
     pub fn select_command(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(command) = self.settings.commands.get(index) else { return };
+        if let Some(view) = self.settings_view.as_mut() { view.ai_tab = AiTab::Commands }
         let open = self.settings_view.as_ref().and_then(|view| view.command.as_ref()).map(|(open, _)| *open);
         let fields = (open != Some(index)).then(|| (index, CommandFields::new(command, cx)));
         if let Some(view) = self.settings_view.as_mut() { view.command = fields }
@@ -628,24 +693,20 @@ impl Workspace {
         self.save_settings(cx);
     }
 
-    /// Keep what the AI page shows as the model service on show.
-    fn save_profile(&mut self, cx: &mut Context<Self>) {
+    /// Keep what 模型 shows as the provider on show. The models keep their
+    /// ids and thinking settings; only their names come from the fields.
+    fn save_provider(&mut self, cx: &mut Context<Self>) {
         let Some(view) = &self.settings_view else { return };
         let text = |input: &Entity<TextInput>| input.read(cx).text().trim().to_string();
-        let (fields, editing) = (&view.fields, view.editing);
-        let id = self.settings.profiles.get(editing).map(|p| p.id.clone()).unwrap_or_default();
-        let profile = Profile { id, name: text(&fields.name), protocol: view.protocol, base_url: text(&fields.base_url), api_key: text(&fields.api_key), model: text(&fields.model), effort: view.effort.clone(), proxy: text(&fields.proxy) };
-        match self.settings.profiles.get_mut(editing) {
-            Some(saved) if *saved == profile => return,
-            Some(saved) => *saved = profile,
-            // The first change to the built-in default makes it a saved profile.
-            None if profile == Profile::default() => return,
-            None => {
-                self.settings.add_profile(profile);
-            }
-        }
-        self.save_settings(cx);
+        let (fields, index) = (&view.fields, view.provider);
+        let Some(saved) = self.settings.providers.get(index) else { return };
+        let mut provider = saved.clone();
+        (provider.name, provider.protocol, provider.base_url, provider.api_key, provider.proxy) = (text(&fields.name), view.protocol, text(&fields.base_url), text(&fields.api_key), text(&fields.proxy));
+        for (model, input) in provider.models.iter_mut().zip(&fields.models) { model.model = text(input) }
         cx.notify();
+        if *saved == provider { return }
+        self.settings.providers[index] = provider;
+        self.save_settings(cx);
     }
 
     // ---- drawing
@@ -691,7 +752,6 @@ impl Workspace {
             SettingsPage::Appearance => self.appearance_page(cx),
             SettingsPage::Shortcuts => self.shortcuts_page(cx),
             SettingsPage::Ai => self.ai_page(window, cx),
-            SettingsPage::Commands => self.commands_page(window, cx),
             SettingsPage::Network => self.network_page(window, cx),
             SettingsPage::About => self.about_page(cx),
         };
@@ -719,9 +779,16 @@ impl Workspace {
                     .min_h_0()
                     .overflow_y_scroll()
                     .track_scroll(&view.scroll)
-                    .child(div().flex().flex_col().items_center().w_full().px(px(32.)).pt(px(12.)).pb(px(64.)).child(div().flex().flex_col().w_full().max_w(px(COLUMN_W)).gap(px(24.)).child(heading).child(body))),
+                    .child(div().flex().flex_col().items_center().w_full().px(px(32.)).pt(px(12.)).pb(px(64.)).child(div().flex().flex_col().w_full().max_w(px(if page == SettingsPage::Ai { AI_COLUMN_W } else { COLUMN_W })).gap(px(24.)).child(heading).child(body))),
             );
         div().flex().size_full().child(sidebar).child(content).into_any_element()
+    }
+
+    /// The width of the page's column in pixels. A wrapping text field needs
+    /// to be told its width, since every width above it is a share of its parent's.
+    fn column_width(&self, window: &Window) -> f32 {
+        let page = self.settings_view.as_ref().map(|view| view.page);
+        (f32::from(window.viewport_size().width) - SIDEBAR_W - 65.).min(if page == Some(SettingsPage::Ai) { AI_COLUMN_W } else { COLUMN_W })
     }
 
     fn general_page(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -744,6 +811,10 @@ impl Workspace {
                 group(Some(t("数据")), vec![row(t("数据目录"), Some(self.root.display().to_string().into()), folder).into_any_element()])
                     .child(note(t("所有文献库都在这个文件夹下，每个文献库是其中的一个子文件夹。改到别的目录后，首页显示那个目录里的文献库；原目录里的文献库不会被移动。"))),
             )
+            .when(crate::background::SUPPORTED, |d| {
+                let detail = if cfg!(target_os = "macos") { t("关闭窗口后应用留在程序坞中，检索同步、筛选和导入照常进行；点程序坞图标回到窗口，⌘Q 退出。") } else { t("关闭窗口后应用留在通知区域，检索同步、筛选和导入照常进行；点托盘图标回到窗口，在它的菜单里退出。") };
+                d.child(group(Some(t("后台")), vec![row(t("关闭窗口后在后台运行"), Some(detail.into()), switch("keep-running", self.settings.keep_running).on_click(self.on(Cmd::ToggleKeepRunning, cx))).into_any_element()]))
+            })
             .child(group(
                 Some(t("更新")),
                 vec![
@@ -825,128 +896,332 @@ impl Workspace {
 
     fn ai_page(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(view) = &self.settings_view else { return div().into_any_element() };
+        let tabs = [(AiTab::Models, crate::i18n::tc("ai.models", "模型")), (AiTab::Tasks, t("任务")), (AiTab::Commands, t("命令"))];
+        let bar = div().flex().items_center().gap(px(4.)).children(tabs.into_iter().map(|(tab, label)| {
+            let active = view.ai_tab == tab;
+            div()
+                .id(("ai-tab", tab as usize))
+                .flex()
+                .items_center()
+                .h(px(32.))
+                .px(px(14.))
+                .rounded(px(8.))
+                .cursor_pointer()
+                .when(active, |d| d.bg(Theme::pressed()).font_weight(FontWeight::MEDIUM))
+                .when(!active, |d| d.text_color(Theme::text_secondary()).hover(|s| s.bg(Theme::hover()).text_color(Theme::text())))
+                .on_click(self.on(Cmd::AiTab(tab), cx))
+                .child(label)
+        }));
+        let body = match view.ai_tab {
+            AiTab::Models => self.models_tab(window, cx),
+            AiTab::Tasks => self.tasks_tab(window, cx),
+            AiTab::Commands => self.commands_tab(window, cx),
+        };
+        div().flex().flex_col().w_full().gap(px(20.)).child(bar).child(body).into_any_element()
+    }
+
+    /// 模型: the providers in a list at the left, the one picked at the right
+    /// with its address, key and models.
+    fn models_tab(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let Some(view) = &self.settings_view else { return div().into_any_element() };
         let settings = &self.settings;
-        // Before anything is saved, the built-in default is the one model there is.
-        let builtin = [Profile::default()];
-        let profiles: &[Profile] = if settings.profiles.is_empty() { &builtin } else { &settings.profiles };
-        let saved = !settings.profiles.is_empty();
-        let editing = view.editing.min(profiles.len() - 1);
+        let providers = &settings.providers;
+        let shown = view.provider.min(providers.len().saturating_sub(1));
+        let warn = theme::status_colors("uncertain");
+        // Which model each task ends up with, to say beside the providers and models what they do.
+        let used: Vec<(Task, String)> = Task::ALL.into_iter().filter_map(|task| settings.profile_for(task).map(|p| (task, p.id))).collect();
+
+        let rows: Vec<AnyElement> = providers
+            .iter()
+            .enumerate()
+            .map(|(i, provider)| {
+                let active = i == shown;
+                let missing = provider.key().is_empty();
+                let busy = used.iter().any(|(_, id)| provider.models.iter().any(|m| m.id == *id));
+                let about: SharedString = if missing { t("缺 API Key").into() } else { tf!("{} 个模型", "{} models", provider.models.len()).into() };
+                div()
+                    .id(("provider", i))
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .w_full()
+                    .px(px(10.))
+                    .py(px(8.))
+                    .rounded(px(9.))
+                    .cursor_pointer()
+                    .when(active, |d| d.bg(Theme::pressed()))
+                    .when(!active, |d| d.hover(|s| s.bg(Theme::hover())))
+                    .on_click(self.on(Cmd::SelectProvider(i), cx))
+                    .child(provider_tile(&provider.preset, 32.))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(1.))
+                            .child(div().truncate().font_weight(FontWeight::MEDIUM).child(provider.title()))
+                            .child(div().truncate().text_size(px(12.)).text_color(if missing { warn.0 } else { Theme::text_tertiary() }).child(about)),
+                    )
+                    // In use: some task's model is one of its models.
+                    .when(busy, |d| d.child(div().flex_none().size(px(7.)).rounded_full().bg(Theme::accent())))
+                    .into_any_element()
+            })
+            .collect();
+        let list = div()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .w(px(PROVIDER_LIST_W))
+            .p(px(6.))
+            .gap(px(2.))
+            .border_r_1()
+            .border_color(Theme::line())
+            .bg(Theme::bg_sunken())
+            .children(rows)
+            .child(
+                div()
+                    .id("provider-add")
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .w_full()
+                    .px(px(10.))
+                    .py(px(8.))
+                    .rounded(px(9.))
+                    .cursor_pointer()
+                    .text_color(Theme::text_secondary())
+                    .hover(|s| s.bg(Theme::hover()).text_color(Theme::text()))
+                    .on_click(self.on_menu(MenuKind::AddProvider, cx))
+                    .child(div().flex().flex_none().items_center().justify_center().size(px(32.)).rounded(px(9.)).border_1().border_dashed().border_color(Theme::line_strong()).child(ui::icon("plus", 15., Theme::text_secondary())))
+                    .child(t("添加服务")),
+            );
+
+        let detail = match providers.get(shown) {
+            Some(provider) => self.provider_detail(provider, &used, window, cx),
+            None => div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .items_center()
+                .justify_center()
+                .gap(px(8.))
+                .p(px(32.))
+                .child(ui::icon("sparkle", 22., Theme::text_tertiary()))
+                .child(div().font_weight(FontWeight::MEDIUM).child(t("还没有模型服务")))
+                .child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(t("在左边添加一个服务，填上它的 API Key。")))
+                .into_any_element(),
+        };
+        div()
+            .flex()
+            .flex_col()
+            .w_full()
+            .gap(px(8.))
+            .child(div().flex().w_full().min_h(px(520.)).rounded(px(12.)).border_1().border_color(Theme::line()).overflow_hidden().child(list).child(detail))
+            .child(note(t("一个服务可以提供多个模型，各个任务用哪一个在「任务」里选。修改会自动保存在本机的 settings.json 里。")))
+            .into_any_element()
+    }
+
+    /// The right of 模型: one provider's settings and its models.
+    fn provider_detail(&self, provider: &Provider, used: &[(Task, String)], window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let Some(view) = &self.settings_view else { return div().into_any_element() };
+        let fields = &view.fields;
         let protocol_name = |protocol: Protocol| match protocol {
             Protocol::Anthropic => "Claude API",
             Protocol::OpenAI => t("OpenAI 兼容"),
             Protocol::Responses => "OpenAI Responses",
         };
-        let warn = theme::status_colors("uncertain");
-
-        // The fields of the model that is open, drawn under its row.
-        let (variable, privacy) = match view.protocol {
-            Protocol::Anthropic => ("ANTHROPIC_API_KEY", t("用到这个模型时，问题和相关文献的记录、笔记、全文页面（筛选时是待判断的文献，翻译时是题目和摘要）会发送给这个服务。API Key 以明文保存在本机的 settings.json 里。")),
-            Protocol::Responses => ("OPENAI_API_KEY", t("OpenAI 的 Responses 接口（/responses），地址写到 /v1。对话不会保存在服务端：每次请求带上完整的对话，模型的推理内容以加密形式随之传回。用到这个模型时，问题和相关文献的内容会发送给这个服务。API Key 以明文保存在本机的 settings.json 里。")),
-            Protocol::OpenAI => ("OPENAI_API_KEY", t("适用于任何兼容 chat/completions 的服务，地址写到 /v1。用到这个模型时，问题和相关文献的内容会发送给这个服务。API Key 以明文保存在本机的 settings.json 里。")),
+        let (privacy, thinking) = match view.protocol {
+            Protocol::Anthropic => (t("用到这个服务的模型时，问题和相关文献的记录、笔记、全文页面（筛选时是待判断的文献，翻译时是题目和摘要）会发送给它。API Key 以明文保存在本机的 settings.json 里。"), t("思考：「默认」不发送思考参数，由模型自己决定；其余各档按 effort 发送。「关闭」让模型不思考，适合翻译这样的任务；Claude Opus 5.5 和 Fable 不能关闭思考，对它们改用最低一档。")),
+            Protocol::Responses => (t("OpenAI 的 Responses 接口（/responses），地址写到 /v1。对话不会保存在服务端：每次请求带上完整的对话，模型的推理内容以加密形式随之传回。用到这个服务的模型时，问题和相关文献的内容会发送给它。API Key 以明文保存在本机的 settings.json 里。"), t("思考：「默认」不发送推理参数。各档按 reasoning.effort 发送，「极高」「最高」按「高」，「关闭」是 none。模型不认这个参数时服务会报错，改回「默认」即可。")),
+            Protocol::OpenAI => (t("适用于任何兼容 chat/completions 的服务，地址写到 /v1。用到这个服务的模型时，问题和相关文献的内容会发送给它。API Key 以明文保存在本机的 settings.json 里。"), t("思考：「默认」不发送思考参数。各档按 reasoning_effort 发送，「极高」「最高」按「高」。「关闭」因服务而异：OpenAI 是 reasoning_effort: none，百炼和硅基流动是 enable_thinking: false，DeepSeek、火山方舟、智谱、Kimi 等是 thinking: disabled。模型不认这个参数时服务会报错，改回「默认」即可。")),
         };
-        let thinking = match view.protocol {
-            Protocol::Anthropic => t("思考：「默认」不发送思考参数，由模型自己决定；其余各档按 effort 发送。「关闭」让模型不思考，适合翻译这样的任务；Claude Opus 5.5 和 Fable 不能关闭思考，对它们改用最低一档。"),
-            Protocol::OpenAI => t("思考：「默认」不发送思考参数。各档按 reasoning_effort 发送，「极高」「最高」按「高」。「关闭」因服务而异：OpenAI 是 reasoning_effort: none，百炼和硅基流动是 enable_thinking: false，DeepSeek、火山方舟、智谱、Kimi 等是 thinking: disabled。模型不认这个参数时服务会报错，改回「默认」即可。"),
-            Protocol::Responses => t("思考：「默认」不发送推理参数。各档按 reasoning.effort 发送，「极高」「最高」按「高」，「关闭」是 none。模型不认这个参数时服务会报错，改回「默认」即可。"),
-        };
-        let fields = &view.fields;
-        let field = |input: &Entity<TextInput>| div().w(px(INPUT_W)).child(ui::field(input, window, cx));
-        let (name, base_url, model, api_key, profile_proxy) = (field(&fields.name), field(&fields.base_url), field(&fields.model), field(&fields.api_key), field(&fields.proxy));
-        // A bad address is said where it is typed; the request would only fail later.
-        let proxy_detail = wisp_core::settings::proxy_problem(fields.proxy.read(cx).text(), true).unwrap_or_else(|| t("只用于这个模型服务。留空则使用「网络」页的全局代理；填 direct 表示不走代理。").to_string());
-        let efforts: Vec<(&'static str, Cmd)> = ai::EFFORTS.iter().map(|(key, name)| (t(name), Cmd::SetEffort(key.to_string()))).collect();
-        let effort = ai::EFFORTS.iter().position(|(key, _)| *key == view.effort).unwrap_or(0);
-        let mut service = vec![
+        let input_w = px(INPUT_W - 40.);
+        let field = |input: &Entity<TextInput>| div().w(input_w).child(ui::field(input, window, cx));
+        let proxy_detail = wisp_core::settings::proxy_problem(fields.proxy.read(cx).text(), true).unwrap_or_else(|| t("留空则使用「网络」页的全局代理；填 direct 表示不走代理。").to_string());
+        let key_detail = if !provider.api_key.trim().is_empty() { t("已保存在本机。").to_string() } else if provider.key().is_empty() { tf!("还没有填写，环境变量 {} 也是空的。", "Not set, and {} is empty too.", provider.key_env()) } else { tf!("正在使用环境变量 {}。", "Using environment variable {}.", provider.key_env()) };
+        let (name, base_url, api_key, proxy) = (field(&fields.name), field(&fields.base_url), field(&fields.api_key), field(&fields.proxy));
+        let settings_rows = [
             row(t("名称"), None, name),
-            row(t("接口"), None, segmented("protocol", vec![("Claude API", Cmd::PickProtocol(Protocol::Anthropic)), (t("OpenAI 兼容"), Cmd::PickProtocol(Protocol::OpenAI)), ("OpenAI Responses", Cmd::PickProtocol(Protocol::Responses))], match view.protocol { Protocol::Anthropic => 0, Protocol::OpenAI => 1, Protocol::Responses => 2 }, self, cx)),
+            row(t("接口"), None, segmented("protocol", vec![("Claude API", Cmd::PickProtocol(Protocol::Anthropic)), (t("OpenAI 兼容"), Cmd::PickProtocol(Protocol::OpenAI)), ("Responses", Cmd::PickProtocol(Protocol::Responses))], match view.protocol { Protocol::Anthropic => 0, Protocol::OpenAI => 1, Protocol::Responses => 2 }, self, cx)),
             row(t("服务地址"), None, base_url),
-            row(t("模型"), None, model),
-            row("API Key", Some(tf!("留空则读取环境变量 {variable}。", "Leave blank to use environment variable {variable}.").into()), api_key),
-            row(t("思考"), None, segmented("effort", efforts, effort, self, cx)),
-            row(t("代理"), Some(proxy_detail.into()), profile_proxy),
+            row("API Key", Some(key_detail.into()), api_key),
+            row(t("代理"), Some(proxy_detail.into()), proxy),
         ];
-        if profiles.len() > 1 {
-            service.push(row(t("删除这个模型"), Some(t("用到它的任务改用默认的模型。").into()), button("model-remove", t("删除…")).text_color(Theme::danger()).on_click(self.on(Cmd::AskRemoveProfile(editing), cx))));
-        }
-        let small = |text: &'static str| div().text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_tertiary()).child(text);
-        let mut open = Some(div().flex().flex_col().w_full().bg(Theme::bg_sunken()).children(service.into_iter().map(|row| row.border_t_1().border_color(Theme::line()))).child(div().flex().flex_col().gap(px(6.)).px(px(16.)).py(px(12.)).border_t_1().border_color(Theme::line()).child(small(thinking)).child(small(privacy))));
+        let console = provider.preset().map(|p| p.console);
+        let header = div()
+            .flex()
+            .items_center()
+            .gap(px(12.))
+            .px(px(16.))
+            .pt(px(16.))
+            .pb(px(12.))
+            .child(provider_tile(&provider.preset, 40.))
+            .child(div().flex().flex_col().flex_1().min_w_0().gap(px(1.)).child(div().truncate().text_size(px(16.)).line_height(px(22.)).font_weight(FontWeight::SEMIBOLD).child(provider.title())).child(div().truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(format!("{} · {}", protocol_name(view.protocol), provider.base_url.trim()))))
+            .children(console.map(|url| link_button("provider-console", t("获取 API Key")).on_click(self.on(Cmd::OpenUrl(url.to_string()), cx))));
 
-        // The models, each with the tasks it does; the open one with its fields below.
-        let mut models: Vec<AnyElement> = profiles
+        // The models, each with its thinking and the tasks it does.
+        let models: Vec<AnyElement> = provider
+            .models
             .iter()
+            .zip(&fields.models)
             .enumerate()
-            .map(|(i, profile)| {
-                let shown = i == editing && view.expanded;
-                let serves = Task::ALL.into_iter().filter(|task| settings.profile_for(*task).is_none_or(|used| used.id == profile.id));
-                let effort = ai::EFFORTS.iter().find(|(key, _)| *key == profile.effort).map_or(t("默认"), |(_, name)| t(name));
-                let about = tf!("{} · {} · 思考：{effort}", "{} · {} · Thinking: {effort}", if profile.model.trim().is_empty() { t("未填模型") } else { profile.model.trim() }, protocol_name(profile.protocol));
-                let head = div()
-                    .id(("model", i))
+            .map(|(i, (model, input))| {
+                let effort = ai::EFFORTS.iter().find(|(key, _)| *key == model.effort).map_or(t("默认"), |(_, name)| t(name));
+                let serves: Vec<&str> = used.iter().filter(|(_, id)| *id == model.id).map(|(task, _)| t(task.label())).collect();
+                div()
                     .flex()
                     .items_center()
                     .gap(px(8.))
                     .w_full()
-                    .min_h(px(52.))
                     .px(px(16.))
-                    .py(px(9.))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(Theme::hover()))
-                    .on_click(self.on(Cmd::SelectProfile(i), cx))
-                    .child(div().flex().flex_col().flex_1().min_w_0().gap(px(2.)).child(div().truncate().font_weight(FontWeight::MEDIUM).child(profile.title())).child(div().truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(about)))
-                    .child(div().flex().flex_none().flex_wrap().justify_end().max_w(relative(0.6)).gap(px(4.))
-                        .children(serves.map(|task| ui::chip(t(task.label()), Theme::accent(), Theme::accent_soft())))
-                        .children(profile.missing().map(|what| ui::chip(t(what), warn.0, warn.1))))
-                    .child(ui::icon(if shown { "chevron-up" } else { "chevron-down" }, 14., Theme::text_tertiary()));
-                div().flex().flex_col().w_full().child(head).children(open.take_if(|_| shown)).into_any_element()
+                    .py(px(6.))
+                    // A field's width has to be given here: under these widths it would be measured as narrow.
+                    .child(div().flex_none().w(px(MODEL_W)).child(ui::field(input, window, cx)))
+                    .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(Theme::accent()).child(serves.join(" · ")))
+                    .child(
+                        div()
+                            .id(("model-effort", i))
+                            .flex()
+                            .flex_none()
+                            .items_center()
+                            .gap(px(4.))
+                            .h(px(28.))
+                            .px(px(10.))
+                            .rounded(px(7.))
+                            .cursor_pointer()
+                            .text_size(px(12.))
+                            .text_color(Theme::text_secondary())
+                            .bg(Theme::hover())
+                            .hover(|s| s.bg(Theme::pressed()))
+                            .on_click(self.on_menu(MenuKind::ModelEffort(i), cx))
+                            .child(tf!("思考 · {effort}", "Thinking · {effort}"))
+                            .child(ui::icon("chevron-down", 12., Theme::text_tertiary())),
+                    )
+                    .child(ui::ghost_button(("model-remove", i), Some("x"), None).tooltip(|_, cx| cx.new(|_| crate::write_assist::Tip(t("删除这个模型").to_string())).into()).on_click(self.on(Cmd::RemoveModel(i), cx)))
+                    .into_any_element()
             })
             .collect();
-        models.push(div().flex().items_center().w_full().px(px(16.)).py(px(10.)).child(button("model-add", t("添加模型")).on_click(self.on(Cmd::AddProfile, cx))).into_any_element());
+        let typed = !fields.new_model.read(cx).text().trim().is_empty();
+        let add = div()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .w_full()
+            .px(px(16.))
+            .py(px(6.))
+            .child(div().flex_none().w(px(MODEL_W)).child(ui::field(&fields.new_model, window, cx)))
+            .child(div().flex_1())
+            .child(button("model-add", t("添加")).when(!typed, |d| d.opacity(0.5)).on_click(self.on(Cmd::AddModel, cx)));
+        let caption = |text: &'static str| div().px(px(16.)).pt(px(18.)).pb(px(6.)).text_size(px(12.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::text_secondary()).child(text);
+        let small = |text: &'static str| div().text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_tertiary()).child(text);
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .child(header)
+            .children(settings_rows.into_iter().map(|row| row.border_t_1().border_color(Theme::line())))
+            .child(div().border_t_1().border_color(Theme::line()).child(caption(t("模型"))))
+            .when(provider.models.is_empty(), |d| d.child(div().px(px(16.)).pb(px(4.)).child(small(t("还没有模型：在下面写上模型名称，按 Enter 添加。")))))
+            .children(models)
+            .child(add)
+            .child(div().flex().flex_col().gap(px(6.)).px(px(16.)).pt(px(14.)).pb(px(16.)).child(small(thinking)).child(small(privacy)))
+            .child(div().flex_1())
+            .child(row(t("删除这个服务"), Some(t("连同它的模型一起删除；用到它们的任务改用默认的模型。").into()), button("provider-remove", t("删除…")).text_color(Theme::danger()).on_click(self.on(Cmd::AskRemoveProvider(view.provider.min(self.settings.providers.len().saturating_sub(1))), cx))).border_t_1().border_color(Theme::line()))
+            .into_any_element()
+    }
 
-        // Which model does what.
+    /// 任务: which model each task uses, and how it is asked.
+    fn tasks_tab(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let Some(view) = &self.settings_view else { return div().into_any_element() };
+        let settings = &self.settings;
+        let any = settings.providers.iter().any(|p| p.models.iter().any(|m| !m.model.trim().is_empty()));
+        let warn = theme::status_colors("uncertain");
         let pick = |n: usize, task: Task, this: &Self, cx: &mut Context<Self>| {
-            let used = settings.profile_for_or_default(task).title();
-            let text = if task != Task::Chat && settings.tasks.get(task).is_empty() { tf!("与助手相同（{used}）", "Same as assistant ({used})") } else { used };
-            let shell = div().id(("task-model", n)).flex().flex_none().items_center().gap(px(6.)).h(px(28.)).max_w(px(300.)).px(px(10.)).rounded(px(7.)).child(div().truncate().child(text));
-            // With only the built-in default there is nothing to choose from.
-            if saved { shell.bg(Theme::hover()).hover(|s| s.bg(Theme::pressed())).cursor_pointer().child(ui::icon("chevron-down", 12., Theme::text_secondary())).on_click(this.on_menu(MenuKind::TaskModel(task), cx)) } else { shell.text_color(Theme::text_secondary()) }
+            let used = settings.profile_for_or_default(task);
+            let follows = task != Task::Chat && settings.tasks.get(task).is_empty();
+            let shell = div()
+                .id(("task-model", n))
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(px(6.))
+                .h(px(30.))
+                .max_w(px(360.))
+                .px(px(10.))
+                .rounded(px(8.))
+                .when(follows, |d| d.child(div().flex_none().text_color(Theme::text_tertiary()).child(t("同助手"))))
+                .child(div().flex_none().font_weight(FontWeight::MEDIUM).child(used.title()))
+                // What still keeps the model from answering is said where it is chosen.
+                .child(match used.missing() {
+                    Some(what) => div().min_w_0().truncate().text_size(px(12.)).text_color(warn.0).child(if used.provider.is_empty() { t(what).to_string() } else { format!("{} · {}", used.provider, t(what)) }),
+                    None => div().min_w_0().truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(used.provider.clone()),
+                });
+            if any { shell.bg(Theme::hover()).hover(|s| s.bg(Theme::pressed())).cursor_pointer().child(ui::icon("chevron-down", 12., Theme::text_secondary())).on_click(this.on_menu(MenuKind::TaskModel(task), cx)) } else { shell.text_color(Theme::text_secondary()) }
+        };
+        // A task: its mark, its name and what uses it, and the model it is done with.
+        let head = |n: usize, task: Task, icon: &'static str, about: &'static str, this: &Self, cx: &mut Context<Self>| {
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap(px(14.))
+                .w_full()
+                .px(px(16.))
+                .py(px(14.))
+                .child(div().flex().flex_none().items_center().justify_center().size(px(34.)).rounded(px(9.)).bg(Theme::accent_soft()).child(ui::icon(icon, 17., Theme::accent())))
+                .child(div().flex().flex_col().flex_1().min_w(px(200.)).gap(px(2.)).child(div().font_weight(FontWeight::SEMIBOLD).child(t(task.label()))).child(div().text_size(px(12.)).line_height(px(17.)).text_color(Theme::text_tertiary()).child(t(about))))
+                .child(pick(n, task, this, cx))
+                .into_any_element()
         };
         const WORKERS: [usize; 6] = [1, 2, 3, 4, 6, 8];
         let workers: Vec<(&'static str, Cmd)> = ["1", "2", "3", "4", "6", "8"].into_iter().zip(WORKERS).map(|(name, count)| (name, Cmd::SetScreenWorkers(count))).collect();
-        let tasks = vec![
-            row(t(Task::Chat.label()), Some(t("助手和单篇文献的对话。向导拟检索式、图片库里看图写图注和标签、写作页的改写、润色和配引用也用它；看图需要能读图片的模型。").into()), pick(0, Task::Chat, self, cx)).into_any_element(),
-            row(t(Task::Screen.label()), Some(t("逐篇阅读文献：筛选页的批量建议、复核和单篇再问，以及提取页按词条填写。文献多的时候，可以给它一个更快、更便宜的模型。").into()), pick(1, Task::Screen, self, cx)).into_any_element(),
-            row(t("同时阅读的篇数"), Some(t("批量筛选时同时发出的请求数。服务限速时调小。").into()), segmented("workers", workers, WORKERS.iter().position(|count| *count == settings.screen_workers).unwrap_or(usize::MAX), self, cx)).into_any_element(),
-            row(t(Task::Translate.label()), Some(t("翻译题目、摘要和 PDF 里选中的文字；写作页把你写的话变成候选句的检索词也用它。翻译用不着思考：可以给它一个把「思考」设为关闭的小模型。").into()), pick(2, Task::Translate, self, cx)).into_any_element(),
-            row(t(Task::Structure.label()), Some(t("写作页的准备工作：把全文按导言、方法、结果、讨论分开，以及读出扫描件页面上的文字（需要能看图的模型）。").into()), pick(3, Task::Structure, self, cx)).into_any_element(),
-        ];
-        // The column's width in pixels, less the card's border and padding: a
-        // wrapping text field needs to be told its width here, where every
-        // width above it is a share of its parent's.
-        let wide = (f32::from(window.viewport_size().width) - SIDEBAR_W - 65.).min(COLUMN_W) - 34.;
-        let translation = div()
+        let sub = |row: Div| row.pl(px(64.)).border_t_1().border_color(Theme::line()).into_any_element();
+        // In pixels, less the card's border and padding: the instructions wrap.
+        let wide = self.column_width(window) - 34.;
+        let prompt = div()
             .flex()
             .flex_col()
             .gap(px(8.))
             .px(px(16.))
             .py(px(12.))
-            .child(div().flex().items_center().justify_between().w(px(wide)).min_h(px(26.)).child(t("翻译要求")).when(!settings.translation_prompt.is_empty(), |d| d.child(link_button("translation-reset", t("恢复默认")).on_click(self.on(Cmd::ResetTranslationPrompt, cx)))))
-            .child(div().w(px(wide)).child(ui::field(&view.translation_prompt, window, cx)));
+            .border_t_1()
+            .border_color(Theme::line())
+            .child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(px(16.))
+                    .w(px(wide))
+                    .child(div().flex().flex_col().flex_1().gap(px(2.)).child(t("提示词")).child(div().text_size(px(12.)).line_height(px(17.)).text_color(Theme::text_tertiary()).child(t("留空则用默认的要求。可以指定别的目标语言、术语的译法或输出的格式；改了以后，同一段文字按新的要求重新翻译。"))))
+                    .when(!settings.translation_prompt.is_empty(), |d| d.child(link_button("translation-reset", t("恢复默认")).on_click(self.on(Cmd::ResetTranslationPrompt, cx)))),
+            )
+            .child(div().w(px(wide)).child(ui::field(&view.translation_prompt, window, cx)))
+            .into_any_element();
+        // Each card is given its width in pixels: under widths that are shares, a
+        // column guesses the translation card's height at another width and
+        // leaves the difference under it.
+        let column = self.column_width(window);
+        let card = |rows: Vec<AnyElement>| group(None, rows).w(px(column));
         div()
             .flex()
             .flex_col()
-            .w_full()
-            .gap(px(24.))
-            .child(group(Some(t("模型")), models).child(note(t("可以放进多个模型，各做各的事：点一个模型展开它的设置，修改会自动保存。下面的「任务」决定谁做什么。"))))
-            .child(group(Some(t("任务")), tasks).child(note(t("没有单独指定模型的任务，使用助手的模型。"))))
-            .child(group(Some(t("翻译")), vec![translation.into_any_element()]).child(note(t("可以在这里指定别的目标语言、术语的译法或输出的格式。要求改了以后，同一段文字会按新的要求重新翻译；译过的文字保存在文献库里，不会再次请求。"))))
+            .w(px(column))
+            .gap(px(16.))
+            .child(card(vec![head(0, Task::Chat, "sparkle", "助手和单篇文献的对话。向导拟检索式、图片库里看图写图注和标签、写作页的改写、润色和配引用也用它；看图需要能读图片的模型。", self, cx)]))
+            .child(card(vec![head(1, Task::Screen, "list-todo", "逐篇阅读文献：筛选页的批量建议、复核和单篇再问，以及提取页按词条填写。文献多的时候，可以给它一个更快、更便宜的模型。", self, cx), sub(row(t("同时阅读的篇数"), Some(t("批量筛选时同时发出的请求数。服务限速时调小。").into()), segmented("workers", workers, WORKERS.iter().position(|count| *count == settings.screen_workers).unwrap_or(usize::MAX), self, cx)))]))
+            .child(card(vec![head(2, Task::Translate, "scan-text", "翻译题目、摘要和 PDF 里选中的文字；写作页把你写的话变成候选句的检索词也用它。翻译用不着思考：可以给它一个把「思考」设为关闭的小模型。", self, cx), prompt]))
+            .child(card(vec![head(3, Task::Structure, "file-text", "写作页的准备工作：把全文按导言、方法、结果、讨论分开，以及读出扫描件页面上的文字（需要能看图的模型）。", self, cx)]))
+            .child(note(t("没有单独指定模型的任务，使用助手的模型；助手没有指定时，用第一个填好了 API Key 的模型。译过的文字保存在文献库里，不会再次请求。")))
             .into_any_element()
     }
 
-    fn commands_page(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+    fn commands_tab(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(view) = &self.settings_view else { return div().into_any_element() };
         let commands = &self.settings.commands;
-        // In pixels, as for the translation instructions on the AI page: the template wraps.
-        let wide = (f32::from(window.viewport_size().width) - SIDEBAR_W - 65.).min(COLUMN_W) - 34.;
+        // In pixels, as for the translation instructions on 任务: the template wraps.
+        let wide = self.column_width(window) - 34.;
         let mut open = view.command.as_ref().map(|(index, fields)| {
             let problem = name_problem(&fields.typed_name(cx), *index, commands);
             let wrong = problem.is_some();
@@ -1066,4 +1341,20 @@ impl Workspace {
             ))
             .into_any_element()
     }
+}
+
+/// A provider's mark: white on a tile of the service's colour.
+fn provider_tile(preset: &str, size: f32) -> Div {
+    let (top, bottom) = theme::provider_tile(preset);
+    let mark = if provider::preset(preset).is_some() { format!("provider-{preset}") } else { "provider-custom".to_string() };
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(px(size))
+        .rounded(px(size * 0.28))
+        .bg(linear_gradient(160., linear_color_stop(top, 0.), linear_color_stop(bottom, 1.)))
+        .shadow(theme::shadow_card())
+        .child(ui::icon(&mark, size * 0.56, gpui::white()))
 }

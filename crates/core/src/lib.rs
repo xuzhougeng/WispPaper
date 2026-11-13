@@ -44,6 +44,7 @@ pub mod model;
 pub mod openaccess;
 pub mod organise;
 pub mod pdftext;
+pub mod provider;
 pub mod retrieval;
 pub mod review;
 pub mod screening;

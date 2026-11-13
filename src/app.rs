@@ -5,7 +5,7 @@
 use crate::i18n::t;
 use crate::input::{InputEvent, TextInput};
 use crate::pdf::{PdfEvent, PdfView, Zoom, ZoomTo};
-use crate::settings::{SettingsPage, SettingsView, UpdateState};
+use crate::settings::{AiTab, SettingsPage, SettingsView, UpdateState};
 use crate::shortcuts::{self, Dismiss};
 use crate::theme;
 use gpui::*;
@@ -97,6 +97,10 @@ pub enum MenuKind {
     InsertInto(Option<String>),
     /// Which model a task uses (设置 › AI).
     TaskModel(Task),
+    /// The services a provider can be added from (设置 › AI › 模型).
+    AddProvider,
+    /// How hard the n-th model of the provider on show thinks.
+    ModelEffort(usize),
     /// How large the PDF's pages are drawn.
     PdfZoom,
     /// 写作: the library's manuscripts, one section's own, export, and the language.
@@ -169,6 +173,7 @@ pub enum Cmd {
     ResetDataDir,
     RevealDataDir,
     ToggleAutoUpdate,
+    ToggleKeepRunning,
     CheckUpdate,
     SetAppearance(String),
     SetLanguage(Language),
@@ -177,14 +182,20 @@ pub enum Cmd {
     ClearShortcut(String),
     ResetShortcut(String),
     ResetShortcuts,
+    /// 设置 › AI on one of its tabs.
+    AiTab(AiTab),
     PickProtocol(Protocol),
-    /// Show another model service's fields on the AI page.
-    SelectProfile(usize),
-    AddProfile,
-    AskRemoveProfile(usize),
-    RemoveProfile(usize),
-    /// How hard the model on show thinks, a key of `ai::EFFORTS`.
-    SetEffort(String),
+    /// Show another provider's settings on 设置 › AI › 模型.
+    SelectProvider(usize),
+    /// One more provider, from a `provider::Preset` key; empty is a service set up by hand.
+    AddProvider(String),
+    AskRemoveProvider(usize),
+    RemoveProvider(usize),
+    /// One more model of the provider on show, from what its field holds.
+    AddModel,
+    RemoveModel(usize),
+    /// How hard the n-th model of the provider on show thinks, a key of `ai::EFFORTS`.
+    SetEffort(usize, String),
     /// Bind a task to a profile id; an empty id follows the default.
     SetTaskModel(Task, String),
     SetScreenWorkers(usize),
@@ -1641,13 +1652,37 @@ impl Workspace {
                     items.push(MenuItem { label: section.name.clone().into(), checked: false, note: Some(if length == 0 { t("空").into() } else { tf!("{length} 字", "{length} chars").into() }), cmd: Cmd::InsertInto(section.id.clone(), text.clone()) });
                 }
             }
+            MenuKind::AddProvider => {
+                for preset in &wisp_core::provider::PRESETS {
+                    let note = self.settings.providers.iter().any(|p| p.preset == preset.key).then(|| SharedString::from(t("已添加")));
+                    items.push(MenuItem { label: preset.name.into(), checked: false, note, cmd: Cmd::AddProvider(preset.key.into()) });
+                }
+                breaks.push(items.len());
+                items.push(MenuItem { label: t("其他 OpenAI 兼容服务").into(), checked: false, note: None, cmd: Cmd::AddProvider(String::new()) });
+            }
+            MenuKind::ModelEffort(index) => {
+                let Some(view) = self.settings_view.as_ref() else { return };
+                let effort = self.settings.providers.get(view.provider()).and_then(|p| p.models.get(index)).map(|m| m.effort.clone()).unwrap_or_default();
+                for (key, name) in ai::EFFORTS {
+                    items.push(MenuItem { label: t(name).into(), checked: effort == key, note: None, cmd: Cmd::SetEffort(index, key.to_string()) });
+                }
+            }
             MenuKind::TaskModel(task) => {
                 let bound = self.settings.tasks.get(task).to_string();
                 // Questions always have a model: the first one until another is chosen.
-                let chosen = if task == Task::Chat { self.settings.profile_for(task).map(|p| p.id.clone()).unwrap_or_default() } else { bound };
-                if task != Task::Chat { items.push(MenuItem { label: t("与助手相同").into(), checked: chosen.is_empty(), note: None, cmd: Cmd::SetTaskModel(task, String::new()) }) }
-                for profile in &self.settings.profiles {
-                    items.push(MenuItem { label: profile.title().into(), checked: chosen == profile.id, note: Some(profile.model.clone().into()), cmd: Cmd::SetTaskModel(task, profile.id.clone()) });
+                let chosen = if task == Task::Chat { self.settings.profile_for(task).map(|p| p.id).unwrap_or_default() } else { bound };
+                if task != Task::Chat {
+                    items.push(MenuItem { label: t("与助手相同").into(), checked: chosen.is_empty(), note: None, cmd: Cmd::SetTaskModel(task, String::new()) });
+                    breaks.push(items.len());
+                }
+                // Each provider's models, in its group; one without a key says so beside it.
+                let mut providers = self.settings.providers.iter().filter(|p| p.models.iter().any(|m| !m.model.trim().is_empty())).peekable();
+                while let Some(provider) = providers.next() {
+                    let note: SharedString = if provider.key().is_empty() { tf!("{} · 缺 API Key", "{} · no API key", provider.title()).into() } else { provider.title().into() };
+                    for model in provider.models.iter().filter(|m| !m.model.trim().is_empty()) {
+                        items.push(MenuItem { label: model.model.trim().to_string().into(), checked: chosen == model.id, note: Some(note.clone()), cmd: Cmd::SetTaskModel(task, model.id.clone()) });
+                    }
+                    if providers.peek().is_some() { breaks.push(items.len()) }
                 }
             }
             MenuKind::Screening(id) => {
@@ -1742,6 +1777,10 @@ impl Workspace {
                 self.save_settings(cx);
                 if self.settings.auto_update { self.check_update(false, cx) }
             }
+            Cmd::ToggleKeepRunning => {
+                self.settings.keep_running = !self.settings.keep_running;
+                self.save_settings(cx);
+            }
             Cmd::CheckUpdate => self.check_update(true, cx),
             Cmd::SetAppearance(value) => {
                 self.settings.appearance = value;
@@ -1755,6 +1794,7 @@ impl Workspace {
             Cmd::SetLanguage(language) => {
                 self.settings.language = language;
                 crate::i18n::set_language(language);
+                crate::background::set_menus(cx);
                 self.save_settings(cx);
                 cx.refresh_windows();
             }
@@ -1763,20 +1803,23 @@ impl Workspace {
             Cmd::ResetShortcut(id) => self.set_shortcut(&id, None, cx),
             Cmd::ResetShortcuts => self.reset_shortcuts(cx),
             Cmd::PickProtocol(value) => self.pick_protocol(value, cx),
-            Cmd::SelectProfile(index) => self.select_profile(index, cx),
-            Cmd::AddProfile => self.add_profile(cx),
-            Cmd::AskRemoveProfile(index) => {
-                let Some(profile) = self.settings.profiles.get(index) else { return };
-                let serves: Vec<&str> = Task::ALL.into_iter().filter(|task| self.settings.tasks.get(*task) == profile.id).map(|task| t(task.label())).collect();
-                let after = if serves.is_empty() { String::new() } else { tf!("它现在用于{}，删除后这些任务改用默认的模型。", "It currently serves {}. These tasks will use the default model after removal.", serves.join("、")) };
+            Cmd::AiTab(tab) => self.open_ai_tab(tab, window, cx),
+            Cmd::SelectProvider(index) => self.select_provider(index, cx),
+            Cmd::AddProvider(preset) => self.add_provider(&preset, cx),
+            Cmd::AskRemoveProvider(index) => {
+                let Some(provider) = self.settings.providers.get(index) else { return };
+                let serves: Vec<&str> = Task::ALL.into_iter().filter(|task| provider.models.iter().any(|m| m.id == self.settings.tasks.get(*task))).map(|task| t(task.label())).collect();
+                let after = if serves.is_empty() { String::new() } else { tf!("它的模型现在用于{}，删除后这些任务改用默认的模型。", "Its models currently serve {}. These tasks will use the default model after removal.", serves.join("、")) };
                 self.modal_error.clear();
-                self.modal = Some(Modal::Confirm { title: tf!("删除模型「{}」？", "Delete model “{}”?", profile.title()), message: tf!("它的地址、API Key 和设置会从 settings.json 里删除。{after}", "Its URL, API key and settings will be removed from settings.json. {after}"), action: t("删除").into(), cmd: Cmd::RemoveProfile(index) });
+                self.modal = Some(Modal::Confirm { title: tf!("删除服务「{}」？", "Delete provider “{}”?", provider.title()), message: tf!("它的地址、API Key 和 {} 个模型会从 settings.json 里删除。{after}", "Its URL, API key and {} models will be removed from settings.json. {after}", provider.models.len()), action: t("删除").into(), cmd: Cmd::RemoveProvider(index) });
             }
-            Cmd::RemoveProfile(index) => {
+            Cmd::RemoveProvider(index) => {
                 self.run(Cmd::CloseModal, window, cx);
-                self.remove_profile(index, cx);
+                self.remove_provider(index, cx);
             }
-            Cmd::SetEffort(value) => self.set_effort(value, cx),
+            Cmd::AddModel => self.add_model(cx),
+            Cmd::RemoveModel(index) => self.remove_model(index, cx),
+            Cmd::SetEffort(index, value) => self.set_effort(index, value, cx),
             Cmd::SetTaskModel(task, id) => {
                 self.settings.tasks.set(task, &id);
                 self.save_settings(cx);
@@ -2792,7 +2835,7 @@ impl Workspace {
     /// for this once (the settings stay as they are) and kept in place of
     /// the earlier translation.
     fn translate_passage(&mut self, text: String, profile: Option<String>, cx: &mut Context<Self>) {
-        let chosen = profile.as_deref().and_then(|id| self.settings.profiles.iter().find(|p| p.id == id)).cloned();
+        let chosen = profile.as_deref().and_then(|id| self.settings.profile(id));
         let again = chosen.is_some();
         let profile = chosen.unwrap_or_else(|| self.settings.profile_for_or_default(Task::Translate));
         // A click is a request: what failed before is asked again.
@@ -2804,14 +2847,14 @@ impl Workspace {
     /// Tell the PDF viewer how the translation on its card stands, and which models it may be asked of.
     pub(crate) fn sync_pdf_translation(&mut self, cx: &mut Context<Self>) {
         let prompt = ai::translation_prompt(&self.settings.translation_prompt).to_string();
-        let models: Vec<(String, String)> = self.settings.profiles.iter().map(|p| (p.id.clone(), p.title())).collect();
+        let models: Vec<(String, String)> = self.settings.profiles().into_iter().filter(|p| !p.model.trim().is_empty()).map(|p| (p.id.clone(), p.labelled())).collect();
         let usual = self.settings.profile_for_or_default(Task::Translate);
         let Some(lib) = self.lib.as_ref() else { return };
         let Some(pdf) = lib.pdf.clone() else { return };
         let Some((text, profile)) = pdf.read(cx).translation_asked() else { return };
         let state = lib.translations.get(&wisp_core::store::translation_key(&text, &prompt)).cloned().unwrap_or(Translated::Busy);
-        let model = profile.and_then(|id| self.settings.profiles.iter().find(|p| p.id == id)).unwrap_or(&usual);
-        let model = (model.id.clone(), model.title());
+        let model = profile.and_then(|id| self.settings.profile(&id)).unwrap_or(usual);
+        let model = (model.id.clone(), model.labelled());
         pdf.update(cx, |pdf, cx| pdf.show_translation(state, model, models, cx));
     }
 
@@ -4935,7 +4978,7 @@ impl Workspace {
                     return;
                 }
                 "pdftranslate" => {
-                    let profile = arg.parse::<usize>().ok().and_then(|n| self.settings.profiles.get(n)).map(|p| p.id.clone());
+                    let profile = arg.parse::<usize>().ok().and_then(|n| self.settings.profiles().into_iter().nth(n)).map(|p| p.id);
                     if let Some(pdf) = self.lib.as_ref().and_then(|l| l.pdf.clone()) { pdf.update(cx, |pdf, cx| pdf.translate(profile, cx)) }
                     return;
                 }
@@ -4994,8 +5037,8 @@ impl Workspace {
                 }
                 "translate" if arg == "stop" => Some(Cmd::StopBatchTranslation),
                 "translate" => Some(Cmd::ToggleTranslation),
-                // `profile:1` shows the second model service on the AI page.
-                "profile" => Some(Cmd::SelectProfile(arg.parse().unwrap_or(0))),
+                // `profile:1` shows the second provider on 设置 › AI › 模型.
+                "profile" => Some(Cmd::SelectProvider(arg.parse().unwrap_or(0))),
                 "menu" => {
                     let kind = match arg { "sort" => MenuKind::Sort, "year" => MenuKind::Filter(FilterKey::Year), "zoom" => MenuKind::PdfZoom, "fulltext" => MenuKind::Filter(FilterKey::Fulltext), "manuscripts" => MenuKind::Manuscripts, "export" => MenuKind::ManuscriptExport, _ => MenuKind::Add };
                     self.open_menu(kind, point(px(if matches!(arg, "zoom" | "manuscripts" | "export") { 900. } else { 20. }), px(120.)), cx);
@@ -5034,15 +5077,18 @@ impl Workspace {
                     None
                 }
                 "history" => Some(Cmd::ToggleHistory(false)),
-                "settings" => Some(Cmd::OpenSettings(match arg {
-                    "appearance" => SettingsPage::Appearance,
-                    "shortcuts" => SettingsPage::Shortcuts,
-                    "ai" => SettingsPage::Ai,
-                    "network" => SettingsPage::Network,
-                    "about" => SettingsPage::About,
-                    "commands" => SettingsPage::Commands,
-                    _ => SettingsPage::General,
-                })),
+                "settings" => Some(match arg {
+                    "ai" | "models" => Cmd::AiTab(AiTab::Models),
+                    "tasks" => Cmd::AiTab(AiTab::Tasks),
+                    "commands" => Cmd::AiTab(AiTab::Commands),
+                    _ => Cmd::OpenSettings(match arg {
+                        "appearance" => SettingsPage::Appearance,
+                        "shortcuts" => SettingsPage::Shortcuts,
+                        "network" => SettingsPage::Network,
+                        "about" => SettingsPage::About,
+                        _ => SettingsPage::General,
+                    }),
+                }),
                 "candidate" => Some(Cmd::CompleteChoose(arg.parse().ok())),
                 // `command:0` opens the first of the person's own commands on 设置 › 命令.
                 "command" => Some(Cmd::SelectCommand(arg.parse().unwrap_or(0))),
@@ -5051,6 +5097,11 @@ impl Workspace {
                 "language" => Some(Cmd::SetLanguage(if arg == "en" { Language::En } else { Language::Zh })),
                 "record" => Some(Cmd::RecordShortcut(arg.to_string())),
                 "update" => Some(Cmd::CheckUpdate),
+                // The window's close button: put away while 设置 › 通用 › 后台 is on, else closed (and the app quits).
+                "close" => {
+                    if crate::background::close(self.settings.keep_running, window, cx) { window.remove_window() }
+                    return;
+                }
                 "modal" => match arg {
                     "fields" => Some(Cmd::ManageFields),
                     "library" => Some(Cmd::NewLibrary),
