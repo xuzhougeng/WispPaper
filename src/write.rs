@@ -51,9 +51,16 @@ impl Workspace {
         let text = writing.editor.read(cx).text().to_string();
         // The words comments are about, drawn on a tint in the manuscript, and a marker in its margin on each line that has some.
         let marks = self.comment_marks(&text);
-        writing.editor.update(cx, |input, _| input.set_marks(marks.iter().map(|(range, tint, _)| (range.clone(), *tint)).collect()));
+        let noted: Vec<(std::ops::Range<usize>, Hsla)> = marks.iter().map(|(range, tint, _)| (range.clone(), *tint)).collect();
         let tops = writing.editor.read(cx).mark_tops().to_vec();
-        let markers = self.render_comment_markers(&marks, &tops, cx);
+        let markers = self.render_comment_markers(&marks, tops.get(..marks.len()).unwrap_or(&[]), cx);
+        // What the assistant is changing and has changed (revise.rs): tinted after the comments' words, a bar in the left margin on its lines.
+        // The tints move for a moment after each change and while one is being written: frames are asked for until they rest.
+        let (changed, bars, moving) = self.revise_marks(&text, std::time::Instant::now());
+        if moving { window.request_animation_frame() }
+        let bars = self.render_revise_bars(&bars, cx);
+        let lib = self.lib.as_ref().unwrap();
+        lib.writing.editor.update(cx, |input, _| input.set_marks(noted.into_iter().chain(changed).collect()));
         let lib = self.lib.as_ref().unwrap();
         let writing = &lib.writing;
         let text = writing.editor.read(cx).text();
@@ -92,12 +99,14 @@ impl Workspace {
                         .border_1()
                         .border_color(if focused { Theme::accent().opacity(0.55) } else { Theme::line() })
                         .bg(Theme::bg_body())
-                        .child(div().relative().w_full().max_w(px(EDITOR_MEASURE)).mx_auto().pl(px(18.)).pr(px(if markers.is_empty() { 18. } else { MARGIN })).py(px(14.)).text_size(px(15.)).line_height(px(26.)).text_color(Theme::text()).child(crate::input::with_selection_toolbar(&writing.editor, self.render_assist_bar(true, cx))).children(markers))
+                        .child(div().relative().w_full().max_w(px(EDITOR_MEASURE)).mx_auto().pl(px(18.)).pr(px(if markers.is_empty() { 18. } else { MARGIN })).py(px(14.)).text_size(px(15.)).line_height(px(26.)).text_color(Theme::text()).child(crate::input::with_selection_toolbar(&writing.editor, self.render_assist_bar(true, cx))).children(markers).children(bars))
                         .into_any_element()
                 }),
             )
             .when(!writing.reading && writing.editor.read(cx).selection().is_empty(), |d| d.child(self.render_assist_bar(false, cx)))
             .child(self.render_references(window, cx))
+            // Under the references, the box where the assistant is told what to change in this section.
+            .when(!writing.reading, |d| d.child(self.render_revise(if stacked { width } else { width - panel } - 40., window, cx)))
             .child(div().flex().flex_none().px(px(22.)).pb(px(12.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(div().flex_1().min_w_0().child(if writing.reading {
                 let whole: String = writing.current().map_or(String::new(), |m| m.sections.iter().map(|s| s.body.as_str()).collect::<Vec<_>>().join("\n"));
                 tf!("全文 {} · 点一节的名称，回到那一节写", "Manuscript: {} · Click a section name to edit it", length_label(&whole))

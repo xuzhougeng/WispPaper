@@ -26,6 +26,7 @@ mod manuscripts;
 mod markdown;
 mod pdf;
 mod picture;
+mod revise;
 mod screen;
 mod screen_confirm;
 mod screen_single;

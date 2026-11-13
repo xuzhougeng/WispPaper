@@ -210,6 +210,7 @@ impl Workspace {
         writing.section_id = section.map(|s| s.id.clone()).unwrap_or_default();
         writing.manuscript = manuscript.id.clone();
         writing.assist.leave();
+        writing.revise.leave();
         writing.editor.update(cx, |input, cx| input.set_text(&body, cx));
         writing.title.update(cx, |input, cx| input.set_text(&title, cx));
         // A comment being written was about the section left.
@@ -869,6 +870,7 @@ impl Workspace {
             "restore" => t("恢复前"),
             "split" => t("拆分前"),
             "merge" => t("并入前"),
+            "assistant" => t("助手改动前"),
             _ => "",
         };
         let rows: Vec<AnyElement> = snapshots

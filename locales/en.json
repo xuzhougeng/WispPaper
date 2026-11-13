@@ -800,7 +800,7 @@
   "默认": "Default",
   "未填模型": "Model not set",
   "添加模型": "Add model",
-  "助手和单篇文献的对话。向导拟检索式、图片库里看图写图注和标签、写作页的改写、润色和配引用也用它；看图需要能读图片的模型。": "The assistant and conversations about a paper. Also writes the setup guide’s queries, figure legends and tags, and rewrites, polishes and places citations on the writing page; reading figures needs a model that accepts images.",
+  "助手和单篇文献的对话。向导拟检索式、图片库里看图写图注和标签、写作页的改写、润色、配引用和让助手改稿也用它；看图需要能读图片的模型。": "The assistant and conversations about a paper. Also writes the setup guide’s queries, figure legends and tags, and rewrites, polishes places citations and revises a section as told on the writing page; reading figures needs a model that accepts images.",
   "逐篇阅读文献：筛选页的批量建议、复核和单篇再问，以及提取页按词条填写。文献多的时候，可以给它一个更快、更便宜的模型。": "Reads papers one by one: batch suggestions, rechecks and single-paper asks on the screening page, and filling in custom fields on the extraction page. For large libraries, you can choose a faster, cheaper model.",
   "同时阅读的篇数": "Concurrent papers",
   "批量筛选时同时发出的请求数。服务限速时调小。": "Concurrent batch screening requests. Lower this if the service rate-limits requests.",
@@ -1210,5 +1210,15 @@
   "从这一段起拆成新的一节，再给它起名": "Start a new section at this paragraph, then name it",
   "并入上一节": "Merge into previous section",
   "拆分前": "Before split",
-  "并入前": "Before merge"
+  "并入前": "Before merge",
+  "让助手改这一节：比如「把第二段写得更简洁」「在结尾补一句研究空白」": "Tell the assistant what to change in this section, e.g. “make the second paragraph tighter”",
+  "配置模型后，可以在这里让助手按你的话修改这一节。": "Set up a model to have the assistant revise this section as you tell it.",
+  "正在读这一节…": "Reading the section…",
+  "没有改动": "Nothing changed",
+  "后来改过": "Edited since",
+  "全部撤销": "Undo all",
+  "保留": "Keep",
+  "助手改动前": "Before the assistant’s changes",
+  "先写下想让助手怎么改。": "Say what the assistant should change first.",
+  "这一节太长，一次改不完：先拆成几节，或用上面的按钮一段一段改。": "This section is too long to revise at once: split it, or use the buttons above paragraph by paragraph."
 }
