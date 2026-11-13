@@ -1,6 +1,6 @@
 [package]
 name = "wisp_net"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 description = "Wisp Paper's HTTP: metadata lookups, literature searches, the streamed chat request and the update check. Blocking, on ureq."
 license = "MIT"
