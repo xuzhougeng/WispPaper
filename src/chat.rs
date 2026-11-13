@@ -511,9 +511,11 @@ impl Workspace {
             self.render_review_record(chat, review, cx)
         } else if !configured && chat.messages.is_empty() {
             ui::empty_state("sparkle", t("还没有配置模型"), t("提问需要一个模型服务：Claude API，或任何 OpenAI 兼容的服务。API Key 只保存在本机。以前的对话在右上角的「历史」里，不配置也能看。")).child(ui::primary_button(SharedString::from(format!("chat-settings-{side}")), t("打开设置")).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx))).into_any_element()
+        } else if chat.messages.is_empty() && chat.error.is_empty() && !about_paper {
+            self.render_start(cx)
         } else if chat.messages.is_empty() && chat.error.is_empty() {
-            let suggestions: &[&str] = if about_paper { &[t("这篇文献的研究问题、方法和主要结论是什么？"), t("作者的结论有哪些证据支持？有什么局限？"), t("用三句话向同行介绍这篇文章。")] } else { &[t("这些文献主要在研究哪些问题？按主题归类。"), t("哪些文献的结论相互支持或矛盾？"), t("我还没读的文献里，哪几篇最值得先读？为什么？")] };
-            ui::empty_state("sparkle", if about_paper { t("就这篇文献提问") } else { t("向文献库提问") }, t("回答依据文献库里的记录、笔记和已存 PDF 的全文，并标出出处。需要时助手会自己检索和翻阅全文。"))
+            let suggestions: &[&str] = &[t("这篇文献的研究问题、方法和主要结论是什么？"), t("作者的结论有哪些证据支持？有什么局限？"), t("用三句话向同行介绍这篇文章。")];
+            ui::empty_state("sparkle", t("就这篇文献提问"), t("回答依据文献库里的记录、笔记和已存 PDF 的全文，并标出出处。需要时助手会自己检索和翻阅全文。"))
                 .id(SharedString::from(format!("chat-empty-{side}"))).w_full().min_h_0().overflow_y_scroll().justify_start()
                 .children(suggestions.iter().enumerate().map(|(i, text)| ui::secondary_button(SharedString::from(format!("suggest-{side}-{i}")), "").w_full().h_auto().min_h(px(30.)).py(px(6.)).child(div().flex_1().min_w_0().child(*text)).on_click(self.on(Cmd::Suggest(about_paper, text.to_string()), cx))))
                 .into_any_element()
@@ -545,11 +547,11 @@ impl Workspace {
                             .flex_col()
                             .flex_1()
                             .min_w(px(200.))
-                            .when(!about_paper, |d| d.child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(if listing { t("文献库的历史对话") } else { t("向文献库提问") })))
+                            .when(!about_paper, |d| d.child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(if listing { t("助手的历史对话") } else { t("助手") })))
                             // The paper's panel has its title above; its history says whose it is.
                             .when(about_paper && listing, |d| d.child(div().font_weight(FontWeight::MEDIUM).child(t("这篇文献的历史对话"))))
                             .child(div().text_size(px(12.)).line_height(px(17.)).text_color(Theme::text_tertiary()).child(match (listing, about_paper) {
-                                (true, false) => t("向整个文献库提过的问题和回答；点开一次对话可以接着问。单篇文献的对话在各自的「提问」里").to_string(),
+                                (true, false) => t("和助手就整个文献库有过的对话；点开一次可以接着说。单篇文献的对话在各自的「提问」里").to_string(),
                                 (true, true) => t("就这篇文献提过的问题和回答；点开一次对话可以接着问").to_string(),
                                 (false, _) => scope,
                             })),
@@ -603,6 +605,66 @@ impl Workspace {
     /// what each was handed over as once the material is built; the papers
     /// of the current list before that. A row opens the paper beside the
     /// conversation; the scope stays what it is.
+    /// The assistant's page before anything is said: what it can be asked
+    /// to do, by kind. A line is a request sent as it stands, or a command
+    /// left in the box for its words to follow.
+    fn render_start(&self, cx: &mut Context<Self>) -> AnyElement {
+        enum Start {
+            Say(&'static str),
+            Command(&'static str),
+        }
+        use Start::*;
+        let groups: [(&str, &str, &[Start]); 3] = [
+            ("search", "找文献", &[Say("按这个文献库的主题在 PubMed 和 Europe PMC 试检索，看看还有哪些文献没有收进来。"), Say("给还没有 PDF 的文献查找开放全文。"), Command("search")]),
+            ("file-text", "读文献", &[Say("这些文献主要在研究哪些问题？按主题归类。"), Say("哪些文献的结论相互支持或矛盾？"), Say("我还没读的文献里，哪几篇最值得先读？为什么？"), Command("compare")]),
+            ("pen-line", "写", &[Command("review"), Command("write"), Command("cite")]),
+        ];
+        let cards = groups.into_iter().map(|(icon, title, starts)| {
+            let lines = starts.iter().enumerate().map(|(n, start)| {
+                let line = div().id(SharedString::from(format!("start-{icon}-{n}"))).flex().gap(px(8.)).w_full().px(px(8.)).py(px(6.)).rounded(px(6.)).text_size(px(13.)).line_height(px(19.)).cursor_pointer().hover(|s| s.bg(Theme::hover()));
+                match start {
+                    Say(text) => line.child(div().flex_1().min_w_0().child(t(text))).on_click(self.on(Cmd::Suggest(false, t(text).to_string()), cx)),
+                    Command(name) => {
+                        let about = ai::SLASH.iter().find(|slash| slash.name == *name).map_or("", |slash| slash.about);
+                        line.child(div().flex_none().font_weight(FontWeight::MEDIUM).text_color(Theme::accent()).child(format!("/{name}"))).child(div().flex_1().min_w_0().text_color(Theme::text_secondary()).child(t(about))).on_click(self.on(Cmd::StartCommand(name), cx))
+                    }
+                }
+            });
+            div()
+                .flex()
+                .flex_col()
+                .flex_none()
+                // A width of its own: a card that shares the row's width is measured before its lines wrap, and is then too short for them.
+                .w(px(348.))
+                .max_w_full()
+                .gap(px(2.))
+                .p(px(8.))
+                .rounded(px(10.))
+                .border_1()
+                .border_color(Theme::line())
+                .child(div().flex().items_center().gap(px(7.)).px(px(8.)).pt(px(4.)).pb(px(6.)).child(ui::icon(icon, 14., Theme::text_tertiary())).child(div().text_size(px(12.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text_tertiary()).child(t(title))))
+                .children(lines)
+        });
+        div()
+            .id("chat-start")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .items_center()
+            .w_full()
+            .min_h_0()
+            .overflow_y_scroll()
+            .gap(px(8.))
+            .px(px(24.))
+            .pt(px(56.))
+            .pb(px(24.))
+            .child(ui::icon("sparkle", 30., Theme::text_placeholder()))
+            .child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("交给助手")))
+            .child(div().max_w(px(600.)).text_size(px(12.)).line_height(px(18.)).text_center().text_color(Theme::text_tertiary()).child(t("交代一件事，或者提一个问题。助手会自己检索和翻阅文献库，回答标出出处；要改动文献库时先问你。")))
+            .child(div().flex().flex_wrap().justify_center().items_start().gap(px(12.)).w_full().max_w(px(1080.)).pt(px(20.)).children(cards))
+            .into_any_element()
+    }
+
     fn render_materials(&self, chat: &Chat, cx: &mut Context<Self>) -> AnyElement {
         /// The rows drawn; a library of thousands is not a list to scroll through here.
         const LISTED: usize = 300;

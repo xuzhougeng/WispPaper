@@ -383,7 +383,7 @@ impl Workspace {
             )
             .child(ui::primary_button("add-paper", t("添加文献")).w_full().on_click(self.on_menu(MenuKind::Add, cx)))
             .child(div().flex().flex_col().gap(px(1.)).children(view_rows))
-            .child(div().flex().flex_col().gap(px(1.)).child(nav("page-ask", "sparkle", t("向文献库提问"), None, lib.page == Page::Ask, Cmd::SetPage(Page::Ask), self, cx)).child(nav("page-sources", "search", t("检索与导入"), (!lib.searches.is_empty()).then_some(lib.searches.len()), matches!(lib.page, Page::Sources | Page::Guide), Cmd::SetPage(Page::Sources), self, cx)).child(nav("page-screen", "list-todo", t("筛选"), Some(lib.papers.iter().filter(|p| p.screening == "pending").count()).filter(|n| *n > 0), lib.page == Page::Screen, Cmd::SetPage(Page::Screen), self, cx)).child(nav("page-write", "pen-line", t("写作"), None, lib.page == Page::Write, Cmd::SetPage(Page::Write), self, cx)))
+            .child(div().flex().flex_col().gap(px(1.)).child(nav("page-ask", "sparkle", t("助手"), None, lib.page == Page::Ask, Cmd::SetPage(Page::Ask), self, cx)).child(nav("page-sources", "search", t("检索与导入"), (!lib.searches.is_empty()).then_some(lib.searches.len()), matches!(lib.page, Page::Sources | Page::Guide), Cmd::SetPage(Page::Sources), self, cx)).child(nav("page-screen", "list-todo", t("筛选"), Some(lib.papers.iter().filter(|p| p.screening == "pending").count()).filter(|n| *n > 0), lib.page == Page::Screen, Cmd::SetPage(Page::Screen), self, cx)).child(nav("page-write", "pen-line", t("写作"), None, lib.page == Page::Write, Cmd::SetPage(Page::Write), self, cx)))
             .child(
                 div()
                     .flex()

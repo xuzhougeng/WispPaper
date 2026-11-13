@@ -31,7 +31,7 @@ pub const SHORTCUTS: [Shortcut; 14] = [
     Shortcut { id: "search", label: "搜索文献", group: 1, default: "secondary-f" },
     Shortcut { id: "add", label: "通过 DOI / PMID 添加文献", group: 1, default: "secondary-n" },
     Shortcut { id: "import-pdf", label: "导入 PDF 文件", group: 1, default: "secondary-o" },
-    Shortcut { id: "ask", label: "向文献库提问", group: 1, default: "secondary-l" },
+    Shortcut { id: "ask", label: "打开助手", group: 1, default: "secondary-l" },
     Shortcut { id: "detail", label: "展开 / 收起文献详情", group: 1, default: "secondary-e" },
     Shortcut { id: "sidebar", label: "显示 / 收起侧边栏", group: 1, default: "secondary-b" },
     Shortcut { id: "reading", label: "进入 / 退出阅读模式", group: 1, default: "secondary-shift-f" },

@@ -282,6 +282,8 @@ pub enum Cmd {
     Ask(bool),
     /// Ask one of the suggested questions.
     Suggest(bool, String),
+    /// Leave a slash command in the assistant's box, for its words to follow.
+    StartCommand(&'static str),
     NewChat(bool),
     /// Stop the answer being given.
     StopChat(bool),
@@ -1612,7 +1614,7 @@ impl Workspace {
                 let bound = self.settings.tasks.get(task).to_string();
                 // Questions always have a model: the first one until another is chosen.
                 let chosen = if task == Task::Chat { self.settings.profile_for(task).map(|p| p.id.clone()).unwrap_or_default() } else { bound };
-                if task != Task::Chat { items.push(MenuItem { label: t("与提问相同").into(), checked: chosen.is_empty(), note: None, cmd: Cmd::SetTaskModel(task, String::new()) }) }
+                if task != Task::Chat { items.push(MenuItem { label: t("与助手相同").into(), checked: chosen.is_empty(), note: None, cmd: Cmd::SetTaskModel(task, String::new()) }) }
                 for profile in &self.settings.profiles {
                     items.push(MenuItem { label: profile.title().into(), checked: chosen == profile.id, note: Some(profile.model.clone().into()), cmd: Cmd::SetTaskModel(task, profile.id.clone()) });
                 }
@@ -2066,6 +2068,13 @@ impl Workspace {
                     chat.input.update(cx, |input, cx| input.set_text(&question, cx));
                 }
                 self.ask(paper, cx);
+            }
+            Cmd::StartCommand(name) => {
+                if let Some(lib) = self.lib.as_ref() {
+                    lib.library_chat.input.update(cx, |input, cx| input.set_text(&format!("/{name} "), cx));
+                    lib.library_chat.input.read(cx).focus(window);
+                }
+                self.chat_input(false, InputEvent::Changed, cx);
             }
             Cmd::NewChat(paper) => {
                 // An answer still arriving is stopped first, so that what there is of it is kept.
@@ -2612,7 +2621,7 @@ impl Workspace {
                 }
             }),
         ];
-        let library_chat = Chat::new("向文献库提问，输入 / 选择命令，可以粘贴图片", cx);
+        let library_chat = Chat::new("交代一件事或提一个问题，输入 / 选择命令，可以粘贴图片", cx);
         let paper_chat = Chat::new("就这篇文献提问，输入 / 选择命令", cx);
         let mut subscriptions = subscriptions;
         for (chat, paper) in [(&library_chat, false), (&paper_chat, true)] {
