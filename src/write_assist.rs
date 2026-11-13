@@ -5,6 +5,7 @@
 //! the candidates, beside the original with the words that changed marked;
 //! only the person puts it into the draft, and Undo takes that back.
 
+use crate::i18n::t;
 use crate::app::{Cmd, Workspace};
 use crate::settings::SettingsPage;
 use crate::theme::Theme;
@@ -25,7 +26,7 @@ pub struct Assisting {
 /// One action's result, with what it was asked about.
 pub struct Card {
     pub assist: Assist,
-    pub title: String,
+    pub language: String,
     /// The part of the manuscript the paragraph is in: the card is for that part only.
     pub section: String,
     /// The text sent, and where in the draft it stood when it was sent.
@@ -90,7 +91,7 @@ impl Workspace {
             .collect();
         writing.assist.generation += 1;
         let generation = writing.assist.generation;
-        let mut card = Card { title: assist.title(&language), assist: assist.clone(), section: writing.section_id.clone(), original, range, result: String::new(), busy: true, error: String::new(), note: String::new(), model: format!("{} · {}", profile.title(), profile.model) };
+        let mut card = Card { language: language.clone(), assist: assist.clone(), section: writing.section_id.clone(), original, range, result: String::new(), busy: true, error: String::new(), note: String::new(), model: format!("{} · {}", profile.title(), profile.model) };
         let request = ai::assist_request(&profile, &assist, &language, &card.original, &examples, &own);
         let request = match request {
             Ok(request) => request,
@@ -125,7 +126,7 @@ impl Workspace {
                             true
                         }
                         ChatEvent::Retrying(attempt, why) => {
-                            card.note = format!("模型服务暂时没有回应（{why}），正在重试，第 {attempt} 次…");
+                            card.note = tf!("模型服务暂时没有回应（{why}），正在重试，第 {attempt} 次…", "The model service has not responded ({why}). Retrying, attempt {attempt}…");
                             true
                         }
                         ChatEvent::Error(error) => {
@@ -136,7 +137,7 @@ impl Workspace {
                         ChatEvent::Done(turn) => {
                             card.busy = false;
                             card.note = ai::stop_note(&turn.stop).unwrap_or_default().to_string();
-                            if card.result.trim().is_empty() && card.error.is_empty() { card.error = "模型没有返回内容。".into() }
+                            if card.result.trim().is_empty() && card.error.is_empty() { card.error = t("模型没有返回内容。").into() }
                             false
                         }
                     };
@@ -156,7 +157,7 @@ impl Workspace {
         assist.generation += 1;
         if let Some(card) = assist.card.as_mut().filter(|card| card.busy) {
             card.busy = false;
-            card.note = if card.result.trim().is_empty() { "已停止。".into() } else { "已停止，下面是停止前收到的部分。".into() };
+            card.note = if card.result.trim().is_empty() { t("已停止。").into() } else { t("已停止，下面是停止前收到的部分。").into() };
         }
         cx.notify();
     }
@@ -175,14 +176,14 @@ impl Workspace {
         if result.is_empty() { return }
         if how == Use::Copy {
             cx.write_to_clipboard(ClipboardItem::new_string(result));
-            return self.say("已复制", cx);
+            return self.say(t("已复制"), cx);
         }
         // The draft may have been edited meanwhile: the paragraph is found again by what it says.
         let text = writing.editor.read(cx).text().to_string();
         let found = if text.get(card.range.clone()) == Some(card.original.as_str()) { Some(card.range.clone()) } else { text.find(&card.original).map(|at| at..at + card.original.len()) };
         match (how, found) {
             (Use::Replace, Some(range)) => writing.editor.update(cx, |input, cx| input.replace_range(range, &result, cx)),
-            (Use::Replace, None) => return self.fail("原来那段已经改动，找不到了：可以复制结果，自己放进去。", cx),
+            (Use::Replace, None) => return self.fail(t("原来那段已经改动，找不到了：可以复制结果，自己放进去。"), cx),
             (_, found) => {
                 // Below the paragraph's line; without it, at the end of the draft.
                 let end = found.map_or(text.len(), |range| text[range.end..].find('\n').map_or(text.len(), |at| range.end + at));
@@ -210,7 +211,7 @@ impl Workspace {
                 Assist::Own(name) => self.settings.commands.iter().find(|command| command.name == *name).map(|command| command.about.clone()).unwrap_or_default(),
                 _ => String::new(),
             };
-            ui::ghost_button(("write-assist", n), (n == 0).then_some("sparkle"), Some(assist.title(&language).into()))
+            ui::ghost_button(("write-assist", n), (n == 0).then_some("sparkle"), Some(crate::i18n::assist_title(assist, &language).into()))
                 .h(px(24.))
                 .px(px(7.))
                 .text_size(px(12.))
@@ -227,9 +228,9 @@ impl Workspace {
             .gap(px(2.))
             .px(px(20.))
             .pb(px(6.))
-            .child(div().flex_none().mr(px(4.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(if selected { "对选中的文字：" } else { "对光标所在的段落：" }))
+            .child(div().flex_none().mr(px(4.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(if selected { t("对选中的文字：") } else { t("对光标所在的段落：") }))
             .when(configured, |d| d.children(buttons))
-            .when(!configured, |d| d.child(ui::ghost_button("write-assist-settings", Some("settings-gear"), Some("配置模型后可以改写、翻译和润色".into())).h(px(24.)).text_size(px(12.)).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx))))
+            .when(!configured, |d| d.child(ui::ghost_button("write-assist-settings", Some("settings-gear"), Some(t("配置模型后可以改写、翻译和润色").into())).h(px(24.)).text_size(px(12.)).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx))))
     }
 
     /// The result of the last action, over the candidates; `None` without one for this part.
@@ -254,11 +255,11 @@ impl Workspace {
             .gap(px(8.))
             .max_h(px(380.))
             .overflow_y_scroll()
-            .child(label("原文"))
+            .child(label(t("原文")))
             .child(div().px(px(10.)).py(px(8.)).rounded(px(8.)).bg(Theme::bg_sunken()).text_size(px(12.)).line_height(px(19.)).text_color(Theme::text_secondary()).child(before))
-            .child(label(match card.assist { Assist::Translate => "译文", Assist::Own(_) => "结果", _ => "改后" }))
+            .child(label(match card.assist { Assist::Translate => t("译文"), Assist::Own(_) => t("结果"), _ => t("改后") }))
             .child(if card.result.trim().is_empty() && card.busy {
-                div().flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(Theme::text_tertiary()).child(ui::spinner("write-assist-wait", 12., Theme::accent())).child("正在写…")
+                div().flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(Theme::text_tertiary()).child(ui::spinner("write-assist-wait", 12., Theme::accent())).child(t("正在写…"))
             } else {
                 div().text_size(px(13.)).line_height(px(21.)).text_color(Theme::text()).child(after)
             });
@@ -282,10 +283,10 @@ impl Workspace {
                     .items_center()
                     .gap(px(6.))
                     .child(ui::icon("sparkle", 13., Theme::accent()))
-                    .child(div().flex_none().text_size(px(12.)).font_weight(FontWeight::MEDIUM).child(card.title.clone()))
+                    .child(div().flex_none().text_size(px(12.)).font_weight(FontWeight::MEDIUM).child(crate::i18n::assist_title(&card.assist, &card.language)))
                     .when(card.busy && !card.result.is_empty(), |d| d.child(ui::spinner("write-assist-busy", 11., Theme::accent())))
                     .child(div().flex_1().min_w_0().truncate().text_right().text_size(px(11.)).text_color(Theme::text_tertiary()).child(card.model.clone()))
-                    .when(card.busy, |d| d.child(small("write-assist-stop", "停止").on_click(self.on(Cmd::WriteAssistStop, cx))))
+                    .when(card.busy, |d| d.child(small("write-assist-stop", t("停止")).on_click(self.on(Cmd::WriteAssistStop, cx))))
                     .when(!card.busy, |d| d.child(ui::ghost_button("write-assist-close", Some("x"), None).size(px(22.)).min_w(px(22.)).on_click(self.on(Cmd::WriteAssistUse(Use::Drop), cx)))),
             )
             // A request refused before it was sent has nothing to compare.
@@ -299,12 +300,12 @@ impl Workspace {
                         .items_center()
                         .flex_wrap()
                         .gap(px(4.))
-                        .child(ui::primary_button("write-assist-replace", "替换原文").h(px(26.)).px(px(10.)).text_size(px(12.)).on_click(self.on(Cmd::WriteAssistUse(Use::Replace), cx)))
-                        .child(ui::secondary_button("write-assist-below", "插在下面").h(px(26.)).px(px(10.)).text_size(px(12.)).on_click(self.on(Cmd::WriteAssistUse(Use::Below), cx)))
-                        .child(small("write-assist-copy", "复制").on_click(self.on(Cmd::WriteAssistUse(Use::Copy), cx)))
-                        .child(small("write-assist-drop", "放弃").on_click(self.on(Cmd::WriteAssistUse(Use::Drop), cx)))
+                        .child(ui::primary_button("write-assist-replace", t("替换原文")).h(px(26.)).px(px(10.)).text_size(px(12.)).on_click(self.on(Cmd::WriteAssistUse(Use::Replace), cx)))
+                        .child(ui::secondary_button("write-assist-below", t("插在下面")).h(px(26.)).px(px(10.)).text_size(px(12.)).on_click(self.on(Cmd::WriteAssistUse(Use::Below), cx)))
+                        .child(small("write-assist-copy", t("复制")).on_click(self.on(Cmd::WriteAssistUse(Use::Copy), cx)))
+                        .child(small("write-assist-drop", t("放弃")).on_click(self.on(Cmd::WriteAssistUse(Use::Drop), cx)))
                         .child(div().flex_1())
-                        .child(div().flex_none().text_size(px(11.)).text_color(Theme::text_tertiary()).child(if cfg!(target_os = "macos") { "⌘Z 可撤销" } else { "Ctrl+Z 可撤销" })),
+                        .child(div().flex_none().text_size(px(11.)).text_color(Theme::text_tertiary()).child(if cfg!(target_os = "macos") { t("⌘Z 可撤销") } else { t("Ctrl+Z 可撤销") })),
                 )
             });
         Some(card_el.into_any_element())

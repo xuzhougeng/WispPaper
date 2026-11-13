@@ -1,6 +1,7 @@
 //! The window's frame (menus, dialogs and toasts over the page) and the
 //! home page: one card per library.
 
+use crate::i18n::t;
 use crate::app::{Cmd, Edge, MenuKind, Workspace};
 use crate::context::Nav;
 use crate::settings::{SettingsPage, UpdateState};
@@ -182,7 +183,7 @@ impl Workspace {
             .iter()
             .map(|info| {
                 let accent = theme::accent_of(&info.color);
-                let topic = if info.topic.is_empty() { "还没有写主题描述".to_string() } else { info.topic.clone() };
+                let topic = if info.topic.is_empty() { t("还没有写主题描述").to_string() } else { info.topic.clone() };
                 div()
                     .id(SharedString::from(format!("library-{}", info.id)))
                     .flex()
@@ -231,8 +232,8 @@ impl Workspace {
                                     .justify_between()
                                     .text_size(px(12.))
                                     .text_color(Theme::text_tertiary())
-                                    .child(format!("{} 篇文献", info.paper_count))
-                                    .child(format!("打开于 {}", time::date_text(&info.opened_at))),
+                                    .child(tf!("{} 篇文献", "{} papers", info.paper_count))
+                                    .child(tf!("打开于 {}", "Opened {}", time::date_text(&info.opened_at))),
                             ),
                     )
                     .into_any_element()
@@ -256,7 +257,7 @@ impl Workspace {
             .hover(|s| s.bg(Theme::hover()))
             .on_click(self.on(Cmd::NewLibrary, cx))
             .child(ui::icon("plus", 20., Theme::text_secondary()))
-            .child("新建文献库");
+            .child(t("新建文献库"));
         let empty = self.libraries.is_empty();
         let new_version = match &self.update {
             UpdateState::Available(release) => Some(release.version.clone()),
@@ -290,20 +291,20 @@ impl Workspace {
                                     .flex_col()
                                     .gap(px(4.))
                                     .child(div().text_size(px(24.)).line_height(px(32.)).font_weight(FontWeight::SEMIBOLD).child("Wisp Paper"))
-                                    .child(div().text_color(Theme::text_secondary()).child("每个文献库是一个独立的主题：自己的文献、PDF、词条和提问。")),
+                                    .child(div().text_color(Theme::text_secondary()).child(t("每个文献库是一个独立的主题：自己的文献、PDF、词条和提问。"))),
                             )
                             .child(
                                 div()
                                     .flex()
                                     .gap(px(4.))
                                     // Only while a newer release is on offer.
-                                    .when_some(new_version, |d, version| d.child(ui::primary_button("home-update", format!("新版本 {version}")).h(px(28.)).px(px(10.)).rounded_full().text_size(px(12.)).on_click(self.on(Cmd::OpenSettings(SettingsPage::About), cx))))
-                                    .child(ui::ghost_button("home-folder", Some("folder-open"), Some("数据目录".into())).on_click(self.on(Cmd::RevealFolder, cx)))
-                                    .child(ui::ghost_button("home-settings", Some("settings-gear"), Some("设置".into())).on_click(self.on(Cmd::OpenSettings(SettingsPage::General), cx))),
+                                    .when_some(new_version, |d, version| d.child(ui::primary_button("home-update", tf!("新版本 {version}", "New version {version}")).h(px(28.)).px(px(10.)).rounded_full().text_size(px(12.)).on_click(self.on(Cmd::OpenSettings(SettingsPage::About), cx))))
+                                    .child(ui::ghost_button("home-folder", Some("folder-open"), Some(t("数据目录").into())).on_click(self.on(Cmd::RevealFolder, cx)))
+                                    .child(ui::ghost_button("home-settings", Some("settings-gear"), Some(t("设置").into())).on_click(self.on(Cmd::OpenSettings(SettingsPage::General), cx))),
                             ),
                     )
                     .when(empty, |d| {
-                        d.child(div().p(px(16.)).rounded(px(10.)).bg(Theme::accent_soft()).text_color(Theme::text_secondary()).child("还没有文献库。先为一个研究主题新建文献库，再往里添加文献：粘贴 DOI、拖入 PDF，或导入 BibTeX / RIS。"))
+                        d.child(div().p(px(16.)).rounded(px(10.)).bg(Theme::accent_soft()).text_color(Theme::text_secondary()).child(t("还没有文献库。先为一个研究主题新建文献库，再往里添加文献：粘贴 DOI、拖入 PDF，或导入 BibTeX / RIS。")))
                     })
                     .child(div().flex().flex_wrap().gap(px(16.)).children(cards).child(new_card)),
             )

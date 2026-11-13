@@ -11,6 +11,7 @@
 //! model questions are put to); what it writes is in the field to change,
 //! and kept only with the rest.
 
+use crate::i18n::{t, tc};
 use crate::app::{Cmd, MenuItem, MenuKind, Modal, Page, Picture, Tab, Workspace};
 use crate::input::{InputEvent, TextInput};
 use crate::pdf::Piece;
@@ -120,7 +121,7 @@ fn grid(width: f32) -> (usize, f32) {
 
 /// Where a figure is from, in a line: who and when, then the title.
 fn source_line(paper: Option<&Paper>) -> String {
-    let Some(paper) = paper else { return "文献已不在库里".into() };
+    let Some(paper) = paper else { return t("文献已不在库里").into() };
     let mut who = paper.short_authors();
     if let Some(year) = paper.year { who = if who.is_empty() { year.to_string() } else { format!("{who} {year}") } }
     if who.is_empty() { paper.title.clone() } else { format!("{who} · {}", paper.title) }
@@ -190,7 +191,7 @@ impl Workspace {
             Cmd::FigureSource(id) => {
                 let Some(figure) = self.lib.as_ref().and_then(|lib| lib.gallery.figure(&id)).cloned() else { return };
                 self.run(Cmd::CloseModal, window, cx);
-                if self.lib.as_ref().is_some_and(|lib| lib.paper(&figure.paper_id).is_none()) { return self.fail("这张图的文献已不在库里。", cx) }
+                if self.lib.as_ref().is_some_and(|lib| lib.paper(&figure.paper_id).is_none()) { return self.fail(t("这张图的文献已不在库里。"), cx) }
                 self.run(Cmd::GotoSource(figure.paper_id.clone(), (figure.page > 0).then_some(figure.page), String::new()), window, cx);
                 // Where on the page it was cut from, once the page is at hand.
                 if let (Some(bbox), Some(pdf)) = (figure.bbox, self.lib.as_ref().and_then(|lib| lib.pdf.clone())) && figure.page > 0 {
@@ -213,18 +214,18 @@ impl Workspace {
                 match std::fs::read(&path) {
                     Ok(bytes) => {
                         cx.write_to_clipboard(ClipboardItem::new_image(&Image::from_bytes(format, bytes)));
-                        self.say("图片已复制", cx);
+                        self.say(t("图片已复制"), cx);
                     }
-                    Err(err) => self.fail(format!("无法读取 {}：{err}", path.display()), cx),
+                    Err(err) => self.fail(tf!("无法读取 {}：{err}", "Cannot read {}: {err}", path.display()), cx),
                 }
             }
             Cmd::SaveFigure(id) => self.save_figure_as(&id, cx),
             Cmd::AskRemoveFigure(id) => {
                 let Some(figure) = self.lib.as_ref().and_then(|lib| lib.gallery.figure(&id)) else { return };
-                let name = if figure.headline().is_empty() { "这张图片".to_string() } else { format!("「{}」", figure.headline().chars().take(40).collect::<String>()) };
+                let name = if figure.headline().is_empty() { t("这张图片").to_string() } else { format!("「{}」", figure.headline().chars().take(40).collect::<String>()) };
                 self.modal_subscriptions.clear();
                 self.modal_error.clear();
-                self.modal = Some(Modal::Confirm { title: format!("把{name}移出图片库？"), message: "它的图注、标签和备注会一起删除。图片文件不会被删除，会移到文献库文件夹下的 removed 文件夹。PDF 和文献不动。".into(), action: "移出图片库".into(), cmd: Cmd::RemoveFigure(id) });
+                self.modal = Some(Modal::Confirm { title: tf!("把{name}移出图片库？", "Remove {name} from figures?"), message: t("它的图注、标签和备注会一起删除。图片文件不会被删除，会移到文献库文件夹下的 removed 文件夹。PDF 和文献不动。").into(), action: t("移出图片库").into(), cmd: Cmd::RemoveFigure(id) });
             }
             Cmd::RemoveFigure(id) => {
                 self.run(Cmd::CloseModal, window, cx);
@@ -234,7 +235,7 @@ impl Workspace {
                     lib.gallery.broken.remove(&id);
                     if let Some(image) = lib.gallery.thumbs.remove(&id) { cx.drop_image(image, Some(window)) }
                 }
-                self.say("已移出图片库。", cx);
+                self.say(t("已移出图片库。"), cx);
             }
             Cmd::FigureInfer(ask) => self.infer_figure(ask, cx),
             Cmd::FigureAddTag(tag) => {
@@ -261,8 +262,8 @@ impl Workspace {
                 if path.extension().is_none() && let Some(extension) = from.extension() { path.set_extension(extension); }
                 let result = std::fs::copy(&from, &path);
                 this.update(cx, |this, cx| match result {
-                    Ok(_) => this.say(format!("已保存到 {}", path.display()), cx),
-                    Err(err) => this.fail(format!("无法写入 {}：{err}", path.display()), cx),
+                    Ok(_) => this.say(tf!("已保存到 {}", "Saved to {}", path.display()), cx),
+                    Err(err) => this.fail(tf!("无法写入 {}：{err}", "Cannot write {}: {err}", path.display()), cx),
                 })
                 .ok();
             }
@@ -341,7 +342,7 @@ impl Workspace {
                 let wanted = matches!(&this.modal, Some(Modal::Figure(form)) if form.key == key);
                 let Some(lib) = this.lib.as_mut().filter(|lib| lib.info.id == library && wanted) else { return };
                 let Some(picture) = picture else {
-                    this.modal_error = "这张图片读不出来，文件可能被移走了。".into();
+                    this.modal_error = t("这张图片读不出来，文件可能被移走了。").into();
                     return cx.notify();
                 };
                 if let Some((_, old)) = lib.gallery.large.replace((key, Arc::new(RenderImage::new(vec![image::Frame::new(picture)])))) { cx.drop_image(old, None) }
@@ -360,7 +361,7 @@ impl Workspace {
         let Some(Modal::Figure(form)) = self.modal.as_mut() else { return };
         if form.asking.contains(&ask) { return }
         if profile.missing().is_some() {
-            self.modal_error = "还没有配置模型。在「设置 › AI」里填好一个能看图的模型，它就可以看着图写图注、标签和解读。".into();
+            self.modal_error = t("还没有配置模型。在「设置 › AI」里填好一个能看图的模型，它就可以看着图写图注、标签和解读。").into();
             return cx.notify();
         }
         let text = |input: &Entity<TextInput>| input.read(cx).text().trim().to_string();
@@ -375,8 +376,8 @@ impl Workspace {
         let work = cx.background_executor().spawn(async move {
             let bytes = match (png, path) {
                 (Some(png), _) => png.to_vec(),
-                (None, Some(path)) => std::fs::read(&path).map_err(|err| format!("无法读取 {}：{err}", path.display()))?,
-                (None, None) => return Err("没有可以给模型看的图片。".to_string()),
+                (None, Some(path)) => std::fs::read(&path).map_err(|err| tf!("无法读取 {}：{err}", "Cannot read {}: {err}", path.display()))?,
+                (None, None) => return Err(t("没有可以给模型看的图片。").to_string()),
             };
             let picture = crate::picture::prepare(bytes)?;
             let request = ai::picture_request(&profile, figure::ASK_SYSTEM, &prompt, ai::ImageData { media_type: picture.format.mime_type().to_string(), data: ai::base64(&picture.bytes) })?;
@@ -390,27 +391,27 @@ impl Workspace {
                 form.asking.remove(&ask);
                 let whole = |input: &Entity<TextInput>, text: &str, cx: &mut Context<Self>| input.update(cx, |input, cx| input.replace_range(0..input.text().len(), text, cx));
                 let failed = match reply {
-                    Err(err) => Some(format!("模型没有答上来：{err}")),
+                    Err(err) => Some(tf!("模型没有答上来：{err}", "Model request failed: {err}")),
                     Ok(reply) => match ask {
                         Ask::Legend => {
                             let caption = figure::read_legend(&reply);
                             // The number read off the page, or typed, stays; the model's fills an empty one.
                             if !caption.label.is_empty() && form.label.read(cx).text().trim().is_empty() { whole(&form.label, &caption.label, cx) }
                             if !caption.legend.is_empty() { whole(&form.legend, &caption.legend, cx) }
-                            caption.legend.is_empty().then(|| "模型没有写出图注。".to_string())
+                            caption.legend.is_empty().then(|| t("模型没有写出图注。").to_string())
                         }
                         Ask::Tags => {
                             let mut tags = split_list(form.tags.read(cx).text());
                             let offered = figure::read_tags(&reply);
                             for tag in &offered { if !tags.contains(tag) { tags.push(tag.clone()) } }
                             whole(&form.tags, &tags.join(", "), cx);
-                            offered.is_empty().then(|| "模型没有给出标签。".to_string())
+                            offered.is_empty().then(|| t("模型没有给出标签。").to_string())
                         }
                         Ask::Notes => {
                             let (before, reading) = (form.notes.read(cx).text().trim_end().to_string(), figure::read_notes(&reply));
                             // After what is there: the person's own notes are not written over.
                             if !reading.is_empty() { whole(&form.notes, &if before.is_empty() { reading.clone() } else { format!("{before}\n\n{reading}") }, cx) }
-                            reading.is_empty().then(|| "模型没有写出解读。".to_string())
+                            reading.is_empty().then(|| t("模型没有写出解读。").to_string())
                         }
                     },
                 };
@@ -468,7 +469,7 @@ impl Workspace {
         if id.is_none() {
             // The piece is kept: the next one can be cut.
             if let Some(pdf) = self.lib.as_ref().and_then(|lib| lib.pdf.clone()) { pdf.update(cx, |pdf, cx| pdf.cut_kept(cx)) }
-            self.say("已收藏到图片库，在左侧「收藏」里的「图片」下。", cx);
+            self.say(t("已收藏到图片库，在左侧「收藏」里的「图片」下。"), cx);
         }
     }
 
@@ -493,26 +494,28 @@ impl Workspace {
             None => ui::icon("image-broken", 30., Theme::text_placeholder()).into_any_element(),
         };
         let mut where_from = source_line(paper);
-        if form.page > 0 { where_from = format!("第 {} 页 · {where_from}", form.page) }
+        if form.page > 0 { where_from = tf!("第 {} 页 · {where_from}", "Page {} · {where_from}", form.page) }
         let tool = |id: &'static str, label: &'static str, cmd: Cmd, this: &Self, cx: &mut Context<Self>| ui::ghost_button(id, None, Some(label.into())).flex_none().h(px(26.)).text_size(px(12.)).on_click(this.on(cmd, cx));
         let under = div()
             .flex()
+            .flex_wrap()
             .flex_none()
             .items_center()
             .gap(px(4.))
-            .h(px(52.))
+            .min_h(px(52.))
+            .py(px(8.))
             .px(px(16.))
             .border_t_1()
             .border_color(Theme::line())
             .text_size(px(12.))
             .text_color(Theme::text_secondary())
-            .child(div().flex_1().min_w_0().truncate().child(where_from))
+            .child(div().flex_1().min_w(px(140.)).truncate().child(where_from))
             .when_some(held, |d, figure| {
                 let id = figure.id.clone();
-                d.child(tool("figure-source", "打开原文", Cmd::FigureSource(id.clone()), self, cx).text_color(Theme::accent()))
-                    .child(tool("figure-ask", "用这张图提问", Cmd::AskFigure(id.clone()), self, cx))
-                    .child(tool("figure-copy", "复制图片", Cmd::CopyFigure(id.clone()), self, cx))
-                    .child(tool("figure-save", "另存为…", Cmd::SaveFigure(id), self, cx))
+                d.child(tool("figure-source", t("打开原文"), Cmd::FigureSource(id.clone()), self, cx).text_color(Theme::accent()))
+                    .child(tool("figure-ask", t("用这张图提问"), Cmd::AskFigure(id.clone()), self, cx))
+                    .child(tool("figure-copy", t("复制图片"), Cmd::CopyFigure(id.clone()), self, cx))
+                    .child(tool("figure-save", t("另存为…"), Cmd::SaveFigure(id), self, cx))
             });
         let left = div()
             .flex()
@@ -570,7 +573,7 @@ impl Workspace {
                 .tooltip(move |_, cx| cx.new(|_| crate::write_assist::Tip(tip.to_string())).into())
         };
         let named = |label: &'static str, sparkle: Stateful<Div>, field: Div| div().flex().flex_col().gap(px(3.)).w(px(wide)).child(div().flex().items_center().justify_between().h(px(22.)).child(div().text_size(px(12.)).text_color(Theme::text_secondary()).child(label)).child(sparkle)).child(field);
-        let sparkles = [sparkle("figure-ask-legend", Ask::Legend, "让模型看图写图注", self, cx), sparkle("figure-ask-tags", Ask::Tags, "让模型看图建议标签", self, cx), sparkle("figure-ask-notes", Ask::Notes, "让模型看图写一段解读", self, cx)];
+        let sparkles = [sparkle("figure-ask-legend", Ask::Legend, t("让模型看图写图注"), self, cx), sparkle("figure-ask-tags", Ask::Tags, t("让模型看图建议标签"), self, cx), sparkle("figure-ask-notes", Ask::Notes, t("让模型看图写一段解读"), self, cx)];
         let [ask_legend, ask_tags, ask_notes] = sparkles;
         // A wrapping field under percentages is measured too narrow: each gets the column's width.
         let row = |label: &'static str, input: &Entity<TextInput>| ui::form_row(label, div().w(px(wide)).child(ui::field(input, window, cx)));
@@ -583,9 +586,9 @@ impl Workspace {
         let hint = if !fresh {
             None
         } else if form.guessed {
-            Some("图号和图注是从这一页上读出来的，收藏前看一眼，不对的地方改掉。")
+            Some(t("图号和图注是从这一页上读出来的，收藏前看一眼，不对的地方改掉。"))
         } else {
-            Some("这一页上没有找到挨着它的图注，可以自己填，也可以先留空。")
+            Some(t("这一页上没有找到挨着它的图注，可以自己填，也可以先留空。"))
         };
         let fields = div()
             .id("figure-fields")
@@ -598,10 +601,10 @@ impl Workspace {
             .px(px(20.))
             .py(px(8.))
             .when_some(hint, |d, hint| d.child(div().w(px(wide)).text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_tertiary()).child(hint)))
-            .child(row("图号", &form.label))
-            .child(named("图注", ask_legend, tall("figure-legend", &form.legend, 190.)))
-            .child(named("标签", ask_tags, div().w(px(wide)).child(ui::field(&form.tags, window, cx))).when(!offered.is_empty(), |d| d.child(div().flex().flex_wrap().gap(px(5.)).pt(px(3.)).w(px(wide)).children(offered))))
-            .child(named("备注", ask_notes, tall("figure-notes", &form.notes, 130.)))
+            .child(row(t("图号"), &form.label))
+            .child(named(t("图注"), ask_legend, tall("figure-legend", &form.legend, 190.)))
+            .child(named(t("标签"), ask_tags, div().w(px(wide)).child(ui::field(&form.tags, window, cx))).when(!offered.is_empty(), |d| d.child(div().flex().flex_wrap().gap(px(5.)).pt(px(3.)).w(px(wide)).children(offered))))
+            .child(named(t("备注"), ask_notes, tall("figure-notes", &form.notes, 130.)))
             .child(div().w(px(wide)).child(ui::error_line(&self.modal_error)));
         let footer = div()
             .flex()
@@ -610,11 +613,11 @@ impl Workspace {
             .gap(px(8.))
             .px(px(20.))
             .py(px(14.))
-            .when_some(form.id.clone(), |d, id| d.child(ui::ghost_button("figure-remove", Some("bin"), Some("移出".into())).text_color(Theme::danger()).on_click(self.on(Cmd::AskRemoveFigure(id), cx))))
+            .when_some(form.id.clone(), |d, id| d.child(ui::ghost_button("figure-remove", Some("bin"), Some(t("移出").into())).text_color(Theme::danger()).on_click(self.on(Cmd::AskRemoveFigure(id), cx))))
             .child(div().flex_1())
-            .child(ui::secondary_button("modal-cancel", if fresh { "取消" } else { "关闭" }).on_click(self.on(Cmd::CloseModal, cx)))
-            .child(ui::primary_button("modal-ok", if fresh { "收藏" } else { "保存" }).on_click(self.on(Cmd::SubmitModal, cx)));
-        let right = div().flex().flex_col().flex_none().w(px(SIDE_W)).h_full().child(ui::dialog_title(if fresh { "收藏到图片库" } else { "图片" })).child(fields).child(footer);
+            .child(ui::secondary_button("modal-cancel", if fresh { t("取消") } else { crate::i18n::tc("dialog.close", "关闭") }).on_click(self.on(Cmd::CloseModal, cx)))
+            .child(ui::primary_button("modal-ok", if fresh { tc("action.save_figure", "收藏") } else { t("保存") }).on_click(self.on(Cmd::SubmitModal, cx)));
+        let right = div().flex().flex_col().flex_none().w(px(SIDE_W)).h_full().child(ui::dialog_title(if fresh { t("收藏到图片库") } else { t("图片") })).child(fields).child(footer);
         Some(ui::dialog(width).h(px(height)).flex_row().child(left).child(right))
     }
 
@@ -688,8 +691,8 @@ impl Workspace {
             .p(px(3.))
             .rounded(px(9.))
             .bg(Theme::groove())
-            .child(side("collect-papers", format!("文献 {}", lib.papers.iter().filter(|p| p.starred).count()), !figures, Cmd::SetView(View::Starred), self, cx))
-            .child(side("collect-figures", format!("图片 {}", lib.gallery.items.len()), figures, Cmd::SetPage(Page::Figures), self, cx))
+            .child(side("collect-papers", tf!("文献 {}", "Papers {}", lib.papers.iter().filter(|p| p.starred).count()), !figures, Cmd::SetView(View::Starred), self, cx))
+            .child(side("collect-figures", tf!("图片 {}", "Figures {}", lib.gallery.items.len()), figures, Cmd::SetPage(Page::Figures), self, cx))
     }
 
     pub fn render_figures(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -718,15 +721,15 @@ impl Workspace {
                 .on_click(this.on(cmd, cx))
                 .child(label)
         };
-        let mut chips = vec![tag_chip("figure-tag-all".into(), format!("全部 {total}"), gallery.tag.is_empty(), Cmd::FigureTag(gallery.tag.clone()), self, cx).into_any_element()];
+        let mut chips = vec![tag_chip("figure-tag-all".into(), tf!("全部 {total}", "All {total}"), gallery.tag.is_empty(), Cmd::FigureTag(gallery.tag.clone()), self, cx).into_any_element()];
         for (i, (tag, n)) in tags.iter().take(24).enumerate() {
             chips.push(tag_chip(("figure-tag", i).into(), format!("{tag} {n}"), *tag == gallery.tag, Cmd::FigureTag(tag.clone()), self, cx).into_any_element());
         }
 
         let body = if total == 0 {
-            ui::empty_state("image", "还没有收藏图片", "打开一篇文献的 PDF，点工具栏上的「截图」，在页面上框出一张图或一个表，再点「收藏到图片库」。图号和图注会从页面上读出来，标签和备注可以自己加。").into_any_element()
+            ui::empty_state("image", t("还没有收藏图片"), t("打开一篇文献的 PDF，点工具栏上的「截图」，在页面上框出一张图或一个表，再点「收藏到图片库」。图号和图注会从页面上读出来，标签和备注可以自己加。")).into_any_element()
         } else if count == 0 {
-            ui::empty_state("search", "没有匹配的图片", "换一个搜索词，或者点「全部」看所有图片。").into_any_element()
+            ui::empty_state("search", t("没有匹配的图片"), t("换一个搜索词，或者点「全部」看所有图片。")).into_any_element()
         } else {
             let rows = count.div_ceil(columns);
             let shown = shown.clone();
@@ -763,8 +766,8 @@ impl Workspace {
                     .text_size(px(12.))
                     .text_color(Theme::text_tertiary())
                     .gap(px(12.))
-                    .child(div().flex_none().child(if total == 0 { "图片库是空的".to_string() } else if count == total { format!("共 {total} 张，来自 {papers} 篇文献") } else { format!("显示 {count} / {total} 张") }))
-                    .child(div().min_w_0().truncate().child("点开图片查看和修改 · 右键更多操作 · 在 PDF 工具栏点「截图」收藏新的")),
+                    .child(div().flex_none().child(if total == 0 { t("图片库是空的").to_string() } else if count == total { tf!("共 {total} 张，来自 {papers} 篇文献", "{total} images from {papers} papers") } else { tf!("显示 {count} / {total} 张", "Showing {count} / {total} images") }))
+                    .child(div().min_w_0().truncate().child(t("点开图片查看和修改 · 右键更多操作 · 在 PDF 工具栏点「截图」收藏新的"))),
             )
             .into_any_element()
     }
@@ -829,9 +832,9 @@ impl Workspace {
                             .items_center()
                             .gap(px(6.))
                             .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(head))
-                            .when(figure.page > 0, |d| d.child(div().flex_none().text_size(px(11.)).text_color(Theme::text_tertiary()).child(format!("第 {} 页", figure.page)))),
+                            .when(figure.page > 0, |d| d.child(div().flex_none().text_size(px(11.)).text_color(Theme::text_tertiary()).child(tf!("第 {} 页", "Page {}", figure.page)))),
                     )
-                    .child(div().h(px(36.)).overflow_hidden().text_size(px(12.)).line_height(px(18.)).line_clamp(2).text_color(if said.is_empty() { Theme::text_placeholder() } else { Theme::text_secondary() }).child(if said.is_empty() { "还没有图注".to_string() } else { said }))
+                    .child(div().h(px(36.)).overflow_hidden().text_size(px(12.)).line_height(px(18.)).line_clamp(2).text_color(if said.is_empty() { Theme::text_placeholder() } else { Theme::text_secondary() }).child(if said.is_empty() { t("还没有图注").to_string() } else { said }))
                     .when(!below.is_empty(), |d| d.child(div().truncate().text_size(px(11.)).text_color(Theme::text_tertiary()).child(below)))
                     .child(div().flex().flex_none().gap(px(4.)).h(px(20.)).overflow_hidden().children(tags)),
             )
@@ -843,14 +846,14 @@ impl Workspace {
         let item = |label: &str, cmd: Cmd| MenuItem { label: label.to_string().into(), checked: false, note: None, cmd };
         let Some(figure) = self.lib.as_ref().and_then(|lib| lib.gallery.figure(id)) else { return (vec![], vec![]) };
         let id = id.to_string();
-        let mut items = vec![item("查看与修改…", Cmd::OpenFigure(id.clone())), item(&if figure.page > 0 { format!("打开原文第 {} 页", figure.page) } else { "打开所属文献".to_string() }, Cmd::FigureSource(id.clone()))];
+        let mut items = vec![item(t("查看与修改…"), Cmd::OpenFigure(id.clone())), item(&if figure.page > 0 { tf!("打开原文第 {} 页", "Open source at page {}", figure.page) } else { t("打开所属文献").to_string() }, Cmd::FigureSource(id.clone()))];
         let mut breaks = vec![items.len()];
-        items.push(item("用这张图提问", Cmd::AskFigure(id.clone())));
-        items.push(item("复制图片", Cmd::CopyFigure(id.clone())));
-        if !figure.legend.is_empty() { items.push(item("复制图注", Cmd::CopyText(figure.legend.clone()))) }
-        items.push(item("另存为…", Cmd::SaveFigure(id.clone())));
+        items.push(item(t("用这张图提问"), Cmd::AskFigure(id.clone())));
+        items.push(item(t("复制图片"), Cmd::CopyFigure(id.clone())));
+        if !figure.legend.is_empty() { items.push(item(t("复制图注"), Cmd::CopyText(figure.legend.clone()))) }
+        items.push(item(t("另存为…"), Cmd::SaveFigure(id.clone())));
         breaks.push(items.len());
-        items.push(item("移出图片库…", Cmd::AskRemoveFigure(id)));
+        items.push(item(t("移出图片库…"), Cmd::AskRemoveFigure(id)));
         (items, breaks)
     }
 }

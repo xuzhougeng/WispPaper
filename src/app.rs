@@ -2,6 +2,7 @@
 //! open library. All state lives here; every click becomes a `Cmd` handled
 //! by `run`, and the other modules render parts of it.
 
+use crate::i18n::t;
 use crate::input::{InputEvent, TextInput};
 use crate::pdf::{PdfEvent, PdfView, Zoom, ZoomTo};
 use crate::settings::{SettingsPage, SettingsView, UpdateState};
@@ -20,7 +21,7 @@ use wisp_core::lookup::{self, Identifier};
 use wisp_core::model::*;
 pub(crate) use wisp_core::settings::default_root;
 use wisp_core::screening::{Before, Confirming, Round};
-use wisp_core::settings::{Settings, Task, settings_file};
+use wisp_core::settings::{Language, Settings, Task, settings_file};
 use wisp_core::store::{Conversation, ConversationInfo, ImportBatch, SavedSearch, Store, StructureInfo, Suggestion, TrashEntry};
 use wisp_core::manuscript::{Manuscript, Snapshot};
 use wisp_core::{complete, export, fulltext, import, pdftext, structure, time, tools, zotero};
@@ -160,6 +161,7 @@ pub enum Cmd {
     ToggleAutoUpdate,
     CheckUpdate,
     SetAppearance(String),
+    SetLanguage(Language),
     SetDensity(String),
     RecordShortcut(String),
     ClearShortcut(String),
@@ -793,8 +795,8 @@ pub struct ZoteroRun {
 
 impl ZoteroRun {
     pub fn summary(&self) -> String {
-        if self.running { return format!("正在导入 Zotero · {}/{} · {}", self.rows.len(), self.total, self.current) }
-        format!("新增 {} 篇 · 已有 {} 篇 · 回收站 {} 篇 · 失败 {} 篇 · 新增 PDF {} 个 · 待处理 {} 项",
+        if self.running { return tf!("正在导入 Zotero · {}/{} · {}", "Importing Zotero · {}/{} · {}", self.rows.len(), self.total, self.current) }
+        tf!("新增 {} 篇 · 已有 {} 篇 · 回收站 {} 篇 · 失败 {} 篇 · 新增 PDF {} 个 · 待处理 {} 项", "{} added · {} existing · {} in trash · {} failed · {} PDFs added · {} pending",
             self.rows.iter().filter(|r| r.added).count(),
             self.rows.iter().filter(|r| !r.added && r.paper_id.is_some()).count(),
             self.rows.iter().filter(|r| r.in_trash).count(),
@@ -818,10 +820,10 @@ impl ImportRun {
     pub fn summary(&self) -> String {
         let mut facts = vec![];
         for (n, text) in [
-            (self.count(|row| row.outcome == Imported::Added), "新增"),
-            (self.count(|row| row.outcome == Imported::Attached), "附到已有文献"),
-            (self.count(|row| row.outcome == Imported::InTrash), "在回收站里、未导入"),
-            (self.count(|row| matches!(row.outcome, Imported::Failed(_))), "没有成功"),
+            (self.count(|row| row.outcome == Imported::Added), t("新增")),
+            (self.count(|row| row.outcome == Imported::Attached), t("附到已有文献")),
+            (self.count(|row| row.outcome == Imported::InTrash), t("在回收站里、未导入")),
+            (self.count(|row| matches!(row.outcome, Imported::Failed(_))), t("没有成功")),
         ] {
             if n > 0 { facts.push(format!("{text} {n}")) }
         }
@@ -870,10 +872,10 @@ impl FetchRun {
 
     pub fn status(&self) -> &'static str {
         match (self.stopped, self.running()) {
-            (true, true) => "正在停止",
-            (true, false) => "已停止",
-            (false, true) => "正在查找",
-            (false, false) => "查找完成",
+            (true, true) => t("正在停止"),
+            (true, false) => t("已停止"),
+            (false, true) => t("正在查找"),
+            (false, false) => t("查找完成"),
         }
     }
 
@@ -1229,7 +1231,7 @@ impl Chat {
         self.pending = None;
         self.running.clear();
         self.drop_empty_answer();
-        if self.note.is_empty() && self.error.is_empty() && !matches!(self.messages.last(), Some(ChatItem::Answer(_))) { self.note = "模型没有返回内容。".into() }
+        if self.note.is_empty() && self.error.is_empty() && !matches!(self.messages.last(), Some(ChatItem::Answer(_))) { self.note = t("模型没有返回内容。").into() }
     }
 
     /// The conversation as it is kept in the library: what was said, and
@@ -1479,9 +1481,10 @@ impl Workspace {
         let settings_path = settings_file();
         let mut toast = None;
         let settings = Settings::load(&settings_path).unwrap_or_else(|err| {
-            toast = Some(Toast { message: format!("{err:#}；本次使用默认设置。").into(), error: true, at: Instant::now() });
+            toast = Some(Toast { message: tf!("{err:#}；本次使用默认设置。", "{err:#}; using default settings for this session.").into(), error: true, at: Instant::now() });
             Settings::default()
         });
+        crate::i18n::set_language(settings.language);
         wisp_net::set_proxy(&settings.proxy);
         let root = settings.data_root(&default_root());
         let _ = std::fs::create_dir_all(&root);
@@ -1567,27 +1570,27 @@ impl Workspace {
             MenuKind::Paper(_) | MenuKind::Papers(_) | MenuKind::Trashed(_) | MenuKind::File(_) | MenuKind::Tag(_) | MenuKind::Conversation(..) | MenuKind::Text(_) | MenuKind::Answer(..) => (items, breaks) = self.context_menu(&kind),
             MenuKind::Figure(id) => (items, breaks) = self.figure_menu(&id),
             MenuKind::Add => {
-                items.push(item("通过 DOI / PMID 添加…", Cmd::AddById));
-                items.push(item("导入 PDF 文件…", Cmd::ImportPdfs));
-                items.push(item("导入文件夹…", Cmd::ImportFolder));
-                items.push(item("导入 BibTeX / RIS…", Cmd::ImportReferences));
-                items.push(item("从 Zotero 导入…", Cmd::ImportZotero));
-                items.push(item("手动录入…", Cmd::AddManual));
+                items.push(item(t("通过 DOI / PMID 添加…"), Cmd::AddById));
+                items.push(item(t("导入 PDF 文件…"), Cmd::ImportPdfs));
+                items.push(item(t("导入文件夹…"), Cmd::ImportFolder));
+                items.push(item(t("导入 BibTeX / RIS…"), Cmd::ImportReferences));
+                items.push(item(t("从 Zotero 导入…"), Cmd::ImportZotero));
+                items.push(item(t("手动录入…"), Cmd::AddManual));
             }
             MenuKind::Manuscripts | MenuKind::Section(_) | MenuKind::ManuscriptExport | MenuKind::WriteLanguage => items = self.manuscript_menu(&kind),
             MenuKind::Export => {
                 items.push(item("BibTeX（.bib）", Cmd::Export(ExportKind::Bibtex)));
-                items.push(item("表格（.csv）", Cmd::Export(ExportKind::Csv)));
+                items.push(item(t("表格（.csv）"), Cmd::Export(ExportKind::Csv)));
             }
             MenuKind::LibraryCard(id) => {
-                items.push(item("打开", Cmd::OpenLibrary(id.clone())));
-                items.push(item("编辑名称与主题…", Cmd::EditLibrary(id.clone())));
-                items.push(item("移除文献库…", Cmd::AskRemoveLibrary(id)));
+                items.push(item(t("打开"), Cmd::OpenLibrary(id.clone())));
+                items.push(item(t("编辑名称与主题…"), Cmd::EditLibrary(id.clone())));
+                items.push(item(t("移除文献库…"), Cmd::AskRemoveLibrary(id)));
             }
             MenuKind::PdfZoom => {
                 let Some(current) = self.lib.as_ref().and_then(|lib| lib.pdf.as_ref()).map(|pdf| pdf.read(cx).zoom()) else { return };
-                let fits = [("适应宽度", Zoom::FitWidth), ("适应整页", Zoom::FitPage)].map(|(label, zoom)| (label.to_string(), zoom));
-                let sizes = [50., 75., 100., 125., 150., 200., 300., 400.].map(|percent| (if percent == 100. { "100%（实际大小）".to_string() } else { format!("{percent}%") }, Zoom::Percent(percent)));
+                let fits = [(t("适应宽度"), Zoom::FitWidth), (t("适应整页"), Zoom::FitPage)].map(|(label, zoom)| (label.to_string(), zoom));
+                let sizes = [50., 75., 100., 125., 150., 200., 300., 400.].map(|percent| (if percent == 100. { t("100%（实际大小）").to_string() } else { format!("{percent}%") }, Zoom::Percent(percent)));
                 for (label, zoom) in fits.into_iter().chain(sizes) {
                     items.push(MenuItem { label: label.into(), checked: current == zoom, note: None, cmd: Cmd::PdfZoom(ZoomTo::Set(zoom)) });
                 }
@@ -1595,37 +1598,37 @@ impl Workspace {
             MenuKind::Sort => {
                 let Some(lib) = &self.lib else { return };
                 let current = if lib.filters.sort.is_empty() { "newest" } else { lib.filters.sort.as_str() };
-                for (value, label) in [("newest", "最近添加"), ("year-desc", "发表年份 ↓"), ("year-asc", "发表年份 ↑"), ("title-asc", "题目 A→Z"), ("title-desc", "题目 Z→A"), ("journal-asc", "期刊 A→Z"), ("authors-asc", "作者 A→Z")] {
+                for (value, label) in [("newest", t("最近添加")), ("year-desc", t("发表年份 ↓")), ("year-asc", t("发表年份 ↑")), ("title-asc", t("题目 A→Z")), ("title-desc", t("题目 Z→A")), ("journal-asc", t("期刊 A→Z")), ("authors-asc", t("作者 A→Z"))] {
                     items.push(MenuItem { label: label.into(), checked: current == value, note: None, cmd: Cmd::SetSort(value.into()) });
                 }
             }
             MenuKind::Reading(id) => {
                 let Some(current) = self.lib.as_ref().and_then(|l| l.paper(&id)).map(|p| p.reading.clone()) else { return };
                 for (value, label) in READINGS {
-                    items.push(MenuItem { label: label.into(), checked: current == value, note: None, cmd: Cmd::SetReading(id.clone(), value.into()) });
+                    items.push(MenuItem { label: t(label).into(), checked: current == value, note: None, cmd: Cmd::SetReading(id.clone(), value.into()) });
                 }
             }
             MenuKind::TaskModel(task) => {
                 let bound = self.settings.tasks.get(task).to_string();
                 // Questions always have a model: the first one until another is chosen.
                 let chosen = if task == Task::Chat { self.settings.profile_for(task).map(|p| p.id.clone()).unwrap_or_default() } else { bound };
-                if task != Task::Chat { items.push(MenuItem { label: "与提问相同".into(), checked: chosen.is_empty(), note: None, cmd: Cmd::SetTaskModel(task, String::new()) }) }
+                if task != Task::Chat { items.push(MenuItem { label: t("与提问相同").into(), checked: chosen.is_empty(), note: None, cmd: Cmd::SetTaskModel(task, String::new()) }) }
                 for profile in &self.settings.profiles {
                     items.push(MenuItem { label: profile.title().into(), checked: chosen == profile.id, note: Some(profile.model.clone().into()), cmd: Cmd::SetTaskModel(task, profile.id.clone()) });
                 }
             }
             MenuKind::Screening(id) => {
                 let Some(current) = self.lib.as_ref().and_then(|l| l.paper(&id)).map(|p| p.screening.clone()) else { return };
-                let hints = [("pending", "还没有判断"), ("included", "符合主题，重点阅读"), ("excluded", "可能有用，保留备查"), ("uncertain", "暂时判断不了"), ("irrelevant", "与主题无关，默认隐藏")];
+                let hints = [("pending", t("还没有判断")), ("included", t("符合主题，重点阅读")), ("excluded", t("可能有用，保留备查")), ("uncertain", t("暂时判断不了")), ("irrelevant", t("与主题无关，默认隐藏"))];
                 for (value, label) in SCREENINGS {
                     let hint = hints.iter().find(|(v, _)| *v == value).map(|(_, h)| SharedString::from(*h));
-                    items.push(MenuItem { label: label.into(), checked: current == value, note: hint, cmd: Cmd::SetScreening(id.clone(), value.into()) });
+                    items.push(MenuItem { label: t(label).into(), checked: current == value, note: hint, cmd: Cmd::SetScreening(id.clone(), value.into()) });
                 }
             }
             MenuKind::Filter(key) => {
                 let Some(lib) = &self.lib else { return };
                 let f = &lib.filters;
-                let fixed = |table: &[(&str, &str)]| table.iter().map(|(v, l)| (v.to_string(), l.to_string(), None)).collect::<Vec<_>>();
+                let fixed = |table: &[(&str, &str)]| table.iter().map(|(v, l)| (v.to_string(), t(l).to_string(), None)).collect::<Vec<_>>();
                 let counted = |list: Vec<(String, usize)>| list.into_iter().take(40).map(|(v, n)| (v.clone(), v, Some(n))).collect::<Vec<_>>();
                 let (current, choices): (String, Vec<(String, String, Option<usize>)>) = match &key {
                     FilterKey::Tag => (f.tag.clone(), counted(filter::tag_counts(&lib.papers))),
@@ -1634,10 +1637,10 @@ impl Workspace {
                     FilterKey::Reading => (f.reading.clone(), fixed(&READINGS)),
                     FilterKey::Screening => (f.screening.clone(), fixed(&SCREENINGS)),
                     FilterKey::Fulltext => (f.fulltext.clone(), fixed(&FULLTEXTS)),
-                    FilterKey::Preprint => (f.preprint.clone(), fixed(&[("yes", "只看预印本"), ("no", "不含预印本")])),
+                    FilterKey::Preprint => (f.preprint.clone(), fixed(&[("yes", t("只看预印本")), ("no", t("不含预印本"))])),
                     FilterKey::Field(id) => (f.fields.get(id).cloned().unwrap_or_default(), counted(filter::field_counts(&lib.papers, id))),
                 };
-                items.push(MenuItem { label: "全部".into(), checked: current.is_empty(), note: None, cmd: Cmd::SetFilter(key.clone(), String::new()) });
+                items.push(MenuItem { label: t("全部").into(), checked: current.is_empty(), note: None, cmd: Cmd::SetFilter(key.clone(), String::new()) });
                 for (value, label, count) in choices {
                     items.push(MenuItem { label: label.into(), checked: current == value, note: count.map(|n| n.to_string().into()), cmd: Cmd::SetFilter(key.clone(), value) });
                 }
@@ -1673,9 +1676,9 @@ impl Workspace {
                 let Some(info) = self.libraries.iter().find(|l| l.id == id).or(self.lib.as_ref().map(|l| &l.info)) else { return };
                 self.modal_error.clear();
                 self.modal = Some(Modal::Confirm {
-                    title: format!("移除文献库「{}」？", info.name),
-                    message: format!("文献库会从首页消失。它的文件夹（{} 篇文献、PDF 和笔记）会移到数据目录下的 removed 文件夹，不会被删除，需要时可以手动移回。", info.paper_count),
-                    action: "移除".into(),
+                    title: tf!("移除文献库「{}」？", "Remove library “{}”?", info.name),
+                    message: tf!("文献库会从首页消失。它的文件夹（{} 篇文献、PDF 和笔记）会移到数据目录下的 removed 文件夹，不会被删除，需要时可以手动移回。", "The library will disappear from home. Its folder ({} papers, PDFs and notes) moves to removed in the data directory. You can move it back manually.", info.paper_count),
+                    action: t("移除").into(),
                     cmd: Cmd::RemoveLibrary(id),
                 });
             }
@@ -1685,7 +1688,7 @@ impl Workspace {
                 if self.lib.as_ref().is_some_and(|l| l.info.id == id) { self.lib = None }
                 let Some(info) = self.libraries.iter().find(|l| l.id == id).cloned() else { return };
                 match libraries::remove(&self.root, &info) {
-                    Ok(target) => self.say(format!("已移到 {}", target.display()), cx),
+                    Ok(target) => self.say(tf!("已移到 {}", "Moved to {}", target.display()), cx),
                     Err(err) => self.fail(format!("{err:#}"), cx),
                 }
                 self.libraries = libraries::list(&self.root);
@@ -1716,6 +1719,12 @@ impl Workspace {
                 self.settings.density = value;
                 self.save_settings(cx);
             }
+            Cmd::SetLanguage(language) => {
+                self.settings.language = language;
+                crate::i18n::set_language(language);
+                self.save_settings(cx);
+                cx.refresh_windows();
+            }
             Cmd::RecordShortcut(id) => self.start_recording(id, window, cx),
             Cmd::ClearShortcut(id) => self.set_shortcut(&id, Some(String::new()), cx),
             Cmd::ResetShortcut(id) => self.set_shortcut(&id, None, cx),
@@ -1725,10 +1734,10 @@ impl Workspace {
             Cmd::AddProfile => self.add_profile(cx),
             Cmd::AskRemoveProfile(index) => {
                 let Some(profile) = self.settings.profiles.get(index) else { return };
-                let serves: Vec<&str> = Task::ALL.into_iter().filter(|task| self.settings.tasks.get(*task) == profile.id).map(Task::label).collect();
-                let after = if serves.is_empty() { String::new() } else { format!("它现在用于{}，删除后这些任务改用默认的模型。", serves.join("、")) };
+                let serves: Vec<&str> = Task::ALL.into_iter().filter(|task| self.settings.tasks.get(*task) == profile.id).map(|task| t(task.label())).collect();
+                let after = if serves.is_empty() { String::new() } else { tf!("它现在用于{}，删除后这些任务改用默认的模型。", "It currently serves {}. These tasks will use the default model after removal.", serves.join("、")) };
                 self.modal_error.clear();
-                self.modal = Some(Modal::Confirm { title: format!("删除模型「{}」？", profile.title()), message: format!("它的地址、API Key 和设置会从 settings.json 里删除。{after}"), action: "删除".into(), cmd: Cmd::RemoveProfile(index) });
+                self.modal = Some(Modal::Confirm { title: tf!("删除模型「{}」？", "Delete model “{}”?", profile.title()), message: tf!("它的地址、API Key 和设置会从 settings.json 里删除。{after}", "Its URL, API key and settings will be removed from settings.json. {after}"), action: t("删除").into(), cmd: Cmd::RemoveProfile(index) });
             }
             Cmd::RemoveProfile(index) => {
                 self.run(Cmd::CloseModal, window, cx);
@@ -1749,7 +1758,7 @@ impl Workspace {
             Cmd::AskRemoveCommand(index) => {
                 let Some(command) = self.settings.commands.get(index) else { return };
                 self.modal_error.clear();
-                self.modal = Some(Modal::Confirm { title: format!("删除命令 /{}？", command.name), message: "它的模板会从 settings.json 里删除。用过它的对话不受影响：对话里保存着当时发出的内容。".into(), action: "删除".into(), cmd: Cmd::RemoveCommand(index) });
+                self.modal = Some(Modal::Confirm { title: tf!("删除命令 /{}？", "Delete command /{}?", command.name), message: t("它的模板会从 settings.json 里删除。用过它的对话不受影响：对话里保存着当时发出的内容。").into(), action: t("删除").into(), cmd: Cmd::RemoveCommand(index) });
             }
             Cmd::RemoveCommand(index) => {
                 self.run(Cmd::CloseModal, window, cx);
@@ -1764,9 +1773,9 @@ impl Workspace {
             }
             Cmd::AddManual => self.paper_dialog(None, window, cx),
             Cmd::EditPaper(id) => self.paper_dialog(Some(id), window, cx),
-            Cmd::ImportReferences => self.pick_files("导入", false, cx),
+            Cmd::ImportReferences => self.pick_files(t("导入"), false, cx),
             Cmd::ImportZotero => {
-                if self.lib.is_none() { return self.fail("请先打开一个文献库。", cx) }
+                if self.lib.is_none() { return self.fail(t("请先打开一个文献库。"), cx) }
                 self.modal_error.clear();
                 self.modal = Some(if self.lib.as_ref().and_then(|l| l.zotero.as_ref()).is_some_and(|r| r.running) { Modal::ZoteroReport } else { Modal::Zotero });
             }
@@ -1775,7 +1784,7 @@ impl Workspace {
                 self.modal_error.clear();
                 self.modal = Some(Modal::ZoteroReport);
             }
-            Cmd::ImportPdfs => self.pick_files("导入", true, cx),
+            Cmd::ImportPdfs => self.pick_files(t("导入"), true, cx),
             Cmd::ImportFolder => self.pick_folders(cx),
             Cmd::ShowImport => {
                 self.modal_subscriptions.clear();
@@ -1922,16 +1931,16 @@ impl Workspace {
                 if self.change(cx, |lib| lib.store.trash_paper(&id)) {
                     let next = row.and_then(|row| self.lib.as_ref().and_then(|lib| lib.shown.get(row).or(lib.shown.last()).map(|&i| lib.papers[i].id.clone())));
                     if next.is_some() { self.select(next, window, cx) }
-                    self.say("已移到回收站。", cx)
+                    self.say(t("已移到回收站。"), cx)
                 }
             }
             Cmd::RestorePaper(id) => {
-                if self.change(cx, |lib| lib.store.restore_paper(&id)) { self.say("已恢复。", cx) }
+                if self.change(cx, |lib| lib.store.restore_paper(&id)) { self.say(t("已恢复。"), cx) }
             }
             Cmd::AskDeletePaper(id) => {
                 let title = self.lib.as_ref().and_then(|l| l.trash.iter().find(|t| t.paper.id == id)).map(|t| t.paper.title.clone()).unwrap_or_default();
                 self.modal_error.clear();
-                self.modal = Some(Modal::Confirm { title: "彻底删除这篇文献？".into(), message: format!("「{title}」的记录、笔记和词条会被删除，无法恢复。它的 PDF 会移到文献库文件夹下的 removed 文件夹。"), action: "彻底删除".into(), cmd: Cmd::DeletePaper(id) });
+                self.modal = Some(Modal::Confirm { title: t("彻底删除这篇文献？").into(), message: tf!("「{title}」的记录、笔记和词条会被删除，无法恢复。它的 PDF 会移到文献库文件夹下的 removed 文件夹。", "The record, notes and fields of “{title}” will be deleted permanently. Its PDF moves to the library's removed folder."), action: t("彻底删除").into(), cmd: Cmd::DeletePaper(id) });
             }
             Cmd::DeletePaper(id) => {
                 self.modal = None;
@@ -1956,7 +1965,7 @@ impl Workspace {
             Cmd::RemoveFile(id) => {
                 if self.change(cx, |lib| lib.store.remove_file(&id)) {
                     if let Some(lib) = self.lib.as_mut() { lib.pdf = None }
-                    self.say("附件已移除（文件移到了 removed 文件夹）。", cx);
+                    self.say(t("附件已移除（文件移到了 removed 文件夹）。"), cx);
                 }
             }
             Cmd::RereadFile(id) => self.reread_file(id, cx),
@@ -2072,7 +2081,7 @@ impl Workspace {
                     // A new conversation with the library is about the list on show again.
                     if !paper { lib.asked.clear() }
                 }
-                if kept { self.say("上一段对话已保存，在「历史」里可以找到。", cx) }
+                if kept { self.say(t("上一段对话已保存，在「历史」里可以找到。"), cx) }
             }
             Cmd::StopChat(paper) => self.stop_chat(paper, cx),
             Cmd::ToggleHistory(paper) => {
@@ -2095,8 +2104,8 @@ impl Workspace {
                 // A review is reached through its conversation alone, so it goes with it: say so first.
                 let reviewed = self.lib.as_ref().is_some_and(|l| l.store.review_for_conversation(&id).is_ok_and(|review| review.is_some()));
                 self.modal_error.clear();
-                let warning = if reviewed { "\n\n这次对话的综述记录（写作要求、大纲、正文和证据）会一起删除；已经存为稿件的内容不受影响。" } else { "" };
-                self.modal = Some(Modal::Confirm { title: "删除这次对话？".into(), message: format!("「{title}」连同其中的图片会从这个文献库的历史对话里删除，不能恢复。文献库里的文献不受影响。{warning}"), action: "删除".into(), cmd: Cmd::RemoveChat(paper, id) });
+                let warning = if reviewed { t("\n\n这次对话的综述记录（写作要求、大纲、正文和证据）会一起删除；已经存为稿件的内容不受影响。") } else { "" };
+                self.modal = Some(Modal::Confirm { title: t("删除这次对话？").into(), message: tf!("「{title}」连同其中的图片会从这个文献库的历史对话里删除，不能恢复。文献库里的文献不受影响。{warning}", "“{title}” and its images will be permanently removed from this library's chat history. Papers are kept.{warning}"), action: t("删除").into(), cmd: Cmd::RemoveChat(paper, id) });
             }
             Cmd::RemoveChat(paper, id) => {
                 if let Some(lib) = self.lib.as_mut() {
@@ -2122,7 +2131,7 @@ impl Workspace {
             }
             Cmd::AttachImages(paper) => {
                 let extensions: Vec<SharedString> = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff"].into_iter().map(SharedString::from).collect();
-                let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some("添加图片".into()), extensions: Some(extensions) });
+                let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some(t("添加图片").into()), extensions: Some(extensions) });
                 cx.spawn(async move |this, cx| {
                     if let Ok(Ok(Some(paths))) = picked.await {
                         this.update(cx, |this, cx| this.attach_images(paper, paths.into_iter().map(Picture::File).collect(), cx)).ok();
@@ -2168,10 +2177,10 @@ impl Workspace {
             Cmd::EditReviewText(what) => self.edit_review_text(what, window, cx),
             Cmd::AskRemoveReviewSection(name) => {
                 self.modal_error.clear();
-                self.modal = Some(Modal::Confirm { title: format!("删除综述记录中的「{name}」？"), message: "这一节会从综述记录中移除，它的引用带来的、你还没有判断过的证据也一起移除。已创建的稿件不受影响。".into(), action: "删除".into(), cmd: Cmd::RemoveReviewSection(name) });
+                self.modal = Some(Modal::Confirm { title: tf!("删除综述记录中的「{name}」？", "Delete “{name}” from the review record?"), message: t("这一节会从综述记录中移除，它的引用带来的、你还没有判断过的证据也一起移除。已创建的稿件不受影响。").into(), action: t("删除").into(), cmd: Cmd::RemoveReviewSection(name) });
             }
             Cmd::RemoveReviewSection(name) => {
-                self.review_apply(wisp_core::review::ReviewAction::RemoveSection { name }, "这一节已从综述记录中移除", cx);
+                self.review_apply(wisp_core::review::ReviewAction::RemoveSection { name }, t("这一节已从综述记录中移除"), cx);
                 self.run(Cmd::CloseModal, window, cx);
             }
             Cmd::EditReviewEvidence(id, claim) => self.edit_review_evidence(id, claim, window, cx),
@@ -2193,20 +2202,20 @@ impl Workspace {
             }
             Cmd::AskRemoveReviewEvidence(id) => {
                 self.modal_error.clear();
-                self.modal = Some(Modal::Confirm { title: "删除这条证据记录？".into(), message: "这条论断与来源的关联会从综述记录中移除，文献和正文不受影响。".into(), action: "删除".into(), cmd: Cmd::RemoveReviewEvidence(id) });
+                self.modal = Some(Modal::Confirm { title: t("删除这条证据记录？").into(), message: t("这条论断与来源的关联会从综述记录中移除，文献和正文不受影响。").into(), action: t("删除").into(), cmd: Cmd::RemoveReviewEvidence(id) });
             }
             Cmd::RemoveReviewEvidence(id) => {
-                self.review_apply(wisp_core::review::ReviewAction::RemoveEvidence { id }, "证据记录已删除", cx);
+                self.review_apply(wisp_core::review::ReviewAction::RemoveEvidence { id }, t("证据记录已删除"), cx);
                 self.run(Cmd::CloseModal, window, cx);
             }
             Cmd::CopyText(text) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
-                self.say("已复制", cx);
+                self.say(t("已复制"), cx);
             }
             Cmd::CopySelected => {
                 if let Some(text) = self.picked.as_ref().map(|picked| picked.chosen().to_string()).filter(|text| !text.is_empty()) {
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
-                    self.say("已复制", cx);
+                    self.say(t("已复制"), cx);
                 }
             }
             Cmd::RenameTag(tag) => {
@@ -2219,11 +2228,11 @@ impl Workspace {
             Cmd::AskRemoveTag(tag) => {
                 let count = self.lib.as_ref().map_or(0, |lib| lib.papers.iter().filter(|p| p.tags.contains(&tag)).count());
                 self.modal_error.clear();
-                self.modal = Some(Modal::Confirm { title: format!("去掉标签「{tag}」？"), message: format!("它会从 {count} 篇文献上去掉。文献本身不动。"), action: "去掉标签".into(), cmd: Cmd::RemoveTag(tag) });
+                self.modal = Some(Modal::Confirm { title: tf!("去掉标签「{tag}」？", "Remove tag “{tag}”?"), message: tf!("它会从 {count} 篇文献上去掉。文献本身不动。", "It will be removed from {count} papers. The papers are kept."), action: t("去掉标签").into(), cmd: Cmd::RemoveTag(tag) });
             }
             Cmd::RemoveTag(tag) => {
                 self.modal = None;
-                if self.retag(&tag, None, cx) { self.say("标签已去掉。", cx) }
+                if self.retag(&tag, None, cx) { self.say(t("标签已去掉。"), cx) }
             }
             Cmd::AnswerToNote(question, answer) => {
                 let Some(lib) = self.lib.as_ref() else { return };
@@ -2260,7 +2269,7 @@ impl Workspace {
             Cmd::CopyPicked(paper) => {
                 if let Some(text) = self.lib.as_ref().and_then(|lib| lib.chat(paper).picked_text()) {
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
-                    self.say("已复制", cx);
+                    self.say(t("已复制"), cx);
                 }
             }
             Cmd::QuotePicked(paper) => {
@@ -2288,7 +2297,7 @@ impl Workspace {
             Cmd::GotoCited(paper, label, page, quote) => {
                 let Some(lib) = self.lib.as_ref() else { return };
                 let chat = lib.chat(paper);
-                let Some(id) = chat.sources().iter().find(|source| source.label == label).map(|source| source.paper_id.clone()) else { return self.fail(format!("这次对话里没有 {label} 这篇文献。"), cx) };
+                let Some(id) = chat.sources().iter().find(|source| source.label == label).map(|source| source.paper_id.clone()) else { return self.fail(tf!("这次对话里没有 {label} 这篇文献。", "Paper {label} is not in this conversation."), cx) };
                 // Where the sentence was found, when it is not where the answer says.
                 let page = match chat.checks.get(&(label, page, quote.clone())) {
                     Some(ai::Quoted::Elsewhere(at) | ai::Quoted::Begins(at, _)) => Some(*at),
@@ -2319,7 +2328,7 @@ impl Workspace {
             Cmd::AskRemoveSearch(id) => {
                 let Some(search) = self.lib.as_ref().and_then(|l| l.searches.iter().find(|s| s.id == id)) else { return };
                 self.modal_error.clear();
-                self.modal = Some(Modal::Confirm { title: format!("删除检索式「{}」？", search.name), message: "它导入过的文献和运行记录都会保留，只是不再运行这个检索式。".into(), action: "删除".into(), cmd: Cmd::RemoveSearch(id) });
+                self.modal = Some(Modal::Confirm { title: tf!("删除检索式「{}」？", "Delete search “{}”?", search.name), message: t("它导入过的文献和运行记录都会保留，只是不再运行这个检索式。").into(), action: t("删除").into(), cmd: Cmd::RemoveSearch(id) });
             }
             Cmd::RemoveSearch(id) => {
                 self.change(cx, |lib| lib.store.remove_search(&id));
@@ -2346,7 +2355,7 @@ impl Workspace {
                     // The run wrote through its own connection, failed runs included.
                     this.change(cx, |_| Ok(()));
                     match result {
-                        Ok(run) => this.say(format!("{}：新增 {} 篇，跳过已有的 {} 篇", run["search"].as_str().unwrap_or("检索"), run["added"], run["skipped"]), cx),
+                        Ok(run) => this.say(tf!("{}：新增 {} 篇，跳过已有的 {} 篇", "{}: {} added, {} existing skipped", run["search"].as_str().unwrap_or(t("检索")), run["added"], run["skipped"]), cx),
                         Err(err) => this.fail(err, cx),
                     }
                 });
@@ -2361,9 +2370,9 @@ impl Workspace {
                 let Some(batch) = self.lib.as_ref().and_then(|l| l.batches.iter().find(|b| b.id == id)) else { return };
                 self.modal_error.clear();
                 self.modal = Some(Modal::Confirm {
-                    title: "撤销这次导入？".into(),
-                    message: format!("{}\n\n这次导入新增的 {} 篇文献里，还没有处理过的会被删除；已经做过收录判断、读过、收藏、写过笔记、加过标签或附件的会保留。", batch.label, batch.added),
-                    action: "撤销导入".into(),
+                    title: t("撤销这次导入？").into(),
+                    message: tf!("{}\n\n这次导入新增的 {} 篇文献里，还没有处理过的会被删除；已经做过收录判断、读过、收藏、写过笔记、加过标签或附件的会保留。", "{}\n\nOf {} papers added by this import, untouched papers will be deleted. Papers already screened, read, starred, annotated, tagged or given attachments are kept.", batch.label, batch.added),
+                    action: t("撤销导入").into(),
                     cmd: Cmd::UndoImport(id),
                 });
             }
@@ -2372,7 +2381,7 @@ impl Workspace {
                 if self.change(cx, |lib| lib.store.undo_batch(&id).map(|done| undone = Some(done)))
                     && let Some(done) = undone
                 {
-                    self.say(if done.kept.is_empty() { format!("已撤销：删除了 {} 篇", done.removed) } else { format!("已撤销：删除了 {} 篇，保留了处理过的 {} 篇", done.removed, done.kept.len()) }, cx);
+                    self.say(if done.kept.is_empty() { tf!("已撤销：删除了 {} 篇", "Undone: {} papers deleted", done.removed) } else { tf!("已撤销：删除了 {} 篇，保留了处理过的 {} 篇", "Undone: {} deleted, {} edited papers kept", done.removed, done.kept.len()) }, cx);
                 }
                 self.run(Cmd::CloseModal, window, cx);
             }
@@ -2617,7 +2626,7 @@ impl Workspace {
             let goal = input.read(cx).text().trim().to_string();
             let Some(lib) = this.lib.as_mut().filter(|l| l.info.criteria != goal) else { return };
             lib.info.criteria = goal;
-            if let Err(err) = libraries::save(&lib.info) { this.fail(format!("筛选目标没有保存：{err:#}"), cx) }
+            if let Err(err) = libraries::save(&lib.info) { this.fail(tf!("筛选目标没有保存：{err:#}", "Screening criteria not saved: {err:#}"), cx) }
         }));
         let manuscripts = store.manuscripts().unwrap_or_default();
         let (manuscript, section_id) = Writing::latest(&manuscripts);
@@ -2775,23 +2784,23 @@ impl Workspace {
     /// What the PDF viewer reports: its selection copied, or handed to a conversation.
     fn pdf_event(&mut self, event: &PdfEvent, cx: &mut Context<Self>) {
         match event {
-            PdfEvent::Copied => self.say("已复制", cx),
+            PdfEvent::Copied => self.say(t("已复制"), cx),
             PdfEvent::Translate(text, profile) => self.translate_passage(text.clone(), profile.clone(), cx),
             PdfEvent::Figure(piece) => self.collect_piece(piece, cx),
             PdfEvent::Picture(png, to_library) => {
                 self.attach_images(!*to_library, vec![Picture::Bytes(png.clone())], cx);
-                if *to_library { self.say("截图已加到文献库对话的输入框上方。", cx) } else { self.show_paper_chat(cx) }
+                if *to_library { self.say(t("截图已加到文献库对话的输入框上方。"), cx) } else { self.show_paper_chat(cx) }
             }
             PdfEvent::Quote(page, text, to_library) => {
                 let Some(lib) = self.lib.as_mut() else { return };
                 let Some(paper_id) = lib.selected.clone() else { return };
                 let quote = ChatQuote { paper_id, page: *page, text: text.clone() };
                 let chat = lib.chat_mut(!*to_library);
-                if chat.quotes.len() >= MAX_QUOTES { return self.fail(format!("一个问题最多带 {MAX_QUOTES} 段原文。先发出去，或者去掉一段。"), cx) }
+                if chat.quotes.len() >= MAX_QUOTES { return self.fail(tf!("一个问题最多带 {MAX_QUOTES} 段原文。先发出去，或者去掉一段。", "A question can include at most {MAX_QUOTES} passages. Send it first or remove one."), cx) }
                 if !chat.quotes.contains(&quote) { chat.quotes.push(quote) }
                 chat.history = None;
                 if *to_library {
-                    self.say("已加到文献库对话的输入框上方。", cx);
+                    self.say(t("已加到文献库对话的输入框上方。"), cx);
                 } else {
                     self.show_paper_chat(cx);
                 }
@@ -2809,7 +2818,7 @@ impl Workspace {
         if !(lib.split && lib.tab == Tab::Ask) {
             if lib.tab != Tab::Ask { lib.ask_from = lib.tab }
             (lib.split, lib.tab) = (true, Tab::Ask);
-            self.say("已加到这篇文献的提问里。", cx);
+            self.say(t("已加到这篇文献的提问里。"), cx);
         }
         cx.notify();
     }
@@ -2849,7 +2858,7 @@ impl Workspace {
         let Some(lib) = self.lib.as_ref() else { return };
         if lib.zotero.as_ref().is_some_and(|run| run.running) { return }
         let library = lib.info.id.clone();
-        let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: false, prompt: Some("选择 zotero.sqlite".into()), extensions: Some(vec!["sqlite".into()]) });
+        let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: false, prompt: Some(t("选择 zotero.sqlite").into()), extensions: Some(vec!["sqlite".into()]) });
         cx.spawn(async move |this, cx| {
             let result = picked.await;
             this.update(cx, |this, cx| {
@@ -2857,8 +2866,8 @@ impl Workspace {
                 match result {
                     Ok(Ok(Some(paths))) => { if let Some(path) = paths.into_iter().next() { this.import_zotero(path, cx) } }
                     Ok(Ok(None)) => {}
-                    Ok(Err(err)) => { this.modal_error = format!("无法打开文件选择器：{err:#}"); }
-                    Err(err) => { this.modal_error = format!("文件选择器未能返回结果：{err}"); }
+                    Ok(Err(err)) => { this.modal_error = tf!("无法打开文件选择器：{err:#}", "Cannot open file picker: {err:#}"); }
+                    Err(err) => { this.modal_error = tf!("文件选择器未能返回结果：{err}", "File picker returned no result: {err}"); }
                 }
                 cx.notify();
             }).ok();
@@ -2871,7 +2880,7 @@ impl Workspace {
         let library = lib.info.id.clone();
         let root = lib.store.root().to_path_buf();
         let run_id = new_id("Z");
-        lib.zotero = Some(ZoteroRun { id: run_id.clone(), running: true, current: "正在读取数据库…".into(), ..Default::default() });
+        lib.zotero = Some(ZoteroRun { id: run_id.clone(), running: true, current: t("正在读取数据库…").into(), ..Default::default() });
         lib.page = Page::Papers;
         self.modal = Some(Modal::ZoteroReport);
         cx.notify();
@@ -2938,7 +2947,7 @@ impl Workspace {
 
     /// Folders picked: every PDF under them, tagged with the folders it lies in.
     fn pick_folders(&mut self, cx: &mut Context<Self>) {
-        let picked = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: true, prompt: Some("导入".into()), extensions: None });
+        let picked = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: true, prompt: Some(t("导入").into()), extensions: None });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = picked.await {
                 this.update(cx, |this, cx| this.import_paths(paths, cx)).ok();
@@ -2948,7 +2957,7 @@ impl Workspace {
     }
 
     fn pick_attachment(&mut self, paper_id: String, cx: &mut Context<Self>) {
-        let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some("添加".into()), extensions: None });
+        let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some(t("添加").into()), extensions: None });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = picked.await {
                 this.update(cx, |this, cx| {
@@ -2968,7 +2977,7 @@ impl Workspace {
                         if let Some(lib) = this.lib.as_mut() { lib.pdf = None }
                         this.ensure_pdf(cx);
                         this.extract_missing(cx);
-                        this.say(format!("已添加 {added} 个附件。"), cx);
+                        this.say(tf!("已添加 {added} 个附件。", "Added {added} attachments."), cx);
                     }
                 })
                 .ok();
@@ -2981,7 +2990,7 @@ impl Workspace {
     /// imported, and a folder gives every PDF under it, tagged with the
     /// folders between it and the file (`import::folder_pdfs`).
     pub fn import_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
-        if self.lib.is_none() { return self.fail("请先打开一个文献库，再拖入文件。", cx) }
+        if self.lib.is_none() { return self.fail(t("请先打开一个文献库，再拖入文件。"), cx) }
         let mut pdfs: Vec<(PathBuf, Vec<String>)> = vec![];
         let mut others = vec![];
         let mut empty_folders = vec![];
@@ -2997,14 +3006,14 @@ impl Workspace {
             }
         }
         if !empty_folders.is_empty() && pdfs.is_empty() && others.is_empty() {
-            return self.fail(format!("文件夹「{}」里没有 PDF。", empty_folders.join("」「")), cx);
+            return self.fail(tf!("文件夹「{}」里没有 PDF。", "No PDFs in folder “{}”.", empty_folders.join("」「")), cx);
         }
         let mut added = vec![];
         let mut skipped = 0;
         let mut errors = vec![];
         for path in others {
             let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-            let parsed = std::fs::read(&path).map_err(|e| format!("无法读取 {name}：{e}")).and_then(|bytes| import::parse_references(&String::from_utf8_lossy(&bytes), &format!("导入 · {name}")).map_err(|e| format!("{name}：{e}")));
+            let parsed = std::fs::read(&path).map_err(|e| tf!("无法读取 {name}：{e}", "Cannot read {name}: {e}")).and_then(|bytes| import::parse_references(&String::from_utf8_lossy(&bytes), &tf!("导入 · {name}", "Import · {name}")).map_err(|e| format!("{name}：{e}")));
             match parsed {
                 Ok(papers) => {
                     let mut result = None;
@@ -3023,7 +3032,7 @@ impl Workspace {
         if !errors.is_empty() {
             self.fail(errors.join("；"), cx);
         } else if !added.is_empty() || skipped > 0 {
-            self.say(format!("导入 {} 篇{}。", added.len(), if skipped > 0 { format!("，跳过 {skipped} 篇已有的") } else { String::new() }), cx);
+            self.say(tf!("导入 {} 篇{}。", "Imported {} papers{}.", added.len(), if skipped > 0 { tf!("，跳过 {skipped} 篇已有的", ", skipped {skipped} existing") } else { String::new() }), cx);
         }
         if pdfs.is_empty() { return }
         let Some(lib) = self.lib.as_mut() else { return };
@@ -3079,10 +3088,10 @@ impl Workspace {
     /// held included.
     fn add_pdf(&mut self, path: &std::path::Path, tags: &[String], pages: Result<Vec<String>, String>, found: Option<Paper>, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
-        let stem = path.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "未命名文献".into());
+        let stem = path.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| t("未命名文献").into());
         let recognised = found.is_some();
         let mut paper = found.unwrap_or_else(|| Paper { title: stem.clone(), ..Default::default() });
-        paper.source = "PDF 导入".into();
+        paper.source = t("PDF 导入").into();
         paper.tags = clean_strings(paper.tags.iter().chain(tags));
         let mut row = ImportRow { name: path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| stem.clone()), outcome: Imported::Added, paper_id: None, unrecognised: false, textless: String::new() };
         let stored = (|| -> anyhow::Result<()> {
@@ -3121,13 +3130,13 @@ impl Workspace {
         if let Err(err) = stored { row.outcome = Imported::Failed(format!("{err:#}")) }
         let title = row.paper_id.as_deref().and_then(|id| lib.paper(id)).map(|p| p.title.clone()).unwrap_or_default();
         let said = match &row.outcome {
-            Imported::Added if row.unrecognised => format!("已添加「{stem}」。没有识别出 DOI：可以在文献详情里「按题目补全」。"),
-            Imported::Added => format!("已添加：{title}"),
-            Imported::Attached => format!("「{stem}」已在文献库中，PDF 已附到原条目。"),
-            Imported::InTrash => format!("「{stem}」对应的文献在回收站中，未导入。"),
-            Imported::Failed(err) => format!("「{stem}」没有导入：{err}"),
+            Imported::Added if row.unrecognised => tf!("已添加「{stem}」。没有识别出 DOI：可以在文献详情里「按题目补全」。", "Added “{stem}”. DOI not detected; use “Look up by title” in paper details."),
+            Imported::Added => tf!("已添加：{title}", "Added: {title}"),
+            Imported::Attached => tf!("「{stem}」已在文献库中，PDF 已附到原条目。", "“{stem}” is already in this library. PDF attached to existing record."),
+            Imported::InTrash => tf!("「{stem}」对应的文献在回收站中，未导入。", "“{stem}” is in trash and was not imported."),
+            Imported::Failed(err) => tf!("「{stem}」没有导入：{err}", "“{stem}” not imported: {err}"),
         };
-        let said = if row.textless.is_empty() { said } else { format!("{said} 但没有读出文字（{}），全文暂时不能用于提问。", fulltext::failure_brief(&row.textless)) };
+        let said = if row.textless.is_empty() { said } else { tf!("{said} 但没有读出文字（{}），全文暂时不能用于提问。", "{said} But no text was extracted ({}); full text is unavailable for chat.", fulltext::failure_brief(&row.textless)) };
         let failed = matches!(row.outcome, Imported::Failed(_));
         let Some(run) = lib.import.as_mut() else { return };
         if let Some(at) = run.working.iter().position(|name| name == &row.name) { run.working.remove(at); }
@@ -3164,8 +3173,8 @@ impl Workspace {
                 let Some(lib) = this.lib.as_mut().filter(|l| l.info.id == library) else { return };
                 lib.extracting.remove(&id);
                 let said = match &pages {
-                    Ok(pages) => Ok(format!("读出了 {} 页文字，现在可以用于提问。", pages.len())),
-                    Err(reason) => Err(format!("还是没有读出文字：{reason}")),
+                    Ok(pages) => Ok(tf!("读出了 {} 页文字，现在可以用于提问。", "Read {} pages of text, now available for chat.", pages.len())),
+                    Err(reason) => Err(tf!("还是没有读出文字：{reason}", "Still no readable text: {reason}")),
                 };
                 let kept = lib.store.save_fulltext_pages(&id, &pages).and_then(|()| lib.reload());
                 lib.texts_changed();
@@ -3220,7 +3229,7 @@ impl Workspace {
     fn export(&mut self, kind: ExportKind, cx: &mut Context<Self>) {
         let Some(lib) = &self.lib else { return };
         let papers: Vec<&Paper> = lib.shown.iter().map(|&i| &lib.papers[i]).collect();
-        if papers.is_empty() { return self.fail("当前列表是空的，没有可导出的文献。", cx) }
+        if papers.is_empty() { return self.fail(t("当前列表是空的，没有可导出的文献。"), cx) }
         let (text, extension) = match kind {
             ExportKind::Bibtex => (export::bibtex(&papers), "bib"),
             ExportKind::Csv => (export::papers_csv(&papers, &lib.fields), "csv"),
@@ -3234,8 +3243,8 @@ impl Workspace {
                 if path.extension().is_none() { path.set_extension(extension); }
                 let result = std::fs::write(&path, text);
                 this.update(cx, |this, cx| match result {
-                    Ok(()) => this.say(format!("已导出 {count} 篇到 {}", path.display()), cx),
-                    Err(err) => this.fail(format!("无法写入 {}：{err}", path.display()), cx),
+                    Ok(()) => this.say(tf!("已导出 {count} 篇到 {}", "Exported {count} papers to {}", path.display()), cx),
+                    Err(err) => this.fail(tf!("无法写入 {}：{err}", "Cannot write {}: {err}", path.display()), cx),
                 })
                 .ok();
             }
@@ -3301,12 +3310,12 @@ impl Workspace {
         let too_many = pictures.len() > room;
         pictures.truncate(room);
         chat.attaching += pictures.len();
-        if too_many { self.fail(format!("一次提问最多带 {MAX_ATTACHMENTS} 张图片。"), cx) }
+        if too_many { self.fail(tf!("一次提问最多带 {MAX_ATTACHMENTS} 张图片。", "A question can include at most {MAX_ATTACHMENTS} images."), cx) }
         if pictures.is_empty() { return }
         let work = cx.background_executor().spawn(async move {
             let read = |picture: Picture| match picture {
                 Picture::Bytes(bytes) => Ok(bytes),
-                Picture::File(path) => std::fs::read(&path).map_err(|err| format!("无法读取 {}：{err}", path.display())),
+                Picture::File(path) => std::fs::read(&path).map_err(|err| tf!("无法读取 {}：{err}", "Cannot read {}: {err}", path.display())),
             };
             pictures.into_iter().map(|picture| read(picture).and_then(crate::picture::prepare)).collect::<Vec<_>>()
         });
@@ -3343,11 +3352,11 @@ impl Workspace {
         chat.error.clear();
         chat.note.clear();
         if chat.attaching > 0 {
-            chat.error = "图片还在读取，稍等一下再发送。".into();
+            chat.error = t("图片还在读取，稍等一下再发送。").into();
             return cx.notify();
         }
         // `/search …` and the like stand for a longer request; the bubble shows what was typed.
-        let prompt = match ai::read_input(if question.is_empty() && !chat.quotes.is_empty() { "这段原文说了什么？在这篇文献里起什么作用？" } else { &question }, &self.settings.commands) {
+        let prompt = match ai::read_input(if question.is_empty() && !chat.quotes.is_empty() { t("这段原文说了什么？在这篇文献里起什么作用？") } else { &question }, &self.settings.commands) {
             Ok(ai::Input::Ask(prompt)) => prompt,
             Ok(ai::Input::NewChat) => {
                 chat.reset(cx);
@@ -3384,7 +3393,7 @@ impl Workspace {
                 Scope::Library => lib.shown.iter().map(|&i| &lib.papers[i]).collect(),
             };
             if papers.is_empty() {
-                chat.error = "当前列表里没有文献。先添加文献，或清空筛选条件。".into();
+                chat.error = t("当前列表里没有文献。先添加文献，或清空筛选条件。").into();
                 return cx.notify();
             }
             // A conversation taken up from the history keeps the labels its answers already use.
@@ -3502,7 +3511,7 @@ impl Workspace {
                             true
                         }
                         ChatEvent::Retrying(attempt, why) => {
-                            chat.note = format!("模型服务暂时没有回应（{why}），正在重试，第 {attempt} 次…");
+                            chat.note = tf!("模型服务暂时没有回应（{why}），正在重试，第 {attempt} 次…", "The model service has not responded ({why}). Retrying, attempt {attempt}…");
                             true
                         }
                         ChatEvent::Error(error) => {
@@ -3520,9 +3529,9 @@ impl Workspace {
                             } else if !turn.runnable() || chat.steps >= MAX_CHAT_STEPS {
                                 // The calls still get an answer: a conversation that ends on an unanswered call cannot continue.
                                 let (why, note) = if turn.runnable() {
-                                    ("已达到单次提问的步数上限，工具没有执行。", "已达到单次提问的步数上限。可以继续提问，让它接着做。")
+                                    (t("已达到单次提问的步数上限，工具没有执行。"), t("已达到单次提问的步数上限。可以继续提问，让它接着做。"))
                                 } else {
-                                    ("回答被截断，工具没有执行。", ai::stop_note(&turn.stop).unwrap_or("回答没有正常结束。"))
+                                    (t("回答被截断，工具没有执行。"), ai::stop_note(&turn.stop).unwrap_or(t("回答没有正常结束。")))
                                 };
                                 let results: Vec<(String, String, bool)> = turn.calls.iter().map(|call| (call.id.clone(), why.to_string(), true)).collect();
                                 chat.wire.extend(ai::tool_results(protocol, &results));
@@ -3650,16 +3659,16 @@ impl Workspace {
         };
         if let Some(protocol) = chat.protocol {
             if !unanswered.is_empty() {
-                let results: Vec<(String, String, bool)> = unanswered.into_iter().map(|id| (id, "用户中止了这次提问，这个工具的结果没有交回。".to_string(), true)).collect();
+                let results: Vec<(String, String, bool)> = unanswered.into_iter().map(|id| (id, t("用户中止了这次提问，这个工具的结果没有交回。").to_string(), true)).collect();
                 chat.wire.extend(ai::tool_results(protocol, &results));
             } else if let Some(ChatItem::Answer(text)) = chat.messages.last() && !text.is_empty() {
                 chat.wire.push(ai::assistant_message(text));
             }
         }
         for item in chat.messages.iter_mut() {
-            if let ChatItem::Tool { result, .. } = item && result.is_none() { *result = Some(("已中止".into(), true)) }
+            if let ChatItem::Tool { result, .. } = item && result.is_none() { *result = Some((t("已中止").into(), true)) }
         }
-        chat.note = "已停止。".into();
+        chat.note = t("已停止。").into();
         chat.end_run();
         self.save_chat(about_paper, cx);
         cx.notify();
@@ -3690,7 +3699,7 @@ impl Workspace {
         chat.stored_images.extend(kept);
         (chat.id, chat.created_at) = (conversation.id, conversation.created_at);
         chat.kept = result.is_ok();
-        if let Err(err) = result { self.fail(format!("这次对话没能保存：{err:#}"), cx) }
+        if let Err(err) = result { self.fail(tf!("这次对话没能保存：{err:#}", "Conversation not saved: {err:#}"), cx) }
     }
 
     /// Take up a conversation from the history: what was said is shown
@@ -3698,14 +3707,14 @@ impl Workspace {
     /// library as it is now, under the labels the old answers use.
     fn open_chat(&mut self, about_paper: bool, id: &str, cx: &mut Context<Self>) {
         self.open_chat_said(about_paper, id, cx);
-        if !about_paper && let Some(Err(err)) = self.lib.as_mut().map(|lib| lib.load_review()) { self.fail(format!("无法读取综述记录：{err:#}"), cx) }
+        if !about_paper && let Some(Err(err)) = self.lib.as_mut().map(|lib| lib.load_review()) { self.fail(tf!("无法读取综述记录：{err:#}", "Cannot read review record: {err:#}"), cx) }
     }
 
     fn open_chat_said(&mut self, about_paper: bool, id: &str, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
         let conversation = match lib.store.conversation(id) {
             Ok(Some(conversation)) => conversation,
-            Ok(None) => return self.fail("这次对话已经不在了。", cx),
+            Ok(None) => return self.fail(t("这次对话已经不在了。"), cx),
             Err(err) => return self.fail(format!("{err:#}"), cx),
         };
         if !about_paper { lib.asked.clear() }
@@ -3796,7 +3805,7 @@ impl Workspace {
         let text = |input: &Entity<TextInput>| input.read(cx).text().trim().to_string();
         let title = text(&form.title);
         if title.is_empty() {
-            self.modal_error = "写上题目再查找。".into();
+            self.modal_error = t("写上题目再查找。").into();
             return;
         }
         let year = match text(&form.year) {
@@ -3804,7 +3813,7 @@ impl Workspace {
             year => match year.parse::<i32>().ok().filter(|y| (1800..=2200).contains(y)) {
                 Some(year) => Some(year),
                 None => {
-                    self.modal_error = "年份应为数字，例如 2019；不确定可以留空。".into();
+                    self.modal_error = t("年份应为数字，例如 2019；不确定可以留空。").into();
                     return;
                 }
             },
@@ -3821,7 +3830,7 @@ impl Workspace {
                 form.busy = false;
                 // A record the library holds as another paper cannot be written into this one.
                 form.held = found.candidates.iter().map(|candidate| lib.store.existing_paper(&candidate.paper).ok().flatten().filter(|id| *id != paper_id).map(|id| (id.clone(), lib.paper(&id).or_else(|| lib.trash.iter().map(|entry| &entry.paper).find(|paper| paper.id == id)).map(|paper| paper.title.clone()).unwrap_or_default()))).collect();
-                if found.asked.iter().all(|asked| !asked.error.is_empty()) { this.modal_error = "几个来源都没有查成，见下面的原因。检查网络或「设置 › 网络」里的代理后再试。".into() }
+                if found.asked.iter().all(|asked| !asked.error.is_empty()) { this.modal_error = t("几个来源都没有查成，见下面的原因。检查网络或「设置 › 网络」里的代理后再试。").into() }
                 form.chosen = None;
                 form.found = Some(found);
                 cx.notify();
@@ -3838,11 +3847,11 @@ impl Workspace {
         let (Some(at), Some(found)) = (form.chosen, form.found.as_ref()) else { return };
         let (id, candidate, fields) = (form.paper_id.clone(), found.candidates[at].clone(), form.fields.clone());
         let problem = if form.held.get(at).is_some_and(Option::is_some) {
-            Some("文献库里已经有这条记录了，不能再写进这一篇。")
+            Some(t("文献库里已经有这条记录了，不能再写进这一篇。"))
         } else if fields.is_empty() {
-            Some("没有勾选要写入的字段。")
+            Some(t("没有勾选要写入的字段。"))
         } else if self.lib.as_ref().and_then(|lib| lib.paper(&id)).is_none_or(|paper| paper.updated_at != form.seen) {
-            Some("这篇文献在查找期间被改过。关掉这个窗口重新打开，按它现在的内容再核对。")
+            Some(t("这篇文献在查找期间被改过。关掉这个窗口重新打开，按它现在的内容再核对。"))
         } else {
             None
         };
@@ -3852,7 +3861,7 @@ impl Workspace {
         }
         if !self.edit_paper(&id, cx, |paper| complete::apply(paper, &candidate, &fields)) { return }
         self.run(Cmd::CloseModal, window, cx);
-        self.say(format!("已补全：{}", self.lib.as_ref().and_then(|lib| lib.paper(&id)).map(|paper| paper.title.clone()).unwrap_or_default()), cx);
+        self.say(tf!("已补全：{}", "Completed: {}", self.lib.as_ref().and_then(|lib| lib.paper(&id)).map(|paper| paper.title.clone()).unwrap_or_default()), cx);
     }
 
     fn library_dialog(&mut self, editing: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
@@ -3932,7 +3941,7 @@ impl Workspace {
         let keywords = lib.guide.keywords.read(cx).text().trim().to_string();
         lib.guide.error.clear();
         if keywords.is_empty() && lib.info.topic.trim().is_empty() {
-            lib.guide.error = "先写下研究主题或几个关键词。".into();
+            lib.guide.error = t("先写下研究主题或几个关键词。").into();
             return cx.notify();
         }
         let (system, prompt) = ai::query_prompt(&lib.info.name, &lib.info.topic, &keywords, &lib.guide.kinds);
@@ -3994,7 +4003,7 @@ impl Workspace {
                     if mine.is_empty() { return }
                     this.change(cx, |_| Ok(()));
                     let added: u64 = mine.iter().filter_map(|run| run["added"].as_u64()).sum();
-                    if added > 0 { this.say(format!("自动更新：新增 {added} 篇待判断的文献"), cx) }
+                    if added > 0 { this.say(tf!("自动更新：新增 {added} 篇待判断的文献", "Automatic update: {added} new papers awaiting screening"), cx) }
                 });
                 if alive.is_err() { break }
                 cx.background_executor().timer(std::time::Duration::from_secs(60)).await;
@@ -4022,7 +4031,7 @@ impl Workspace {
         }
         let mut todo: Vec<String> = only.unwrap_or_else(|| lib.screen_unasked(decided).iter().map(|p| p.id.clone()).collect());
         if todo.is_empty() {
-            lib.screen.error = if decided { "已判断的文献都有按当前目标的建议了。" } else { "待判断的文献都已经有按当前目标的建议了。" }.into();
+            lib.screen.error = if decided { t("已判断的文献都有按当前目标的建议了。") } else { t("待判断的文献都已经有按当前目标的建议了。") }.into();
             return cx.notify();
         }
         todo.reverse();
@@ -4053,7 +4062,7 @@ impl Workspace {
         let criteria = Some(lib.info.criteria.clone());
         // Nothing to read: say so without asking, rather than have the model guess from a title.
         if basis == "none" {
-            let mut suggestion = Suggestion { paper_id: id, verdict: "uncertain".into(), reason: "这篇文献没有摘要，也没有保存全文，无法判断。".into(), basis: basis.into(), author, criteria, ..Default::default() };
+            let mut suggestion = Suggestion { paper_id: id, verdict: "uncertain".into(), reason: t("这篇文献没有摘要，也没有保存全文，无法判断。").into(), basis: basis.into(), author, criteria, ..Default::default() };
             let saved = lib.store.save_suggestion(&mut suggestion);
             lib.screen.done += 1;
             if saved.is_ok() { lib.suggestions.insert(suggestion.paper_id.clone(), suggestion); }
@@ -4093,10 +4102,10 @@ impl Workspace {
                         lib.screen.failed += 1;
                         lib.screen.streak += 1;
                         if lib.screen.streak >= SCREEN_GIVE_UP {
-                            lib.screen.error = format!("连续 {SCREEN_GIVE_UP} 篇没有得到可用的回答，已停止。最后一篇「{}」：{err}", paper.title);
+                            lib.screen.error = tf!("连续 {SCREEN_GIVE_UP} 篇没有得到可用的回答，已停止。最后一篇「{}」：{err}", "Stopped after {SCREEN_GIVE_UP} consecutive unusable responses. Last paper “{}”: {err}", paper.title);
                             lib.screen.todo.clear();
                         } else {
-                            lib.screen.error = format!("「{}」没有判断成，留待下一轮：{err}", paper.title);
+                            lib.screen.error = tf!("「{}」没有判断成，留待下一轮：{err}", "Could not screen “{}”; left for the next round: {err}", paper.title);
                             this.screen_next(run, cx);
                         }
                     }
@@ -4167,7 +4176,7 @@ impl Workspace {
                     let request = ai::read_page_request(&profile, ai::ImageData { media_type: "image/png".into(), data: ai::base64(&picture) })?;
                     pages.push(ai::page_reading(&wisp_net::complete(request, protocol)?));
                 }
-                if pages.iter().all(|page| page.trim().is_empty()) { return Err("模型在页面上没有读到文字。".to_string()) }
+                if pages.iter().all(|page| page.trim().is_empty()) { return Err(t("模型在页面上没有读到文字。").to_string()) }
                 Ok(Made::Read(pages, count))
             } else {
                 let blocks = structure::blocks(&pages);
@@ -4209,10 +4218,10 @@ impl Workspace {
                         sorting.failed += 1;
                         sorting.streak += 1;
                         if sorting.streak >= SCREEN_GIVE_UP {
-                            sorting.error = format!("连续 {SCREEN_GIVE_UP} 篇没有成功，已停止。最后一篇「{title}」：{err}");
+                            sorting.error = tf!("连续 {SCREEN_GIVE_UP} 篇没有成功，已停止。最后一篇「{title}」：{err}", "Stopped after {SCREEN_GIVE_UP} consecutive failures. Last paper “{title}”: {err}");
                             sorting.todo.clear();
                         } else {
-                            sorting.error = format!("「{title}」没有整理成：{err}");
+                            sorting.error = tf!("「{title}」没有整理成：{err}", "Could not structure “{title}”: {err}");
                             this.write_run_next(run, cx);
                         }
                     }
@@ -4229,15 +4238,15 @@ impl Workspace {
     /// round under way takes more papers in.
     pub(crate) fn fetch_start(&mut self, only: Option<String>, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
-        if lib.fetching.as_ref().is_some_and(|run| run.stopped && run.running()) { return self.say("正在结束当前请求，请稍后再开始新的查找。", cx) }
+        if lib.fetching.as_ref().is_some_and(|run| run.stopped && run.running()) { return self.say(t("正在结束当前请求，请稍后再开始新的查找。"), cx) }
         let known = wisp_core::openaccess::lookable;
         let lacking = |paper: &Paper| matches!(paper.fulltext.as_str(), "missing" | "linked");
         let wanted: Vec<String> = match &only {
             Some(id) => lib.paper(id).filter(|paper| lacking(paper)).map(|paper| paper.id.clone()).into_iter().collect(),
             None => lib.shown.iter().map(|&i| &lib.papers[i]).filter(|paper| lacking(paper) && known(paper)).map(|paper| paper.id.clone()).collect(),
         };
-        if let Some(paper) = only.as_deref().and_then(|id| lib.paper(id)) && !known(paper) { return self.fail("这篇文献没有 DOI、PMID 或 arXiv 编号，无从查起。先在「编辑信息与词条」里补上编号。", cx) }
-        if wanted.is_empty() { return self.say("当前列表里没有可以查找的文献：要么已经有 PDF，要么没有 DOI、PMID 或 arXiv 编号。", cx) }
+        if let Some(paper) = only.as_deref().and_then(|id| lib.paper(id)) && !known(paper) { return self.fail(t("这篇文献没有 DOI、PMID 或 arXiv 编号，无从查起。先在「编辑信息与词条」里补上编号。"), cx) }
+        if wanted.is_empty() { return self.say(t("当前列表里没有可以查找的文献：要么已经有 PDF，要么没有 DOI、PMID 或 arXiv 编号。"), cx) }
         let fresh = lib.fetching.as_ref().is_none_or(|run| !run.running());
         if fresh { lib.fetching = Some(FetchRun { run: lib.fetching.as_ref().map_or(0, |run| run.run) + 1, ..Default::default() }) }
         let run = lib.fetching.as_mut().unwrap();
@@ -4272,11 +4281,11 @@ impl Workspace {
             let detail = match (&result, outcome.as_str()) {
                 (Err(err), _) => err.clone(),
                 (_, "saved") => {
-                    let version = wisp_core::openaccess::version_label(found["version"].as_str().unwrap_or(""));
+                    let version = t(wisp_core::openaccess::version_label(found["version"].as_str().unwrap_or("")));
                     let from = [found["source"].as_str().unwrap_or(""), version].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" · ");
                     match found["textReason"].as_str() {
-                        Some(reason) => format!("来自 {from}。没读出文字：{reason}"),
-                        None => format!("来自 {from}，读出 {} 页文字", found["pages"].as_u64().unwrap_or(0)),
+                        Some(reason) => tf!("来自 {from}。没读出文字：{reason}", "From {from}. No text extracted: {reason}"),
+                        None => tf!("来自 {from}，读出 {} 页文字", "From {from}, {} pages of text read", found["pages"].as_u64().unwrap_or(0)),
                     }
                 }
                 // Nothing found and nothing gone wrong: the outcome says it all.
@@ -4375,7 +4384,7 @@ impl Workspace {
             Modal::Tag { tag, name } => {
                 let (tag, name) = (tag.clone(), text(name, cx));
                 if name.is_empty() {
-                    self.modal_error = "标签不能没有名字。要去掉它，在标签上点右键选「去掉这个标签」。".into();
+                    self.modal_error = t("标签不能没有名字。要去掉它，在标签上点右键选「去掉这个标签」。").into();
                     return;
                 }
                 if name == tag || self.retag(&tag, Some(&name), cx) { self.run(Cmd::CloseModal, window, cx) }
@@ -4383,7 +4392,7 @@ impl Workspace {
             Modal::TagPapers { ids, name } => {
                 let (ids, tags) = (ids.clone(), wisp_core::model::split_list(&text(name, cx)));
                 if tags.is_empty() {
-                    self.modal_error = "写上要添加的标签，多个用逗号或分号隔开。".into();
+                    self.modal_error = t("写上要添加的标签，多个用逗号或分号隔开。").into();
                     return;
                 }
                 let done = self.change(cx, |lib| {
@@ -4396,13 +4405,13 @@ impl Workspace {
                 });
                 if done {
                     self.run(Cmd::CloseModal, window, cx);
-                    self.say(format!("已为 {} 篇文献添加标签。", ids.len()), cx);
+                    self.say(tf!("已为 {} 篇文献添加标签。", "Added tags to {} papers.", ids.len()), cx);
                 }
             }
             Modal::Note { paper_id, text: input } => {
                 let (paper_id, note) = (paper_id.clone(), text(input, cx));
                 if note.is_empty() {
-                    self.modal_error = "没有内容可以记下。".into();
+                    self.modal_error = t("没有内容可以记下。").into();
                     return;
                 }
                 // Added after what is there: the reader's own notes are never written over.
@@ -4415,12 +4424,12 @@ impl Workspace {
                 if !saved { return }
                 if let Some(lib) = self.lib.as_ref().filter(|lib| lib.selected.as_deref() == Some(paper_id.as_str())) { lib.notes.update(cx, |input, cx| input.set_text(&joined, cx)) }
                 self.run(Cmd::CloseModal, window, cx);
-                self.say("已记到这篇文献的「我的笔记」里。", cx);
+                self.say(t("已记到这篇文献的「我的笔记」里。"), cx);
             }
             Modal::AddById { input, busy } => {
                 if *busy { return }
                 let Some(id) = lookup::parse_identifier(&text(input, cx)) else {
-                    self.modal_error = "没有认出 DOI 或 PMID。DOI 形如 10.1038/s41586-020-2649-2，PMID 是一串数字。".into();
+                    self.modal_error = t("没有认出 DOI 或 PMID。DOI 形如 10.1038/s41586-020-2649-2，PMID 是一串数字。").into();
                     return;
                 };
                 *busy = true;
@@ -4436,7 +4445,7 @@ impl Workspace {
                                 this.change(cx, |_| Ok(()));
                                 this.run(Cmd::CloseModal, window, cx);
                                 this.select(Some(paper.id), window, cx);
-                                this.say(format!("已添加：{}", paper.title), cx);
+                                this.say(tf!("已添加：{}", "Added: {}", paper.title), cx);
                             }
                             Err(err) => this.modal_error = err,
                         }
@@ -4454,7 +4463,7 @@ impl Workspace {
                     Ok(year) => Some(year),
                     Err(_) if year.is_empty() => None,
                     Err(_) => {
-                        self.modal_error = "年份应为数字，例如 2024；不确定可以留空。".into();
+                        self.modal_error = t("年份应为数字，例如 2024；不确定可以留空。").into();
                         return;
                     }
                 };
@@ -4485,7 +4494,7 @@ impl Workspace {
                         if !editing { self.select(Some(id), window, cx) }
                         // An edited title or abstract is a new text to translate.
                         self.translate_selected(false, cx);
-                        self.say(if editing { "修改已保存。" } else { "已添加。" }, cx);
+                        self.say(if editing { t("修改已保存。") } else { t("已添加。") }, cx);
                     }
                     Err(err) => self.modal_error = format!("{err:#}"),
                 }
@@ -4503,7 +4512,7 @@ impl Workspace {
             }
             Modal::Search { editing, kind, name, query, max } => {
                 let Ok(max_results) = text(max, cx).parse::<usize>() else {
-                    self.modal_error = "每次取回的篇数应为数字，例如 50。".into();
+                    self.modal_error = t("每次取回的篇数应为数字，例如 50。").into();
                     return;
                 };
                 let Some(lib) = self.lib.as_mut() else { return };
@@ -4530,7 +4539,7 @@ impl Workspace {
 /// what the model reads, whether it failed, and the line for the window.
 fn run_tool(info: &LibraryInfo, sources: &[ai::Source], call: PreparedCall, allowed: bool) -> (String, String, bool, String) {
     if call.confirm && !allowed {
-        return (call.id, "用户没有同意这次操作，它没有执行。不要重试；需要时向用户说明它会做什么，由用户决定。".into(), true, "没有执行：未获同意".into());
+        return (call.id, "用户没有同意这次操作，它没有执行。不要重试；需要时向用户说明它会做什么，由用户决定。".into(), true, t("没有执行：未获同意").into());
     }
     let result = call.args.and_then(|args| {
         let mut store = Store::open(&info.dir).map_err(|e| format!("{e:#}"))?;
@@ -4571,6 +4580,39 @@ impl Workspace {
         {
             let (name, arg) = step.split_once(':').unwrap_or((step, ""));
             let cmd = match name {
+                "do" => {
+                    for step in arg.split('|') { self.dev_step(step, window, cx) }
+                    return;
+                }
+                // UI layout checks without changing the normal startup or real libraries.
+                "size" => {
+                    if let Some((width, height)) = arg.split_once(';').and_then(|(w, h)| Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?))) {
+                        window.resize(size(px(width), px(height)));
+                    }
+                    return;
+                }
+                "ui" => match arg {
+                    "clear" => {
+                        self.run(Cmd::CloseModal, window, cx);
+                        self.run(Cmd::CloseSettings, window, cx);
+                        self.menu = None;
+                        return;
+                    }
+                    "home" => Some(Cmd::GoHome),
+                    "detail-close" => Some(Cmd::CloseDetail),
+                    "new-library" => Some(Cmd::NewLibrary),
+                    "edit-library" => self.lib.as_ref().map(|lib| Cmd::EditLibrary(lib.info.id.clone())),
+                    "add" => Some(Cmd::AddById),
+                    "manual" => Some(Cmd::AddManual),
+                    "fields" => Some(Cmd::ManageFields),
+                    "new-search" => Some(Cmd::NewSearch),
+                    "zotero" => Some(Cmd::ImportZotero),
+                    "edit-paper" => self.lib.as_ref().and_then(|lib| lib.selected.clone()).map(Cmd::EditPaper),
+                    "delete-paper" => self.lib.as_ref().and_then(|lib| lib.selected.clone()).map(Cmd::AskDeletePaper),
+                    "guide" => Some(Cmd::OpenGuide(true)),
+                    "guide-search" => Some(Cmd::OpenGuide(false)),
+                    _ => None,
+                },
                 "open" => self.libraries.get(arg.parse::<usize>().unwrap_or(0)).map(|l| Cmd::OpenLibrary(l.id.clone())),
                 "select" => self.lib.as_ref().and_then(|l| l.shown.get(arg.parse::<usize>().unwrap_or(0)).map(|&i| Cmd::Select(l.papers[i].id.clone()))),
                 "tab" => Some(Cmd::SetTab(match arg { "pdf" => Tab::Pdf, "ask" => Tab::Ask, _ => Tab::Info })),
@@ -4947,6 +4989,7 @@ impl Workspace {
                 "command" => Some(Cmd::SelectCommand(arg.parse().unwrap_or(0))),
                 // Saved like the choice in 设置 › 外观: "light", "dark", or empty for the system's.
                 "theme" => Some(Cmd::SetAppearance(arg.to_string())),
+                "language" => Some(Cmd::SetLanguage(if arg == "en" { Language::En } else { Language::Zh })),
                 "record" => Some(Cmd::RecordShortcut(arg.to_string())),
                 "update" => Some(Cmd::CheckUpdate),
                 "modal" => match arg {

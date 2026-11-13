@@ -23,7 +23,7 @@ pub fn format_of(media_type: &str) -> Option<ImageFormat> {
 /// in a format the services read and small enough, otherwise scaled down
 /// to `MAX_EDGE` and written as PNG, or as JPEG when that is still too big.
 pub fn prepare(bytes: Vec<u8>) -> Result<Image, String> {
-    let unreadable = |err: image::ImageError| format!("无法读取这张图片：{err}");
+    let unreadable = |err: image::ImageError| tf!("无法读取这张图片：{err}", "Cannot read image: {err}");
     let direct = match image::guess_format(&bytes) {
         Ok(image::ImageFormat::Png) => Some(ImageFormat::Png),
         Ok(image::ImageFormat::Jpeg) => Some(ImageFormat::Jpeg),

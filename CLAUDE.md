@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Wisp Paper is a local-first literature library desktop app (collect papers, organise, preview PDFs, ask an LLM about the library), written in Rust with GPUI. Targets Windows and macOS; Linux compiles but is untested. The UI is Chinese-only: user-facing strings and error messages are written in Chinese, code comments in English.
+Wisp Paper is a local-first literature library desktop app (collect papers, organise, preview PDFs, ask an LLM about the library), written in Rust with GPUI. Targets Windows and macOS; Linux compiles but is untested. The desktop UI supports Chinese and English (Settings › General). Use `i18n::t` with Chinese keys in `locales/en.json` for static labels, and `tf!` with both Rust format literals for dynamic messages. Translate shared label tables at display sites; keep stored keys, user content and model prompts unchanged. Code comments are in English.
 
 ## Commands
 

@@ -2,6 +2,7 @@
 //! which are fixed): their defaults, the changes kept in settings.json, and
 //! how a key is shown. 设置 › 快捷键 records new keys (settings.rs).
 
+use crate::i18n::t;
 use gpui::*;
 use std::collections::BTreeMap;
 
@@ -68,15 +69,15 @@ pub fn is_default(id: &str, key: &str) -> bool {
 
 /// Why `key` cannot become the shortcut `id`, if it cannot.
 pub fn refusal(id: &str, key: &str, custom: &BTreeMap<String, String>) -> Option<String> {
-    let Ok(stroke) = Keystroke::parse(key) else { return Some("没有认出这个按键。".into()) };
+    let Ok(stroke) = Keystroke::parse(key) else { return Some(t("没有认出这个按键。").into()) };
     let m = stroke.modifiers;
     let function_key = stroke.key.len() > 1 && stroke.key.starts_with('f') && stroke.key[1..].parse::<u8>().is_ok();
     if !(m.control || m.alt || m.platform || function_key) {
-        return Some(if cfg!(target_os = "macos") { "快捷键需要带上 ⌘、⌃ 或 ⌥，或者使用 F1–F12。".into() } else { "快捷键需要带上 Ctrl 或 Alt，或者使用 F1–F12。".into() });
+        return Some(if cfg!(target_os = "macos") { t("快捷键需要带上 ⌘、⌃ 或 ⌥，或者使用 F1–F12。").into() } else { t("快捷键需要带上 Ctrl 或 Alt，或者使用 F1–F12。").into() });
     }
-    if EDITING.iter().any(|e| same(e, key)) { return Some(format!("{} 用于文本编辑（全选、复制、剪切、粘贴），不能改作他用。", pretty(key))) }
-    if same(TRASH, key) { return Some(format!("{} 用于把选中的文献移到回收站，不能改作他用。", pretty(key))) }
-    SHORTCUTS.iter().find(|s| s.id != id && same(&key_of(s.id, custom), key)).map(|other| format!("{} 已用于「{}」。先修改或移除那个快捷键。", pretty(key), other.label))
+    if EDITING.iter().any(|e| same(e, key)) { return Some(tf!("{} 用于文本编辑（全选、复制、剪切、粘贴），不能改作他用。", "{} is reserved for text editing (select all, copy, cut and paste).", pretty(key))) }
+    if same(TRASH, key) { return Some(tf!("{} 用于把选中的文献移到回收站，不能改作他用。", "{} is reserved for moving selected papers to trash.", pretty(key))) }
+    SHORTCUTS.iter().find(|s| s.id != id && same(&key_of(s.id, custom), key)).map(|other| tf!("{} 已用于「{}」。先修改或移除那个快捷键。", "{} is already used for “{}”. Change or remove that shortcut first.", pretty(key), t(other.label)))
 }
 
 /// Replace every key binding: the text field's, Esc, and the shortcuts as changed by `custom`.

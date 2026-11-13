@@ -4,13 +4,13 @@
 //! The rules (what a new manuscript holds, when a snapshot is worth keeping,
 //! what an export looks like) are `wisp_core::manuscript`'s.
 
+use crate::i18n::{label, t};
 use crate::app::{Cmd, MenuItem, MenuKind, Modal, Page, Workspace, Writing};
 use crate::input::TextInput;
 use crate::theme::Theme;
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
 use wisp_core::manuscript::{self, LANGUAGES, Manuscript, Section};
-use wisp_core::model::label;
 use wisp_core::structure::SECTIONS;
 
 /// What a manuscript is exported as.
@@ -78,10 +78,10 @@ fn answer_source_labels(answer: &str, sources: &[wisp_core::ai::Source], papers:
     labels.into_iter().map(|label| {
         let matching: Vec<_> = sources.iter().filter(|source| source.label == label).collect();
         let [source] = matching.as_slice() else {
-            return if matching.is_empty() { format!("[{label}] 无法解析：对话中没有该标签，请核对。") }
-                else { format!("[{label}] 标签对应多个来源，请核对。") }
+            return if matching.is_empty() { tf!("[{label}] 无法解析：对话中没有该标签，请核对。", "[{label}] cannot be resolved: this label is absent from the conversation. Please check it.") }
+                else { tf!("[{label}] 标签对应多个来源，请核对。", "[{label}] matches multiple sources. Please check it.") }
         };
-        let mut line = format!("[{label}] {} (文献 ID: {})", source.title, source.paper_id);
+        let mut line = tf!("[{label}] {} (文献 ID: {})", "[{label}] {} (paper ID: {})", source.title, source.paper_id);
         if let Some(paper) = papers.iter().find(|paper| paper.id == source.paper_id) {
             if !paper.authors.trim().is_empty() { line.push_str(&format!("; {}", paper.authors.trim())) }
             if let Some(year) = paper.year { line.push_str(&format!("; {year}")) }
@@ -96,12 +96,12 @@ impl Workspace {
     /// existing draft. Conversation-local citation labels travel with it.
     pub(crate) fn answer_to_manuscript(&mut self, question: String, answer: String, window: &mut Window, cx: &mut Context<Self>) {
         let title: String = question.trim().strip_prefix("/review").unwrap_or(question.trim()).trim().chars().take(80).collect();
-        self.draft_to_manuscript(title, vec![("正文".into(), answer)], window, cx);
+        self.draft_to_manuscript(title, vec![(t("正文").into(), answer)], window, cx);
     }
 
     /// Assemble every recorded section in its saved order into a new manuscript.
     pub(crate) fn review_to_manuscript(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(review) = self.lib.as_ref().and_then(|lib| lib.library_chat.review.clone()).filter(|review| review.outline_confirmed && !review.sections.is_empty()) else { return self.fail("请先确认大纲并保存正文。", cx) };
+        let Some(review) = self.lib.as_ref().and_then(|lib| lib.library_chat.review.clone()).filter(|review| review.outline_confirmed && !review.sections.is_empty()) else { return self.fail(t("请先确认大纲并保存正文。"), cx) };
         self.draft_to_manuscript(review.title, review.sections.into_iter().map(|s| (s.name, s.body)).collect(), window, cx);
     }
 
@@ -112,7 +112,7 @@ impl Workspace {
         // writing page; a quoted sentence is left out, its page kept. Labels
         // that do not resolve remain literal and get a lookup below.
         // Conversion does not verify a claim or page.
-        let known = match lib.store.cite_keys() { Ok(keys) => keys, Err(err) => return self.fail(format!("无法读取引用记录：{err:#}"), cx) };
+        let known = match lib.store.cite_keys() { Ok(keys) => keys, Err(err) => return self.fail(tf!("无法读取引用记录：{err:#}", "Cannot read citation records: {err:#}"), cx) };
         let converted = {
             let index = wisp_core::cite::Index::new(&lib.papers, lib.trash.iter().map(|entry| &entry.paper), &known);
             sections.iter().map(|(name, body)| (name.clone(), wisp_core::cite::convert_ai_citations(body, lib.library_chat.sources(), &index))).collect::<Vec<_>>()
@@ -121,18 +121,18 @@ impl Workspace {
         let mut sections: Vec<(String, String)> = converted.into_iter().map(|(name, part)| (name, part.text)).collect();
         let answer = sections.iter().map(|(_, body)| body.as_str()).collect::<Vec<_>>().join("\n\n");
         let labels = answer_source_labels(&answer, lib.library_chat.sources(), &lib.papers);
-        if !labels.is_empty() { sections.push(("来源标签（请核对）".into(), labels)) }
+        if !labels.is_empty() { sections.push((t("来源标签（请核对）").into(), labels)) }
         let language = lib.writing.language().to_string();
         // Creating all sections and pinning keys are a single database transaction.
         let made = match lib.store.create_manuscript_from_sections(&title, &language, &sections, &keys) {
             Ok(made) => made,
-            Err(err) => return self.fail(format!("稿件没有保存：{err:#}"), cx),
+            Err(err) => return self.fail(tf!("稿件没有保存：{err:#}", "Manuscript not saved: {err:#}"), cx),
         };
         let id = made.id.clone();
         let section = made.sections.first().map(|section| section.id.clone()).unwrap_or_default();
         lib.citing.kept = match lib.store.cite_keys() {
             Ok(kept) => kept,
-            Err(err) => return self.fail(format!("新稿件 {id} 已保存，但无法重新读取引用键：{err:#}"), cx),
+            Err(err) => return self.fail(tf!("新稿件 {id} 已保存，但无法重新读取引用键：{err:#}", "New manuscript {id} saved, but citation keys could not be reloaded: {err:#}"), cx),
         };
         lib.writing.manuscripts.push(made);
         lib.writing.reading = false;
@@ -141,7 +141,7 @@ impl Workspace {
         self.write_show(id, section, cx);
         self.write_texts_changed(cx);
         if let Some(lib) = self.lib.as_ref() { lib.writing.editor.read(cx).focus(window) }
-        self.say("已保存为新稿件；请核对引用与原文。", cx);
+        self.say(t("已保存为新稿件；请核对引用与原文。"), cx);
     }
 
     // ---- which manuscript and section
@@ -155,7 +155,7 @@ impl Workspace {
                 lib.writing.manuscripts.push(made);
                 self.write_show(id, section, cx);
             }
-            Err(err) => self.fail(format!("稿件没有建好：{err:#}"), cx),
+            Err(err) => self.fail(tf!("稿件没有建好：{err:#}", "Cannot create manuscript: {err:#}"), cx),
         }
     }
 
@@ -214,7 +214,7 @@ impl Workspace {
         let Some(lib) = self.lib.as_mut() else { return };
         let section = lib.writing.section_id.clone();
         if section.is_empty() { return }
-        if let Err(err) = lib.store.save_section_body(&section, &text) { return self.fail(format!("草稿没有保存：{err:#}"), cx) }
+        if let Err(err) = lib.store.save_section_body(&section, &text) { return self.fail(tf!("草稿没有保存：{err:#}", "Draft not saved: {err:#}"), cx) }
         if let Some(kept) = lib.writing.section_mut() { kept.body = text }
         lib.writing.typed += 1;
         let (typed, library) = (lib.writing.typed, lib.info.id.clone());
@@ -232,7 +232,7 @@ impl Workspace {
     pub(crate) fn write_title_typed(&mut self, title: String, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
         let id = lib.writing.manuscript.clone();
-        if let Err(err) = lib.store.rename_manuscript(&id, &title) { return self.fail(format!("题目没有保存：{err:#}"), cx) }
+        if let Err(err) = lib.store.rename_manuscript(&id, &title) { return self.fail(tf!("题目没有保存：{err:#}", "Title not saved: {err:#}"), cx) }
         if let Some(m) = lib.writing.manuscripts.iter_mut().find(|m| m.id == id) { m.title = title.trim().to_string() }
         cx.notify();
     }
@@ -263,8 +263,8 @@ impl Workspace {
             }
             Cmd::AskRemoveManuscript(id) => {
                 let Some(m) = self.lib.as_ref().and_then(|l| l.writing.manuscripts.iter().find(|m| m.id == id)) else { return };
-                let title = m.shown_title().to_string();
-                self.modal = Some(Modal::Confirm { title: format!("移除稿件「{title}」？"), message: "它不再列在写作里。文字仍留在这个文献库的数据库中，不会被删除。".into(), action: "移除".into(), cmd: Cmd::RemoveManuscript(id) });
+                let title = crate::i18n::manuscript_title(m).to_string();
+                self.modal = Some(Modal::Confirm { title: tf!("移除稿件「{title}」？", "Remove manuscript “{title}”?"), message: t("它不再列在写作里。文字仍留在这个文献库的数据库中，不会被删除。").into(), action: t("移除").into(), cmd: Cmd::RemoveManuscript(id) });
             }
             Cmd::RemoveManuscript(id) => {
                 self.modal = None;
@@ -311,10 +311,10 @@ impl Workspace {
             }
             Cmd::AskRemoveSection(id) => {
                 let Some(section) = self.lib.as_ref().and_then(|l| l.writing.current()?.section(&id)).cloned() else { return };
-                if self.lib.as_ref().and_then(|l| l.writing.current()).is_some_and(|m| m.sections.len() <= 1) { return self.fail("稿件至少要留一节。", cx) }
+                if self.lib.as_ref().and_then(|l| l.writing.current()).is_some_and(|m| m.sections.len() <= 1) { return self.fail(t("稿件至少要留一节。"), cx) }
                 if section.body.trim().is_empty() { return self.run_manuscript(Cmd::RemoveSection(id), window, cx) }
                 let words = section.body.split_whitespace().count();
-                self.modal = Some(Modal::Confirm { title: format!("删除「{}」这一节？", section.name), message: format!("这一节写了 {words} 词，连同它的历史版本会一起删除，不能恢复。要留着文字，先用「导出」或「复制全文」。"), action: "删除".into(), cmd: Cmd::RemoveSection(id) });
+                self.modal = Some(Modal::Confirm { title: tf!("删除「{}」这一节？", "Delete section “{}”?", section.name), message: tf!("这一节写了 {words} 词，连同它的历史版本会一起删除，不能恢复。要留着文字，先用「导出」或「复制全文」。", "This section contains {words} words. Its text and history will be deleted permanently. Export or copy the manuscript first to keep them."), action: t("删除").into(), cmd: Cmd::RemoveSection(id) });
             }
             Cmd::RemoveSection(id) => {
                 self.modal = None;
@@ -384,7 +384,7 @@ impl Workspace {
                     Ok(_) => {
                         self.modal = None;
                         self.write_reload(Some(snapshot.section_id), cx);
-                        self.say("已恢复这一版。恢复前的文字也留了一个版本，可以再换回去。", cx);
+                        self.say(t("已恢复这一版。恢复前的文字也留了一个版本，可以再换回去。"), cx);
                     }
                     Err(err) => self.modal_error = format!("{err:#}"),
                 }
@@ -396,16 +396,16 @@ impl Workspace {
 
     fn export_manuscript(&mut self, kind: ManuscriptExport, cx: &mut Context<Self>) {
         let Some(manuscript) = self.lib.as_ref().and_then(|l| l.writing.current()).cloned() else { return };
-        if manuscript.sections.iter().all(|s| s.body.trim().is_empty()) { return self.fail("这份稿件还没有写什么。", cx) }
+        if manuscript.sections.iter().all(|s| s.body.trim().is_empty()) { return self.fail(t("这份稿件还没有写什么。"), cx) }
         let (bytes, extension) = match kind {
             ManuscriptExport::Copy => {
                 cx.write_to_clipboard(ClipboardItem::new_string(manuscript::plain_text(&manuscript)));
-                return self.say("已复制整份稿件。", cx);
+                return self.say(t("已复制整份稿件。"), cx);
             }
             ManuscriptExport::Markdown => (manuscript::markdown(&manuscript).into_bytes(), "md"),
             ManuscriptExport::Docx => (manuscript::docx(&manuscript), "docx"),
         };
-        let name = format!("{}.{extension}", file_name(manuscript.shown_title()));
+        let name = format!("{}.{extension}", file_name(crate::i18n::manuscript_title(&manuscript)));
         let directory = dirs::document_dir().or_else(dirs::home_dir).unwrap_or_else(|| self.root.clone());
         let picked = cx.prompt_for_new_path(&directory, Some(&name));
         cx.spawn(async move |this, cx| {
@@ -413,8 +413,8 @@ impl Workspace {
                 if path.extension().is_none() { path.set_extension(extension); }
                 let result = std::fs::write(&path, bytes);
                 this.update(cx, |this, cx| match result {
-                    Ok(()) => this.say(format!("已导出到 {}", path.display()), cx),
-                    Err(err) => this.fail(format!("无法写入 {}：{err}", path.display()), cx),
+                    Ok(()) => this.say(tf!("已导出到 {}", "Exported to {}", path.display()), cx),
+                    Err(err) => this.fail(tf!("无法写入 {}：{err}", "Cannot write {}: {err}", path.display()), cx),
                 })
                 .ok();
             }
@@ -431,29 +431,29 @@ impl Workspace {
             MenuKind::Manuscripts => {
                 for m in &writing.manuscripts {
                     let words: usize = m.sections.iter().map(|s| s.body.split_whitespace().count()).sum();
-                    items.push(MenuItem { label: m.shown_title().to_string().into(), checked: m.id == writing.manuscript, note: Some(format!("{words} 词").into()), cmd: Cmd::WriteManuscript(m.id.clone()) });
+                    items.push(MenuItem { label: crate::i18n::manuscript_title(m).to_string().into(), checked: m.id == writing.manuscript, note: Some(tf!("{words} 词", "{words} words").into()), cmd: Cmd::WriteManuscript(m.id.clone()) });
                 }
-                items.push(item("新建稿件".into(), false, Cmd::NewManuscript));
+                items.push(item(t("新建稿件").into(), false, Cmd::NewManuscript));
                 if writing.manuscripts.len() > 1 || writing.current().is_some_and(|m| m.sections.iter().any(|s| !s.body.trim().is_empty())) {
-                    items.push(item("移除这份稿件…".into(), false, Cmd::AskRemoveManuscript(writing.manuscript.clone())));
+                    items.push(item(t("移除这份稿件…").into(), false, Cmd::AskRemoveManuscript(writing.manuscript.clone())));
                 }
             }
             MenuKind::Section(id) => {
                 let Some(m) = writing.current() else { return items };
                 let at = m.sections.iter().position(|s| s.id == *id).unwrap_or(0);
-                items.push(item("名称与类型…".into(), false, Cmd::EditSection(Some(id.clone()))));
-                if at > 0 { items.push(item("前移".into(), false, Cmd::MoveSection(id.clone(), -1))) }
-                if at + 1 < m.sections.len() { items.push(item("后移".into(), false, Cmd::MoveSection(id.clone(), 1))) }
-                items.push(item("历史版本…".into(), false, Cmd::WriteHistory));
-                if m.sections.len() > 1 { items.push(item("删除这一节…".into(), false, Cmd::AskRemoveSection(id.clone()))) }
+                items.push(item(t("名称与类型…").into(), false, Cmd::EditSection(Some(id.clone()))));
+                if at > 0 { items.push(item(t("前移").into(), false, Cmd::MoveSection(id.clone(), -1))) }
+                if at + 1 < m.sections.len() { items.push(item(t("后移").into(), false, Cmd::MoveSection(id.clone(), 1))) }
+                items.push(item(t("历史版本…").into(), false, Cmd::WriteHistory));
+                if m.sections.len() > 1 { items.push(item(t("删除这一节…").into(), false, Cmd::AskRemoveSection(id.clone()))) }
             }
             MenuKind::ManuscriptExport => {
                 items.push(item("Markdown（.md）".into(), false, Cmd::ExportManuscript(ManuscriptExport::Markdown)));
                 items.push(item("Word（.docx）".into(), false, Cmd::ExportManuscript(ManuscriptExport::Docx)));
-                items.push(item("复制全文".into(), false, Cmd::ExportManuscript(ManuscriptExport::Copy)));
+                items.push(item(t("复制全文").into(), false, Cmd::ExportManuscript(ManuscriptExport::Copy)));
             }
             MenuKind::WriteLanguage => {
-                for (code, name) in LANGUAGES { items.push(item(format!("{name}（{code}）"), writing.language() == code, Cmd::WriteLanguage(code.to_string()))) }
+                for (code, name) in LANGUAGES { items.push(item(format!("{} ({code})", t(name)), writing.language() == code, Cmd::WriteLanguage(code.to_string()))) }
             }
             _ => {}
         }
@@ -467,7 +467,7 @@ impl Workspace {
         let lib = self.lib.as_ref().unwrap();
         let writing = &lib.writing;
         let Some(manuscript) = writing.current() else { return div() };
-        let language = LANGUAGES.iter().find(|(code, _)| *code == manuscript.language).map_or(manuscript.language.as_str(), |(_, name)| name);
+        let language = LANGUAGES.iter().find(|(code, _)| *code == manuscript.language).map_or(manuscript.language.as_str(), |(_, name)| t(name));
         let tool = |id: &'static str, icon: &'static str, text: Option<SharedString>| ui::ghost_button(id, Some(icon), text).h(px(26.)).px(px(7.)).text_size(px(12.));
         let pills: Vec<AnyElement> = manuscript
             .sections
@@ -505,6 +505,7 @@ impl Workspace {
             .child(
                 div()
                     .flex()
+                    .flex_wrap()
                     .items_center()
                     .gap(px(4.))
                     .child(
@@ -522,11 +523,11 @@ impl Workspace {
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(writing.title.clone()),
                     )
-                    .child(tool("write-manuscripts", "list", Some(format!("稿件 {}", writing.manuscripts.len()).into())).on_click(self.on_menu(MenuKind::Manuscripts, cx)))
+                    .child(tool("write-manuscripts", "list", Some(tf!("稿件 {}", "Manuscript {}", writing.manuscripts.len()).into())).on_click(self.on_menu(MenuKind::Manuscripts, cx)))
                     .child(tool("write-language", "chevron-down", Some(language.to_string().into())).on_click(self.on_menu(MenuKind::WriteLanguage, cx)))
                     .child(tool("write-history", "history", None).on_click(self.on(Cmd::WriteHistory, cx)))
-                    .child(tool("write-export", "export", Some("导出".into())).on_click(self.on_menu(MenuKind::ManuscriptExport, cx)))
-                    .child(if writing.reading { tool("write-reading", "pen-line", Some("写作".into())).on_click(self.on(Cmd::WriteReading(false), cx)) } else { tool("write-reading", "eye", Some("通读".into())).on_click(self.on(Cmd::WriteReading(true), cx)) }),
+                    .child(tool("write-export", "export", Some(t("导出").into())).on_click(self.on_menu(MenuKind::ManuscriptExport, cx)))
+                    .child(if writing.reading { tool("write-reading", "pen-line", Some(t("写作").into())).on_click(self.on(Cmd::WriteReading(false), cx)) } else { tool("write-reading", "eye", Some(t("通读").into())).on_click(self.on(Cmd::WriteReading(true), cx)) }),
             )
             .child(div().flex().items_center().flex_wrap().gap(px(6.)).children(pills).child(add))
     }
@@ -556,7 +557,7 @@ impl Workspace {
                             .child(div().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::text()).hover(|s| s.text_color(Theme::accent())).child(section.name.clone()))
                             .when(section.kind != "other", |d| d.child(div().text_size(px(11.)).text_color(Theme::text_tertiary()).child(label(&SECTIONS, &section.kind).to_string()))),
                     )
-                    .when(paragraphs.is_empty(), |d| d.child(div().text_size(px(13.)).text_color(Theme::text_tertiary()).child("这一节还没有写。")))
+                    .when(paragraphs.is_empty(), |d| d.child(div().text_size(px(13.)).text_color(Theme::text_tertiary()).child(t("这一节还没有写。"))))
                     .children(paragraphs)
                     .into_any_element()
             })
@@ -570,7 +571,7 @@ impl Workspace {
             .border_1()
             .border_color(Theme::line())
             .bg(Theme::bg_body())
-            .child(div().flex().justify_center().px(px(28.)).py(px(24.)).child(div().flex().flex_col().gap(px(26.)).w_full().max_w(px(720.)).child(div().text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).line_height(px(30.)).child(manuscript.shown_title().to_string())).children(sections)))
+            .child(div().flex().justify_center().px(px(28.)).py(px(24.)).child(div().flex().flex_col().gap(px(26.)).w_full().max_w(px(720.)).child(div().text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).line_height(px(30.)).child(crate::i18n::manuscript_title(manuscript).to_string())).children(sections)))
             .into_any_element()
     }
 
@@ -582,13 +583,13 @@ impl Workspace {
             .enumerate()
             .map(|(n, (key, shown))| {
                 let on = kind == key;
-                div().id(("section-kind", n)).flex().flex_none().items_center().h(px(28.)).px(px(12.)).rounded(px(14.)).text_size(px(13.)).cursor_pointer().border_1().when(on, |d| d.bg(Theme::accent_soft()).text_color(Theme::accent()).border_color(Theme::accent().opacity(0.35))).when(!on, |d| d.border_color(Theme::line()).text_color(Theme::text_secondary()).hover(|s| s.bg(Theme::hover()))).on_click(self.on(Cmd::PickSectionKind(key.to_string()), cx)).child(shown.to_string()).into_any_element()
+                div().id(("section-kind", n)).flex().flex_none().items_center().h(px(28.)).px(px(12.)).rounded(px(14.)).text_size(px(13.)).cursor_pointer().border_1().when(on, |d| d.bg(Theme::accent_soft()).text_color(Theme::accent()).border_color(Theme::accent().opacity(0.35))).when(!on, |d| d.border_color(Theme::line()).text_color(Theme::text_secondary()).hover(|s| s.bg(Theme::hover()))).on_click(self.on(Cmd::PickSectionKind(key.to_string()), cx)).child(t(shown).to_string()).into_any_element()
             })
             .collect();
-        let hint = if kind == "other" { "候选句来自文献里不属于导言、方法、结果、讨论的段落。综述的各节、致谢、展望都可以选它。" } else { "候选句来自文献库里的文献在这一部分的句子。" };
+        let hint = if kind == "other" { t("候选句来自文献里不属于导言、方法、结果、讨论的段落。综述的各节、致谢、展望都可以选它。") } else { t("候选句来自文献库里的文献在这一部分的句子。") };
         Some(
             ui::dialog(480.)
-                .child(ui::dialog_title(if editing.is_some() { "这一节的名称与类型" } else { "添加一节" }))
+                .child(ui::dialog_title(if editing.is_some() { t("这一节的名称与类型") } else { t("添加一节") }))
                 .child(
                     div()
                         .flex()
@@ -596,12 +597,12 @@ impl Workspace {
                         .gap(px(12.))
                         .px(px(20.))
                         .py(px(8.))
-                        .child(ui::form_row("名称", ui::field(name, window, cx)))
-                        .child(ui::form_row("类型", div().flex().flex_wrap().gap(px(6.)).children(kinds)))
+                        .child(ui::form_row(t("名称"), ui::field(name, window, cx)))
+                        .child(ui::form_row(t("类型"), div().flex().flex_wrap().gap(px(6.)).children(kinds)))
                         .child(div().text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_tertiary()).child(hint))
                         .child(ui::error_line(&self.modal_error)),
                 )
-                .child(self.manuscript_footer(if editing.is_some() { "保存" } else { "添加" }, true, cx)),
+                .child(self.manuscript_footer(if editing.is_some() { t("保存") } else { t("添加") }, true, cx)),
         )
     }
 
@@ -613,7 +614,7 @@ impl Workspace {
             .gap(px(8.))
             .px(px(20.))
             .py(px(14.))
-            .child(ui::secondary_button("modal-cancel", "取消").on_click(self.on(Cmd::CloseModal, cx)))
+            .child(ui::secondary_button("modal-cancel", t("取消")).on_click(self.on(Cmd::CloseModal, cx)))
             .when(enabled, |d| d.child(ui::primary_button("modal-ok", confirm).on_click(self.on(Cmd::SubmitModal, cx))))
     }
 
@@ -622,9 +623,9 @@ impl Workspace {
         let Some(Modal::History { section, snapshots, chosen }) = self.modal.as_ref() else { return None };
         let name = self.lib.as_ref().and_then(|l| l.writing.current()?.section(section)).map(|s| s.name.clone()).unwrap_or_default();
         let why = |why: &str| match why {
-            "pause" => "停笔时",
-            "leave" => "离开时",
-            "restore" => "恢复前",
+            "pause" => t("停笔时"),
+            "leave" => t("离开时"),
+            "restore" => t("恢复前"),
             _ => "",
         };
         let rows: Vec<AnyElement> = snapshots
@@ -646,13 +647,13 @@ impl Workspace {
                     .when(!on, |d| d.hover(|s| s.bg(Theme::hover())))
                     .on_click(self.on(Cmd::HistoryPick(n), cx))
                     .child(div().text_size(px(13.)).text_color(if on { Theme::accent() } else { Theme::text() }).child(wisp_core::time::short_time(&snapshot.taken_at)))
-                    .child(div().text_size(px(11.)).text_color(Theme::text_tertiary()).child(format!("{} · {words} 词", why(&snapshot.why))))
+                    .child(div().text_size(px(11.)).text_color(Theme::text_tertiary()).child(tf!("{} · {words} 词", "{} · {words} words", why(&snapshot.why))))
                     .into_any_element()
             })
             .collect();
         let shown = snapshots.get(*chosen);
         let body = match shown {
-            None => div().flex().flex_col().px(px(20.)).py(px(12.)).child(ui::empty_state("history", "还没有历史版本", &format!("停笔 {} 秒，或换到别的一节时，这一节的文字有了变化就会留一个版本，最多 {} 个。", manuscript::PAUSE_SECS, manuscript::KEEP_SNAPSHOTS))),
+            None => div().flex().flex_col().px(px(20.)).py(px(12.)).child(ui::empty_state("history", t("还没有历史版本"), &tf!("停笔 {} 秒，或换到别的一节时，这一节的文字有了变化就会留一个版本，最多 {} 个。", "When you pause for {} seconds or switch sections, changed text is saved as a version, up to {} versions.", manuscript::PAUSE_SECS, manuscript::KEEP_SNAPSHOTS))),
             Some(snapshot) => div()
                 .flex()
                 .h(px(380.))
@@ -675,17 +676,17 @@ impl Workspace {
                         .border_1()
                         .border_color(Theme::line())
                         .bg(Theme::bg_body())
-                        .when(snapshot.body.trim().is_empty(), |d| d.child(div().text_size(px(13.)).text_color(Theme::text_tertiary()).child("（这一版是空的）")))
+                        .when(snapshot.body.trim().is_empty(), |d| d.child(div().text_size(px(13.)).text_color(Theme::text_tertiary()).child(t("（这一版是空的）"))))
                         .children(manuscript::paragraphs(&snapshot.body).map(|line| div().text_size(px(14.)).line_height(px(23.)).text_color(Theme::text()).child(line.to_string()))),
                 ),
         };
         Some(
             ui::dialog(680.)
-                .child(ui::dialog_title(format!("「{name}」的历史版本")))
+                .child(ui::dialog_title(tf!("「{name}」的历史版本", "Version history of “{name}”")))
                 .child(body)
                 .child(div().px(px(20.)).child(ui::error_line(&self.modal_error)))
-                .child(div().px(px(20.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child("恢复时，现在的文字会先留一个版本，所以恢复也可以撤回。"))
-                .child(self.manuscript_footer("恢复这一版", shown.is_some(), cx)),
+                .child(div().px(px(20.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(t("恢复时，现在的文字会先留一个版本，所以恢复也可以撤回。")))
+                .child(self.manuscript_footer(t("恢复这一版"), shown.is_some(), cx)),
         )
     }
 }

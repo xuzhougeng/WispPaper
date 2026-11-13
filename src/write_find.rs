@@ -6,6 +6,7 @@
 //! lists merged. Only the list of how each paper opens the part comes by
 //! itself, while nothing has been asked.
 
+use crate::i18n::t;
 use crate::app::{Library, Page, Workspace};
 use gpui::*;
 use serde_json::{Value, json};
@@ -128,7 +129,7 @@ impl Workspace {
                 return self.write_rank(round, groups, cx);
             }
             Some(Err(error)) => {
-                search.note = format!("模型没有给出检索词（{error}），按原文的词查找。");
+                search.note = tf!("模型没有给出检索词（{error}），按原文的词查找。", "The model returned no search terms ({error}). Searching with the original words.");
                 return self.write_rank(round, vec![], cx);
             }
             None => {}
@@ -136,7 +137,7 @@ impl Workspace {
         // Without a model the words go as written, and find what they can.
         let request = if profile.key().is_empty() { Err(String::new()) } else { ai::plain_request(&profile, &retrieval::queries_system(language), &asked.text) };
         let Ok(request) = request else {
-            search.note = "没有配置模型，按原文的词查找：写的不是英文时几乎找不到。配置模型后，会先把这段变成几组英文检索词。".into();
+            search.note = t("没有配置模型，按原文的词查找：写的不是英文时几乎找不到。配置模型后，会先把这段变成几组英文检索词。").into();
             return self.write_rank(round, vec![], cx);
         };
         cx.notify();
@@ -150,14 +151,14 @@ impl Workspace {
                     if language == "英文" { groups.retain(|group| plain_latin(&group.words)) }
                     Some(groups).filter(|groups| !groups.is_empty())
                 };
-                let made = reply.and_then(|reply| usable(retrieval::parse_groups(&reply)).ok_or_else(|| "回答里没有检索词".to_string()));
+                let made = reply.and_then(|reply| usable(retrieval::parse_groups(&reply)).ok_or_else(|| t("回答里没有检索词").to_string()));
                 let search = &mut lib.writing.search;
                 search.made.insert(key, made.clone());
                 if search.round != round { return }
                 match made {
                     Ok(groups) => this.write_rank(round, groups, cx),
                     Err(error) => {
-                        search.note = format!("模型没有给出检索词（{error}），按原文的词查找。");
+                        search.note = tf!("模型没有给出检索词（{error}），按原文的词查找。", "The model returned no search terms ({error}). Searching with the original words.");
                         this.write_rank(round, vec![], cx)
                     }
                 }

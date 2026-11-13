@@ -1,6 +1,7 @@
 //! An open library: the sidebar (collect, views, tags), the paper table with
 //! its search and filters, and the trash.
 
+use crate::i18n::{label, t};
 use crate::app::{Cmd, Edge, FilterKey, Library, MenuKind, Page, Tab, Translated, Workspace};
 use crate::settings::SettingsPage;
 use crate::theme::{self, Theme};
@@ -44,7 +45,7 @@ fn ask_list_width(own: f32, viewport: f32) -> f32 {
 }
 
 fn view_label(view: View) -> &'static str {
-    VIEWS.iter().find(|(_, _, _, other)| *other == view).map_or("文献", |(_, _, label, _)| label)
+    VIEWS.iter().find(|(_, _, _, other)| *other == view).map_or(t("文献"), |(_, _, label, _)| t(label))
 }
 
 /// The views of a library, as the sidebar lists them: element id, icon, name.
@@ -147,7 +148,8 @@ impl Workspace {
         if self.asking(window) { return viewport - self.ask_list_width(window) }
         let own = if self.settings.detail_width > 0. { self.settings.detail_width } else { DETAIL_W };
         let sidebar = self.sidebar_width(window);
-        if lib.wide { (viewport * 0.62).max(DETAIL_W).min(viewport - sidebar - 80.) } else { own.min(viewport - sidebar - MAIN_MIN).max(DETAIL_MIN) }
+        let main_min = if lib.page == Page::Papers { MAIN_MIN } else { 460. };
+        if lib.wide { (viewport * 0.62).max(DETAIL_W).min(viewport - sidebar - 80.) } else { own.min(viewport - sidebar - main_min).max(DETAIL_MIN) }
     }
 
     /// The edge between the list and the detail panel is being dragged:
@@ -279,19 +281,19 @@ impl Workspace {
             .when(!ui::custom_titlebar(), |d| d.h(px(28.)))
             .pl(px(ui::traffic_lights_width()))
             .child(ui::ghost_button("toggle-sidebar", Some("panel-left"), None).occlude().on_click(self.on(Cmd::ToggleSidebar, cx)))
-            .child(ui::ghost_button("back-home", Some("arrow-left"), roomy.then(|| "所有文献库".into())).occlude().on_click(self.on(Cmd::GoHome, cx)))
+            .child(ui::ghost_button("back-home", Some("arrow-left"), roomy.then(|| t("所有文献库").into())).occlude().on_click(self.on(Cmd::GoHome, cx)))
     }
 
     /// Each background job stays compact; its dialog owns the live details.
     fn render_import(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let run = self.lib.as_ref()?.import.as_ref()?;
-        Some(ui::progress_entry("import-progress", if run.running() { "导入 PDF" } else { "PDF 导入完成" }, run.rows.len(), run.total, run.running(), &ui::import_segments(run))
+        Some(ui::progress_entry("import-progress", if run.running() { t("导入 PDF") } else { t("PDF 导入完成") }, run.rows.len(), run.total, run.running(), &ui::import_segments(run))
             .on_click(self.on(Cmd::ShowImport, cx)).into_any_element())
     }
 
     fn render_fetching(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let run = self.lib.as_ref()?.fetching.as_ref()?;
-        Some(ui::progress_entry("fetch-progress", if run.running() { "查找全文" } else { run.status() }, run.rows.len(), run.total, run.running(), &ui::fetch_segments(run))
+        Some(ui::progress_entry("fetch-progress", if run.running() { t("查找全文") } else { run.status() }, run.rows.len(), run.total, run.running(), &ui::fetch_segments(run))
             .on_click(self.on(Cmd::ShowFetch, cx)).into_any_element())
     }
 
@@ -322,7 +324,7 @@ impl Workspace {
                 // 收藏 holds the starred papers and the figure library: both count, and either page is its own.
                 let collected = if view == View::Starred { lib.gallery.items.len() } else { 0 };
                 let active = (on_papers && lib.filters.view == view) || (view == View::Starred && lib.page == Page::Figures);
-                nav(id, icon, label, Some(filter::view_count(&lib.papers, view, now) + collected), active, Cmd::SetView(view), self, cx).into_any_element()
+                nav(id, icon, t(label), Some(filter::view_count(&lib.papers, view, now) + collected), active, Cmd::SetView(view), self, cx).into_any_element()
             })
             .collect();
         let tags = filter::tag_counts(&lib.papers);
@@ -353,11 +355,13 @@ impl Workspace {
             .collect();
         let trash_count = lib.trash.len();
         div()
+            .id("library-sidebar")
             .flex()
             .flex_col()
             .flex_none()
             .w(px(width))
             .h_full()
+            .overflow_y_scroll()
             .px(px(10.))
             .pb(px(10.))
             .pt(px(Self::corner_top()))
@@ -377,22 +381,22 @@ impl Workspace {
                     .on_click(self.on(Cmd::EditLibrary(lib.info.id.clone()), cx))
                     .child(div().flex().items_center().gap(px(8.)).child(div().size(px(10.)).flex_none().rounded(px(3.)).bg(Theme::accent())).child(div().flex_1().min_w_0().truncate().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(lib.info.name.clone())))
             )
-            .child(ui::primary_button("add-paper", "添加文献").w_full().on_click(self.on_menu(MenuKind::Add, cx)))
+            .child(ui::primary_button("add-paper", t("添加文献")).w_full().on_click(self.on_menu(MenuKind::Add, cx)))
             .child(div().flex().flex_col().gap(px(1.)).children(view_rows))
-            .child(div().flex().flex_col().gap(px(1.)).child(nav("page-ask", "sparkle", "向文献库提问", None, lib.page == Page::Ask, Cmd::SetPage(Page::Ask), self, cx)).child(nav("page-sources", "search", "检索与导入", (!lib.searches.is_empty()).then_some(lib.searches.len()), matches!(lib.page, Page::Sources | Page::Guide), Cmd::SetPage(Page::Sources), self, cx)).child(nav("page-screen", "list-todo", "筛选", Some(lib.papers.iter().filter(|p| p.screening == "pending").count()).filter(|n| *n > 0), lib.page == Page::Screen, Cmd::SetPage(Page::Screen), self, cx)).child(nav("page-write", "pen-line", "写作", None, lib.page == Page::Write, Cmd::SetPage(Page::Write), self, cx)))
+            .child(div().flex().flex_col().gap(px(1.)).child(nav("page-ask", "sparkle", t("向文献库提问"), None, lib.page == Page::Ask, Cmd::SetPage(Page::Ask), self, cx)).child(nav("page-sources", "search", t("检索与导入"), (!lib.searches.is_empty()).then_some(lib.searches.len()), matches!(lib.page, Page::Sources | Page::Guide), Cmd::SetPage(Page::Sources), self, cx)).child(nav("page-screen", "list-todo", t("筛选"), Some(lib.papers.iter().filter(|p| p.screening == "pending").count()).filter(|n| *n > 0), lib.page == Page::Screen, Cmd::SetPage(Page::Screen), self, cx)).child(nav("page-write", "pen-line", t("写作"), None, lib.page == Page::Write, Cmd::SetPage(Page::Write), self, cx)))
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .flex_1()
-                    .min_h_0()
+                    .min_h(px(80.))
                     .gap(px(2.))
-                    .child(ui::caption("标签").px(px(8.)).py(px(4.)))
-                    .child(div().id("tags").flex().flex_col().flex_1().min_h_0().overflow_y_scroll().gap(px(1.)).children(tag_rows).when(tags.is_empty(), |d| d.child(div().px(px(8.)).text_size(px(12.)).text_color(Theme::text_placeholder()).child("编辑文献时添加标签"))))
+                    .child(ui::caption(t("标签")).px(px(8.)).py(px(4.)))
+                    .child(div().id("tags").flex().flex_col().flex_1().min_h_0().overflow_y_scroll().gap(px(1.)).children(tag_rows).when(tags.is_empty(), |d| d.child(div().px(px(8.)).text_size(px(12.)).text_color(Theme::text_placeholder()).child(t("编辑文献时添加标签")))))
             )
             .children(self.render_import(cx))
             .when_some(lib.zotero.as_ref(), |d, run| d.child(
-                ui::progress_entry("zotero-progress", if run.running { "导入 Zotero" } else if !run.error.is_empty() { "Zotero 导入失败" } else { "Zotero 导入完成" }, run.rows.len(), run.total, run.running, &ui::zotero_segments(run))
+                ui::progress_entry("zotero-progress", if run.running { t("导入 Zotero") } else if !run.error.is_empty() { t("Zotero 导入失败") } else { t("Zotero 导入完成") }, run.rows.len(), run.total, run.running, &ui::zotero_segments(run))
                     .on_click(self.on(Cmd::ShowZotero, cx))
             ))
             .children(self.render_fetching(cx))
@@ -404,22 +408,23 @@ impl Workspace {
                     .pt(px(6.))
                     .border_t_1()
                     .border_color(Theme::line())
-                    .child(nav("manage-fields", "list", "自定义词条", Some(lib.fields.len()), false, Cmd::ManageFields, self, cx))
-                    .child(nav("page-trash", "bin", "回收站", (trash_count > 0).then_some(trash_count), lib.page == Page::Trash, Cmd::SetPage(Page::Trash), self, cx))
-                    .child(nav("open-settings", "settings-gear", "设置", None, false, Cmd::OpenSettings(SettingsPage::General), self, cx)),
+                    .child(nav("manage-fields", "list", t("自定义词条"), Some(lib.fields.len()), false, Cmd::ManageFields, self, cx))
+                    .child(nav("page-trash", "bin", t("回收站"), (trash_count > 0).then_some(trash_count), lib.page == Page::Trash, Cmd::SetPage(Page::Trash), self, cx))
+                    .child(nav("open-settings", "settings-gear", t("设置"), None, false, Cmd::OpenSettings(SettingsPage::General), self, cx)),
             )
             .into_any_element()
     }
 
     fn columns(lib: &Library, width: f32) -> Vec<Column> {
         let column = |label: &str, width: f32, sort: Option<&'static str>, kind: ColumnKind| Column { label: label.to_string(), width: Some(width), sort, kind };
-        let mut columns = vec![column("", 34., None, ColumnKind::Star), Column { label: "文献".into(), width: None, sort: Some("title"), kind: ColumnKind::Title }];
+        let mut columns = vec![column("", 34., None, ColumnKind::Star), Column { label: t("文献").into(), width: None, sort: Some("title"), kind: ColumnKind::Title }];
         // The title keeps at least 300px; optional columns join while there is room, in this order.
         let mut room = width - 34. - 300. - 32.;
-        let mut optional = vec![column("阅读", 76., None, ColumnKind::Reading), column("年份", 60., Some("year"), ColumnKind::Year), column("全文", 84., None, ColumnKind::Fulltext)];
+        let english = crate::i18n::is_english();
+        let mut optional = vec![column(t("阅读"), if english { 112. } else { 76. }, None, ColumnKind::Reading), column(t("年份"), 60., Some("year"), ColumnKind::Year), column(t("全文"), if english { 144. } else { 84. }, None, ColumnKind::Fulltext)];
         optional.extend(lib.fields.iter().filter(|f| f.in_table).map(|f| column(&f.name, 132., None, ColumnKind::Field(f.id.clone()))));
-        optional.push(column("期刊", 150., Some("journal"), ColumnKind::Journal));
-        optional.push(column("收录", 84., None, ColumnKind::Screening));
+        optional.push(column(t("期刊"), 150., Some("journal"), ColumnKind::Journal));
+        optional.push(column(t("收录"), if english { 176. } else { 84. }, None, ColumnKind::Screening));
         let mut chosen = vec![];
         for c in optional {
             let w = c.width.unwrap_or(0.);
@@ -468,22 +473,22 @@ impl Workspace {
                 .child(ui::icon("chevron-down", 12., if set { Theme::accent() } else { Theme::text_tertiary() }))
         };
         let mut chips: Vec<AnyElement> = vec![
-            chip("f-year".into(), "年份", f.year.clone(), FilterKey::Year, self, cx).into_any_element(),
-            chip("f-reading".into(), "阅读", label(&READINGS, &f.reading).to_string(), FilterKey::Reading, self, cx).into_any_element(),
-            chip("f-screening".into(), "收录", label(&SCREENINGS, &f.screening).to_string(), FilterKey::Screening, self, cx).into_any_element(),
-            chip("f-fulltext".into(), "全文", label(&FULLTEXTS, &f.fulltext).to_string(), FilterKey::Fulltext, self, cx).into_any_element(),
-            chip("f-tag".into(), "标签", f.tag.clone(), FilterKey::Tag, self, cx).into_any_element(),
+            chip("f-year".into(), t("年份"), f.year.clone(), FilterKey::Year, self, cx).into_any_element(),
+            chip("f-reading".into(), t("阅读"), label(&READINGS, &f.reading).to_string(), FilterKey::Reading, self, cx).into_any_element(),
+            chip("f-screening".into(), t("收录"), label(&SCREENINGS, &f.screening).to_string(), FilterKey::Screening, self, cx).into_any_element(),
+            chip("f-fulltext".into(), t("全文"), label(&FULLTEXTS, &f.fulltext).to_string(), FilterKey::Fulltext, self, cx).into_any_element(),
+            chip("f-tag".into(), t("标签"), f.tag.clone(), FilterKey::Tag, self, cx).into_any_element(),
         ];
         for (i, field) in lib.fields.iter().enumerate() {
             if field.kind == FieldKind::Text { continue }
             let value = f.fields.get(&field.id).cloned().unwrap_or_default();
             chips.push(chip(("f-field", i).into(), &field.name, value, FilterKey::Field(field.id.clone()), self, cx).into_any_element());
         }
-        chips.push(chip("f-source".into(), "来源", f.source.clone(), FilterKey::Source, self, cx).into_any_element());
-        chips.push(chip("f-preprint".into(), "预印本", match f.preprint.as_str() { "yes" => "只看".into(), "no" => "不含".into(), _ => String::new() }, FilterKey::Preprint, self, cx).into_any_element());
+        chips.push(chip("f-source".into(), t("来源"), f.source.clone(), FilterKey::Source, self, cx).into_any_element());
+        chips.push(chip("f-preprint".into(), t("预印本"), match f.preprint.as_str() { "yes" => t("只看").into(), "no" => t("不含").into(), _ => String::new() }, FilterKey::Preprint, self, cx).into_any_element());
         let filtered = f.active() > 0 || !f.search.trim().is_empty();
         if filtered {
-            chips.push(ui::ghost_button("f-clear", Some("x"), Some("清空筛选".into())).h(px(26.)).on_click(self.on(Cmd::ClearFilters, cx)).into_any_element());
+            chips.push(ui::ghost_button("f-clear", Some("x"), Some(t("清空筛选").into())).h(px(26.)).on_click(self.on(Cmd::ClearFilters, cx)).into_any_element());
         }
 
         let columns = Self::columns(lib, width);
@@ -518,22 +523,22 @@ impl Workspace {
         let lookable = if lib.filters.view == View::NoPdf { lib.shown.iter().filter(|&&i| wisp_core::openaccess::lookable(&lib.papers[i])).count() } else { 0 };
         let body = if shown == 0 {
             if lib.papers.is_empty() {
-                ui::empty_state("library", "这个文献库还是空的", "点击左侧「添加文献」：粘贴 DOI 或 PMID、导入 BibTeX / RIS，或者直接把 PDF 或整个文件夹拖进窗口（子文件夹的名字会成为标签）。").into_any_element()
+                ui::empty_state("library", t("这个文献库还是空的"), t("点击左侧「添加文献」：粘贴 DOI 或 PMID、导入 BibTeX / RIS，或者直接把 PDF 或整个文件夹拖进窗口（子文件夹的名字会成为标签）。")).into_any_element()
             } else {
-                ui::empty_state("search", "没有匹配的文献", "调整搜索词或筛选条件。").child(ui::secondary_button("empty-clear", "清空筛选").on_click(self.on(Cmd::ClearFilters, cx))).into_any_element()
+                ui::empty_state("search", t("没有匹配的文献"), t("调整搜索词或筛选条件。")).child(ui::secondary_button("empty-clear", t("清空筛选")).on_click(self.on(Cmd::ClearFilters, cx))).into_any_element()
             }
         } else {
             uniform_list("papers", shown, cx.processor(move |this, range: Range<usize>, window, cx| this.render_rows(range, width, window, cx))).track_scroll(lib.table_scroll.clone()).flex_1().into_any_element()
         };
         let marked = lib.marked.len();
         let status = if marked > 0 {
-            format!("已选 {marked} 篇 · 右键批量操作 · Esc 取消")
+            tf!("已选 {marked} 篇 · 右键批量操作 · Esc 取消", "{marked} selected · Right-click for batch actions · Esc to cancel")
         } else if let Some(run) = lib.import.as_ref().filter(|run| run.running()) {
-            format!("正在导入 PDF，已完成 {} / {}", run.rows.len(), run.total)
+            tf!("正在导入 PDF，已完成 {} / {}", "Importing PDFs, {} / {} complete", run.rows.len(), run.total)
         } else if !lib.extracting.is_empty() {
-            format!("正在提取 {} 篇全文的文字，用于提问…", lib.extracting.len())
+            tf!("正在提取 {} 篇全文的文字，用于提问…", "Extracting full text from {} papers for chat…", lib.extracting.len())
         } else {
-            format!("↑↓ 切换文献 · Shift / {} 点选多篇 · 右键更多操作 · {} 搜索", if cfg!(target_os = "macos") { "⌘" } else { "Ctrl" }, crate::shortcuts::pretty(&crate::shortcuts::key_of("search", &self.settings.shortcuts)))
+            tf!("↑↓ 切换文献 · Shift / {} 点选多篇 · 右键更多操作 · {} 搜索", "↑↓ Switch paper · Shift / {} to select multiple · Right-click for more · {} Search", if cfg!(target_os = "macos") { "⌘" } else { "Ctrl" }, crate::shortcuts::pretty(&crate::shortcuts::key_of("search", &self.settings.shortcuts)))
         };
         div()
             .flex()
@@ -542,6 +547,7 @@ impl Workspace {
             .child(
                 div()
                     .flex()
+                    .flex_wrap()
                     .items_center()
                     .gap(px(8.))
                     .px(px(16.))
@@ -552,6 +558,7 @@ impl Workspace {
                         div()
                             .flex()
                             .flex_1()
+                            .min_w(px(180.))
                             .items_center()
                             .gap(px(8.))
                             .h(px(34.))
@@ -563,9 +570,9 @@ impl Workspace {
                             .child(ui::icon("search", 15., Theme::text_tertiary()))
                             .child(lib.search.clone()),
                     )
-                    .child(ui::secondary_button("sort", "排序").child(ui::icon("sort-down", 14., Theme::text_secondary())).on_click(self.on_menu(MenuKind::Sort, cx)))
-                    .child(ui::secondary_button("list-translation", if lib.show_translation { "显示原文" } else { "显示译文" }).on_click(self.on(Cmd::ToggleTranslation, cx)))
-                    .child(ui::secondary_button("export", "导出").child(ui::icon("export", 14., Theme::text_secondary())).on_click(self.on_menu(MenuKind::Export, cx))),
+                    .child(ui::secondary_button("sort", t("排序")).child(ui::icon("sort-down", 14., Theme::text_secondary())).on_click(self.on_menu(MenuKind::Sort, cx)))
+                    .child(ui::secondary_button("list-translation", if lib.show_translation { t("显示原文") } else { t("显示译文") }).on_click(self.on(Cmd::ToggleTranslation, cx)))
+                    .child(ui::secondary_button("export", t("导出")).child(ui::icon("export", 14., Theme::text_secondary())).on_click(self.on_menu(MenuKind::Export, cx))),
             )
             .child(div().id("filters").flex().flex_wrap().items_center().gap(px(6.)).px(px(16.)).py(px(10.)).children(chips))
             .child(div().flex().flex_none().h(px(32.)).px(px(8.)).border_t_1().border_b_1().border_color(Theme::line()).bg(Theme::bg_sunken()).text_size(px(12.)).text_color(Theme::text_tertiary()).children(header))
@@ -582,8 +589,8 @@ impl Workspace {
                         .border_b_1()
                         .border_color(Theme::line())
                         .bg(Theme::accent_soft())
-                        .child(div().flex_1().min_w_0().text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_secondary()).child(format!("这些文献还没有 PDF。可以替你找开放获取的全文（arXiv、开放获取期刊、作者存档的版本），下载后附到各自的条目上；要付费或登录的不会去取。查找时会把 DOI 或 PMID 发给 OpenAlex、Europe PMC 和出版商。{}", if lookable < shown { format!("另有 {} 篇没有 DOI、PMID 或 arXiv 编号，查不了。", shown - lookable) } else { String::new() })))
-                        .child(ui::primary_button("find-pdfs", format!("为 {lookable} 篇查找开放全文")).h(px(30.)).flex_none().on_click(self.on(Cmd::FindPdfs(None), cx))),
+                        .child(div().flex_1().min_w_0().text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_secondary()).child(tf!("这些文献还没有 PDF。可以替你找开放获取的全文（arXiv、开放获取期刊、作者存档的版本），下载后附到各自的条目上；要付费或登录的不会去取。查找时会把 DOI 或 PMID 发给 OpenAlex、Europe PMC 和出版商。{}", "Find open access full text from arXiv, journals and author repositories, then attach it to each paper. Paid or login-only files are skipped. DOI or PMID will be sent to OpenAlex, Europe PMC and publishers.{}", if lookable < shown { tf!("另有 {} 篇没有 DOI、PMID 或 arXiv 编号，查不了。", "Another {} papers have no DOI, PMID or arXiv ID and cannot be searched.", shown - lookable) } else { String::new() })))
+                        .child(ui::primary_button("find-pdfs", tf!("为 {lookable} 篇查找开放全文", "Find open full text for {lookable} papers")).h(px(30.)).flex_none().on_click(self.on(Cmd::FindPdfs(None), cx))),
                 )
             })
             .child(body)
@@ -600,7 +607,7 @@ impl Workspace {
                     .text_size(px(12.))
                     .text_color(Theme::text_tertiary())
                     .gap(px(12.))
-                    .child(div().flex_none().child(if filtered || shown != total { format!("显示 {shown} / {total} 篇") } else { format!("共 {total} 篇") }))
+                    .child(div().flex_none().child(if filtered || shown != total { tf!("显示 {shown} / {total} 篇", "Showing {shown} / {total} papers") } else { tf!("共 {total} 篇", "{total} papers in total") }))
                     .child(div().min_w_0().truncate().child(status)),
             )
             .into_any_element()
@@ -620,7 +627,7 @@ impl Workspace {
                 let cells: Vec<AnyElement> = columns
                     .iter()
                     .map(|c| {
-                        let cell = div().flex().items_center().h_full().px(px(8.)).map(|d| match c.width {
+                        let cell = div().flex().items_center().h_full().overflow_hidden().px(px(8.)).map(|d| match c.width {
                             Some(w) => d.w(px(w)).flex_none(),
                             None => d.flex_1().min_w_0(),
                         });
@@ -669,8 +676,8 @@ impl Workspace {
                                                 .text_size(px(12.))
                                                 .line_height(px(18.))
                                                 .text_color(Theme::text_tertiary())
-                                                .child(div().min_w_0().truncate().child(if meta.is_empty() { "作者、年份待补".to_string() } else { meta.join(" · ") }))
-                                                .when(p.publication_status == "preprint", |d| d.child(div().flex_none().text_color(theme::status_colors("preprint").0).child("预印本")))
+                                                .child(div().min_w_0().truncate().child(if meta.is_empty() { t("作者、年份待补").to_string() } else { meta.join(" · ") }))
+                                                .when(p.publication_status == "preprint", |d| d.child(div().flex_none().text_color(theme::status_colors("preprint").0).child(t("预印本"))))
                                                 .children(p.tags.iter().take(2).map(|t| div().flex_none().text_color(Theme::accent()).child(format!("#{t}")))),
                                         ),
                                 )
@@ -751,7 +758,7 @@ impl Workspace {
         let (shown, total) = (lib.shown.len(), filter::view_count(&lib.papers, View::All, 0));
         let filtered = lib.filters.active() > 0 || !lib.search.read(cx).text().trim().is_empty();
         let body = if shown == 0 {
-            div().flex_1().px(px(8.)).pt(px(8.)).text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_placeholder()).child("没有匹配的文献。换个搜索词，或按 Esc 回到完整列表调整筛选。").into_any_element()
+            div().flex_1().px(px(8.)).pt(px(8.)).text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_placeholder()).child(t("没有匹配的文献。换个搜索词，或按 Esc 回到完整列表调整筛选。")).into_any_element()
         } else {
             uniform_list("ask-papers", shown, cx.processor(move |this, range: Range<usize>, _, cx| this.render_ask_rows(range, cx))).track_scroll(lib.table_scroll.clone()).flex_1().into_any_element()
         };
@@ -791,10 +798,10 @@ impl Workspace {
                     .gap(px(8.))
                     .px(px(8.))
                     .child(ui::caption(if lib.filters.tag.is_empty() { view_label(lib.filters.view).to_string() } else { format!("{} · #{}", view_label(lib.filters.view), lib.filters.tag) }).min_w_0().truncate())
-                    .child(div().flex_none().text_size(px(11.)).text_color(Theme::text_tertiary()).child(if filtered || shown != total { format!("{shown} / {total} 篇") } else { format!("{total} 篇") })),
+                    .child(div().flex_none().text_size(px(11.)).text_color(Theme::text_tertiary()).child(if filtered || shown != total { tf!("{shown} / {total} 篇", "{shown} / {total} papers") } else { tf!("{total} 篇", "{total} papers") })),
             )
             .child(body)
-            .child(div().flex_none().px(px(8.)).truncate().text_size(px(11.)).text_color(Theme::text_placeholder()).child(format!("↑↓ 切换文献 · {} 回到完整列表", crate::shortcuts::pretty("escape"))))
+            .child(div().flex_none().px(px(8.)).truncate().text_size(px(11.)).text_color(Theme::text_placeholder()).child(tf!("↑↓ 切换文献 · {} 回到完整列表", "↑↓ Switch paper · {} Back to full list", crate::shortcuts::pretty("escape"))))
             .into_any_element()
     }
 
@@ -846,10 +853,10 @@ impl Workspace {
                                         .text_size(px(12.))
                                         .line_height(px(18.))
                                         .text_color(Theme::text_tertiary())
-                                        .child(div().min_w_0().truncate().child(if meta.is_empty() { "作者、年份待补".to_string() } else { meta.join(" · ") }))
+                                        .child(div().min_w_0().truncate().child(if meta.is_empty() { t("作者、年份待补").to_string() } else { meta.join(" · ") }))
                                         .when(p.starred, |d| d.child(ui::icon("star", 11., Theme::star())))
                                         // Asked about without its PDF, the answer has only the record to go by.
-                                        .when(lib.pdf_file(&p.id).is_none(), |d| d.child(div().flex_none().text_color(Theme::text_placeholder()).child("无 PDF"))),
+                                        .when(lib.pdf_file(&p.id).is_none(), |d| d.child(div().flex_none().text_color(Theme::text_placeholder()).child(t("无 PDF")))),
                                 ),
                         )
                         .into_any_element(),
@@ -875,9 +882,9 @@ impl Workspace {
                     .border_b_1()
                     .border_color(Theme::line())
                     .on_mouse_down(MouseButton::Right, self.on_context(MenuKind::Trashed(p.id.clone()), cx))
-                    .child(div().flex().flex_col().flex_1().min_w_0().child(div().truncate().child(p.title.clone())).child(div().truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(format!("{} · 删除于 {}", if p.authors.is_empty() { "作者待补".to_string() } else { p.short_authors() }, time::date_text(&entry.deleted_at)))))
-                    .child(ui::secondary_button(("restore", i), "恢复").on_click(self.on(Cmd::RestorePaper(p.id.clone()), cx)))
-                    .child(ui::ghost_button(("delete", i), Some("bin"), Some("彻底删除".into())).text_color(Theme::danger()).on_click(self.on(Cmd::AskDeletePaper(p.id.clone()), cx)))
+                    .child(div().flex().flex_col().flex_1().min_w_0().child(div().truncate().child(p.title.clone())).child(div().truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(tf!("{} · 删除于 {}", "{} · Deleted {}", if p.authors.is_empty() { t("作者待补").to_string() } else { p.short_authors() }, time::date_text(&entry.deleted_at)))))
+                    .child(ui::secondary_button(("restore", i), t("恢复")).on_click(self.on(Cmd::RestorePaper(p.id.clone()), cx)))
+                    .child(ui::ghost_button(("delete", i), Some("bin"), Some(t("彻底删除").into())).text_color(Theme::danger()).on_click(self.on(Cmd::AskDeletePaper(p.id.clone()), cx)))
                     .into_any_element()
             })
             .collect();
@@ -885,8 +892,8 @@ impl Workspace {
             .flex()
             .flex_col()
             .size_full()
-            .child(div().px(px(16.)).pt(px(16.)).pb(px(10.)).child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child("回收站")).child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child("这里的文献保留着笔记、词条和 PDF，可以恢复。它们仍会阻止同一篇文献被重复导入。")))
-            .child(if rows.is_empty() { ui::empty_state("bin", "回收站是空的", "").into_any_element() } else { div().id("trash").flex().flex_col().flex_1().min_h_0().overflow_y_scroll().border_t_1().border_color(Theme::line()).children(rows).into_any_element() })
+            .child(div().px(px(16.)).pt(px(16.)).pb(px(10.)).child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("回收站"))).child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(t("这里的文献保留着笔记、词条和 PDF，可以恢复。它们仍会阻止同一篇文献被重复导入。"))))
+            .child(if rows.is_empty() { ui::empty_state("bin", t("回收站是空的"), "").into_any_element() } else { div().id("trash").flex().flex_col().flex_1().min_h_0().overflow_y_scroll().border_t_1().border_color(Theme::line()).children(rows).into_any_element() })
             .into_any_element()
     }
 }

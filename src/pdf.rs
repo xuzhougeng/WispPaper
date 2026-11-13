@@ -4,6 +4,7 @@
 //! thread finds a quoted sentence among the glyphs of a page, so a citation
 //! can be shown where it stands.
 
+use crate::i18n::t;
 use crate::app::Translated;
 use crate::theme::Theme;
 use crate::ui;
@@ -246,22 +247,22 @@ pub fn page_pictures(path: &Path, skip: usize, limit: usize) -> Result<(Vec<Vec<
     use hayro::hayro_syntax::Pdf;
     use hayro::vello_cpu::color::palette::css::WHITE;
     use hayro::{PixmapSettings, RenderCache, RenderSettings, render};
-    let data = std::fs::read(path).map_err(|err| format!("无法读取文件：{err}"))?;
-    let pdf = Pdf::new(data).map_err(|err| format!("无法解析这个 PDF（{err:?}）。"))?;
+    let data = std::fs::read(path).map_err(|err| tf!("无法读取文件：{err}", "Cannot read file: {err}"))?;
+    let pdf = Pdf::new(data).map_err(|err| tf!("无法解析这个 PDF（{err:?}）。", "Cannot parse this PDF ({err:?})."))?;
     let (cache, interpreter, settings) = (RenderCache::new(), InterpreterSettings::default(), RenderSettings::default());
     let mut out = vec![];
     let count = pdf.pages().len();
     for page in pdf.pages().iter().skip(skip).take(limit) {
         let (w, h) = page.render_dimensions();
         let scale = 1.5_f32.min(2000. / w.max(h).max(1.));
-        let pixmap = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render(page, &cache, &interpreter, &settings, &PixmapSettings { x_scale: scale, y_scale: scale, bg_color: WHITE }))).map_err(|_| "这个 PDF 的页面画不出来。".to_string())?;
+        let pixmap = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render(page, &cache, &interpreter, &settings, &PixmapSettings { x_scale: scale, y_scale: scale, bg_color: WHITE }))).map_err(|_| t("这个 PDF 的页面画不出来。").to_string())?;
         // On an opaque white background premultiplied colour is the colour itself.
-        let picture = image::RgbaImage::from_raw(pixmap.width() as u32, pixmap.height() as u32, pixmap.data_as_u8_slice().to_vec()).ok_or("这个 PDF 的页面画不出来。")?;
+        let picture = image::RgbaImage::from_raw(pixmap.width() as u32, pixmap.height() as u32, pixmap.data_as_u8_slice().to_vec()).ok_or(t("这个 PDF 的页面画不出来。"))?;
         let mut png = vec![];
-        image::DynamicImage::ImageRgba8(picture).to_rgb8().write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).map_err(|err| format!("页面图像写不出来：{err}"))?;
+        image::DynamicImage::ImageRgba8(picture).to_rgb8().write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).map_err(|err| tf!("页面图像写不出来：{err}", "Cannot write page image: {err}"))?;
         out.push(png);
     }
-    if out.is_empty() { return Err("这个 PDF 没有页面。".into()) }
+    if out.is_empty() { return Err(t("这个 PDF 没有页面。").into()) }
     Ok((out, count))
 }
 
@@ -274,14 +275,14 @@ fn worker(path: PathBuf, requests: mpsc::Receiver<Request>, replies: async_chann
     let data = match std::fs::read(&path) {
         Ok(data) => data,
         Err(err) => {
-            let _ = replies.send_blocking(Reply::Failed(format!("无法读取文件：{err}")));
+            let _ = replies.send_blocking(Reply::Failed(tf!("无法读取文件：{err}", "Cannot read file: {err}")));
             return;
         }
     };
     let pdf = match Pdf::new(data) {
         Ok(pdf) => pdf,
         Err(err) => {
-            let _ = replies.send_blocking(Reply::Failed(format!("无法解析这个 PDF（{err:?}）。可以改用系统应用打开。")));
+            let _ = replies.send_blocking(Reply::Failed(tf!("无法解析这个 PDF（{err:?}）。可以改用系统应用打开。", "Cannot parse this PDF ({err:?}). Try opening it with a system app.")));
             return;
         }
     };
@@ -674,7 +675,7 @@ impl PdfView {
         let sheet = div().relative().flex_none().ml(px(self.sheet_left(width))).w(px(width)).h(px(height)).bg(gpui::white()).border_1().border_color(Theme::line()).overflow_hidden();
         let sheet = match image {
             Some((image, _)) => sheet.when(cutting, |d| d.cursor_crosshair()).when(!cutting, |d| d.cursor_text()).child(img(image).w(px(width)).h(px(height))).children(selected).children(marks).children(cut),
-            None => sheet.flex().items_center().justify_center().text_size(px(12.)).text_color(Theme::text_placeholder()).child(if self.broken.contains(&index) { format!("第 {} 页无法渲染", index + 1) } else { format!("第 {} 页", index + 1) }),
+            None => sheet.flex().items_center().justify_center().text_size(px(12.)).text_color(Theme::text_placeholder()).child(if self.broken.contains(&index) { tf!("第 {} 页无法渲染", "Cannot render page {}", index + 1) } else { tf!("第 {} 页", "Page {}", index + 1) }),
         };
         div().w_full().flex().pb(px(PAGE_GAP)).child(sheet).into_any_element()
     }
@@ -871,7 +872,7 @@ impl PdfView {
         let place = card_place([x + left * scale, y + first[1] * scale, x + right * scale, y + last[3] * scale], CARD_W, CARD_TALL, (self.width, self.height));
         let button = |id: &'static str, label: &'static str| div().id(id).flex().flex_none().items_center().h(px(24.)).px(px(8.)).rounded(px(6.)).cursor_pointer().text_color(Theme::accent()).hover(|s| s.bg(Theme::hover())).child(label);
         let body = match &card.state {
-            Translated::Busy => div().flex().items_center().gap(px(8.)).text_color(Theme::text_secondary()).child(ui::spinner("pdf-translation-busy", 14., Theme::text_tertiary())).child("正在翻译…"),
+            Translated::Busy => div().flex().items_center().gap(px(8.)).text_color(Theme::text_secondary()).child(ui::spinner("pdf-translation-busy", 14., Theme::text_tertiary())).child(t("正在翻译…")),
             Translated::Done(text) => div().text_color(Theme::text()).child(text.clone()),
             Translated::Failed(error) => div().text_color(Theme::danger()).child(error.clone()),
         };
@@ -894,13 +895,13 @@ impl PdfView {
                 .border_b_1()
                 .border_color(Theme::line())
                 .text_size(px(13.))
-                .child(div().px(px(8.)).py(px(4.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child("只这一次换用，不改设置"))
-                .when(rows.is_empty(), |d| d.child(div().px(px(8.)).py(px(6.)).text_color(Theme::text_secondary()).child("还没有配置模型：在 设置 › AI 里添加。")))
+                .child(div().px(px(8.)).py(px(4.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(t("只这一次换用，不改设置")))
+                .when(rows.is_empty(), |d| d.child(div().px(px(8.)).py(px(6.)).text_color(Theme::text_secondary()).child(t("还没有配置模型：在 设置 › AI 里添加。"))))
                 .children(rows)
         });
         let footer = match &card.state {
-            Translated::Done(_) => Some(button("pdf-translation-copy", "复制译文").on_click(cx.listener(|this, _, _, cx| this.copy_translation(cx)))),
-            Translated::Failed(_) => Some(button("pdf-translation-retry", "重试").on_click(cx.listener(|this, _, _, cx| {
+            Translated::Done(_) => Some(button("pdf-translation-copy", t("复制译文")).on_click(cx.listener(|this, _, _, cx| this.copy_translation(cx)))),
+            Translated::Failed(_) => Some(button("pdf-translation-retry", t("重试")).on_click(cx.listener(|this, _, _, cx| {
                 let profile = this.translation.as_ref().and_then(|t| t.profile.clone());
                 this.translate(profile, cx);
             }))),
@@ -916,7 +917,7 @@ impl PdfView {
             .pr(px(4.))
             .border_b_1()
             .border_color(Theme::line())
-            .child(div().flex_1().text_size(px(12.)).text_color(Theme::text_tertiary()).child("译文"))
+            .child(div().flex_1().text_size(px(12.)).text_color(Theme::text_tertiary()).child(t("译文")))
             .child(
                 div()
                     .id("pdf-translation-model")
@@ -1025,15 +1026,15 @@ impl PdfView {
                 .occlude()
                 // A press on the bar is not a press on the page.
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .when(!piece, |d| d.child(button("pdf-copy", "复制").on_click(cx.listener(|this, _, _, cx| this.copy(cx)))))
-                .when(!piece && self.library_chat, |d| d.child(button("pdf-quote-library", "加到文献库对话").text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.quote(true, cx)))).child(button("pdf-quote-paper", "加到这篇的对话").text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.quote(false, cx)))))
-                .when(!piece && !self.library_chat, |d| d.child(button("pdf-quote-paper", "添加到对话").text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.quote(false, cx)))))
-                .when(!piece, |d| d.child(button("pdf-translate", "翻译").on_click(cx.listener(|this, _, _, cx| this.translate(None, cx)))))
+                .when(!piece, |d| d.child(button("pdf-copy", t("复制")).on_click(cx.listener(|this, _, _, cx| this.copy(cx)))))
+                .when(!piece && self.library_chat, |d| d.child(button("pdf-quote-library", t("加到文献库对话")).text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.quote(true, cx)))).child(button("pdf-quote-paper", t("加到这篇的对话")).text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.quote(false, cx)))))
+                .when(!piece && !self.library_chat, |d| d.child(button("pdf-quote-paper", t("添加到对话")).text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.quote(false, cx)))))
+                .when(!piece, |d| d.child(button("pdf-translate", t("翻译")).on_click(cx.listener(|this, _, _, cx| this.translate(None, cx)))))
                 // A piece of the page: a figure to keep, or a picture for the next question.
-                .when(piece, |d| d.child(button("pdf-cut-keep", "收藏到图片库").text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.collect_cut(cx)))))
-                .when(piece && self.library_chat, |d| d.child(button("pdf-cut-library", "截图加到文献库对话").on_click(cx.listener(|this, _, _, cx| this.send_cut(true, cx)))).child(button("pdf-cut-paper", "截图加到这篇的对话").on_click(cx.listener(|this, _, _, cx| this.send_cut(false, cx)))))
-                .when(piece && !self.library_chat, |d| d.child(button("pdf-cut-paper", "用这张截图提问").on_click(cx.listener(|this, _, _, cx| this.send_cut(false, cx)))))
-                .when(piece, |d| d.child(button("pdf-cut-cancel", "取消").on_click(cx.listener(|this, _, _, cx| this.toggle_cutting(cx)))))
+                .when(piece, |d| d.child(button("pdf-cut-keep", t("收藏到图片库")).text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.collect_cut(cx)))))
+                .when(piece && self.library_chat, |d| d.child(button("pdf-cut-library", t("截图加到文献库对话")).on_click(cx.listener(|this, _, _, cx| this.send_cut(true, cx)))).child(button("pdf-cut-paper", t("截图加到这篇的对话")).on_click(cx.listener(|this, _, _, cx| this.send_cut(false, cx)))))
+                .when(piece && !self.library_chat, |d| d.child(button("pdf-cut-paper", t("用这张截图提问")).on_click(cx.listener(|this, _, _, cx| this.send_cut(false, cx)))))
+                .when(piece, |d| d.child(button("pdf-cut-cancel", t("取消")).on_click(cx.listener(|this, _, _, cx| this.toggle_cutting(cx)))))
                 .into_any_element(),
         )
     }
@@ -1061,10 +1062,10 @@ impl Drop for PdfView {
 impl Render for PdfView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(error) = &self.error {
-            return ui::empty_state("image-broken", "无法预览", error).size_full().into_any_element();
+            return ui::empty_state("image-broken", t("无法预览"), error).size_full().into_any_element();
         }
         if self.sizes.is_empty() {
-            return ui::empty_state("file-text", "正在打开 PDF…", "").size_full().into_any_element();
+            return ui::empty_state("file-text", t("正在打开 PDF…"), "").size_full().into_any_element();
         }
         self.device_scale = window.scale_factor();
         let entity = cx.entity();
@@ -1103,7 +1104,7 @@ impl Render for PdfView {
             // Said plainly: the page is the cited one, the sentence was not found on it or anywhere else.
             .children(bar)
             .children(card)
-            .children(self.missing.then(|| div().absolute().top(px(8.)).left_0().w_full().flex().justify_center().child(div().px(px(10.)).py(px(5.)).rounded(px(6.)).bg(Theme::bg_body()).border_1().border_color(Theme::line()).text_size(px(12.)).text_color(Theme::text_secondary()).child("已跳到引用的页，但没有在 PDF 里找到这句原文。"))))
+            .children(self.missing.then(|| div().absolute().top(px(8.)).left_0().w_full().flex().justify_center().child(div().px(px(10.)).py(px(5.)).rounded(px(6.)).bg(Theme::bg_body()).border_1().border_color(Theme::line()).text_size(px(12.)).text_color(Theme::text_secondary()).child(t("已跳到引用的页，但没有在 PDF 里找到这句原文。")))))
             .into_any_element()
     }
 }

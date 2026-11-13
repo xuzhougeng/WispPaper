@@ -6,6 +6,7 @@
 //! otherwise. A decision brings the next paper up; past the last one the
 //! round is summed up.
 
+use crate::i18n::{label, t};
 use crate::app::{Cmd, Library, Page, ScreenMode, Tab, Translated, Workspace};
 use crate::context::Nav;
 use crate::settings::SettingsPage;
@@ -15,7 +16,7 @@ use gpui::{prelude::FluentBuilder, *};
 use std::collections::HashMap;
 use std::ops::Range;
 use wisp_core::ai;
-use wisp_core::model::{FULLTEXTS, Paper, SCREENINGS, label};
+use wisp_core::model::{FULLTEXTS, Paper, SCREENINGS};
 use wisp_core::screening::{self, Before, Confirming, DECISIONS, Round};
 use wisp_core::settings::Task;
 use wisp_core::store::translation_key;
@@ -52,7 +53,7 @@ impl Workspace {
         match cmd {
             Cmd::ScreenMode(mode) => {
                 let Some(lib) = self.lib.as_mut() else { return };
-                if mode == ScreenMode::Confirm && lib.screen.running() { return self.say("助手还在判断，等这一轮结束再确认。", cx) }
+                if mode == ScreenMode::Confirm && lib.screen.running() { return self.say(t("助手还在判断，等这一轮结束再确认。"), cx) }
                 (lib.page, lib.reading) = (Page::Screen, false);
                 // The paper beside the page stays beside it, on the paper the round opens with.
                 let beside = lib.selected.is_some();
@@ -111,11 +112,11 @@ impl Workspace {
             }
             Cmd::ScreenUndo => {
                 let Some(before) = self.lib.as_mut().and_then(|lib| lib.screen.round.undo()) else { return };
-                if self.edit_paper(&before.paper_id, cx, |p| before.restore(p)) { self.say(format!("已撤销：回到「{}」。", label(&SCREENINGS, &before.screening)), cx) }
+                if self.edit_paper(&before.paper_id, cx, |p| before.restore(p)) { self.say(tf!("已撤销：回到「{}」。", "Undone: back to “{}”.", label(&SCREENINGS, &before.screening)), cx) }
                 self.round_moved(window, cx);
             }
             Cmd::ScreenAskOne(id) => {
-                if self.lib.as_ref().is_some_and(|lib| lib.screen.running()) { return self.say("助手正在判断别的文献，等这一轮结束。", cx) }
+                if self.lib.as_ref().is_some_and(|lib| lib.screen.running()) { return self.say(t("助手正在判断别的文献，等这一轮结束。"), cx) }
                 self.screen_start(false, Some(vec![id]), cx);
             }
             Cmd::ScreenBeside => {
@@ -163,7 +164,7 @@ impl Workspace {
         let cmd = match key {
             "a" => match lib.current_suggestion(&id) {
                 Some(suggestion) => Cmd::ScreenDecide(id, suggestion.verdict.clone()),
-                None => return self.say("这一篇还没有按当前目标的建议。", cx),
+                None => return self.say(t("这一篇还没有按当前目标的建议。"), cx),
             },
             "s" => Cmd::ToggleStar(id),
             "t" => Cmd::ToggleTranslation,
@@ -199,9 +200,9 @@ impl Workspace {
         let by_id: HashMap<&str, &Paper> = lib.papers.iter().map(|p| (p.id.as_str(), p)).collect();
         let counts = screening::tally(round.ids.iter().filter_map(|id| by_id.get(id.as_str())).map(|p| p.screening.as_str()));
         let decided = total - counts[0];
-        let place = if round.ended() { format!("共 {total} 篇 · 已判断 {decided}") } else { format!("第 {} / {total} 篇 · 已判断 {decided}", at + 1) };
+        let place = if round.ended() { tf!("共 {total} 篇 · 已判断 {decided}", "{total} papers · {decided} screened") } else { tf!("第 {} / {total} 篇 · 已判断 {decided}", "Paper {} / {total} · {decided} screened", at + 1) };
         // The round so far, as one bar: a stretch per decision, the rest still waiting.
-        let segments: Vec<ui::ProgressSegment> = SCREENINGS.iter().enumerate().skip(1).map(|(n, (key, name))| (counts[n], *name, theme::status_colors(key).0)).collect();
+        let segments: Vec<ui::ProgressSegment> = SCREENINGS.iter().enumerate().skip(1).map(|(n, (key, name))| (counts[n], t(name), theme::status_colors(key).0)).collect();
         let legend = segments.iter().filter(|(count, _, _)| *count > 0).map(|(count, name, color)| div().flex().flex_none().items_center().gap(px(5.)).child(div().flex_none().size(px(7.)).rounded_full().bg(*color)).child(format!("{name} {count}")));
         let head = div()
             .flex()
@@ -215,15 +216,16 @@ impl Workspace {
                 div()
                     .flex()
                     .items_center()
+                    .flex_wrap()
                     .gap(px(12.))
-                    .child(div().flex_none().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child("筛选"))
+                    .child(div().flex_none().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("筛选")))
                     .child(self.render_screen_modes(cx))
                     .child(div().flex_1())
                     .child(div().flex_none().text_size(px(12.)).text_color(Theme::text_secondary()).child(place))
                     .child(div().flex().flex_none().child(ui::ghost_button("round-prev", Some("chevron-up"), None).when(at == 0, |d| d.opacity(0.4)).on_click(self.on(Cmd::ScreenGo(at.saturating_sub(1)), cx))).child(ui::ghost_button("round-next", Some("chevron-down"), None).when(at >= total, |d| d.opacity(0.4)).on_click(self.on(Cmd::ScreenGo((at + 1).min(total)), cx)))),
             )
             .child(ui::progress_bar(total, &segments).h(px(5.)))
-            .child(div().flex().flex_wrap().items_center().gap_x(px(14.)).gap_y(px(2.)).min_h(px(16.)).text_size(px(11.)).line_height(px(16.)).text_color(Theme::text_tertiary()).children(legend).when(counts[0] > 0, |d| d.child(format!("待判断 {}", counts[0]))));
+            .child(div().flex().flex_wrap().items_center().gap_x(px(14.)).gap_y(px(2.)).min_h(px(16.)).text_size(px(11.)).line_height(px(16.)).text_color(Theme::text_tertiary()).children(legend).when(counts[0] > 0, |d| d.child(tf!("待判断 {}", "{} pending", counts[0]))));
 
         let rail = (width >= RAIL_MIN && total > 0).then(|| {
             div()
@@ -295,14 +297,15 @@ impl Workspace {
             .items_center()
             .gap(px(2.))
             .child(div().id("round-star").flex().flex_none().items_center().justify_center().size(px(28.)).rounded(px(6.)).cursor_pointer().hover(|s| s.bg(Theme::hover())).on_click(self.on(Cmd::ToggleStar(paper.id.clone()), cx)).child(ui::icon("star", 16., star)))
-            .child(ui::ghost_button("round-beside", Some("file-text"), Some(if beside { "收起".into() } else if has_pdf { "对照 PDF".into() } else { "完整记录".into() })).on_click(self.on(Cmd::ScreenBeside, cx)));
+            .child(ui::ghost_button("round-beside", Some("file-text"), Some(if beside { t("收起").into() } else if has_pdf { t("对照 PDF").into() } else { t("完整记录").into() })).on_click(self.on(Cmd::ScreenBeside, cx)));
         let marks = div()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap(px(6.))
             .child(ui::status_chip(&paper.screening, label(&SCREENINGS, &paper.screening)))
             .child(ui::status_chip(&paper.fulltext, label(&FULLTEXTS, &paper.fulltext)))
-            .when(lib.screen_group(&paper.id) == "differs", |d| d.child(ui::chip("助手按当前目标看法不同", Theme::warning(), theme::status_colors("uncertain").1)))
+            .when(lib.screen_group(&paper.id) == "differs", |d| d.child(ui::chip(t("助手按当前目标看法不同"), Theme::warning(), theme::status_colors("uncertain").1)))
             .child(div().flex_1())
             .child(tools);
         let title = div()
@@ -327,20 +330,20 @@ impl Workspace {
             .flex()
             .items_center()
             .gap(px(8.))
-            .child(ui::caption("摘要"))
+            .child(ui::caption(t("摘要")))
             .child(div().flex_1())
-            .children(matches!(state, Some(Translated::Busy)).then(|| div().flex().items_center().gap(px(5.)).text_size(px(12.)).text_color(Theme::text_tertiary()).child(ui::spinner("round-translating", 12., Theme::accent())).child("正在翻译…")))
+            .children(matches!(state, Some(Translated::Busy)).then(|| div().flex().items_center().gap(px(5.)).text_size(px(12.)).text_color(Theme::text_tertiary()).child(ui::spinner("round-translating", 12., Theme::accent())).child(t("正在翻译…"))))
             .children(match state {
-                Some(Translated::Failed(_)) => Some(ui::ghost_button("round-translate-retry", None, Some("翻译没有成功，重试".into())).h(px(22.)).text_size(px(12.)).text_color(Theme::danger()).on_click(self.on(Cmd::RetryTranslation, cx))),
+                Some(Translated::Failed(_)) => Some(ui::ghost_button("round-translate-retry", None, Some(t("翻译没有成功，重试").into())).h(px(22.)).text_size(px(12.)).text_color(Theme::danger()).on_click(self.on(Cmd::RetryTranslation, cx))),
                 _ => None,
             })
-            .child(ui::ghost_button("round-translate", None, Some(if lib.show_translation { "显示原文".into() } else { "显示译文".into() })).h(px(22.)).text_size(px(12.)).when(lib.show_translation, |d| d.text_color(Theme::accent())).on_click(self.on(Cmd::ToggleTranslation, cx)));
+            .child(ui::ghost_button("round-translate", None, Some(if lib.show_translation { t("显示原文").into() } else { t("显示译文").into() })).h(px(22.)).text_size(px(12.)).when(lib.show_translation, |d| d.text_color(Theme::accent())).on_click(self.on(Cmd::ToggleTranslation, cx)));
         let abstract_body = if abstract_text.trim().is_empty() {
-            div().text_color(Theme::text_placeholder()).child(if has_pdf { "这篇文献没有摘要。按 Enter 对照它的 PDF。" } else { "这篇文献没有摘要，也没有保存全文。" })
+            div().text_color(Theme::text_placeholder()).child(if has_pdf { t("这篇文献没有摘要。按 Enter 对照它的 PDF。") } else { t("这篇文献没有摘要，也没有保存全文。") })
         } else {
             self.selectable(format!("round-abstract-{}", paper.id), abstract_text, cx).text_size(px(14.)).line_height(px(23.))
         };
-        let reason = (paper.screening != "pending" && !paper.screening_reason.is_empty()).then(|| div().flex().flex_col().gap(px(4.)).child(ui::caption("判断理由")).child(div().text_color(Theme::text_secondary()).child(paper.screening_reason.clone())));
+        let reason = (paper.screening != "pending" && !paper.screening_reason.is_empty()).then(|| div().flex().flex_col().gap(px(4.)).child(ui::caption(t("判断理由"))).child(div().text_color(Theme::text_secondary()).child(paper.screening_reason.clone())));
 
         div()
             .flex()
@@ -397,9 +400,9 @@ impl Workspace {
                 .child(ui::keycap(screening::key_of(status)))
                 .child(label(&SCREENINGS, status))
                 .when(mine, |d| d.child(ui::icon("check", 13., color)))
-                .when(advised && !mine, |d| d.child(div().text_size(px(11.)).text_color(Theme::accent()).child("建议")))
+                .when(advised && !mine, |d| d.child(div().text_size(px(11.)).text_color(Theme::accent()).child(t("建议"))))
         }).collect();
-        let undo = lib.screen.round.can_undo().then(|| ui::ghost_button("round-undo", None, Some("撤销上一个判断".into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::ScreenUndo, cx)));
+        let undo = lib.screen.round.can_undo().then(|| ui::ghost_button("round-undo", None, Some(t("撤销上一个判断").into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::ScreenUndo, cx)));
         div()
             .flex()
             .flex_col()
@@ -422,14 +425,14 @@ impl Workspace {
                     .text_size(px(11.))
                     .line_height(px(18.))
                     .text_color(Theme::text_tertiary())
-                    .child(hint("↑↓", "上一篇 / 下一篇"))
-                    .when(suggested.is_some(), |d| d.child(hint("A", "采纳建议")))
-                    .child(hint("P", "留待判断"))
-                    .child(hint("Z", "撤销"))
-                    .child(hint("S", "收藏"))
-                    .child(hint("T", "译文"))
-                    .child(hint("Enter", "对照 PDF"))
-                    .child(hint("Esc", "回到队列")),
+                    .child(hint("↑↓", t("上一篇 / 下一篇")))
+                    .when(suggested.is_some(), |d| d.child(hint("A", t("采纳建议"))))
+                    .child(hint("P", t("留待判断")))
+                    .child(hint("Z", t("撤销")))
+                    .child(hint("S", t("收藏")))
+                    .child(hint("T", t("译文")))
+                    .child(hint("Enter", t("对照 PDF")))
+                    .child(hint("Esc", t("回到队列"))),
             )
     }
 
@@ -439,13 +442,13 @@ impl Workspace {
         let round = &lib.screen.round;
         let waiting = lib.screen_queue().len();
         if total == 0 {
-            return div().flex().flex_col().flex_1().items_center().justify_center().child(ui::empty_state("check", "没有待判断的文献", "新导入的文献会出现在队列里，到时再逐篇看。").flex_none()).into_any_element();
+            return div().flex().flex_col().flex_1().items_center().justify_center().child(ui::empty_state("check", t("没有待判断的文献"), t("新导入的文献会出现在队列里，到时再逐篇看。")).flex_none()).into_any_element();
         }
         let first_pending = round.first(|id| lib.paper(id).is_some_and(|p| p.screening == "pending"));
         let chips = SCREENINGS.iter().enumerate().skip(1).filter(|(n, _)| counts[*n] > 0).map(|(n, (key, name))| ui::status_chip(key, &format!("{name} {}", counts[n])));
         let message = match counts[0] {
-            0 => format!("这一轮的 {total} 篇都判断过了。"),
-            left => format!("这一轮 {total} 篇，还有 {left} 篇留在待判断。"),
+            0 => tf!("这一轮的 {total} 篇都判断过了。", "All {total} papers in this round have been screened."),
+            left => tf!("这一轮 {total} 篇，还有 {left} 篇留在待判断。", "Of {total} papers in this round, {left} remain pending."),
         };
         div()
             .flex()
@@ -457,9 +460,9 @@ impl Workspace {
             .gap(px(14.))
             .p(px(32.))
             .child(div().flex().items_center().justify_center().size(px(44.)).rounded_full().bg(theme::status_colors("included").1).child(ui::icon("check", 22., theme::status_colors("included").0)))
-            .child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child("这一轮看完了"))
+            .child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("这一轮看完了")))
             .child(div().text_color(Theme::text_secondary()).child(message))
-            .child(div().flex().flex_wrap().justify_center().gap(px(6.)).children(chips).when(counts[0] > 0, |d| d.child(ui::status_chip("pending", &format!("待判断 {}", counts[0])))))
+            .child(div().flex().flex_wrap().justify_center().gap(px(6.)).children(chips).when(counts[0] > 0, |d| d.child(ui::status_chip("pending", &tf!("待判断 {}", "{} pending", counts[0])))))
             .child(
                 div()
                     .flex()
@@ -467,13 +470,13 @@ impl Workspace {
                     .justify_center()
                     .gap(px(8.))
                     .pt(px(6.))
-                    .children(first_pending.map(|at| ui::primary_button("round-pending", "回到没判断的第一篇").on_click(self.on(Cmd::ScreenGo(at), cx))))
+                    .children(first_pending.map(|at| ui::primary_button("round-pending", t("回到没判断的第一篇")).on_click(self.on(Cmd::ScreenGo(at), cx))))
                     // What the queue holds now: the papers this round left waiting, and those that came since.
-                    .when(first_pending.is_none() && waiting > 0, |d| d.child(ui::primary_button("round-again", format!("再看一轮（队列里还有 {waiting} 篇）")).on_click(self.on(Cmd::ScreenMode(ScreenMode::Single), cx))))
-                    .child(ui::secondary_button("round-review", "从头回看").on_click(self.on(Cmd::ScreenGo(0), cx)))
-                    .child(ui::secondary_button("round-leave", "回到队列").on_click(self.on(Cmd::ScreenMode(ScreenMode::Batch), cx))),
+                    .when(first_pending.is_none() && waiting > 0, |d| d.child(ui::primary_button("round-again", tf!("再看一轮（队列里还有 {waiting} 篇）", "Another round ({waiting} papers in queue)")).on_click(self.on(Cmd::ScreenMode(ScreenMode::Single), cx))))
+                    .child(ui::secondary_button("round-review", t("从头回看")).on_click(self.on(Cmd::ScreenGo(0), cx)))
+                    .child(ui::secondary_button("round-leave", t("回到队列")).on_click(self.on(Cmd::ScreenMode(ScreenMode::Batch), cx))),
             )
-            .when(round.can_undo(), |d| d.child(ui::ghost_button("round-end-undo", None, Some("撤销上一个判断".into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::ScreenUndo, cx))))
+            .when(round.can_undo(), |d| d.child(ui::ghost_button("round-end-undo", None, Some(t("撤销上一个判断").into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::ScreenUndo, cx))))
             .into_any_element()
     }
 
@@ -484,6 +487,6 @@ impl Workspace {
 
     /// The way to the model settings, where none is set up.
     pub(crate) fn screen_setup_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
-        ui::ghost_button("screen-settings", Some("settings-gear"), Some("先配置模型".into())).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx))
+        ui::ghost_button("screen-settings", Some("settings-gear"), Some(t("先配置模型").into())).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx))
     }
 }

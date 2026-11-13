@@ -1,6 +1,7 @@
 //! The detail panel of the selected paper: 信息 (record, statuses, custom
 //! fields, notes, files), PDF (preview) and 提问 (questions about this paper).
 
+use crate::i18n::{label, t};
 use crate::app::{Cmd, Edge, MenuKind, Tab, Translated, Workspace};
 use crate::pdf::{Zoom, ZoomTo};
 use crate::theme::{self, Theme};
@@ -53,14 +54,14 @@ impl Workspace {
                 .border_b_1()
                 .border_color(Theme::line())
                 .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(p.title.clone()))
-                .child(tab_button("tab-info", "信息", Tab::Info, self, cx))
-                .child(tab_button("tab-pdf", if has_pdf { "PDF" } else { "PDF（无）" }, Tab::Pdf, self, cx))
-                .child(tab_button("tab-ask", "提问", Tab::Ask, self, cx))
-                .when(tab == Tab::Ask && has_pdf && !(lib.split && width >= SPLIT_MIN), |d| d.child(ui::ghost_button("beside-pdf", Some("file-text"), Some("对照 PDF".into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::BesidePdf(true), cx))))
+                .child(tab_button("tab-info", t("信息"), Tab::Info, self, cx))
+                .child(tab_button("tab-pdf", if has_pdf { "PDF" } else { t("PDF（无）") }, Tab::Pdf, self, cx))
+                .child(tab_button("tab-ask", t("提问"), Tab::Ask, self, cx))
+                .when(tab == Tab::Ask && has_pdf && !(lib.split && width >= SPLIT_MIN), |d| d.child(ui::ghost_button("beside-pdf", Some("file-text"), Some(t("对照 PDF").into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::BesidePdf(true), cx))))
                 .child(if reading {
-                    ui::ghost_button("reading-leave", Some("x"), Some(format!("退出阅读 {}", crate::shortcuts::pretty("escape")).into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::ToggleReading, cx))
+                    ui::ghost_button("reading-leave", Some("x"), Some(tf!("退出阅读 {}", "Leave reading {}", crate::shortcuts::pretty("escape")).into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::ToggleReading, cx))
                 } else {
-                    ui::ghost_button("ask-leave", Some("x"), Some(format!("退出提问 {}", crate::shortcuts::pretty("escape")).into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::LeaveAsk, cx))
+                    ui::ghost_button("ask-leave", Some("x"), Some(tf!("退出提问 {}", "Leave chat {}", crate::shortcuts::pretty("escape")).into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::LeaveAsk, cx))
                 })
         } else { div()
             .flex()
@@ -84,11 +85,11 @@ impl Workspace {
                     .flex()
                     .gap(px(16.))
                     .pt(px(6.))
-                    .child(tab_button("tab-info", "信息", Tab::Info, self, cx))
-                    .child(tab_button("tab-pdf", if has_pdf { "PDF" } else { "PDF（无）" }, Tab::Pdf, self, cx))
-                    .child(tab_button("tab-ask", "提问", Tab::Ask, self, cx))
+                    .child(tab_button("tab-info", t("信息"), Tab::Info, self, cx))
+                    .child(tab_button("tab-pdf", if has_pdf { "PDF" } else { t("PDF（无）") }, Tab::Pdf, self, cx))
+                    .child(tab_button("tab-ask", t("提问"), Tab::Ask, self, cx))
                     // Asking with the PDF put away, or in a panel too narrow for both: one click brings it beside the conversation.
-                    .when(tab == Tab::Ask && has_pdf && !(lib.split && width >= SPLIT_MIN), |d| d.child(div().flex_1()).child(ui::ghost_button("beside-pdf", Some("file-text"), Some("对照 PDF".into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::BesidePdf(true), cx)))),
+                    .when(tab == Tab::Ask && has_pdf && !(lib.split && width >= SPLIT_MIN), |d| d.child(div().flex_1()).child(ui::ghost_button("beside-pdf", Some("file-text"), Some(t("对照 PDF").into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::BesidePdf(true), cx)))),
             ) };
         // Asking about a paper: the conversation, and the paper's PDF to its right where the panel has room for both.
         // A paper without one keeps the layout it is asked about in, with the ways to get its PDF at the right.
@@ -180,18 +181,18 @@ impl Workspace {
             _ => &p.abstract_text,
         };
         let mut card = div().flex().flex_col().gap(px(6.)).child(if abstract_text.is_empty() {
-            div().text_color(Theme::text_placeholder()).child("没有摘要")
+            div().text_color(Theme::text_placeholder()).child(t("没有摘要"))
         } else {
             self.selectable("detail-abstract", abstract_text.clone(), cx).text_color(Theme::text_secondary()).line_height(px(21.))
         });
         if texts.iter().any(|(_, state)| matches!(state, Translated::Busy)) {
-            card = card.child(div().flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(Theme::accent()).child(ui::spinner("translating", 13., Theme::accent())).child("正在翻译…"));
+            card = card.child(div().flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(Theme::accent()).child(ui::spinner("translating", 13., Theme::accent())).child(t("正在翻译…")));
         }
         if let Some(error) = texts.iter().find_map(|(_, state)| match state {
             Translated::Failed(error) => Some(error.clone()),
             _ => None,
         }) {
-            card = card.child(div().flex().items_center().gap(px(8.)).child(div().flex_1().min_w_0().child(ui::error_line(&error))).child(ui::ghost_button("translate-retry", None, Some("重试".into())).on_click(self.on(Cmd::RetryTranslation, cx))));
+            card = card.child(div().flex().items_center().gap(px(8.)).child(div().flex_1().min_w_0().child(ui::error_line(&error))).child(ui::ghost_button("translate-retry", None, Some(t("重试").into())).on_click(self.on(Cmd::RetryTranslation, cx))));
         }
         Some(card.into_any_element())
     }
@@ -244,7 +245,7 @@ impl Workspace {
                     .gap(px(8.))
                     .child(div().flex_none().w(px(84.)).pt(px(1.)).truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(field.name.clone()))
                     .child(if values.is_empty() {
-                        div().text_color(Theme::text_placeholder()).child("未填写")
+                        div().text_color(Theme::text_placeholder()).child(t("未填写"))
                     } else {
                         div().flex().flex_wrap().flex_1().min_w_0().gap(px(4.)).children(values.into_iter().map(|v| ui::chip(v, Theme::text_secondary(), Theme::bg_sunken())))
                     })
@@ -265,24 +266,24 @@ impl Workspace {
                     _ => None,
                 };
                 let note = match &text {
-                    _ if reading => "正在提取文字…".to_string(),
-                    _ if by_eye => "模型正在读页面…".to_string(),
+                    _ if reading => t("正在提取文字…").to_string(),
+                    _ if by_eye => t("模型正在读页面…").to_string(),
                     Some(Ok(pages)) => {
                         // How much of the file gave text: a page without any is a figure, or a page that could not be read.
                         let with_text = pages.iter().filter(|page| !page.trim().is_empty()).count();
-                        let count = if with_text == pages.len() { format!("{} 页文字可用于提问", pages.len()) } else { format!("{} 页中 {with_text} 页有文字，可用于提问", pages.len()) };
+                        let count = if with_text == pages.len() { tf!("{} 页文字可用于提问", "{} pages available for chat", pages.len()) } else { tf!("{} 页中 {with_text} 页有文字，可用于提问", "{with_text} of {} pages contain text for chat", pages.len()) };
                         match lib.writing.structures.get(&file.id).filter(|info| !info.text_by.is_empty()) {
-                            Some(info) if info.read_in_part() => format!("{count}（由 {} 读出，全文 {} 页，还有 {} 页没读）", info.text_by, info.page_count, info.page_count - info.pages_read),
-                            Some(info) => format!("{count}（由 {} 读出）", info.text_by),
+                            Some(info) if info.read_in_part() => tf!("{count}（由 {} 读出，全文 {} 页，还有 {} 页没读）", "{count} (read by {}; {} pages total, {} unread)", info.text_by, info.page_count, info.page_count - info.pages_read),
+                            Some(info) => tf!("{count}（由 {} 读出）", "{count} (read by {})", info.text_by),
                             None => count,
                         }
                     }
-                    Some(Err(error)) => format!("没读出文字：{}", wisp_core::fulltext::failure_brief(error)),
+                    Some(Err(error)) => tf!("没读出文字：{}", "No text extracted: {}", wisp_core::fulltext::failure_brief(error)),
                     None => String::new(),
                 };
                 // A fetched file says where it is from.
                 let note = match lib.origins.get(&file.id) {
-                    Some((_, source, version)) => format!("{note} · 来自 {}", [source.as_str(), wisp_core::openaccess::version_label(version)].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" ")),
+                    Some((_, source, version)) => tf!("{note} · 来自 {}", "{note} · From {}", [source.as_str(), t(wisp_core::openaccess::version_label(version))].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" ")),
                     None => note,
                 };
                 let small = |id: (&'static str, usize), text: &'static str| ui::secondary_button(id, text).h(px(24.)).px(px(8.)).text_size(px(12.));
@@ -308,40 +309,40 @@ impl Workspace {
                                     .flex_1()
                                     .min_w_0()
                                     .child(div().truncate().child(file.title.clone()))
-                                    .child(div().truncate().text_size(px(12.)).text_color(if failure.is_some() { Theme::warning() } else { Theme::text_tertiary() }).child(format!("{} · {}{}", if file.kind == "fulltext" { "全文" } else { "附件" }, file_size(file.size_bytes), if note.is_empty() { String::new() } else { format!(" · {note}") }))),
+                                    .child(div().truncate().text_size(px(12.)).text_color(if failure.is_some() { Theme::warning() } else { Theme::text_tertiary() }).child(format!("{} · {}{}", if file.kind == "fulltext" { t("全文") } else { t("附件") }, file_size(file.size_bytes), if note.is_empty() { String::new() } else { format!(" · {note}") }))),
                             )
                             .child(ui::ghost_button(("file-open", i), Some("link"), None).on_click(self.on(Cmd::OpenFile(file.id.clone()), cx)))
                             .child(ui::ghost_button(("file-remove", i), Some("x"), None).on_click(self.on(Cmd::RemoveFile(file.id.clone()), cx))),
                     )
                     // A file without text: why, what it means for questions, and the two things to try.
                     .when_some(failure, |d, error| {
-                        d.child(div().text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_secondary()).child(format!("{error}在读出文字之前，提问只能用到这篇文献的记录和摘要。")))
+                        d.child(div().text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_secondary()).child(tf!("{error}在读出文字之前，提问只能用到这篇文献的记录和摘要。", "{error}Until text is extracted, questions use only this paper's record and abstract.")))
                             .child(
                                 div()
                                     .flex()
                                     .flex_wrap()
                                     .gap(px(6.))
-                                    .child(small(("file-reread", i), "重新读取").on_click(self.on(Cmd::RereadFile(file.id.clone()), cx)))
-                                    .when(file.format == "pdf" && wisp_core::fulltext::readable_by_eye(&error), |d| d.child(small(("file-by-eye", i), "让模型读页面").on_click(self.on(Cmd::ReadPages(file.id.clone()), cx)))),
+                                    .child(small(("file-reread", i), t("重新读取")).on_click(self.on(Cmd::RereadFile(file.id.clone()), cx)))
+                                    .when(file.format == "pdf" && wisp_core::fulltext::readable_by_eye(&error), |d| d.child(small(("file-by-eye", i), t("让模型读页面")).on_click(self.on(Cmd::ReadPages(file.id.clone()), cx)))),
                             )
                             .when(lib.writing.sorting.reading && !lib.writing.sorting.error.is_empty(), |d| d.child(ui::error_line(&lib.writing.sorting.error)))
                     })
                     // Pages a model read in part: the rest are read from where it stopped.
-                    .when(!by_eye && file.format == "pdf" && lib.writing.structures.get(&file.id).is_some_and(|info| info.read_in_part()), |d| d.child(div().flex().child(small(("file-read-rest", i), "读完剩下的页面").on_click(self.on(Cmd::ReadPages(file.id.clone()), cx)))))
+                    .when(!by_eye && file.format == "pdf" && lib.writing.structures.get(&file.id).is_some_and(|info| info.read_in_part()), |d| d.child(div().flex().child(small(("file-read-rest", i), t("读完剩下的页面")).on_click(self.on(Cmd::ReadPages(file.id.clone()), cx)))))
                     .into_any_element()
             })
             .collect();
         let has_fields = !lib.fields.is_empty();
         let translating = lib.show_translation;
         let abstract_body = self.render_translation(p, cx).unwrap_or_else(|| {
-            if p.abstract_text.is_empty() { div().text_color(Theme::text_placeholder()).child("没有摘要") } else { self.selectable("detail-abstract", p.abstract_text.clone(), cx).text_color(Theme::text_secondary()).line_height(px(21.)) }.into_any_element()
+            if p.abstract_text.is_empty() { div().text_color(Theme::text_placeholder()).child(t("没有摘要")) } else { self.selectable("detail-abstract", p.abstract_text.clone(), cx).text_color(Theme::text_secondary()).line_height(px(21.)) }.into_any_element()
         });
         let abstract_head = div()
             .flex()
             .items_center()
             .justify_between()
-            .child(ui::caption("摘要"))
-            .child(ui::ghost_button("translate", None, Some(if translating { "显示原文".into() } else { "显示译文".into() })).h(px(22.)).text_size(px(12.)).when(translating, |d| d.text_color(Theme::accent())).on_click(self.on(Cmd::ToggleTranslation, cx)));
+            .child(ui::caption(t("摘要")))
+            .child(ui::ghost_button("translate", None, Some(if translating { t("显示原文").into() } else { t("显示译文").into() })).h(px(22.)).text_size(px(12.)).when(translating, |d| d.text_color(Theme::accent())).on_click(self.on(Cmd::ToggleTranslation, cx)));
         div()
             .id("detail-info")
             .flex()
@@ -356,7 +357,7 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .gap(px(6.))
-                    .child(if p.authors.is_empty() { div().text_color(Theme::text_secondary()).child("作者待补") } else { self.selectable("detail-authors", p.authors.clone(), cx).text_color(Theme::text_secondary()) })
+                    .child(if p.authors.is_empty() { div().text_color(Theme::text_secondary()).child(t("作者待补")) } else { self.selectable("detail-authors", p.authors.clone(), cx).text_color(Theme::text_secondary()) })
                     .when(!source_line.is_empty(), |d| d.child(self.selectable("detail-source", source_line.join(" · "), cx).text_size(px(12.)).text_color(Theme::text_tertiary())))
                     .children(identifiers),
             )
@@ -369,33 +370,33 @@ impl Workspace {
                     .child(pick("pick-reading", &p.reading, label(&READINGS, &p.reading), MenuKind::Reading(id.clone()), self, cx))
                     .child(pick("pick-screening", &p.screening, label(&SCREENINGS, &p.screening), MenuKind::Screening(id.clone()), self, cx))
                     .child(ui::status_chip(&p.fulltext, label(&FULLTEXTS, &p.fulltext)))
-                    .child(ui::ghost_button("detail-star", Some("star"), Some(if p.starred { "已收藏".into() } else { "收藏".into() })).when(p.starred, |d| d.text_color(Theme::star())).on_click(self.on(Cmd::ToggleStar(id.clone()), cx))),
+                    .child(ui::ghost_button("detail-star", Some("star"), Some(if p.starred { t("已收藏").into() } else { t("收藏").into() })).when(p.starred, |d| d.text_color(Theme::star())).on_click(self.on(Cmd::ToggleStar(id.clone()), cx))),
             )
             .child(
                 div()
                     .flex()
                     .flex_wrap()
                     .gap(px(8.))
-                    .child(ui::secondary_button("detail-edit", "编辑信息与词条").on_click(self.on(Cmd::EditPaper(id.clone()), cx)))
+                    .child(ui::secondary_button("detail-edit", t("编辑信息与词条")).on_click(self.on(Cmd::EditPaper(id.clone()), cx)))
                     // A record without a number of its own can be looked for by its title.
-                    .when(p.doi.is_empty() && p.pmid.is_empty(), |d| d.child(ui::secondary_button("detail-complete", "按题目补全").on_click(self.on(Cmd::CompletePaper(id.clone()), cx))))
-                    .when(!link.is_empty(), |d| d.child(ui::secondary_button("detail-link", "打开网页").on_click(self.on(Cmd::OpenLink(id.clone()), cx))))
-                    .child(ui::ghost_button("detail-trash", Some("bin"), Some("移到回收站".into())).h(px(32.)).on_click(self.on(Cmd::TrashPaper(id.clone()), cx))),
+                    .when(p.doi.is_empty() && p.pmid.is_empty(), |d| d.child(ui::secondary_button("detail-complete", t("按题目补全")).on_click(self.on(Cmd::CompletePaper(id.clone()), cx))))
+                    .when(!link.is_empty(), |d| d.child(ui::secondary_button("detail-link", t("打开网页")).on_click(self.on(Cmd::OpenLink(id.clone()), cx))))
+                    .child(ui::ghost_button("detail-trash", Some("bin"), Some(t("移到回收站").into())).h(px(32.)).on_click(self.on(Cmd::TrashPaper(id.clone()), cx))),
             )
-            .child(section("标签").child(if p.tags.is_empty() {
-                div().text_color(Theme::text_placeholder()).child("没有标签")
+            .child(section(t("标签")).child(if p.tags.is_empty() {
+                div().text_color(Theme::text_placeholder()).child(t("没有标签"))
             } else {
                 div().flex().flex_wrap().gap(px(4.)).children(p.tags.iter().map(|t| ui::chip(format!("#{t}"), Theme::accent(), Theme::accent_soft())))
             }))
-            .child(section("自定义词条").child(if has_fields {
+            .child(section(t("自定义词条")).child(if has_fields {
                 div().flex().flex_col().gap(px(8.)).children(field_rows)
             } else {
-                div().text_color(Theme::text_placeholder()).child("这个文献库还没有自定义词条。在左下角「自定义词条」里添加，例如物种、研究方法、所属课题。")
+                div().text_color(Theme::text_placeholder()).child(t("这个文献库还没有自定义词条。在左下角「自定义词条」里添加，例如物种、研究方法、所属课题。"))
             }))
             .child(div().flex().flex_col().gap(px(6.)).child(abstract_head).child(abstract_body))
-            .child(section("我的笔记").child(ui::field(&lib.notes, window, cx)))
-            .child(section("文件").child(div().flex().flex_col().gap(px(6.)).children(file_rows).child(ui::secondary_button("attach", if files.is_empty() { "添加 PDF 或附件" } else { "再添加一个文件" }).on_click(self.on(Cmd::AttachPdf(id.clone()), cx)))))
-            .child(div().text_size(px(12.)).text_color(Theme::text_placeholder()).child(format!("来源：{} · 添加于 {}", p.source, time::date_text(&p.added_at))))
+            .child(section(t("我的笔记")).child(ui::field(&lib.notes, window, cx)))
+            .child(section(t("文件")).child(div().flex().flex_col().gap(px(6.)).children(file_rows).child(ui::secondary_button("attach", if files.is_empty() { t("添加 PDF 或附件") } else { t("再添加一个文件") }).on_click(self.on(Cmd::AttachPdf(id.clone()), cx)))))
+            .child(div().text_size(px(12.)).text_color(Theme::text_placeholder()).child(tf!("来源：{} · 添加于 {}", "Source: {} · Added {}", p.source, time::date_text(&p.added_at))))
             .into_any_element()
     }
 
@@ -405,8 +406,8 @@ impl Workspace {
         let Some(file) = lib.pdf_file(&p.id) else {
             let looking = lib.fetching.as_ref().is_some_and(|run| run.running() && (run.working.contains(&p.id)));
             let last = lib.fetching.as_ref().and_then(|run| run.rows.iter().rev().find(|row| row.paper_id == p.id)).map(|row| row.detail.clone()).filter(|detail| !detail.is_empty());
-            return ui::empty_state("file-text", "这篇文献还没有 PDF", "添加后可以在这里预览，全文也会用于提问。也可以替你找开放获取的版本：只取能免费合法获取的，查找时会把 DOI 或 PMID 发给 OpenAlex、Europe PMC 和出版商。")
-                .child(div().flex().gap(px(8.)).child(ui::primary_button("pdf-attach", "添加 PDF").on_click(self.on(Cmd::AttachPdf(p.id.clone()), cx))).child(if looking { ui::secondary_button("pdf-find", "正在查找…") } else { ui::secondary_button("pdf-find", "查找开放全文").on_click(self.on(Cmd::FindPdfs(Some(p.id.clone())), cx)) }))
+            return ui::empty_state("file-text", t("这篇文献还没有 PDF"), t("添加后可以在这里预览，全文也会用于提问。也可以替你找开放获取的版本：只取能免费合法获取的，查找时会把 DOI 或 PMID 发给 OpenAlex、Europe PMC 和出版商。"))
+                .child(div().flex().flex_wrap().gap(px(8.)).child(ui::primary_button("pdf-attach", t("添加 PDF")).on_click(self.on(Cmd::AttachPdf(p.id.clone()), cx))).child(if looking { ui::secondary_button("pdf-find", t("正在查找…")) } else { ui::secondary_button("pdf-find", t("查找开放全文")).on_click(self.on(Cmd::FindPdfs(Some(p.id.clone())), cx)) }))
                 .when_some(last, |d, detail| d.child(div().max_w(px(420.)).text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_tertiary()).child(detail)))
                 .size_full()
                 .into_any_element();
@@ -428,8 +429,8 @@ impl Workspace {
         // The size chosen here is the one the next paper opens at.
         if let Some(lib) = self.lib.as_mut() { lib.zoom = zoom }
         let fit = match zoom {
-            Zoom::FitWidth => "适应宽度",
-            Zoom::FitPage => "适应整页",
+            Zoom::FitWidth => t("适应宽度"),
+            Zoom::FitPage => t("适应整页"),
             Zoom::Percent(_) => "",
         };
         let tool = |id: &'static str, icon: &'static str| ui::ghost_button(id, Some(icon), None).h(px(24.)).min_w(px(24.));
@@ -443,14 +444,16 @@ impl Workspace {
                     .flex_none()
                     .items_center()
                     .gap(px(8.))
-                    .h(px(36.))
+                    .flex_wrap()
+                    .min_h(px(36.))
+                    .py(px(4.))
                     .px(px(12.))
                     .border_b_1()
                     .border_color(Theme::line())
                     .text_size(px(12.))
                     .text_color(Theme::text_tertiary())
                     .child(div().flex_1().min_w_0().truncate().child(file_title))
-                    .when(count > 0, |d| d.child(div().flex_none().child(format!("{page} / {count} 页"))))
+                    .when(count > 0, |d| d.child(div().flex_none().child(tf!("{page} / {count} 页", "{page} / {count} pages"))))
                     // Smaller, the size in force (a menu of sizes), larger.
                     .when(count > 0, |d| {
                         d.child(
@@ -464,10 +467,10 @@ impl Workspace {
                         )
                     })
                     // Cut a piece out of a page (a figure, a table): to keep in the figure library, or as a picture for the next question.
-                    .when(count > 0, |d| d.child(ui::ghost_button("pdf-cut", None, Some(if cutting { "取消截图".into() } else { "截图".into() })).h(px(24.)).px(px(6.)).text_size(px(12.)).when(cutting, |d| d.text_color(Theme::accent())).on_click(self.on(Cmd::PdfCut, cx))))
+                    .when(count > 0, |d| d.child(ui::ghost_button("pdf-cut", None, Some(if cutting { t("取消截图").into() } else { t("截图").into() })).h(px(24.)).px(px(6.)).text_size(px(12.)).when(cutting, |d| d.text_color(Theme::accent())).on_click(self.on(Cmd::PdfCut, cx))))
                     // The whole window for this paper; in reading mode the way back is at the top.
-                    .when(!reading, |d| d.child(ui::ghost_button("pdf-reading", None, Some("阅读模式".into())).h(px(24.)).px(px(6.)).text_size(px(12.)).on_click(self.on(Cmd::ToggleReading, cx))))
-                    .child(ui::ghost_button("pdf-open", Some("link"), (width >= 700.).then(|| "用系统应用打开".into())).h(px(24.)).on_click(self.on(Cmd::OpenFile(file_id), cx)))
+                    .when(!reading, |d| d.child(ui::ghost_button("pdf-reading", None, Some(t("阅读模式").into())).h(px(24.)).px(px(6.)).text_size(px(12.)).on_click(self.on(Cmd::ToggleReading, cx))))
+                    .child(ui::ghost_button("pdf-open", Some("link"), (width >= 700.).then(|| t("用系统应用打开").into())).h(px(24.)).on_click(self.on(Cmd::OpenFile(file_id), cx)))
                     // Beside the conversation: put the PDF away again.
                     .when(beside, |d| d.child(tool("pdf-beside-close", "x").on_click(self.on(Cmd::BesidePdf(false), cx)))),
             )
