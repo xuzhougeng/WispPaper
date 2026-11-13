@@ -101,12 +101,7 @@ impl Workspace {
 
     /// Assemble every recorded section in its saved order into a new manuscript.
     pub(crate) fn review_to_manuscript(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(lib) = self.lib.as_ref() else { return };
-        let review = match lib.store.review_for_conversation(&lib.library_chat.id) {
-            Ok(Some(review)) if review.outline_confirmed && !review.sections.is_empty() => review,
-            Ok(_) => return self.fail("请先确认大纲并保存正文。", cx),
-            Err(err) => return self.fail(format!("无法读取综述记录：{err:#}"), cx),
-        };
+        let Some(review) = self.lib.as_ref().and_then(|lib| lib.library_chat.review.clone()).filter(|review| review.outline_confirmed && !review.sections.is_empty()) else { return self.fail("请先确认大纲并保存正文。", cx) };
         self.draft_to_manuscript(review.title, review.sections.into_iter().map(|s| (s.name, s.body)).collect(), window, cx);
     }
 
@@ -114,8 +109,9 @@ impl Workspace {
         if sections.is_empty() || sections.iter().all(|(_, body)| body.trim().is_empty()) { return }
         let Some(lib) = self.lib.as_mut() else { return };
         // Resolve only unambiguous labels using the same citation keys as the
-        // writing page. Unknown or quoted labels remain literal and get a
-        // lookup below; conversion does not verify a claim or page.
+        // writing page; a quoted sentence is left out, its page kept. Labels
+        // that do not resolve remain literal and get a lookup below.
+        // Conversion does not verify a claim or page.
         let known = match lib.store.cite_keys() { Ok(keys) => keys, Err(err) => return self.fail(format!("无法读取引用记录：{err:#}"), cx) };
         let converted = {
             let index = wisp_core::cite::Index::new(&lib.papers, lib.trash.iter().map(|entry| &entry.paper), &known);

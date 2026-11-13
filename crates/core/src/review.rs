@@ -5,11 +5,10 @@ use crate::model::new_id;
 use crate::store::Store;
 use crate::time::now_iso;
 use anyhow::{Result, bail};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::time::UNIX_EPOCH;
 
 pub(crate) const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS review_projects (
@@ -22,89 +21,31 @@ CREATE TABLE IF NOT EXISTS review_conversations (
     conversation_id TEXT PRIMARY KEY NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
     review_id TEXT UNIQUE NOT NULL REFERENCES review_projects(id) ON DELETE CASCADE
 );
--- A process from an older build may already have a v1 connection open when
--- another process adds evidence. Never allow it to rewrite that evidence away.
-CREATE TRIGGER IF NOT EXISTS review_preserve_evidence BEFORE UPDATE OF body ON review_projects
-WHEN CASE WHEN json_valid(OLD.body) THEN coalesce(json_array_length(OLD.body, '$.evidence_rows'), 0) > 0 ELSE 0 END
- AND CASE WHEN json_valid(NEW.body) THEN coalesce(json_type(NEW.body, '$.evidence_rows'), '') <> 'array' ELSE 1 END
-BEGIN
-    SELECT RAISE(ABORT, '此综述包含新版证据记录，请升级后再修改');
-END;
--- Until there is an independent recovery UI, neither old nor new clients
--- may orphan non-empty evidence by deleting its conversation or association.
-CREATE TRIGGER IF NOT EXISTS review_prevent_orphan BEFORE DELETE ON review_conversations
-WHEN EXISTS (
-    SELECT 1 FROM review_projects WHERE id = OLD.review_id
-      AND CASE WHEN json_valid(body) THEN coalesce(json_array_length(body, '$.evidence_rows'), 0) > 0 ELSE 0 END
-)
-BEGIN
-    SELECT RAISE(ABORT, '此对话关联的综述仍有证据记录，请先删除证据或保留对话');
-END;
--- Hash full-text extraction once, not on every chat repaint. Triggers also
--- cover updates performed by other connections and by older app versions.
-CREATE TABLE IF NOT EXISTS review_text_digests (
-    resource_id TEXT PRIMARY KEY NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
-    digest TEXT NOT NULL
-);
-CREATE TRIGGER IF NOT EXISTS review_digest_after_insert AFTER INSERT ON fulltext_text BEGIN
-    DELETE FROM review_text_digests WHERE resource_id = NEW.resource_id;
-END;
-CREATE TRIGGER IF NOT EXISTS review_digest_after_update AFTER UPDATE OF pages, error, extracted_at ON fulltext_text BEGIN
-    DELETE FROM review_text_digests WHERE resource_id = NEW.resource_id;
-END;
-CREATE TRIGGER IF NOT EXISTS review_digest_after_delete AFTER DELETE ON fulltext_text BEGIN
-    DELETE FROM review_text_digests WHERE resource_id = OLD.resource_id;
-END;
--- Monotonic generations prevent a changed-then-reverted source or a restored
--- paper from silently reviving a judgment. No foreign key: evidence may
--- outlive a permanently removed paper and must retain the old generation.
-CREATE TABLE IF NOT EXISTS review_source_versions (
-    paper_id TEXT PRIMARY KEY NOT NULL,
-    version INTEGER NOT NULL DEFAULT 0
-);
-CREATE TRIGGER IF NOT EXISTS review_version_paper_update AFTER UPDATE OF title, abstract, authors_json, journal, year, publication_state, url, source ON papers
-WHEN OLD.title IS NOT NEW.title OR OLD.abstract IS NOT NEW.abstract OR OLD.authors_json IS NOT NEW.authors_json OR OLD.journal IS NOT NEW.journal OR OLD.year IS NOT NEW.year OR OLD.publication_state IS NOT NEW.publication_state OR OLD.url IS NOT NEW.url OR OLD.source IS NOT NEW.source
-BEGIN
-    UPDATE review_source_versions SET version = version + 1 WHERE paper_id = NEW.id;
-END;
-CREATE TRIGGER IF NOT EXISTS review_version_paper_delete AFTER DELETE ON papers BEGIN
-    UPDATE review_source_versions SET version = version + 1 WHERE paper_id = OLD.id;
-END;
-CREATE TRIGGER IF NOT EXISTS review_version_identifier_insert AFTER INSERT ON paper_identifiers BEGIN
-    UPDATE review_source_versions SET version = version + 1 WHERE paper_id = NEW.paper_id;
-END;
-CREATE TRIGGER IF NOT EXISTS review_version_identifier_delete AFTER DELETE ON paper_identifiers BEGIN
-    UPDATE review_source_versions SET version = version + 1 WHERE paper_id = OLD.paper_id;
-END;
-CREATE TRIGGER IF NOT EXISTS review_version_identifier_update AFTER UPDATE ON paper_identifiers BEGIN
-    UPDATE review_source_versions SET version = version + 1 WHERE paper_id = OLD.paper_id;
-    UPDATE review_source_versions SET version = version + 1 WHERE paper_id = NEW.paper_id;
-END;
-CREATE TRIGGER IF NOT EXISTS review_version_resource_insert AFTER INSERT ON resources WHEN NEW.resource_type = 'fulltext' BEGIN
-    UPDATE review_source_versions SET version = version + 1 WHERE paper_id = NEW.paper_id;
-END;
-CREATE TRIGGER IF NOT EXISTS review_version_resource_delete AFTER DELETE ON resources WHEN OLD.resource_type = 'fulltext' BEGIN
-    UPDATE review_source_versions SET version = version + 1 WHERE paper_id = OLD.paper_id;
-END;
-CREATE TRIGGER IF NOT EXISTS review_version_resource_update AFTER UPDATE OF paper_id, resource_type, sha256, local_path, size_bytes ON resources WHEN OLD.resource_type = 'fulltext' OR NEW.resource_type = 'fulltext' BEGIN
-    UPDATE review_source_versions SET version = version + 1 WHERE paper_id = OLD.paper_id;
-    UPDATE review_source_versions SET version = version + 1 WHERE paper_id = NEW.paper_id;
-END;
-CREATE TRIGGER IF NOT EXISTS review_version_text_insert AFTER INSERT ON fulltext_text BEGIN
-    UPDATE review_source_versions SET version = version + 1 WHERE paper_id IN (SELECT paper_id FROM resources WHERE id = NEW.resource_id);
-END;
-CREATE TRIGGER IF NOT EXISTS review_version_text_update AFTER UPDATE OF pages, error, extracted_at ON fulltext_text BEGIN
-    UPDATE review_source_versions SET version = version + 1 WHERE paper_id IN (SELECT paper_id FROM resources WHERE id = NEW.resource_id);
-END;
-CREATE TRIGGER IF NOT EXISTS review_version_text_delete AFTER DELETE ON fulltext_text BEGIN
-    UPDATE review_source_versions SET version = version + 1 WHERE paper_id IN (SELECT paper_id FROM resources WHERE id = OLD.resource_id);
-END;
-CREATE TRIGGER IF NOT EXISTS review_version_trashed AFTER INSERT ON trashed_papers BEGIN
-    UPDATE review_source_versions SET version = version + 1 WHERE paper_id = NEW.paper_id;
-END;
-CREATE TRIGGER IF NOT EXISTS review_version_restored AFTER DELETE ON trashed_papers BEGIN
-    UPDATE review_source_versions SET version = version + 1 WHERE paper_id = OLD.paper_id;
-END;
+-- A review lives with its conversation: one whose conversation is gone (removed by a build
+-- that knew nothing of reviews) could not be reached from anywhere.
+DELETE FROM review_projects WHERE id NOT IN (SELECT review_id FROM review_conversations);
+-- What builds between two releases put on the tables of the papers to watch a source change.
+-- A judgment now keeps a fingerprint of what was read instead (`Store::evidence_fingerprint`).
+DROP TRIGGER IF EXISTS review_preserve_evidence;
+DROP TRIGGER IF EXISTS review_prevent_orphan;
+DROP TRIGGER IF EXISTS review_digest_after_insert;
+DROP TRIGGER IF EXISTS review_digest_after_update;
+DROP TRIGGER IF EXISTS review_digest_after_delete;
+DROP TRIGGER IF EXISTS review_version_paper_update;
+DROP TRIGGER IF EXISTS review_version_paper_delete;
+DROP TRIGGER IF EXISTS review_version_identifier_insert;
+DROP TRIGGER IF EXISTS review_version_identifier_delete;
+DROP TRIGGER IF EXISTS review_version_identifier_update;
+DROP TRIGGER IF EXISTS review_version_resource_insert;
+DROP TRIGGER IF EXISTS review_version_resource_delete;
+DROP TRIGGER IF EXISTS review_version_resource_update;
+DROP TRIGGER IF EXISTS review_version_text_insert;
+DROP TRIGGER IF EXISTS review_version_text_update;
+DROP TRIGGER IF EXISTS review_version_text_delete;
+DROP TRIGGER IF EXISTS review_version_trashed;
+DROP TRIGGER IF EXISTS review_version_restored;
+DROP TABLE IF EXISTS review_text_digests;
+DROP TABLE IF EXISTS review_source_versions;
 "#;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -114,8 +55,8 @@ pub struct ReviewSection {
     pub body: String,
 }
 
-/// A description supplied by the person recording the evidence, not proof
-/// that the application has retrieved or inspected that source.
+/// What the claim rests on, as the citation or the person says: not proof
+/// that anything was read.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvidenceSource {
@@ -152,23 +93,33 @@ pub struct EvidenceRow {
     pub claim: String,
     pub paper_id: String,
     pub paper_title: String,
-    /// One-based page as entered by the user; not a verified location.
+    /// One-based page of the paper's PDF, as cited or entered.
     pub page: Option<usize>,
     pub quote: String,
     pub source: EvidenceSource,
     pub note: String,
     pub judgment: EvidenceJudgment,
-    /// Source content as it stood when the user explicitly recorded a judgment.
+    /// What the source said when the person judged: `Store::evidence_fingerprint`.
     pub assessed_fingerprint: String,
-    /// Recomputed when loading a review; never inferred from the snapshot.
+    /// The paper is in the library and not in its trash. Worked out on reading.
     #[serde(skip)]
     pub source_available: bool,
-    /// At least one registered full-text attachment is missing or unreadable.
-    #[serde(skip)]
-    pub local_files_missing: bool,
-    /// A derived state, not proof that the claim is supported.
+    /// The judgment was made on what the source says now. Worked out on reading.
     #[serde(skip)]
     pub source_current: bool,
+}
+
+impl EvidenceRow {
+    /// The same claim resting on the same place of the same paper.
+    fn same_evidence(&self, other: &EvidenceRow) -> bool {
+        self.section == other.section && self.claim == other.claim && self.paper_id == other.paper_id && self.page == other.page && self.quote == other.quote
+    }
+
+    fn unjudge(&mut self) {
+        self.judgment = EvidenceJudgment::Unreviewed;
+        self.assessed_fingerprint.clear();
+        self.source_current = false;
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -192,6 +143,18 @@ pub struct Review {
     pub updated_at: String,
 }
 
+impl Review {
+    /// Where the review stands: 1 the requirements, 2 the outline, 3 writing.
+    pub fn step(&self) -> usize {
+        if !self.requirements_confirmed { 1 } else if !self.outline_confirmed { 2 } else { 3 }
+    }
+
+    /// The row's claim still stands in the section it was taken from (a row without a section is on its own).
+    pub fn linked(&self, row: &EvidenceRow) -> bool {
+        !row.section_detached && (row.section.is_empty() || self.sections.iter().any(|section| section.name == row.section && section.body.contains(row.claim.trim())))
+    }
+}
+
 /// Each operation is an explicit user action, not a model's self-assessment.
 pub enum ReviewAction {
     SetRequirements(String),
@@ -203,7 +166,9 @@ pub enum ReviewAction {
     SaveEvidence(EvidenceRow),
     JudgeEvidence { id: String, judgment: EvidenceJudgment },
     RemoveEvidence { id: String },
-    SaveSection { name: String, body: String },
+    /// A section's text, new or again. `cited` is what its citations rest on
+    /// (`cited_evidence`): rows the record does not hold yet are added, unjudged.
+    SaveSection { name: String, body: String, cited: Vec<EvidenceRow> },
     RemoveSection { name: String },
     SetChecks(String),
     Complete,
@@ -216,29 +181,69 @@ fn nonempty(value: &str, what: &str) -> Result<()> {
     Ok(())
 }
 
-/// Recover tracking if a v1 library already contains evidence (for example,
-/// after an interrupted or mixed-version upgrade). Missing evidence is not an
-/// error; existing source judgments without a fingerprint stay stale.
-pub(crate) fn initialize_legacy_watches(db: &Connection) -> Result<bool> {
-    let mut stmt = db.prepare("SELECT body FROM review_projects")?;
-    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-    let mut found = false;
-    let mut paper_ids = std::collections::BTreeSet::new();
-    for body in rows {
-        let Ok(body): Result<serde_json::Value, _> = serde_json::from_str(&body?) else { continue };
-        if let Some(evidence) = body.get("evidence_rows").and_then(|rows| rows.as_array()) {
-            found |= !evidence.is_empty();
-            for row in evidence {
-                if let Some(paper_id) = row.get("paper_id").and_then(|id| id.as_str()).filter(|id| !id.is_empty()) { paper_ids.insert(paper_id.to_string()); }
-            }
+/// The claims of a section's text with what each citation names for them:
+/// the sentence a citation closes, the paper behind its label, the page and
+/// the quotation. This is the evidence table the text already carries; whether
+/// the source bears the claim out stays the person's to say. A label that
+/// names no source, or more than one, is left out.
+pub fn cited_evidence(section: &str, body: &str, sources: &[crate::ai::Source]) -> Vec<EvidenceRow> {
+    let spans = crate::ai::citation_spans(body);
+    let inside = |at: usize| spans.iter().any(|(range, _)| range.contains(&at));
+    // Where sentences end, outside the citations (a quotation has full stops of its own).
+    let mut ends: Vec<usize> = vec![0];
+    let mut letters = body.char_indices().peekable();
+    while let Some((at, letter)) = letters.next() {
+        if inside(at) { continue }
+        let closes = match letter {
+            '。' | '！' | '？' | '\n' => true,
+            '.' | '!' | '?' => letters.peek().is_none_or(|(_, next)| next.is_whitespace()),
+            _ => false,
+        };
+        if closes { ends.push(at + letter.len_utf8()) }
+    }
+    // "A sentence. [P1] The next one": a citation set after the full stop closes that sentence, and the next begins after it.
+    let stops = |text: &str| text.trim_end().trim_end_matches(['"', '”', '」']).ends_with(['。', '！', '？', '.', '!', '?']);
+    ends.extend(spans.iter().filter(|(range, _)| stops(&body[..range.start])).map(|(range, _)| range.end));
+    // What a stretch of the text says, its citations aside.
+    let says = |from: usize, to: usize| spans.iter().filter(|(range, _)| range.start >= from && range.end <= to).fold(body[from..to].to_string(), |text, (range, _)| text.replace(&body[range.clone()], "")).chars().any(char::is_alphanumeric);
+    let mut rows: Vec<EvidenceRow> = vec![];
+    let mut last_claim = String::new();
+    for (range, cited) in &spans {
+        // "… [P1] [P2]": the second citation closes the same sentence as the first, which is not part of it.
+        let mut to = range.start;
+        while let Some((before, _)) = spans.iter().find(|(other, _)| other.end <= to && body[other.end..to].trim().is_empty() && other.start < to) { to = before.start }
+        let from = ends.iter().copied().filter(|end| *end <= to && says(*end, to)).max().unwrap_or(0);
+        // A list mark or a heading's hashes are not part of what is claimed.
+        let written = body[from..to].trim().trim_start_matches(['-', '*', '>', '#', ' ']).trim();
+        let claim = if written.is_empty() { last_claim.clone() } else { written.to_string() };
+        if claim.is_empty() { continue }
+        last_claim = claim.clone();
+        for citation in cited {
+            let mut named = sources.iter().filter(|source| source.label == citation.label);
+            let (Some(source), None) = (named.next(), named.next()) else { continue };
+            // 原文为：“…” [P3]: a sentence quoted before the citation is its quotation, as one inside the brackets is.
+            let quote = if citation.quote.is_empty() { quoted_last(&claim) } else { citation.quote.clone() };
+            let row = EvidenceRow {
+                section: section.to_string(), claim: claim.clone(), paper_id: source.paper_id.clone(), paper_title: source.title.clone(),
+                page: citation.page, quote,
+                source: if citation.page.is_some() { EvidenceSource::FullText } else { EvidenceSource::Unknown },
+                ..Default::default()
+            };
+            if !rows.iter().any(|known| known.same_evidence(&row)) { rows.push(row) }
         }
     }
-    for paper_id in paper_ids {
-        // A missing watcher means changes might have occurred unobserved; a
-        // nonzero generation prevents a v1/default-zero fingerprint reviving.
-        db.execute("INSERT OR IGNORE INTO review_source_versions(paper_id, version) VALUES (?1, 1)", [paper_id])?;
-    }
-    Ok(found)
+    rows
+}
+
+/// The quotation a claim ends with, when it is long enough to be a sentence of a source and not a term in quotation marks.
+fn quoted_last(claim: &str) -> String {
+    let text = claim.trim_end_matches(['。', '.', '，', ',', '；', ';', ' ']);
+    let Some(closing) = text.chars().next_back().filter(|mark| ['"', '”', '」'].contains(mark)) else { return String::new() };
+    let opening = match closing { '”' => '“', '」' => '「', _ => '"' };
+    let inner = &text[..text.len() - closing.len_utf8()];
+    let Some(at) = inner.rfind(opening) else { return String::new() };
+    let quoted = inner[at + opening.len_utf8()..].trim();
+    if quoted.chars().count() >= 20 { quoted.to_string() } else { String::new() }
 }
 
 impl Review {
@@ -250,7 +255,6 @@ impl Review {
                     self.requirements = text;
                     self.requirements_confirmed = false;
                     self.outline_confirmed = false;
-                    for row in &mut self.evidence_rows { row.judgment = EvidenceJudgment::Unreviewed; row.assessed_fingerprint.clear(); row.source_current = false }
                     self.checks_current = false;
                     self.completed = false;
                 }
@@ -267,7 +271,6 @@ impl Review {
                 if self.outline != text {
                     self.outline = text;
                     self.outline_confirmed = false;
-                    for row in &mut self.evidence_rows { row.judgment = EvidenceJudgment::Unreviewed; row.assessed_fingerprint.clear(); row.source_current = false }
                     self.checks_current = false;
                     self.completed = false;
                 }
@@ -300,9 +303,7 @@ impl Review {
                 if row.id.is_empty() {
                     row.id = new_id("E");
                     row.section_detached = false;
-                    row.judgment = EvidenceJudgment::Unreviewed;
-                    row.assessed_fingerprint.clear();
-                    row.source_current = false;
+                    row.unjudge();
                     self.evidence_rows.push(row);
                 } else {
                     let old = self.evidence_rows.iter_mut().find(|old| old.id == row.id).ok_or_else(|| anyhow::anyhow!("证据记录不存在"))?;
@@ -310,23 +311,19 @@ impl Review {
                     row.judgment = old.judgment;
                     row.assessed_fingerprint = old.assessed_fingerprint.clone();
                     row.source_current = old.source_current;
-                    let changed = old.section_detached || old.section != row.section || old.claim != row.claim || old.paper_id != row.paper_id || old.page != row.page || old.quote != row.quote || old.source != row.source || old.note != row.note;
+                    // A note is the person's own remark; what the judgment was about is the rest.
+                    let changed = old.section_detached || !old.same_evidence(&row);
                     row.section_detached = false;
-                    if changed { row.judgment = EvidenceJudgment::Unreviewed; row.assessed_fingerprint.clear(); row.source_current = false }
+                    if changed { row.unjudge() }
                     *old = row;
                 }
                 self.checks_current = false;
                 self.completed = false;
             }
             ReviewAction::JudgeEvidence { id, judgment } => {
-                let row = self.evidence_rows.iter_mut().find(|row| row.id == id).ok_or_else(|| anyhow::anyhow!("证据记录不存在"))?;
-                if judgment != EvidenceJudgment::Unreviewed && row.section_detached { bail!("原章节已移除，请重新关联论断") }
-                if judgment != EvidenceJudgment::Unreviewed && !row.section.is_empty() {
-                    if !self.requirements_confirmed || !self.outline_confirmed { bail!("请先重新确认写作要求和大纲") }
-                    let section = self.sections.iter().find(|section| section.name == row.section).ok_or_else(|| anyhow::anyhow!("原章节已移除，请重新关联论断"))?;
-                    if !section.body.contains(row.claim.trim()) { bail!("论断已不在原章节中，请重新关联") }
-                }
-                row.judgment = judgment;
+                let at = self.evidence_rows.iter().position(|row| row.id == id).ok_or_else(|| anyhow::anyhow!("证据记录不存在"))?;
+                if judgment != EvidenceJudgment::Unreviewed && !self.linked(&self.evidence_rows[at]) { bail!("论断已不在原章节中，请重新关联") }
+                self.evidence_rows[at].judgment = judgment;
                 self.checks_current = false;
                 self.completed = false;
             }
@@ -336,24 +333,27 @@ impl Review {
                 self.checks_current = false;
                 self.completed = false;
             }
-            ReviewAction::SaveSection { name, body } => {
+            ReviewAction::SaveSection { name, body, cited } => {
                 if !self.outline_confirmed {
                     bail!("请先确认大纲")
                 }
                 nonempty(&name, "章节名")?;
                 nonempty(&body, "章节正文")?;
                 let name = name.trim().to_string();
-                if self.sections.iter().any(|section| section.name == name && section.body != body) {
-                    for row in self.evidence_rows.iter_mut().filter(|row| row.section == name) { row.judgment = EvidenceJudgment::Unreviewed; row.assessed_fingerprint.clear(); row.source_current = false }
-                }
-                if let Some(section) = self
-                    .sections
-                    .iter_mut()
-                    .find(|section| section.name == name)
-                {
+                // A judgment was about a claim as written: it goes when the sentence does, and stays through a change elsewhere in the section.
+                for row in self.evidence_rows.iter_mut().filter(|row| row.section == name && !row.section_detached && !body.contains(row.claim.trim())) { row.unjudge() }
+                if let Some(section) = self.sections.iter_mut().find(|section| section.name == name) {
                     section.body = body;
                 } else {
-                    self.sections.push(ReviewSection { name, body });
+                    self.sections.push(ReviewSection { name: name.clone(), body });
+                }
+                for mut row in cited {
+                    row.section = name.clone();
+                    if row.claim.trim().is_empty() || row.paper_id.is_empty() || self.evidence_rows.iter().any(|known| known.same_evidence(&row)) { continue }
+                    row.id = new_id("E");
+                    row.section_detached = false;
+                    row.unjudge();
+                    self.evidence_rows.push(row);
                 }
                 self.checks_current = false;
                 self.completed = false;
@@ -363,7 +363,9 @@ impl Review {
                     bail!("找不到该章节")
                 };
                 self.sections.remove(position);
-                for row in self.evidence_rows.iter_mut().filter(|row| row.section == name) { row.judgment = EvidenceJudgment::Unreviewed; row.assessed_fingerprint.clear(); row.source_current = false; row.section_detached = true }
+                // What the citations of the removed text gave goes with it, unless the person has judged or annotated it: such a row stays, cut loose.
+                self.evidence_rows.retain(|row| row.section != name || row.judgment != EvidenceJudgment::Unreviewed || !row.note.is_empty());
+                for row in self.evidence_rows.iter_mut().filter(|row| row.section == name) { row.unjudge(); row.section_detached = true }
                 self.checks_current = false;
                 self.completed = false;
             }
@@ -398,65 +400,35 @@ impl Store {
         Ok(self.db.query_row("SELECT title FROM papers WHERE id = ?1 AND id NOT IN (SELECT paper_id FROM trashed_papers)", [id], |row| row.get(0)).optional()?)
     }
 
-    /// Old libraries are populated lazily. Full-text table triggers evict a
-    /// cached digest for every insert, update or removal, including rollbacks.
-    fn evidence_text_digest(&self, resource_id: &str) -> Result<Option<String>> {
-        let cached: Option<String> = self.db.query_row("SELECT digest FROM review_text_digests WHERE resource_id = ?1", [resource_id], |row| row.get(0)).optional()?;
-        if cached.is_some() { return Ok(cached) }
-        let text: Option<(String, String, String)> = self.db.query_row("SELECT pages, error, extracted_at FROM fulltext_text WHERE resource_id = ?1", [resource_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).optional()?;
-        let Some((pages, error, extracted_at)) = text else { return Ok(None) };
-        let hash = Sha256::digest(serde_json::to_vec(&(&pages, &error, &extracted_at))?);
-        let digest: String = hash.iter().map(|byte| format!("{byte:02x}")).collect();
-        // Do not install an old digest if another connection changed the
-        // extraction while this connection was computing it.
-        let saved = self.db.execute("INSERT INTO review_text_digests(resource_id, digest) SELECT ?1, ?2 WHERE EXISTS (SELECT 1 FROM fulltext_text WHERE resource_id = ?1 AND pages = ?3 AND error = ?4 AND extracted_at = ?5) ON CONFLICT(resource_id) DO UPDATE SET digest = excluded.digest", params![resource_id, digest, pages, error, extracted_at])?;
-        if saved != 1 { bail!("全文在核验期间发生变化，请重试") }
-        Ok(Some(digest))
-    }
-
-    /// A conservative snapshot of the paper and its local full-text evidence.
-    /// `sha256` is the import-time file hash; filesystem metadata is checked
-    /// too, but files are not re-hashed on every UI render.
-    fn evidence_fingerprint(&self, id: &str) -> Result<Option<(String, bool)>> {
-        let Some(metadata): Option<Vec<String>> = self.db.query_row(
-            "SELECT title, abstract, authors_json, journal, coalesce(CAST(year AS TEXT), ''), publication_state, url, source FROM papers WHERE id = ?1 AND id NOT IN (SELECT paper_id FROM trashed_papers)",
-            [id], |r| (0..8).map(|i| r.get(i)).collect(),
-        ).optional()? else { return Ok(None) };
-        let version: i64 = self.db.query_row("SELECT coalesce((SELECT version FROM review_source_versions WHERE paper_id = ?1), 0)", [id], |r| r.get(0))?;
-        let mut identifiers = self.db.prepare("SELECT namespace, value FROM paper_identifiers WHERE paper_id = ?1 ORDER BY namespace, value")?;
-        let identifiers = identifiers.query_map([id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        let mut resources = self.db.prepare("SELECT id, sha256, local_path, size_bytes FROM resources WHERE paper_id = ?1 AND resource_type = 'fulltext' ORDER BY id")?;
-        let rows = resources.query_map([id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?)))?;
-        let mut attachments = Vec::new();
-        let mut local_files_missing = false;
-        for row in rows {
-            let (resource_id, sha, path, size) = row?;
-            let text_digest = self.evidence_text_digest(&resource_id)?;
-            // Preserve an explicit missing/error marker in the fingerprint:
-            // the paper and abstract may still be usable without the file.
-            let file = std::fs::File::open(self.root().join(&path)).and_then(|file| file.metadata());
-            let file_state = file.ok().filter(|metadata| metadata.is_file()).and_then(|metadata| metadata.modified().ok().and_then(|time| time.duration_since(UNIX_EPOCH).ok()).map(|time| (metadata.len(), time.as_nanos())));
-            if file_state.is_none() { local_files_missing = true }
-            attachments.push((resource_id, sha, path, size, file_state, text_digest));
-        }
-        // JSON serialization frames every field and preserves ordering, so no
-        // two different field sequences collide through concatenation.
-        let bytes = serde_json::to_vec(&(version, metadata, identifiers, attachments))?;
-        let hash = Sha256::digest(bytes);
-        Ok(Some((hash.iter().map(|byte| format!("{byte:02x}")).collect(), local_files_missing)))
-    }
-
-    fn evidence_availability(&self, mut review: Review) -> Result<Review> {
-        let mut fingerprints: HashMap<String, Option<(String, bool)>> = HashMap::new();
-        for row in &mut review.evidence_rows {
-            if !fingerprints.contains_key(&row.paper_id) {
-                fingerprints.insert(row.paper_id.clone(), self.evidence_fingerprint(&row.paper_id)?);
+    /// What a judgment about a paper was made on: its title and abstract, and
+    /// the text of the page named, if one is. `None` for a paper that is gone
+    /// or in the trash. The same words give the same fingerprint, so a record
+    /// changed and changed back leaves a judgment standing, and a tag, a note
+    /// or another page changes nothing.
+    fn evidence_fingerprint(&self, id: &str, page: Option<usize>, texts: &mut HashMap<String, Option<Vec<String>>>) -> Result<Option<String>> {
+        let record: Option<(String, String)> = self.db.query_row("SELECT title, abstract FROM papers WHERE id = ?1 AND id NOT IN (SELECT paper_id FROM trashed_papers)", [id], |row| Ok((row.get(0)?, row.get(1)?))).optional()?;
+        let Some((title, abstract_text)) = record else { return Ok(None) };
+        let on_page = match page {
+            Some(page) => {
+                if !texts.contains_key(id) { texts.insert(id.to_string(), self.paper_pages(id)?); }
+                texts[id].as_ref().and_then(|pages| pages.get(page.checked_sub(1)?)).cloned().unwrap_or_default()
             }
-            let fingerprint = fingerprints.get(&row.paper_id).and_then(Option::as_ref);
+            None => String::new(),
+        };
+        // JSON frames each field, so no two different records read alike.
+        let hash = Sha256::digest(serde_json::to_vec(&(title, abstract_text, on_page))?);
+        Ok(Some(hash.iter().map(|byte| format!("{byte:02x}")).collect()))
+    }
+
+    /// Fill in what is worked out on reading: whether each source is there, and whether its judgment is about what it says now.
+    fn evidence_availability(&self, mut review: Review) -> Result<Review> {
+        let mut texts = HashMap::new();
+        let unlinked: Vec<bool> = review.evidence_rows.iter().map(|row| !review.linked(row)).collect();
+        for (row, unlinked) in review.evidence_rows.iter_mut().zip(unlinked) {
+            let fingerprint = self.evidence_fingerprint(&row.paper_id, row.page, &mut texts)?;
             row.source_available = fingerprint.is_some();
-            row.local_files_missing = fingerprint.is_some_and(|(_, missing)| *missing);
-            row.source_current = !row.section_detached && row.judgment != EvidenceJudgment::Unreviewed && fingerprint.is_some_and(|(current, _)| !row.assessed_fingerprint.is_empty() && &row.assessed_fingerprint == current);
-            if row.section_detached || !row.source_available || (row.judgment != EvidenceJudgment::Unreviewed && !row.source_current) {
+            row.source_current = row.judgment != EvidenceJudgment::Unreviewed && !row.assessed_fingerprint.is_empty() && fingerprint.as_ref() == Some(&row.assessed_fingerprint);
+            if unlinked || !row.source_available || (row.judgment != EvidenceJudgment::Unreviewed && !row.source_current) {
                 review.checks_current = false;
                 review.completed = false;
             }
@@ -477,67 +449,9 @@ impl Store {
         Ok(review)
     }
 
-    /// Create a separate review; never modifies an existing manuscript.
-    pub fn create_review(&mut self, title: &str) -> Result<Review> {
-        nonempty(title, "综述题目")?;
-        let review = Review {
-            id: new_id("R"),
-            title: title.trim().to_string(),
-            updated_at: now_iso(),
-            ..Default::default()
-        };
-        self.db.execute(
-            "INSERT INTO review_projects(id, revision, body, updated_at) VALUES (?1, ?2, ?3, ?4)",
-            params![
-                review.id,
-                review.revision,
-                serde_json::to_string(&review)?,
-                review.updated_at
-            ],
-        )?;
-        Ok(review)
-    }
-
     pub fn review(&self, id: &str) -> Result<Option<Review>> {
-        let body: Option<String> = self
-            .db
-            .query_row(
-                "SELECT body FROM review_projects WHERE id = ?1",
-                [id],
-                |r| r.get(0),
-            )
-            .optional()?;
+        let body: Option<String> = self.db.query_row("SELECT body FROM review_projects WHERE id = ?1", [id], |r| r.get(0)).optional()?;
         body.map(|body| self.evidence_availability(serde_json::from_str(&body)?)).transpose()
-    }
-
-    pub fn reviews(&self) -> Result<Vec<Review>> {
-        let mut stmt = self
-            .db
-            .prepare("SELECT body FROM review_projects ORDER BY updated_at DESC, id")?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        rows.map(|row| self.evidence_availability(serde_json::from_str(&row?)?)).collect()
-    }
-
-    /// Associate an existing conversation and review without replacing an existing link.
-    /// Deleting a conversation removes the link, but leaves the review intact.
-    pub fn link_review_conversation(
-        &mut self,
-        review_id: &str,
-        conversation_id: &str,
-    ) -> Result<()> {
-        nonempty(review_id, "综述 ID")?;
-        nonempty(conversation_id, "对话 ID")?;
-        if let Some(existing) = self.review_for_conversation(conversation_id)? {
-            if existing.id == review_id {
-                return Ok(());
-            }
-            bail!("此对话已关联另一份综述")
-        }
-        self.db.execute(
-            "INSERT INTO review_conversations(conversation_id, review_id) VALUES (?1, ?2)",
-            params![conversation_id, review_id],
-        )?;
-        Ok(())
     }
 
     pub fn review_for_conversation(&self, conversation_id: &str) -> Result<Option<Review>> {
@@ -549,62 +463,35 @@ impl Store {
     }
 
     /// Reject a stale editor rather than silently overwriting another window's work.
-    pub fn apply_review(
-        &mut self,
-        id: &str,
-        expected_revision: i64,
-        action: ReviewAction,
-    ) -> Result<Review> {
-        self.apply_review_inner(id, expected_revision, None, action)
-    }
-
-    /// For conversation-bound UI actions, confirm the link within the write
-    /// transaction. An older process may have removed an empty conversation
-    /// after the UI loaded it but before the first evidence row was saved.
-    pub fn apply_linked_review(
-        &mut self,
-        id: &str,
-        expected_revision: i64,
-        conversation_id: &str,
-        action: ReviewAction,
-    ) -> Result<Review> {
-        nonempty(conversation_id, "对话 ID")?;
-        self.apply_review_inner(id, expected_revision, Some(conversation_id), action)
-    }
-
-    fn apply_review_inner(
-        &mut self,
-        id: &str,
-        expected_revision: i64,
-        conversation_id: Option<&str>,
-        mut action: ReviewAction,
-    ) -> Result<Review> {
-        let mut review = self
-            .review(id)?
-            .ok_or_else(|| anyhow::anyhow!("综述不存在"))?;
+    pub fn apply_review(&mut self, id: &str, expected_revision: i64, mut action: ReviewAction) -> Result<Review> {
+        let mut review = self.review(id)?.ok_or_else(|| anyhow::anyhow!("综述不存在"))?;
         if review.revision != expected_revision {
             bail!("综述已在别处修改，请重新载入")
         }
-        let mut watched_paper = None;
         match &mut action {
             ReviewAction::SaveEvidence(row) => {
-                if let Some(title) = self.evidence_paper_title(&row.paper_id)? {
-                    row.paper_title = review.evidence_rows.iter().find(|old| old.id == row.id && old.paper_id == row.paper_id && !old.paper_title.is_empty()).map_or(title, |old| old.paper_title.clone());
-                    row.source_available = self.evidence_fingerprint(&row.paper_id)?.is_some();
-                } else if let Some(old) = review.evidence_rows.iter().find(|old| old.id == row.id && old.paper_id == row.paper_id) {
-                    row.paper_title = old.paper_title.clone();
-                    row.source_available = false;
-                } else { bail!("来源文献不在文献库中") }
-                watched_paper = Some(row.paper_id.clone());
+                let known = review.evidence_rows.iter().find(|old| old.id == row.id && old.paper_id == row.paper_id);
+                match (self.evidence_paper_title(&row.paper_id)?, known) {
+                    // The title as it was when the row was made stays with it.
+                    (Some(title), known) => row.paper_title = known.filter(|old| !old.paper_title.is_empty()).map_or(title, |old| old.paper_title.clone()),
+                    (None, Some(old)) => row.paper_title = old.paper_title.clone(),
+                    (None, None) => bail!("来源文献不在文献库中"),
+                }
+            }
+            ReviewAction::SaveSection { cited, .. } => {
+                // A citation of a paper that has left the library gives no row.
+                let mut kept = vec![];
+                for mut row in std::mem::take(cited) {
+                    if let Some(title) = self.evidence_paper_title(&row.paper_id)? { row.paper_title = title; kept.push(row) }
+                }
+                *cited = kept;
             }
             ReviewAction::JudgeEvidence { id, judgment } => {
                 let row = review.evidence_rows.iter_mut().find(|row| row.id == *id).ok_or_else(|| anyhow::anyhow!("证据记录不存在"))?;
                 if *judgment == EvidenceJudgment::Unreviewed {
                     row.assessed_fingerprint.clear();
-                    row.source_current = false;
                 } else {
-                    row.assessed_fingerprint = self.evidence_fingerprint(&row.paper_id)?.ok_or_else(|| anyhow::anyhow!("来源文献不可用，请先恢复后再核验"))?.0;
-                    row.source_current = true;
+                    row.assessed_fingerprint = self.evidence_fingerprint(&row.paper_id, row.page, &mut HashMap::new())?.ok_or_else(|| anyhow::anyhow!("来源文献不可用，请先恢复后再判断"))?;
                 }
             }
             _ => {}
@@ -612,24 +499,10 @@ impl Store {
         review.apply(action)?;
         review.revision += 1;
         review.updated_at = now_iso();
-        let tx = self.db.transaction()?;
-        if let Some(conversation_id) = conversation_id {
-            let linked: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM review_conversations WHERE review_id = ?1 AND conversation_id = ?2)", params![id, conversation_id], |row| row.get(0))?;
-            if !linked { bail!("对话与综述的关联已不存在，请重新打开对话") }
-        }
-        let changed = tx.execute("UPDATE review_projects SET revision = ?1, body = ?2, updated_at = ?3 WHERE id = ?4 AND revision = ?5", params![review.revision, serde_json::to_string(&review)?, review.updated_at, id, expected_revision])?;
+        let changed = self.db.execute("UPDATE review_projects SET revision = ?1, body = ?2, updated_at = ?3 WHERE id = ?4 AND revision = ?5", params![review.revision, serde_json::to_string(&review)?, review.updated_at, id, expected_revision])?;
         if changed != 1 {
             bail!("综述已在别处修改，请重新载入")
         }
-        // Track only papers the user actually records as evidence. Keeping the
-        // tombstone after a row is removed prevents accidental version reuse.
-        if let Some(paper_id) = watched_paper {
-            tx.execute("INSERT OR IGNORE INTO review_source_versions(paper_id, version) VALUES (?1, 0)", [paper_id])?;
-            let version: i32 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
-            if version > crate::store::SCHEMA_VERSION { bail!("文献库已由更新版本升级，请升级程序后再操作") }
-            if version < 2 { tx.pragma_update(None, "user_version", 2)? }
-        }
-        tx.commit()?;
         self.evidence_availability(review)
     }
 }
@@ -637,134 +510,111 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::Connection;
     use std::path::Path;
 
     fn action(store: &mut Store, r: &Review, a: ReviewAction) -> Review {
         store.apply_review(&r.id, r.revision, a).unwrap()
     }
 
-    #[test]
-    fn lazy_upgrade_guards_old_connections_and_preserves_legacy_data() {
-        let root = std::env::temp_dir().join(new_id("wisp-review-upgrade"));
-        let (review_id, conversation_id, paper_id) = {
-            let mut s = Store::open(&root).unwrap();
-            assert_eq!(s.db.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0)).unwrap(), 1);
-            let paper = s.add_paper(crate::model::Paper { title: "Source".into(), ..Default::default() }).unwrap();
-            let mut conversation = crate::store::Conversation::default();
-            s.save_conversation(&mut conversation).unwrap();
-            let r = s.create_review_for_conversation("Legacy review", &conversation.id).unwrap();
-            let r = action(&mut s, &r, ReviewAction::SetRequirements("Legacy requirements".into()));
-            (r.id, conversation.id, paper.id)
-        };
-        let mut s = Store::open(&root).unwrap();
-        let mut r = s.review(&review_id).unwrap().unwrap();
-        assert_eq!(r.requirements, "Legacy requirements");
-        assert_eq!(s.db.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0)).unwrap(), 1, "opening a v1 library without evidence remains v1");
-        let old = Connection::open(root.join(crate::store::DB_FILE)).unwrap();
-        old.pragma_update(None, "foreign_keys", "ON").unwrap();
-        assert_eq!(old.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0)).unwrap(), 1);
-        let invalid = EvidenceRow { claim: "".into(), paper_id: paper_id.clone(), ..Default::default() };
-        assert!(s.apply_review(&r.id, r.revision, ReviewAction::SaveEvidence(invalid)).is_err());
-        assert_eq!(s.db.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0)).unwrap(), 1, "failed first save must not upgrade");
-        assert_eq!(s.db.query_row("SELECT count(*) FROM review_source_versions", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
-        s.db.execute_batch("CREATE TRIGGER test_fail_review BEFORE UPDATE OF body ON review_projects BEGIN SELECT RAISE(ABORT, 'test write failure'); END;").unwrap();
-        let valid = EvidenceRow { claim: "Claim".into(), paper_id: paper_id.clone(), ..Default::default() };
-        assert!(s.apply_review(&r.id, r.revision, ReviewAction::SaveEvidence(valid)).is_err());
-        assert_eq!(s.db.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0)).unwrap(), 1, "a failed transactional save must not upgrade");
-        assert_eq!(s.db.query_row("SELECT count(*) FROM review_source_versions", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
-        s.db.execute_batch("DROP TRIGGER test_fail_review").unwrap();
-        r = action(&mut s, &r, ReviewAction::SaveEvidence(EvidenceRow { claim: "Claim".into(), paper_id: paper_id.clone(), ..Default::default() }));
-        assert_eq!(s.db.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0)).unwrap(), 2);
-        assert_eq!(old.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0)).unwrap(), 2);
-        let mut old_json: serde_json::Value = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
-        old_json.as_object_mut().unwrap().remove("evidence_rows");
-        assert!(old.execute("UPDATE review_projects SET body = ?1 WHERE id = ?2", params![old_json.to_string(), review_id]).is_err(), "an already-open old client cannot discard evidence");
-        assert!(old.execute("DELETE FROM conversations WHERE id = ?1", [&conversation_id]).is_err(), "an already-open old client cannot orphan evidence by deleting its conversation");
-        assert_eq!(s.review_for_conversation(&conversation_id).unwrap().unwrap().evidence_rows.len(), 1);
-        let row_id = r.evidence_rows[0].id.clone();
-        r = action(&mut s, &r, ReviewAction::JudgeEvidence { id: row_id, judgment: EvidenceJudgment::Supports });
-        assert!(r.evidence_rows[0].source_current);
-        // An interrupted/mixed-version state with evidence but v1 is repaired
-        // on next open, including tracked paper IDs.
-        s.db.pragma_update(None, "user_version", 1).unwrap();
-        s.db.execute("DELETE FROM review_source_versions", []).unwrap();
-        drop(old);
-        drop(s);
-        let mut s = Store::open(&root).unwrap();
-        assert_eq!(s.db.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0)).unwrap(), 2);
-        assert_eq!(s.db.query_row("SELECT count(*) FROM review_source_versions WHERE paper_id = ?1", [&paper_id], |r| r.get::<_, i64>(0)).unwrap(), 1);
-        let recovered = s.review_for_conversation(&conversation_id).unwrap().unwrap();
-        assert_eq!(recovered.evidence_rows.len(), 1);
-        assert!(!recovered.evidence_rows[0].source_current, "evidence with a missing watcher must be manually rechecked");
-        let row_id = s.review(&review_id).unwrap().unwrap().evidence_rows[0].id.clone();
-        let current = s.review(&review_id).unwrap().unwrap();
-        action(&mut s, &current, ReviewAction::RemoveEvidence { id: row_id });
-        assert!(s.remove_conversation(&conversation_id).is_ok(), "explicitly removing all evidence permits normal deletion");
-        drop(s);
-        let s = Store::open(&root).unwrap();
-        assert_eq!(s.db.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0)).unwrap(), 2, "a v2 library never silently downgrades");
-        drop(s);
-        std::fs::remove_dir_all(root).unwrap();
+    fn section(name: &str, body: &str) -> ReviewAction {
+        ReviewAction::SaveSection { name: name.into(), body: body.into(), cited: vec![] }
     }
 
-    #[test]
-    fn source_generations_track_only_recorded_papers() {
-        let mut s = Store::in_memory(Path::new("/tmp/review-watch-test")).unwrap();
-        let mut paper = s.add_paper(crate::model::Paper { title: "Untracked".into(), doi: "10.1234/watch".into(), ..Default::default() }).unwrap();
-        paper.abstract_text = "New abstract".into();
-        s.save_paper(&mut paper).unwrap();
-        s.trash_paper(&paper.id).unwrap();
-        s.restore_paper(&paper.id).unwrap();
-        assert_eq!(s.db.query_row("SELECT count(*) FROM review_source_versions", [], |r| r.get::<_, i64>(0)).unwrap(), 0, "normal libraries do not accumulate version rows");
-        let r = s.create_review("Review").unwrap();
-        let r = action(&mut s, &r, ReviewAction::SaveEvidence(EvidenceRow { claim: "Claim".into(), paper_id: paper.id.clone(), ..Default::default() }));
-        let id = r.evidence_rows[0].id.clone();
-        assert_eq!(s.db.query_row("SELECT count(*) FROM review_source_versions", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
-        let r = action(&mut s, &r, ReviewAction::JudgeEvidence { id: id.clone(), judgment: EvidenceJudgment::Supports });
-        paper.abstract_text = "Changed".into();
-        s.save_paper(&mut paper).unwrap();
-        paper.abstract_text = "New abstract".into();
-        s.save_paper(&mut paper).unwrap();
-        let r = s.review(&r.id).unwrap().unwrap();
-        assert!(!r.evidence_rows[0].source_current, "tracked change and revert remain stale");
-        action(&mut s, &r, ReviewAction::RemoveEvidence { id });
-        assert_eq!(s.db.query_row("SELECT count(*) FROM review_source_versions", [], |r| r.get::<_, i64>(0)).unwrap(), 1, "keep a version tombstone for previously referenced papers");
-        s.delete_paper(&paper.id).unwrap();
-        assert_eq!(s.db.query_row("SELECT count(*) FROM review_source_versions", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
-    }
-
-    #[test]
-    fn first_evidence_cannot_race_with_deleting_empty_conversation() {
-        let root = std::env::temp_dir().join(new_id("wisp-review-link-race"));
-        let mut s = Store::open(&root).unwrap();
-        let paper = s.add_paper(crate::model::Paper { title: "Source".into(), ..Default::default() }).unwrap();
+    /// A review of a conversation made for it, as the window makes one.
+    fn review(store: &mut Store, title: &str) -> Review {
         let mut conversation = crate::store::Conversation::default();
-        s.save_conversation(&mut conversation).unwrap();
-        let r = s.create_review_for_conversation("Review", &conversation.id).unwrap();
-        let row = || EvidenceRow { claim: "A claim".into(), paper_id: paper.id.clone(), ..Default::default() };
-        assert!(s.apply_linked_review(&r.id, r.revision, "different-conversation", ReviewAction::SaveEvidence(row())).is_err());
-        let old = Connection::open(root.join(crate::store::DB_FILE)).unwrap();
-        old.pragma_update(None, "foreign_keys", "ON").unwrap();
-        old.execute("DELETE FROM conversations WHERE id = ?1", [&conversation.id]).unwrap();
-        assert!(s.apply_linked_review(&r.id, r.revision, &conversation.id, ReviewAction::SaveEvidence(row())).is_err());
-        assert!(s.review(&r.id).unwrap().unwrap().evidence_rows.is_empty());
-        assert_eq!(s.db.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0)).unwrap(), 1);
-        assert_eq!(s.db.query_row("SELECT count(*) FROM review_source_versions", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
-        drop(old);
-        drop(s);
-        std::fs::remove_dir_all(root).unwrap();
+        store.save_conversation(&mut conversation).unwrap();
+        store.create_review_for_conversation(title, &conversation.id).unwrap()
+    }
+
+    /// A review with its requirements and outline confirmed.
+    fn writing(store: &mut Store) -> Review {
+        let r = review(store, "Review");
+        let r = action(store, &r, ReviewAction::SetRequirements("Requirements".into()));
+        let r = action(store, &r, ReviewAction::ConfirmRequirements);
+        let r = action(store, &r, ReviewAction::SetOutline("Outline".into()));
+        action(store, &r, ReviewAction::ConfirmOutline)
+    }
+
+    #[test]
+    fn citations_give_the_evidence_rows() {
+        let sources = vec![
+            crate::ai::Source { label: "P1".into(), paper_id: "one".into(), title: "One".into() },
+            crate::ai::Source { label: "P2".into(), paper_id: "two".into(), title: "Two".into() },
+        ];
+        let body = "## 机制\n\n根系靠乙烯感知紧实 [P1 p.5 \"Ethylene accumulates. It then signals\"]。另一组没有看到这一点 [P2]，也有人认为相反 [P1 p.7] [P2 p.2]。\n- A compact soil slows growth [P1, P9]. Unsupported sentence.";
+        let rows = cited_evidence("机制", body, &sources);
+        let told: Vec<(&str, &str, Option<usize>, &str)> = rows.iter().map(|row| (row.claim.as_str(), row.paper_id.as_str(), row.page, row.quote.as_str())).collect();
+        assert_eq!(told, vec![
+            // The full stop inside the quotation does not end the sentence.
+            ("根系靠乙烯感知紧实", "one", Some(5), "Ethylene accumulates. It then signals"),
+            ("另一组没有看到这一点", "two", None, ""),
+            ("另一组没有看到这一点 [P2]，也有人认为相反", "one", Some(7), ""),
+            // A citation right after another closes the same sentence.
+            ("另一组没有看到这一点 [P2]，也有人认为相反", "two", Some(2), ""),
+            // The list mark is not part of the claim; the label nobody knows gives no row.
+            ("A compact soil slows growth", "one", None, ""),
+        ]);
+        assert!(rows.iter().all(|row| row.section == "机制" && body.contains(&row.claim)), "a claim is the text as written, so it can be found again");
+        assert_eq!(rows[0].source, EvidenceSource::FullText);
+        assert_eq!(rows[1].source, EvidenceSource::Unknown);
+        // As models also write it: the citation after the full stop, and the sentence quoted before its citation.
+        let body = "循环网络学习长期信息很慢。[P1] 原文为：“Learning to store information over extended time intervals takes a very long time.” [P1] 它被称为“注意力”[P2]。";
+        let rows = cited_evidence("A", body, &sources);
+        let told: Vec<(&str, &str, &str)> = rows.iter().map(|row| (row.claim.as_str(), row.paper_id.as_str(), row.quote.as_str())).collect();
+        assert_eq!(told, vec![
+            ("循环网络学习长期信息很慢。", "one", ""),
+            ("原文为：“Learning to store information over extended time intervals takes a very long time.”", "one", "Learning to store information over extended time intervals takes a very long time."),
+            ("它被称为“注意力”", "two", ""),
+        ]);
+        assert!(rows.iter().all(|row| body.contains(&row.claim)));
+        // A label that names two sources names none.
+        let twice = [sources.clone(), vec![crate::ai::Source { label: "P1".into(), paper_id: "three".into(), title: "Three".into() }]].concat();
+        assert!(cited_evidence("A", "Claim [P1].", &twice).is_empty());
+    }
+
+    #[test]
+    fn a_saved_section_brings_its_evidence_once() {
+        let mut s = Store::in_memory(Path::new("/tmp/review-cited-test")).unwrap();
+        let paper = s.add_paper(crate::model::Paper { title: "Roots".into(), ..Default::default() }).unwrap();
+        let sources = vec![
+            crate::ai::Source { label: "P1".into(), paper_id: paper.id.clone(), title: "as the chat called it".into() },
+            crate::ai::Source { label: "P2".into(), paper_id: "gone".into(), title: "Gone".into() },
+        ];
+        let body = "Roots sense compaction [P1 p.2]. Leaves do not [P2].";
+        let r = writing(&mut s);
+        let r = action(&mut s, &r, ReviewAction::SaveSection { name: "A".into(), body: body.into(), cited: cited_evidence("A", body, &sources) });
+        assert_eq!(r.evidence_rows.len(), 1, "a paper that is not in the library gives no row");
+        let row = r.evidence_rows[0].clone();
+        assert_eq!((row.claim.as_str(), row.paper_title.as_str(), row.page, row.judgment), ("Roots sense compaction", "Roots", Some(2), EvidenceJudgment::Unreviewed));
+        assert!(row.source_available && r.linked(&row));
+        let r = action(&mut s, &r, ReviewAction::JudgeEvidence { id: row.id.clone(), judgment: EvidenceJudgment::Supports });
+        // The section saved again with a sentence added: the row is not doubled and its judgment stands.
+        let longer = format!("{body} Stems were not studied [P1].");
+        let r = action(&mut s, &r, ReviewAction::SaveSection { name: "A".into(), body: longer.clone(), cited: cited_evidence("A", &longer, &sources) });
+        assert_eq!(r.evidence_rows.len(), 2);
+        assert_eq!(r.evidence_rows[0].judgment, EvidenceJudgment::Supports);
+        assert!(r.evidence_rows[0].source_current);
+        // The sentence rewritten: the old judgment was about other words.
+        let rewritten = "Roots may sense compaction [P1 p.2].";
+        let r = action(&mut s, &r, ReviewAction::SaveSection { name: "A".into(), body: rewritten.into(), cited: cited_evidence("A", rewritten, &sources) });
+        assert_eq!(r.evidence_rows[0].judgment, EvidenceJudgment::Unreviewed);
+        assert!(!r.linked(&r.evidence_rows[0]) && r.linked(r.evidence_rows.last().unwrap()));
+        // Removing the section takes the rows nobody judged or annotated.
+        let judged = r.evidence_rows.last().unwrap().id.clone();
+        let r = action(&mut s, &r, ReviewAction::JudgeEvidence { id: judged.clone(), judgment: EvidenceJudgment::Partial });
+        let r = action(&mut s, &r, ReviewAction::RemoveSection { name: "A".into() });
+        assert_eq!(r.evidence_rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(), vec![judged.as_str()]);
+        assert!(r.evidence_rows[0].section_detached && r.evidence_rows[0].judgment == EvidenceJudgment::Unreviewed);
     }
 
     #[test]
     fn evidence_is_explicit_and_invalidated_by_content_changes() {
         let mut s = Store::in_memory(Path::new("/tmp/review-evidence-test")).unwrap();
         let paper = s.add_paper(crate::model::Paper { title: "A paper".into(), ..Default::default() }).unwrap();
-        let r = s.create_review("Review").unwrap();
-        let r = action(&mut s, &r, ReviewAction::SetRequirements("Requirements".into()));
-        let r = action(&mut s, &r, ReviewAction::ConfirmRequirements);
-        let r = action(&mut s, &r, ReviewAction::SetOutline("Outline".into()));
-        let r = action(&mut s, &r, ReviewAction::ConfirmOutline);
-        let r = action(&mut s, &r, ReviewAction::SaveSection { name: "A".into(), body: "The claim is limited to cells.".into() });
+        let r = writing(&mut s);
+        let r = action(&mut s, &r, section("A", "The claim is limited to cells."));
         let mut row = EvidenceRow { section: "A".into(), claim: "The claim is limited to cells.".into(), paper_id: paper.id.clone(), paper_title: "fake title".into(), page: Some(3), quote: "Cells were tested".into(), source: EvidenceSource::Abstract, judgment: EvidenceJudgment::Supports, ..Default::default() };
         let mut invalid = row.clone();
         invalid.page = Some(0);
@@ -782,24 +632,37 @@ mod tests {
         assert!(row.source_available);
         let r = action(&mut s, &r, ReviewAction::JudgeEvidence { id: row.id.clone(), judgment: EvidenceJudgment::Partial });
         assert_eq!(r.evidence_rows[0].judgment, EvidenceJudgment::Partial);
+        // The requirements worded anew ask for the confirmations again, and leave what a source says about a claim alone.
+        let r = action(&mut s, &r, ReviewAction::SetRequirements("Requirements, reworded".into()));
+        assert!(!r.requirements_confirmed && !r.outline_confirmed);
+        assert_eq!(r.evidence_rows[0].judgment, EvidenceJudgment::Partial);
+        let r = action(&mut s, &r, ReviewAction::ConfirmRequirements);
+        let r = action(&mut s, &r, ReviewAction::ConfirmOutline);
         let r = action(&mut s, &r, ReviewAction::SetChecks("Manually checked".into()));
         let r = action(&mut s, &r, ReviewAction::Complete);
+        // A note is the person's remark: the judgment stands. Another quotation is other evidence.
         row = r.evidence_rows[0].clone();
-        row.note = "Changed source context".into();
+        row.note = "Only in cell culture".into();
         row.judgment = EvidenceJudgment::Supports;
-        let changed = action(&mut s, &r, ReviewAction::SaveEvidence(row));
+        let noted = action(&mut s, &r, ReviewAction::SaveEvidence(row.clone()));
+        assert_eq!(noted.evidence_rows[0].judgment, EvidenceJudgment::Partial);
+        assert!(!noted.checks_current && !noted.completed);
+        row.quote = "Other words".into();
+        let changed = action(&mut s, &noted, ReviewAction::SaveEvidence(row));
         assert_eq!(changed.evidence_rows[0].judgment, EvidenceJudgment::Unreviewed);
-        assert!(!changed.checks_current && !changed.completed);
         assert!(s.apply_review(&r.id, r.revision, ReviewAction::RemoveEvidence { id: changed.evidence_rows[0].id.clone() }).is_err(), "stale revision must not overwrite");
         let id = changed.evidence_rows[0].id.clone();
         let changed = action(&mut s, &changed, ReviewAction::JudgeEvidence { id: id.clone(), judgment: EvidenceJudgment::Supports });
-        let changed = action(&mut s, &changed, ReviewAction::SaveSection { name: "A".into(), body: "The claim was revised.".into() });
+        let changed = action(&mut s, &changed, section("A", "The claim was revised."));
         assert_eq!(changed.evidence_rows[0].judgment, EvidenceJudgment::Unreviewed);
-        assert!(s.apply_review(&changed.id, changed.revision, ReviewAction::JudgeEvidence { id: id.clone(), judgment: EvidenceJudgment::Supports }).is_err(), "a detached claim cannot be revalidated");
+        assert!(s.apply_review(&changed.id, changed.revision, ReviewAction::JudgeEvidence { id: id.clone(), judgment: EvidenceJudgment::Supports }).is_err(), "a claim that left its section cannot be judged");
+        let changed = action(&mut s, &changed, ReviewAction::JudgeEvidence { id: id.clone(), judgment: EvidenceJudgment::Unreviewed });
+        let changed = action(&mut s, &changed, section("A", "The claim is limited to cells."));
+        let changed = action(&mut s, &changed, ReviewAction::JudgeEvidence { id: id.clone(), judgment: EvidenceJudgment::Supports });
         let changed = action(&mut s, &changed, ReviewAction::RemoveSection { name: "A".into() });
-        assert_eq!(changed.evidence_rows[0].section, "A", "keep the evidence snapshot even when its section is removed");
+        assert_eq!(changed.evidence_rows[0].section, "A", "a judged row outlives its section");
         assert!(changed.evidence_rows[0].section_detached);
-        let changed = action(&mut s, &changed, ReviewAction::SaveSection { name: "A".into(), body: "The claim is limited to cells.".into() });
+        let changed = action(&mut s, &changed, section("A", "The claim is limited to cells."));
         assert!(changed.evidence_rows[0].section_detached, "same-named recreated section must not silently reattach");
         assert!(s.apply_review(&changed.id, changed.revision, ReviewAction::JudgeEvidence { id: id.clone(), judgment: EvidenceJudgment::Supports }).is_err());
         let row = changed.evidence_rows[0].clone();
@@ -816,7 +679,7 @@ mod tests {
         let (review_id, paper_id, row_id) = {
             let mut s = Store::open(&root).unwrap();
             let paper = s.add_paper(crate::model::Paper { title: "Original title".into(), ..Default::default() }).unwrap();
-            let r = s.create_review("Review").unwrap();
+            let r = review(&mut s, "Review");
             let row = EvidenceRow { claim: "Working hypothesis".into(), paper_id: paper.id.clone(), source: EvidenceSource::FullText, page: Some(1), ..Default::default() };
             let r = action(&mut s, &r, ReviewAction::SaveEvidence(row));
             let row_id = r.evidence_rows[0].id.clone();
@@ -828,17 +691,15 @@ mod tests {
             let r = s.review(&review_id).unwrap().unwrap();
             assert_eq!(r.evidence_rows[0].paper_title, "Original title");
             assert_eq!(r.evidence_rows[0].judgment, EvidenceJudgment::Insufficient);
-            assert!(r.evidence_rows[0].source_available);
+            assert!(r.evidence_rows[0].source_available && r.evidence_rows[0].source_current);
             s.trash_paper(&paper_id).unwrap();
             let r = s.review(&review_id).unwrap().unwrap();
-            assert!(!r.evidence_rows[0].source_available);
+            assert!(!r.evidence_rows[0].source_available && !r.evidence_rows[0].source_current);
             assert!(s.apply_review(&r.id, r.revision, ReviewAction::JudgeEvidence { id: row_id.clone(), judgment: EvidenceJudgment::Supports }).is_err());
+            // Back from the trash with the same words, it is what was judged.
             s.restore_paper(&paper_id).unwrap();
             let restored = s.review(&review_id).unwrap().unwrap();
-            assert!(restored.evidence_rows[0].source_available);
-            assert!(!restored.evidence_rows[0].source_current, "restoring a paper cannot silently restore a former judgment");
-            let restored = action(&mut s, &restored, ReviewAction::JudgeEvidence { id: row_id.clone(), judgment: EvidenceJudgment::Partial });
-            assert!(restored.evidence_rows[0].source_current);
+            assert!(restored.evidence_rows[0].source_available && restored.evidence_rows[0].source_current);
             s.trash_paper(&paper_id).unwrap();
             s.delete_paper(&paper_id).unwrap();
             let r = s.review(&review_id).unwrap().unwrap();
@@ -847,7 +708,7 @@ mod tests {
             let r = action(&mut s, &r, ReviewAction::JudgeEvidence { id: row_id, judgment: EvidenceJudgment::Unreviewed });
             assert_eq!(r.evidence_rows[0].judgment, EvidenceJudgment::Unreviewed);
         }
-        // Older reviews have no `evidence_rows`; the default preserves them.
+        // A review from before the evidence rows reads as one without any.
         let old: Review = serde_json::from_str(r#"{"title":"Old review","evidence":"notes"}"#).unwrap();
         assert_eq!(old.evidence, "notes");
         assert!(old.evidence_rows.is_empty());
@@ -855,204 +716,84 @@ mod tests {
     }
 
     #[test]
-    fn source_changes_invalidate_judgments_and_cache_tracks_fulltext_transactions() {
-        let root = std::env::temp_dir().join(new_id("wisp-evidence-version"));
+    fn a_judgment_is_about_what_the_source_said() {
+        let root = std::env::temp_dir().join(new_id("wisp-evidence-source"));
         std::fs::create_dir_all(&root).unwrap();
         let external = root.join("source.pdf");
         std::fs::write(&external, b"test pdf").unwrap();
         let mut s = Store::open(&root).unwrap();
-        let paper = s.add_paper(crate::model::Paper { title: "A paper".into(), abstract_text: "Old abstract".into(), doi: "10.1234/example".into(), ..Default::default() }).unwrap();
+        let paper = s.add_paper(crate::model::Paper { title: "A paper".into(), abstract_text: "Old abstract".into(), ..Default::default() }).unwrap();
         let file = s.import_file(&paper.id, &external, "fulltext").unwrap();
-        s.save_fulltext_pages(&file.id, &Ok(vec!["First text".into()])).unwrap();
-        let r = s.create_review("Review").unwrap();
-        let r = action(&mut s, &r, ReviewAction::SetRequirements("Requirements".into()));
-        let r = action(&mut s, &r, ReviewAction::ConfirmRequirements);
-        let r = action(&mut s, &r, ReviewAction::SetOutline("Outline".into()));
-        let r = action(&mut s, &r, ReviewAction::ConfirmOutline);
-        let r = action(&mut s, &r, ReviewAction::SaveSection { name: "A".into(), body: "A claim".into() });
-        let r = action(&mut s, &r, ReviewAction::SaveEvidence(EvidenceRow { section: "A".into(), claim: "A claim".into(), paper_id: paper.id.clone(), source: EvidenceSource::Abstract, ..Default::default() }));
-        let row_id = r.evidence_rows[0].id.clone();
-        let r = action(&mut s, &r, ReviewAction::JudgeEvidence { id: row_id.clone(), judgment: EvidenceJudgment::Supports });
-        assert!(r.evidence_rows[0].source_current);
+        s.save_fulltext_pages(&file.id, &Ok(vec!["First page".into(), "Second page".into()])).unwrap();
+        let r = writing(&mut s);
+        let r = action(&mut s, &r, section("A", "A claim. Another claim."));
+        let r = action(&mut s, &r, ReviewAction::SaveEvidence(EvidenceRow { section: "A".into(), claim: "A claim".into(), paper_id: paper.id.clone(), ..Default::default() }));
+        let r = action(&mut s, &r, ReviewAction::SaveEvidence(EvidenceRow { section: "A".into(), claim: "Another claim".into(), paper_id: paper.id.clone(), page: Some(2), ..Default::default() }));
+        let (by_record, by_page) = (r.evidence_rows[0].id.clone(), r.evidence_rows[1].id.clone());
+        let r = action(&mut s, &r, ReviewAction::JudgeEvidence { id: by_record.clone(), judgment: EvidenceJudgment::Supports });
+        let r = action(&mut s, &r, ReviewAction::JudgeEvidence { id: by_page.clone(), judgment: EvidenceJudgment::Supports });
         let r = action(&mut s, &r, ReviewAction::SetChecks("Checked".into()));
         let r = action(&mut s, &r, ReviewAction::Complete);
-        let mut tag_edit = s.get_paper(&paper.id).unwrap();
-        tag_edit.tags.push("A tag".into());
-        s.save_paper(&mut tag_edit).unwrap();
-        assert!(s.review(&r.id).unwrap().unwrap().evidence_rows[0].source_current, "unrelated tag changes do not invalidate source judgments");
-        let mut changed_paper = s.get_paper(&paper.id).unwrap();
-        changed_paper.abstract_text = "New abstract".into();
-        s.save_paper(&mut changed_paper).unwrap();
-        let changed = s.review(&r.id).unwrap().unwrap();
-        assert!(!changed.evidence_rows[0].source_current && !changed.checks_current && !changed.completed);
-        // Deriving stale state does not rewrite the review record.
+        let current = |s: &Store| { let r = s.review(&r.id).unwrap().unwrap(); (r.evidence_rows[0].source_current, r.evidence_rows[1].source_current, r.completed) };
+        // A tag is not what the judgment was about.
+        let mut edited = s.get_paper(&paper.id).unwrap();
+        edited.tags.push("A tag".into());
+        s.save_paper(&mut edited).unwrap();
+        assert_eq!(current(&s), (true, true, true));
+        // Another abstract: both judgments read it.
+        edited.abstract_text = "New abstract".into();
+        s.save_paper(&mut edited).unwrap();
+        assert_eq!(current(&s), (false, false, false));
+        // What is worked out on reading is not written back.
         let raw: String = s.db.query_row("SELECT body FROM review_projects WHERE id = ?1", [&r.id], |r| r.get(0)).unwrap();
-        let stored: Review = serde_json::from_str(&raw).unwrap();
-        assert!(stored.checks_current && stored.completed);
-        changed_paper.abstract_text = "Old abstract".into();
-        s.save_paper(&mut changed_paper).unwrap();
-        assert!(!s.review(&r.id).unwrap().unwrap().evidence_rows[0].source_current, "reverting content cannot silently revive the judgment");
-        let changed = action(&mut s, &changed, ReviewAction::JudgeEvidence { id: row_id.clone(), judgment: EvidenceJudgment::Partial });
-        assert!(changed.evidence_rows[0].source_current && !changed.checks_current);
-        assert_eq!(s.db.query_row("SELECT count(*) FROM review_text_digests", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
-        // Equal-length updates with identical extraction time still invalidate
-        // the cached digest, and a rolled-back update restores the cache.
-        let original_pages: String = s.db.query_row("SELECT pages FROM fulltext_text WHERE resource_id = ?1", [&file.id], |r| r.get(0)).unwrap();
-        let replacement = original_pages.replace("First", "Other");
-        assert_eq!(original_pages.len(), replacement.len());
-        let version: i64 = s.db.query_row("SELECT version FROM review_source_versions WHERE paper_id = ?1", [&paper.id], |r| r.get(0)).unwrap();
-        {
-            let tx = s.db.transaction().unwrap();
-            tx.execute("UPDATE fulltext_text SET pages = ?1 WHERE resource_id = ?2", params![replacement, file.id]).unwrap();
-            assert_eq!(tx.query_row("SELECT count(*) FROM review_text_digests", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
-            tx.rollback().unwrap();
-        }
-        assert_eq!(s.db.query_row("SELECT count(*) FROM review_text_digests", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
-        assert_eq!(s.db.query_row("SELECT version FROM review_source_versions WHERE paper_id = ?1", [&paper.id], |r| r.get::<_, i64>(0)).unwrap(), version, "rolled-back changes cannot advance source version");
-        assert!(s.review(&r.id).unwrap().unwrap().evidence_rows[0].source_current);
-        s.db.execute("UPDATE fulltext_text SET pages = ?1 WHERE resource_id = ?2", params![replacement, file.id]).unwrap();
-        assert_eq!(s.db.query_row("SELECT count(*) FROM review_text_digests", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
-        let changed = s.review(&r.id).unwrap().unwrap();
-        assert!(!changed.evidence_rows[0].source_current);
-        let changed = action(&mut s, &changed, ReviewAction::JudgeEvidence { id: row_id.clone(), judgment: EvidenceJudgment::Partial });
-        assert!(changed.evidence_rows[0].source_current);
-        s.db.execute("DELETE FROM fulltext_text WHERE resource_id = ?1", [&file.id]).unwrap();
-        assert_eq!(s.db.query_row("SELECT count(*) FROM review_text_digests", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
-        let changed = s.review(&r.id).unwrap().unwrap();
-        assert!(!changed.evidence_rows[0].source_current);
-        let changed = action(&mut s, &changed, ReviewAction::JudgeEvidence { id: row_id.clone(), judgment: EvidenceJudgment::Partial });
-        assert!(changed.evidence_rows[0].source_current);
-        std::fs::remove_file(root.join(&file.local_path)).unwrap();
-        let missing = s.review(&r.id).unwrap().unwrap();
-        assert!(missing.evidence_rows[0].source_available && missing.evidence_rows[0].local_files_missing);
-        assert!(!missing.evidence_rows[0].source_current, "missing attachment makes the old judgment stale");
-        let rejudged = action(&mut s, &missing, ReviewAction::JudgeEvidence { id: row_id, judgment: EvidenceJudgment::Partial });
-        assert!(rejudged.evidence_rows[0].source_current && rejudged.evidence_rows[0].local_files_missing, "abstract can still be manually judged with an explicit missing-file warning");
-        let mut legacy = rejudged.clone();
+        assert!(serde_json::from_str::<Review>(&raw).unwrap().completed);
+        // The same words again are the same source.
+        edited.abstract_text = "Old abstract".into();
+        s.save_paper(&mut edited).unwrap();
+        assert_eq!(current(&s), (true, true, true));
+        // The text read anew: a change on the page named touches the judgment made on that page, and no other.
+        s.save_fulltext_pages(&file.id, &Ok(vec!["First page, read better".into(), "Second page".into()])).unwrap();
+        assert_eq!(current(&s), (true, true, true));
+        s.save_fulltext_pages(&file.id, &Ok(vec!["First page".into(), "Second page, read better".into()])).unwrap();
+        assert_eq!(current(&s), (true, false, false));
+        let stale = s.review(&r.id).unwrap().unwrap();
+        let again = action(&mut s, &stale, ReviewAction::JudgeEvidence { id: by_page, judgment: EvidenceJudgment::Partial });
+        assert!(again.evidence_rows[1].source_current && !again.checks_current);
+        // A judgment kept without a fingerprint (by a build between releases) is not known to be current.
+        let mut legacy = again.clone();
         legacy.evidence_rows[0].assessed_fingerprint.clear();
-        legacy.checks_current = true;
-        legacy.completed = true;
         s.db.execute("UPDATE review_projects SET body = ?1 WHERE id = ?2", params![serde_json::to_string(&legacy).unwrap(), legacy.id]).unwrap();
-        let read = s.review(&r.id).unwrap().unwrap();
-        assert!(!read.evidence_rows[0].source_current && !read.checks_current && !read.completed, "a legacy verdict has no proven source version");
+        assert!(!s.review(&r.id).unwrap().unwrap().evidence_rows[0].source_current);
         drop(s);
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn identifier_changes_invalidate_without_breaking_conflict_rollback() {
-        let mut s = Store::in_memory(Path::new("/tmp/review-identifier-test")).unwrap();
-        let mut first = s.add_paper(crate::model::Paper { title: "First paper".into(), doi: "10.1234/one".into(), pmid: "111".into(), ..Default::default() }).unwrap();
-        let second = s.add_paper(crate::model::Paper { title: "Second paper".into(), doi: "10.1234/two".into(), ..Default::default() }).unwrap();
-        let r = s.create_review("Review").unwrap();
-        let r = action(&mut s, &r, ReviewAction::SaveEvidence(EvidenceRow { claim: "Claim".into(), paper_id: first.id.clone(), ..Default::default() }));
-        let id = r.evidence_rows[0].id.clone();
-        let r = action(&mut s, &r, ReviewAction::JudgeEvidence { id: id.clone(), judgment: EvidenceJudgment::Supports });
-        first.tags.push("changed tag".into());
-        s.save_paper(&mut first).unwrap();
-        assert!(s.review(&r.id).unwrap().unwrap().evidence_rows[0].source_current, "unchanged identifiers must not invalidate after a tag edit");
-        first.title = "Must roll back".into();
-        first.doi = second.doi.to_uppercase();
-        assert!(s.save_paper(&mut first).is_err(), "case-normalized conflicting DOI must be rejected");
-        let kept = s.get_paper(&first.id).unwrap();
-        assert_eq!(kept.title, "First paper");
-        assert_eq!(kept.doi, "10.1234/one");
-        assert_eq!(kept.pmid, "111");
-        assert!(s.review(&r.id).unwrap().unwrap().evidence_rows[0].source_current, "failed transaction cannot invalidate evidence");
-        first = kept;
-        first.doi = "10.1234/three".into();
-        s.save_paper(&mut first).unwrap();
-        let changed = s.review(&r.id).unwrap().unwrap();
-        assert!(!changed.evidence_rows[0].source_current);
-        let changed = action(&mut s, &changed, ReviewAction::JudgeEvidence { id, judgment: EvidenceJudgment::Supports });
-        first.doi.clear();
-        s.save_paper(&mut first).unwrap();
-        let kept = s.get_paper(&first.id).unwrap();
-        assert!(kept.doi.is_empty());
-        assert_eq!(kept.pmid, "111");
-        assert!(!s.review(&changed.id).unwrap().unwrap().evidence_rows[0].source_current);
-    }
-
-    #[test]
     fn stages_reconfirm_and_keep_drafts() {
         let mut s = Store::in_memory(Path::new("/tmp/review-test")).unwrap();
-        let r = s.create_review("Roots").unwrap();
-        assert!(
-            s.apply_review(&r.id, r.revision, ReviewAction::ConfirmOutline)
-                .is_err()
-        );
-        assert!(
-            s.apply_review(
-                &r.id,
-                r.revision,
-                ReviewAction::SaveSection {
-                    name: "A".into(),
-                    body: "Draft".into()
-                }
-            )
-            .is_err()
-        );
-        let r = action(
-            &mut s,
-            &r,
-            ReviewAction::SetRequirements("Audience: researchers".into()),
-        );
+        let r = review(&mut s, "Roots");
+        assert_eq!(r.step(), 1);
+        assert!(s.apply_review(&r.id, r.revision, ReviewAction::ConfirmOutline).is_err());
+        assert!(s.apply_review(&r.id, r.revision, section("A", "Draft")).is_err());
+        let r = action(&mut s, &r, ReviewAction::SetRequirements("Audience: researchers".into()));
         let r = action(&mut s, &r, ReviewAction::ConfirmRequirements);
+        assert_eq!(r.step(), 2);
         let r = action(&mut s, &r, ReviewAction::SetOutline("A. Roots".into()));
         let r = action(&mut s, &r, ReviewAction::ConfirmOutline);
-        let r = action(
-            &mut s,
-            &r,
-            ReviewAction::SetEvidence("P1: abstract only".into()),
-        );
-        let r = action(
-            &mut s,
-            &r,
-            ReviewAction::SaveSection {
-                name: "A".into(),
-                body: "Draft [P1]".into(),
-            },
-        );
-        assert!(
-            s.apply_review(&r.id, r.revision, ReviewAction::Complete)
-                .is_err()
-        );
-        let r = action(
-            &mut s,
-            &r,
-            ReviewAction::SetChecks("P1 is abstract-only; full text unavailable".into()),
-        );
+        assert_eq!(r.step(), 3);
+        let r = action(&mut s, &r, ReviewAction::SetEvidence("P1: abstract only".into()));
+        let r = action(&mut s, &r, section("A", "Draft [P1]"));
+        assert!(s.apply_review(&r.id, r.revision, ReviewAction::Complete).is_err());
+        let r = action(&mut s, &r, ReviewAction::SetChecks("P1 is abstract-only; full text unavailable".into()));
         let r = action(&mut s, &r, ReviewAction::Complete);
         assert!(r.completed);
-        let edited = action(
-            &mut s,
-            &r,
-            ReviewAction::SetOutline("A. New outline".into()),
-        );
+        let edited = action(&mut s, &r, ReviewAction::SetOutline("A. New outline".into()));
         assert!(!edited.completed && !edited.outline_confirmed && !edited.checks_current);
         assert_eq!(edited.sections[0].body, "Draft [P1]");
-        assert!(
-            s.apply_review(
-                &edited.id,
-                edited.revision,
-                ReviewAction::SaveSection {
-                    name: "A".into(),
-                    body: "New".into()
-                }
-            )
-            .is_err()
-        );
-        assert!(
-            s.apply_review(&r.id, r.revision, ReviewAction::ConfirmOutline)
-                .is_err(),
-            "stale editor must not overwrite"
-        );
+        assert!(s.apply_review(&edited.id, edited.revision, section("A", "New")).is_err());
+        assert!(s.apply_review(&r.id, r.revision, ReviewAction::ConfirmOutline).is_err(), "stale editor must not overwrite");
         let edited = action(&mut s, &edited, ReviewAction::ConfirmOutline);
-        assert!(
-            s.apply_review(&edited.id, edited.revision, ReviewAction::Complete)
-                .is_err(),
-            "old checks are stale"
-        );
+        assert!(s.apply_review(&edited.id, edited.revision, ReviewAction::Complete).is_err(), "old checks are stale");
         let edited = action(&mut s, &edited, ReviewAction::SetChecks("Checked".into()));
         let edited = action(&mut s, &edited, ReviewAction::Complete);
         let edited = action(&mut s, &edited, ReviewAction::RemoveSection { name: "A".into() });
@@ -1061,30 +802,19 @@ mod tests {
     }
 
     #[test]
-    fn record_survives_close_and_reopen() {
+    fn record_survives_close_and_reopen_and_goes_with_its_conversation() {
         let root = std::env::temp_dir().join(new_id("wisp-review"));
+        let count = |s: &Store| s.db.query_row("SELECT count(*) FROM review_projects", [], |r| r.get::<_, i64>(0)).unwrap();
         let (id, revision, conversation_id) = {
             let mut s = Store::open(&root).unwrap();
             assert!(s.create_review_for_conversation("Missing", "missing").is_err());
-            assert!(s.reviews().unwrap().is_empty(), "a failed link leaves no orphan");
+            assert_eq!(count(&s), 0, "a failed link leaves no orphan");
             let mut conversation = crate::store::Conversation::default();
             s.save_conversation(&mut conversation).unwrap();
             let r = s.create_review_for_conversation("Review", &conversation.id).unwrap();
             assert!(s.create_review_for_conversation("Duplicate", &conversation.id).is_err());
-            assert_eq!(s.reviews().unwrap().len(), 1, "duplicate link rolls back the project");
-            assert!(s.link_review_conversation(&r.id, "missing").is_err());
-            s.link_review_conversation(&r.id, &conversation.id).unwrap();
-            s.link_review_conversation(&r.id, &conversation.id).unwrap();
-            let other = s.create_review("Other").unwrap();
-            assert!(
-                s.link_review_conversation(&other.id, &conversation.id)
-                    .is_err()
-            );
-            let r = action(
-                &mut s,
-                &r,
-                ReviewAction::SetRequirements("English, 3000 words".into()),
-            );
+            assert_eq!(count(&s), 1, "duplicate link rolls back the project");
+            let r = action(&mut s, &r, ReviewAction::SetRequirements("English, 3000 words".into()));
             let r = action(&mut s, &r, ReviewAction::ConfirmRequirements);
             let r = action(&mut s, &r, ReviewAction::SetOutline("1. Context".into()));
             (r.id, r.revision, conversation.id)
@@ -1096,19 +826,41 @@ mod tests {
             assert_eq!(r.requirements, "English, 3000 words");
             assert!(r.requirements_confirmed && !r.outline_confirmed);
             assert_eq!(r.outline, "1. Context");
-            assert_eq!(
-                s.review_for_conversation(&conversation_id).unwrap(),
-                Some(r)
-            );
-            assert_eq!(s.reviews().unwrap().len(), 2);
-            s.remove_conversation(&conversation_id).unwrap();
-            assert!(
-                s.review_for_conversation(&conversation_id)
-                    .unwrap()
-                    .is_none()
-            );
-            assert!(s.review(&id).unwrap().is_some());
+            assert_eq!(s.review_for_conversation(&conversation_id).unwrap(), Some(r));
+            // A build that knows nothing of reviews removes the conversation: the next open clears what it left.
+            let mut other = crate::store::Conversation::default();
+            s.save_conversation(&mut other).unwrap();
+            s.create_review_for_conversation("Left behind", &other.id).unwrap();
+            s.db.execute("DELETE FROM conversations WHERE id = ?1", [&other.id]).unwrap();
+            assert_eq!(count(&s), 2);
         }
+        {
+            let mut s = Store::open(&root).unwrap();
+            assert_eq!(count(&s), 1);
+            s.remove_conversation(&conversation_id).unwrap();
+            assert!(s.review_for_conversation(&conversation_id).unwrap().is_none());
+            assert!(s.review(&id).unwrap().is_none(), "the review goes with its conversation");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_library_touched_between_releases_opens_and_is_tidied() {
+        let root = std::env::temp_dir().join(new_id("wisp-review-between"));
+        drop(Store::open(&root).unwrap());
+        {
+            // What a build between 0.5.0 and the next release left: version 2, its tables and a trigger on the papers.
+            let db = Connection::open(root.join(crate::store::DB_FILE)).unwrap();
+            db.execute_batch("CREATE TABLE review_source_versions (paper_id TEXT PRIMARY KEY NOT NULL, version INTEGER NOT NULL DEFAULT 0);
+                CREATE TRIGGER review_version_trashed AFTER INSERT ON trashed_papers BEGIN UPDATE review_source_versions SET version = version + 1 WHERE paper_id = NEW.paper_id; END;
+                PRAGMA user_version = 2;").unwrap();
+        }
+        let mut s = Store::open(&root).unwrap();
+        assert_eq!(s.db.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0)).unwrap(), crate::store::SCHEMA_VERSION);
+        assert_eq!(s.db.query_row("SELECT count(*) FROM sqlite_master WHERE name LIKE 'review_version%' OR name = 'review_source_versions'", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+        let paper = s.add_paper(crate::model::Paper { title: "A paper".into(), ..Default::default() }).unwrap();
+        s.trash_paper(&paper.id).unwrap();
+        drop(s);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1132,8 +884,10 @@ mod tests {
             let r = action(&mut store, &r, ReviewAction::SetOutline("1. Roots; 2. Leaves".into()));
             let r = action(&mut store, &r, ReviewAction::ConfirmOutline);
             let r = action(&mut store, &r, ReviewAction::SetEvidence("P1 full text; P2 abstract only".into()));
-            let r = action(&mut store, &r, ReviewAction::SaveSection { name: "Roots".into(), body: "Root finding [P1 p.5].".into() });
-            let r = action(&mut store, &r, ReviewAction::SaveSection { name: "Leaves".into(), body: "Abstract-only finding [P2].".into() });
+            let roots = "Root finding [P1 p.5 \"Roots were found.\"].";
+            let r = action(&mut store, &r, ReviewAction::SaveSection { name: "Roots".into(), body: roots.into(), cited: cited_evidence("Roots", roots, &sources) });
+            let r = action(&mut store, &r, section("Leaves", "Abstract-only finding [P2]."));
+            assert_eq!(r.evidence_rows[0].quote, "Roots were found.", "the quotation stays in the record");
             let r = action(&mut store, &r, ReviewAction::SetChecks("P1 page checked; P2 full text unavailable".into()));
             let r = action(&mut store, &r, ReviewAction::Complete);
 
@@ -1154,7 +908,7 @@ mod tests {
             let draft = store.manuscript(&manuscript_id).unwrap().unwrap();
             assert_eq!(draft.sections.len(), 2);
             let exported = manuscript::markdown(&draft);
-            assert!(exported.contains("[@Smith2020, p. 5]") && exported.contains("[@Jones2021]"));
+            assert!(exported.contains("Root finding [@Smith2020, p. 5].") && exported.contains("[@Jones2021]"), "{exported}");
             let original = store.manuscript(&original_id).unwrap().unwrap();
             assert_eq!(original.sections[0].body, original_text);
             let papers = store.list_papers().unwrap();
