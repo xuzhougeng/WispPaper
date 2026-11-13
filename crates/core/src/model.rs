@@ -325,9 +325,8 @@ impl Paper {
 
     /// The paper as a sentence cites it: `Zhang et al., 2019`.
     pub fn citation(&self) -> String {
-        // `Zhang, Tian-Qi` or `Tian-Qi Zhang`: the family name either way.
-        let family = |name: &str| name.split_once(',').map(|(family, _)| family.trim().to_string()).unwrap_or_else(|| name.split_whitespace().last().unwrap_or("").to_string());
-        let names: Vec<String> = self.authors.split(';').map(str::trim).filter(|n| !n.is_empty()).map(family).collect();
+        // `Zhang, Tian-Qi`, `Tian-Qi Zhang` or `Zhang TQ`: the family name either way.
+        let names: Vec<String> = author_names(&self.authors).into_iter().map(|(family, _)| family).collect();
         let who = match names.as_slice() {
             [] => self.title.split_whitespace().take(3).collect::<Vec<_>>().join(" "),
             [one] => one.clone(),
@@ -351,9 +350,75 @@ impl Paper {
     }
 }
 
+/// Whether a word is a person's initials, as a database writes them after
+/// the family name: `M`, `JJ`, `T-Q`. Up to three capitals.
+fn is_initials(word: &str) -> bool {
+    let letters = word.chars().filter(|c| !matches!(c, '-' | '.')).count();
+    (1..=3).contains(&letters) && word.chars().all(|c| c.is_uppercase() || matches!(c, '-' | '.'))
+}
+
+/// A name without a comma that ends in initials after other words: `Bono M`, `de Melo AV`.
+fn ends_in_initials(name: &str) -> bool {
+    let words: Vec<&str> = name.split_whitespace().collect();
+    words.len() >= 2 && is_initials(words[words.len() - 1]) && !words[..words.len() - 1].iter().all(|word| is_initials(word))
+}
+
+/// The names of `A; B; C`, each as its family name and the rest of it.
+/// `Zhang, Tian-Qi` is cut at the comma. Without one the family name is
+/// the last word (`Tian-Qi Zhang`), unless the name is written the way
+/// Europe PMC writes authors, family name first and initials after it
+/// (`Zhang TQ`, `de Melo AV`): a name that ends in one capital is, and one
+/// that ends in two or three when most of the list without commas does
+/// (so `Wei LI` beside `Tian-Qi Zhang` keeps its family name).
+pub fn author_names(authors: &str) -> Vec<(String, String)> {
+    let names: Vec<&str> = authors.split(';').map(str::trim).filter(|name| !name.is_empty()).collect();
+    let bare = names.iter().filter(|name| !name.contains(',')).count();
+    let listed_so = names.iter().filter(|name| !name.contains(',') && ends_in_initials(name)).count() * 2 > bare;
+    names
+        .into_iter()
+        .map(|name| {
+            if let Some((family, given)) = name.split_once(',') { return (family.trim().to_string(), given.trim().to_string()) }
+            let words: Vec<&str> = name.split_whitespace().collect();
+            let Some((last, rest)) = words.split_last() else { return (String::new(), String::new()) };
+            if ends_in_initials(name) && (listed_so || last.chars().count() == 1) { (rest.join(" "), last.to_string()) } else { (last.to_string(), rest.join(" ")) }
+        })
+        .filter(|(family, _)| !family.is_empty())
+        .collect()
+}
+
+/// `A; B; C` with the names written family name first and initials after
+/// it (`Bono M`) given their comma, `Bono, M`: the form every reader of
+/// names agrees on. The others stay as they are written.
+pub fn family_first(authors: &str) -> String {
+    let names: Vec<&str> = authors.split(';').map(str::trim).filter(|name| !name.is_empty()).collect();
+    let read = author_names(authors);
+    if read.len() != names.len() { return names.join("; ") }
+    names.iter().zip(read).map(|(name, (family, given))| if !name.contains(',') && !given.is_empty() && name.starts_with(family.as_str()) && ends_in_initials(name) { format!("{family}, {given}") } else { name.to_string() }).collect::<Vec<_>>().join("; ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn family_names_however_a_name_is_written() {
+        let read = |authors: &str| author_names(authors).into_iter().map(|(family, given)| format!("{family}|{given}")).collect::<Vec<_>>();
+        assert_eq!(read("Zhang, Tian-Qi; Tian-Qi Zhang; 张伟; Jürgen Müller"), ["Zhang|Tian-Qi", "Zhang|Tian-Qi", "张伟|", "Müller|Jürgen"]);
+        // As Europe PMC writes them: the family name first, initials after it.
+        assert_eq!(read("Bono M; Marín-Sanz M; Gallo-Franco JJ; de Melo AV"), ["Bono|M", "Marín-Sanz|M", "Gallo-Franco|JJ", "de Melo|AV"]);
+        assert_eq!(read("Harris CR; Millman KJ; The NumPy Team"), ["Harris|CR", "Millman|KJ", "Team|The NumPy"]);
+        // A family name in capitals among names written given name first stays the family name; one capital never is one.
+        assert_eq!(read("Tian-Qi Zhang; Noam Shazeer; Wei LI"), ["Zhang|Tian-Qi", "Shazeer|Noam", "LI|Wei"]);
+        assert_eq!(read("Tian-Qi Zhang; Noam Shazeer; Bono M"), ["Zhang|Tian-Qi", "Shazeer|Noam", "Bono|M"]);
+        assert_eq!(read("J K Rowling; A B;  ; "), ["Rowling|J K", "B|A"]);
+        let paper = |authors: &str| Paper { authors: authors.into(), year: Some(2026), ..Default::default() };
+        assert_eq!(paper("Bono M; Marín-Sanz M; Uberegui E").citation(), "Bono et al., 2026");
+        assert_eq!(paper("de Melo AV; Costa LC").citation(), "de Melo and Costa, 2026");
+        assert_eq!(paper("Wei Zhang").citation(), "Zhang, 2026");
+        // Given their comma, so every reader agrees; the rest as written.
+        assert_eq!(family_first("Bono M; de Melo AV; Zhang, Wei; NumPy Team"), "Bono, M; de Melo, AV; Zhang, Wei; NumPy Team");
+        assert_eq!(family_first("Tian-Qi Zhang; Wei LI"), "Tian-Qi Zhang; Wei LI");
+    }
 
     #[test]
     fn doi_forms() {

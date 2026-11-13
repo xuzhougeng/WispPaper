@@ -455,7 +455,7 @@ pub fn bibtex(references: &[Reference], index: &Index) -> String {
 /// One entry, from what the record has: `Zhang, W., & Li, Q. (2024). Title. Journal. https://doi.org/…`.
 /// The records keep no volume, issue or pages, so an entry has none.
 pub fn reference(paper: &Paper) -> String {
-    let names: Vec<String> = paper.authors.split(';').map(str::trim).filter(|name| !name.is_empty()).map(author).collect();
+    let names = authors_shown(&paper.authors);
     let authors = match names.as_slice() {
         [] => String::new(),
         [one] => one.clone(),
@@ -482,32 +482,26 @@ pub fn reference(paper: &Paper) -> String {
     out
 }
 
-/// `Zhang, Tian-Qi` or `Tian-Qi Zhang` → `Zhang, T.-Q.`; a name in one piece stays as it is.
-fn author(name: &str) -> String {
-    let (family, given) = match name.split_once(',') {
-        Some((family, given)) => (family.trim().to_string(), given.trim().to_string()),
-        None => match name.trim().rsplit_once(' ') {
-            Some((given, family)) => (family.to_string(), given.trim().to_string()),
-            None => return name.trim().to_string(),
-        },
-    };
-    let initials: Vec<String> = given
-        .split_whitespace()
-        .map(|part| part.split('-').filter_map(|piece| piece.chars().next()).map(|c| format!("{}.", c.to_uppercase())).collect::<Vec<_>>().join("-"))
-        .filter(|part| !part.is_empty())
-        .collect();
-    if initials.is_empty() { family } else { format!("{family}, {}", initials.join(" ")) }
+/// `Zhang, Tian-Qi`, `Tian-Qi Zhang` or `Zhang TQ` → `Zhang, T.-Q.`; a name in one piece stays as it is.
+/// The names are read together (`model::author_names`): how a list is written tells which word is the family name.
+fn authors_shown(authors: &str) -> Vec<String> {
+    crate::model::author_names(authors)
+        .into_iter()
+        .map(|(family, given)| {
+            let initials: Vec<String> = given
+                .split_whitespace()
+                // `TQ` is two initials already; `Tian-Qi` gives one for each piece.
+                .map(|part| if part.chars().count() <= 3 && part.chars().all(char::is_uppercase) { part.chars().map(|c| format!("{c}.")).collect::<Vec<_>>().join(" ") } else { part.split('-').filter_map(|piece| piece.chars().next()).map(|c| format!("{}.", c.to_uppercase())).collect::<Vec<_>>().join("-") })
+                .filter(|part| !part.is_empty())
+                .collect();
+            if initials.is_empty() { family } else { format!("{family}, {}", initials.join(" ")) }
+        })
+        .collect()
 }
 
 /// The family names of `A; B; C`, the way `Paper::citation` reads them.
 fn families(authors: &str) -> Vec<String> {
-    authors
-        .split(';')
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(|name| name.split_once(',').map(|(family, _)| family.trim().to_string()).unwrap_or_else(|| name.split_whitespace().last().unwrap_or("").to_string()))
-        .filter(|name| !name.is_empty())
-        .collect()
+    crate::model::author_names(authors).into_iter().map(|(family, _)| family).collect()
 }
 
 const STOP_WORDS: [&str; 16] = ["a", "an", "the", "of", "on", "in", "and", "for", "to", "with", "by", "at", "from", "into", "is", "are"];
@@ -645,6 +639,13 @@ mod tests {
         let index = Index::new(&papers, [], &BTreeMap::new());
         let keys: Vec<&str> = ["P1", "P2", "P3", "P4", "P5"].iter().map(|id| index.key(id).unwrap()).collect();
         assert_eq!(keys, ["Zhang2024", "Zhang2024b", "DeNovo2020", "Muller-nd", "Smith2019"]);
+        // Authors as Europe PMC writes them, the family name first: the key is the family name's, not the initials'.
+        let pmc = [paper("E1", "Bono M; Marín-Sanz M; Uberegui E", Some(2026), "TaPYL", "2026-01-01"), paper("E2", "de Melo AV; Costa LC", Some(2026), "Iron", "2026-01-02")];
+        let index = Index::new(&pmc, [], &BTreeMap::new());
+        assert_eq!((index.key("E1"), index.key("E2")), (Some("Bono2026"), Some("deMelo2026")));
+        // A key cited before stays the paper's, whatever it would be called now.
+        let kept = BTreeMap::from([("M2026".to_string(), "E1".to_string())]);
+        assert_eq!(Index::new(&pmc, [], &kept).key("E1"), Some("M2026"));
     }
 
     #[test]
@@ -731,8 +732,10 @@ mod tests {
         assert!(reference_markdown(&refs).starts_with("## 参考文献\n\nDe Novo"));
         let bib = bibtex(&refs, &index);
         assert!(bib.starts_with("@article{DeNovo2020,\n") && bib.contains("@article{Zhang2024,\n") && bib.matches("@article").count() == 4, "{bib}");
-        assert_eq!(author("Tian-Qi Zhang"), "Zhang, T.-Q.");
-        assert_eq!(author("张伟"), "张伟");
+        assert_eq!(authors_shown("Tian-Qi Zhang; 张伟"), ["Zhang, T.-Q.", "张伟"]);
+        // Europe PMC writes the family name first and initials after it.
+        assert_eq!(authors_shown("Bono M; Marín-Sanz M; de Melo AV"), ["Bono, M.", "Marín-Sanz, M.", "de Melo, A. V."]);
+        assert_eq!(authors_shown("Zhang, TQ; Harris, Charles R."), ["Zhang, T. Q.", "Harris, C. R."]);
     }
 
     #[test]

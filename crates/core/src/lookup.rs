@@ -107,10 +107,18 @@ pub fn europepmc_paper(body: &Value) -> Option<Paper> {
 pub fn europepmc_hit(hit: &Value) -> Option<Paper> {
     let title = strip_markup(&text(&hit["title"])).trim_end_matches('.').to_string();
     if title.is_empty() { return None }
-    let mut authors: Vec<String> = hit["authorList"]["author"].as_array().map(|list| list.iter().map(|a| text(&a["fullName"])).filter(|n| !n.is_empty()).collect()).unwrap_or_default();
+    // Europe PMC writes a name as `Harris CR`: the family name first and initials after it, which a reader of names would take
+    // for a given name and the family name CR. With the name's parts it is kept as `Harris, Charles R`; else the comma is put in.
+    let named = |a: &Value| {
+        let (family, given) = (text(&a["lastName"]), text(&a["firstName"]));
+        let given = if given.is_empty() { text(&a["initials"]) } else { given };
+        if family.is_empty() { Some(text(&a["fullName"])).filter(|name| !name.is_empty()).unwrap_or_else(|| text(&a["collectiveName"])) } else if given.is_empty() { family } else { format!("{family}, {given}") }
+    };
+    let mut authors: Vec<String> = hit["authorList"]["author"].as_array().map(|list| list.iter().map(named).filter(|n| !n.is_empty()).collect()).unwrap_or_default();
     if authors.is_empty() {
         authors = text(&hit["authorString"]).trim_end_matches('.').split(',').map(|a| a.trim().to_string()).filter(|a| !a.is_empty()).collect();
     }
+    let authors: Vec<String> = crate::model::family_first(&authors.join("; ")).split("; ").filter(|name| !name.is_empty()).map(str::to_string).collect();
     let preprint = text(&hit["source"]) == "PPR" || text(&hit["pubTypeList"]["pubType"][0]).to_lowercase().contains("preprint");
     let mut journal = text(&hit["journalInfo"]["journal"]["title"]);
     if journal.is_empty() { journal = text(&hit["journalTitle"]) }
@@ -200,7 +208,17 @@ mod tests {
             "journalInfo": {"journal": {"title": "Nature"}}, "doi": "10.1038/s41586-020-2649-2", "pmid": "32939066", "abstractText": "Text."
         }]}});
         let p = europepmc_paper(&body).unwrap();
-        assert_eq!((p.title.as_str(), p.authors.as_str(), p.pmid.as_str()), ("Array programming with NumPy", "Harris CR; Millman KJ", "32939066"));
+        // Names written family name first get their comma, so the family name is not taken for CR.
+        assert_eq!((p.title.as_str(), p.authors.as_str(), p.pmid.as_str()), ("Array programming with NumPy", "Harris, CR; Millman, KJ", "32939066"));
+        assert_eq!(p.citation(), "Harris and Millman, 2020");
+        // With the parts of each name, those are kept; a group is named as it is.
+        let listed = json!({"title": "T", "authorString": "Harris CR, de Melo AV.", "authorList": {"author": [
+            {"fullName": "Harris CR", "firstName": "Charles R", "lastName": "Harris", "initials": "CR"},
+            {"fullName": "de Melo AV", "lastName": "de Melo", "initials": "AV"},
+            {"fullName": "Marín-Sanz M"},
+            {"collectiveName": "NumPy Team"},
+        ]}});
+        assert_eq!(europepmc_hit(&listed).unwrap().authors, "Harris, Charles R; de Melo, AV; Marín-Sanz, M; NumPy Team");
         let merged = merge_lookup(Paper { title: "T".into(), doi: "10.1038/s41586-020-2649-2".into(), ..Default::default() }, p);
         assert_eq!((merged.title.as_str(), merged.pmid.as_str(), merged.year), ("T", "32939066", Some(2020)));
         assert!(europepmc_paper(&json!({"resultList": {"result": []}})).is_none());

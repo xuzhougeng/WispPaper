@@ -62,12 +62,7 @@ fn ascii_key(value: &str) -> String {
 /// "surname2024word": the first author, the year and the first title word
 /// longer than three letters, ASCII only.
 fn bib_key(p: &Paper) -> String {
-    let first = p.authors.split(';').next().unwrap_or("").trim();
-    let surname = match first.split_once(',') {
-        Some((surname, _)) => surname,
-        None => first.split_whitespace().last().unwrap_or(""),
-    };
-    let mut surname = ascii_key(surname);
+    let mut surname = crate::model::author_names(&p.authors).first().map(|(family, _)| ascii_key(family)).unwrap_or_default();
     if surname.is_empty() { surname = "anon".into() }
     let word = p.title.split_whitespace().map(ascii_key).find(|w| w.len() > 3).unwrap_or_default();
     format!("{surname}{}{word}", p.year.map(|y| y.to_string()).unwrap_or_default()).to_lowercase()
@@ -82,7 +77,9 @@ fn bib_authors(authors: &str) -> String {
         sep = ',';
         if authors.split(',').any(|piece| piece.split_whitespace().count() < 2) { sep = ';' }
     }
-    authors.split(sep).map(str::trim).filter(|n| !n.is_empty()).collect::<Vec<_>>().join(" and ")
+    // `Bono M` would be read by BibTeX as a given name and the family name M: written `Bono, M`.
+    let names = authors.split(sep).map(str::trim).filter(|n| !n.is_empty()).collect::<Vec<_>>().join("; ");
+    crate::model::family_first(&names).split("; ").collect::<Vec<_>>().join(" and ")
 }
 
 /// Protect the characters BibTeX and LaTeX treat specially.
@@ -180,6 +177,7 @@ mod tests {
         assert_eq!(bib_authors("Smith, Alice"), "Smith, Alice");
         assert_eq!(bib_authors("Alice Smith, Bob Jones"), "Alice Smith and Bob Jones");
         assert_eq!(bib_authors("A B; C D"), "A B and C D");
+        assert_eq!(bib_authors("Bono M; de Melo AV"), "Bono, M and de Melo, AV");
     }
 
     #[test]
