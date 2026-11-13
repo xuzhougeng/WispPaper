@@ -67,11 +67,11 @@ impl Workspace {
                         .border_1()
                         .border_color(if focused { Theme::accent().opacity(0.55) } else { Theme::line() })
                         .bg(Theme::bg_body())
-                        .child(div().px(px(18.)).py(px(14.)).text_size(px(15.)).line_height(px(26.)).text_color(Theme::text()).child(writing.editor.clone()))
+                        .child(div().px(px(18.)).py(px(14.)).text_size(px(15.)).line_height(px(26.)).text_color(Theme::text()).child(crate::input::with_selection_toolbar(&writing.editor, self.render_assist_bar(true, cx))))
                         .into_any_element()
                 }),
             )
-            .child(self.render_assist_bar(cx))
+            .when(!writing.reading && writing.editor.read(cx).selection().is_empty(), |d| d.child(self.render_assist_bar(false, cx)))
             .child(self.render_references(window, cx))
             .child(div().flex().flex_none().px(px(22.)).pb(px(12.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(div().flex_1().min_w_0().child(if writing.reading {
                 let total: usize = writing.current().map_or(0, |m| m.sections.iter().map(|s| s.body.split_whitespace().filter(|word| word.chars().any(char::is_alphanumeric)).count()).sum());
