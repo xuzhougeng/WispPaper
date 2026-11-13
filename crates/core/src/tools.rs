@@ -119,7 +119,7 @@ pub fn catalog() -> Vec<ToolDef> {
         scoped(
             "list_figures",
             "查询图片库",
-            "查询图片库：从文献 PDF 里截下来收藏的图片，各自的图号、图注、标签、备注，以及它出自哪篇文献的哪一页。file 是图片文件在本机的路径。回收站中文献的图片不返回。",
+            "查询图片库：从文献 PDF 里截下来收藏的图片，各自的图号、图注、标签、备注，以及它出自哪篇文献的哪一页；drawn 为 true 的是生图模型按描述画的，不出自任何文献。file 是图片文件在本机的路径。回收站中文献的图片不返回。",
             json!({
                 "query": {"type": "string", "description": "在图号、图注、标签、备注，以及所属文献的题目、作者、期刊和年份中搜索；空格分开的每个词都必须出现。"},
                 "tag": {"type": "string", "description": "只返回带这个图片标签的图片。"},
@@ -579,7 +579,7 @@ fn list_figures(store: &mut Store, info: &LibraryInfo, args: &Value) -> Result<V
         .take(limit)
         .map(|f| {
             let source = by_id.get(f.paper_id.as_str()).map(|p| json!({"id": p.id, "title": p.title, "authors": p.short_authors(), "year": p.year}));
-            json!({"id": f.id, "label": f.label, "legend": f.legend, "tags": f.tags, "notes": f.notes, "paper": source, "page": (f.page > 0).then_some(f.page),
+            json!({"id": f.id, "label": f.label, "legend": f.legend, "tags": f.tags, "notes": f.notes, "paper": source, "drawn": f.drawn(), "page": (f.page > 0).then_some(f.page),
                 "width": f.width, "height": f.height, "file": store.figure_path(f), "addedAt": f.added_at})
         })
         .collect();

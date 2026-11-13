@@ -17,16 +17,26 @@ pub struct Preset {
     /// Read when no key is stored. Each service has its own, so a key for one is never sent to another.
     pub key_env: &'static str,
     pub models: &'static [&'static str],
+    /// The models it is set up with that draw (`imagegen`).
+    pub images: &'static [&'static str],
+    /// The models it is set up with that judge (`judge`).
+    pub judges: &'static [&'static str],
     /// Where an API key is had.
     pub console: &'static str,
 }
 
-pub const PRESETS: [Preset; 5] = [
-    Preset { key: "deepseek", name: "DeepSeek", protocol: Protocol::OpenAI, base_url: "https://api.deepseek.com", key_env: "DEEPSEEK_API_KEY", models: &["deepseek-v4-pro", "deepseek-v4-flash"], console: "https://platform.deepseek.com/api_keys" },
-    Preset { key: "kimi", name: "Kimi", protocol: Protocol::OpenAI, base_url: "https://api.moonshot.cn/v1", key_env: "MOONSHOT_API_KEY", models: &["kimi-k2.6"], console: "https://platform.moonshot.cn/console/api-keys" },
-    Preset { key: "glm", name: "GLM", protocol: Protocol::OpenAI, base_url: "https://open.bigmodel.cn/api/paas/v4", key_env: "ZHIPUAI_API_KEY", models: &["glm-5.3", "glm-5.1"], console: "https://open.bigmodel.cn/usercenter/apikeys" },
-    Preset { key: "claude", name: "Claude", protocol: Protocol::Anthropic, base_url: ANTHROPIC_BASE, key_env: "ANTHROPIC_API_KEY", models: &[DEFAULT_MODEL, "claude-sonnet-5-5", "claude-haiku-5-5"], console: "https://console.anthropic.com/settings/keys" },
-    Preset { key: "openai", name: "OpenAI", protocol: Protocol::Responses, base_url: "https://api.openai.com/v1", key_env: "OPENAI_API_KEY", models: &[], console: "https://platform.openai.com/api-keys" },
+pub const PRESETS: [Preset; 8] = [
+    Preset { key: "deepseek", name: "DeepSeek", protocol: Protocol::OpenAI, base_url: "https://api.deepseek.com", key_env: "DEEPSEEK_API_KEY", models: &["deepseek-v4-pro", "deepseek-v4-flash"], images: &[], judges: &[], console: "https://platform.deepseek.com/api_keys" },
+    Preset { key: "kimi", name: "Kimi", protocol: Protocol::OpenAI, base_url: "https://api.moonshot.cn/v1", key_env: "MOONSHOT_API_KEY", models: &["kimi-k2.6"], images: &[], judges: &[], console: "https://platform.moonshot.cn/console/api-keys" },
+    Preset { key: "glm", name: "GLM", protocol: Protocol::OpenAI, base_url: "https://open.bigmodel.cn/api/paas/v4", key_env: "ZHIPUAI_API_KEY", models: &["glm-5.3", "glm-5.1"], images: &[], judges: &[], console: "https://open.bigmodel.cn/usercenter/apikeys" },
+    Preset { key: "claude", name: "Claude", protocol: Protocol::Anthropic, base_url: ANTHROPIC_BASE, key_env: "ANTHROPIC_API_KEY", models: &[DEFAULT_MODEL, "claude-sonnet-5-5", "claude-haiku-5-5"], images: &[], judges: &[], console: "https://console.anthropic.com/settings/keys" },
+    Preset { key: "openai", name: "OpenAI", protocol: Protocol::Responses, base_url: "https://api.openai.com/v1", key_env: "OPENAI_API_KEY", models: &[], images: &["gpt-image-2"], judges: &[], console: "https://platform.openai.com/api-keys" },
+    // Chat goes to Google's OpenAI-compatible address; pictures to Gemini's own interface beside it (`imagegen::guess`).
+    Preset { key: "gemini", name: "Gemini", protocol: Protocol::OpenAI, base_url: "https://generativelanguage.googleapis.com/v1beta/openai", key_env: "GEMINI_API_KEY", models: &[], images: &["gemini-3.1-flash-image-preview", "gemini-3-pro-image-preview"], judges: &[], console: "https://aistudio.google.com/apikey" },
+    // 火山方舟: 豆包 for chat, Seedream (the model behind 即梦) for pictures.
+    Preset { key: "ark", name: "火山方舟", protocol: Protocol::OpenAI, base_url: "https://ark.cn-beijing.volces.com/api/v3", key_env: "ARK_API_KEY", models: &[], images: &["doubao-seedream-4-0-250828"], judges: &[], console: "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey" },
+    // A System One service: its models judge and write nothing (`judge`). The interface chosen for chat is not used.
+    Preset { key: "typesafe", name: "TypeSafe", protocol: Protocol::OpenAI, base_url: "https://api.typesafe.ai/v1", key_env: "TYPESAFE_API_KEY", models: &[], images: &[], judges: &["jev-latest"], console: "https://console.typesafe.ai/" },
 ];
 
 /// The providers a new settings file starts with.
@@ -39,7 +49,7 @@ pub fn preset(key: &str) -> Option<&'static Preset> {
 /// The preset an address belongs to, for settings written before presets existed.
 pub fn preset_of_address(base_url: &str) -> Option<&'static Preset> {
     let host = base_url.split("://").nth(1).unwrap_or(base_url).split(['/', ':']).next().unwrap_or("").to_lowercase();
-    let key = if host.ends_with("deepseek.com") { "deepseek" } else if host.contains("moonshot") { "kimi" } else if host.ends_with("bigmodel.cn") { "glm" } else if host.ends_with("anthropic.com") { "claude" } else if host == "api.openai.com" { "openai" } else { return None };
+    let key = if host.ends_with("deepseek.com") { "deepseek" } else if host.contains("moonshot") { "kimi" } else if host.ends_with("bigmodel.cn") { "glm" } else if host.ends_with("anthropic.com") { "claude" } else if host == "api.openai.com" { "openai" } else if host == "generativelanguage.googleapis.com" { "gemini" } else if host.starts_with("ark.") && host.ends_with("volces.com") { "ark" } else if host == "api.typesafe.ai" { "typesafe" } else { return None };
     preset(key)
 }
 
@@ -53,6 +63,29 @@ pub struct Model {
     pub model: String,
     /// How hard it thinks, a key of `ai::EFFORTS`.
     pub effort: String,
+    /// Empty for a model that answers in words; `imagegen::KIND` for one that draws, `judge::KIND` for one that judges.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub kind: String,
+    /// For a model that draws: how it is asked, a key of `imagegen::INTERFACES`; empty leaves it to `imagegen::guess`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub interface: String,
+}
+
+impl Model {
+    /// Whether it draws pictures, not answers in words.
+    pub fn draws(&self) -> bool {
+        self.kind == crate::imagegen::KIND
+    }
+
+    /// Whether it judges: it decides among given answers and writes nothing.
+    pub fn judges(&self) -> bool {
+        self.kind == crate::judge::KIND
+    }
+
+    /// Whether it answers in words, as every task but drawing can use.
+    pub fn speaks(&self) -> bool {
+        !self.draws() && !self.judges()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -81,7 +114,7 @@ impl Default for Provider {
 
 impl Provider {
     pub fn from_preset(preset: &Preset) -> Provider {
-        Provider { preset: preset.key.into(), protocol: preset.protocol, base_url: preset.base_url.into(), models: preset.models.iter().map(|model| Model { model: model.to_string(), ..Default::default() }).collect(), ..Default::default() }
+        Provider { preset: preset.key.into(), protocol: preset.protocol, base_url: preset.base_url.into(), models: preset.models.iter().map(|model| Model { model: model.to_string(), ..Default::default() }).chain(preset.images.iter().map(|model| Model { model: model.to_string(), kind: crate::imagegen::KIND.into(), ..Default::default() })).chain(preset.judges.iter().map(|model| Model { model: model.to_string(), kind: crate::judge::KIND.into(), ..Default::default() })).collect(), ..Default::default() }
     }
 
     pub fn preset(&self) -> Option<&'static Preset> {
@@ -109,7 +142,7 @@ impl Provider {
 
     /// What a request with one of its models is made with.
     pub fn profile(&self, model: &Model) -> Profile {
-        Profile { id: model.id.clone(), name: String::new(), provider: self.title(), protocol: self.protocol, base_url: self.base_url.clone(), api_key: self.api_key.clone(), key_env: self.key_env().into(), model: model.model.clone(), effort: model.effort.clone(), proxy: self.proxy.clone() }
+        Profile { id: model.id.clone(), name: String::new(), provider: self.title(), protocol: self.protocol, base_url: self.base_url.clone(), api_key: self.api_key.clone(), key_env: self.key_env().into(), model: model.model.clone(), effort: model.effort.clone(), proxy: self.proxy.clone(), interface: model.interface.clone(), kind: model.kind.clone() }
     }
 
     /// The key it would send now, stored or from the environment.
@@ -135,5 +168,20 @@ mod tests {
         assert_eq!(preset_of_address("https://api.anthropic.com").map(|p| p.key), Some("claude"));
         assert_eq!(preset_of_address("http://127.0.0.1:8787").map(|p| p.key), None);
         assert!(DEFAULT_PRESETS.iter().all(|key| preset(key).is_some()));
+        // The services that draw come with their drawing models, marked as such.
+        let openai = Provider::from_preset(preset("openai").unwrap());
+        assert_eq!(openai.models.iter().map(|m| (m.model.as_str(), m.draws())).collect::<Vec<_>>(), [("gpt-image-2", true)]);
+        let gemini = Provider::from_preset(preset("gemini").unwrap());
+        assert!(gemini.models.iter().all(Model::draws) && gemini.key_env() == "GEMINI_API_KEY");
+        assert_eq!(crate::imagegen::interface(&gemini.profile(&gemini.models[0])), crate::imagegen::Interface::Gemini);
+        assert_eq!(preset_of_address("https://ark.cn-beijing.volces.com/api/v3").map(|p| p.key), Some("ark"));
+        assert_eq!(preset_of_address("https://generativelanguage.googleapis.com/v1beta/openai").map(|p| p.key), Some("gemini"));
+        // A service whose models judge: its own key, its own address, and no other kind of model.
+        let typesafe = Provider::from_preset(preset("typesafe").unwrap());
+        assert_eq!(typesafe.models.iter().map(|m| (m.model.as_str(), m.judges(), m.speaks())).collect::<Vec<_>>(), [("jev-latest", true, false)]);
+        assert!(typesafe.profile(&typesafe.models[0]).judges() && typesafe.key_env() == "TYPESAFE_API_KEY");
+        assert_eq!(preset_of_address("https://api.typesafe.ai/v1").map(|p| p.key), Some("typesafe"));
+        // A model that answers in words is written as before: no kind, no interface.
+        assert_eq!(serde_json::to_string(&Model { id: "m1".into(), model: "x".into(), ..Default::default() }).unwrap(), r#"{"id":"m1","model":"x","effort":""}"#);
     }
 }

@@ -134,7 +134,7 @@ impl ProviderFields {
         let api_key = input(tf!("留空则读取环境变量 {}", "Leave blank to read {}", provider.key_env()).into(), &provider.api_key);
         let proxy = input(t("留空则使用全局代理").into(), &provider.proxy);
         let models: Vec<Entity<TextInput>> = provider.models.iter().map(|model| input(t("模型名称").into(), &model.model)).collect();
-        let example = preset.and_then(|p| p.models.first().copied()).unwrap_or("gpt-5.5");
+        let example = preset.and_then(|p| p.models.first().or(p.images.first()).or(p.judges.first()).copied()).unwrap_or("gpt-5.5");
         let new_model = input(tf!("添加模型，例如 {example}", "Add a model, e.g. {example}").into(), "");
         api_key.update(cx, |input, _| input.masked = true);
         let mut subscriptions: Vec<Subscription> = [&name, &base_url, &api_key, &proxy]
@@ -1078,6 +1078,9 @@ impl Workspace {
             .enumerate()
             .map(|(i, (model, input))| {
                 let effort = ai::EFFORTS.iter().find(|(key, _)| *key == model.effort).map_or(t("默认"), |(_, name)| t(name));
+                // A model that draws has no thinking to set: how it is asked for a picture stands in its place.
+                let (draws, judges) = (model.draws(), model.judges());
+                let asked = wisp_core::imagegen::Interface::from_key(&model.interface).map_or(t("自动"), |interface| t(interface.name()));
                 let serves: Vec<&str> = used.iter().filter(|(_, id)| *id == model.id).map(|(task, _)| t(task.label())).collect();
                 div()
                     .flex()
@@ -1088,7 +1091,9 @@ impl Workspace {
                     .py(px(6.))
                     // A field's width has to be given here: under these widths it would be measured as narrow.
                     .child(div().flex_none().w(px(MODEL_W)).child(ui::field(input, window, cx)))
-                    .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(Theme::accent()).child(serves.join(" · ")))
+                    .when(draws, |d| d.child(div().id(("model-draws", i)).flex().flex_none().items_center().gap(px(4.)).h(px(22.)).px(px(7.)).rounded(px(6.)).bg(Theme::accent_soft()).text_size(px(11.)).text_color(Theme::accent()).child(ui::icon("image", 12., Theme::accent())).child(t("生图模型")).tooltip(|_, cx| cx.new(|_| crate::write_assist::Tip(t("这个模型按描述画图，不回答问题。").to_string())).into())))
+                    .when(judges, |d| d.child(div().id(("model-judges", i)).flex().flex_none().items_center().gap(px(4.)).h(px(22.)).px(px(7.)).rounded(px(6.)).bg(Theme::accent_soft()).text_size(px(11.)).text_color(Theme::accent()).child(ui::icon("list-todo", 12., Theme::accent())).child(t("判断模型")).tooltip(|_, cx| cx.new(|_| crate::write_assist::Tip(t("这个模型只在给定的选项里作判断并给出概率，不写文字。").to_string())).into())))
+                    .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(Theme::accent()).child(if draws && !serves.is_empty() { t("在用").to_string() } else { serves.join(" · ") }))
                     .child(
                         div()
                             .id(("model-effort", i))
@@ -1105,7 +1110,7 @@ impl Workspace {
                             .bg(Theme::hover())
                             .hover(|s| s.bg(Theme::pressed()))
                             .on_click(self.on_menu(MenuKind::ModelEffort(i), cx))
-                            .child(tf!("思考 · {effort}", "Thinking · {effort}"))
+                            .child(if judges { t("类型").to_string() } else if draws { tf!("接口 · {asked}", "Interface · {asked}") } else { tf!("思考 · {effort}", "Thinking · {effort}") })
                             .child(ui::icon("chevron-down", 12., Theme::text_tertiary())),
                     )
                     .child(ui::ghost_button(("model-remove", i), Some("x"), None).tooltip(|_, cx| cx.new(|_| crate::write_assist::Tip(t("删除这个模型").to_string())).into()).on_click(self.on(Cmd::RemoveModel(i), cx)))
@@ -1136,7 +1141,7 @@ impl Workspace {
             .when(provider.models.is_empty(), |d| d.child(div().px(px(16.)).pb(px(4.)).child(small(t("还没有模型：在下面写上模型名称，按 Enter 添加。")))))
             .children(models)
             .child(add)
-            .child(div().flex().flex_col().gap(px(6.)).px(px(16.)).pt(px(14.)).pb(px(16.)).child(small(thinking)).child(small(privacy)))
+            .child(div().flex().flex_col().gap(px(6.)).px(px(16.)).pt(px(14.)).pb(px(16.)).when(provider.models.iter().any(|m| m.speaks()) || provider.models.is_empty(), |d| d.child(small(thinking))).when(provider.models.iter().any(|m| m.judges()), |d| d.child(small(t("判断：带「判断」标记的是 System One 这一类模型（如 TypeSafe 的 Jev）：给它材料和事先定好的选项，它在选项里作出判断，并给每个选项一个概率，不写文字，所以又快又便宜。在「任务」里可以把「批量筛选」交给它：每篇文献得到一个结论和把握，把握不足的留给你判断，没有理由和原文摘录。它不能回答问题，别的任务用不了它；这个服务的「接口」一项对它不起作用。")))).when(provider.models.iter().any(|m| m.draws()), |d| d.child(small(t("生图：带「生图」标记的模型按描述画图，在图片库里用，名字里看得出是生图模型的会自动标上，也可以在右边的菜单里改。「接口」是向服务要图的方式：「自动」时 Gemini 官方地址用它的原生接口，别处的 Gemini 模型（中转服务）走对话接口，其余走 OpenAI 的 Images 接口（/images/generations，火山方舟的 Seedream 也是它）。描述会发送给这个服务。")))).child(small(privacy)))
             .child(div().flex_1())
             .child(row(t("删除这个服务"), Some(t("连同它的模型一起删除；用到它们的任务改用默认的模型。").into()), button("provider-remove", t("删除…")).text_color(Theme::danger()).on_click(self.on(Cmd::AskRemoveProvider(view.provider.min(self.settings.providers.len().saturating_sub(1))), cx))).border_t_1().border_color(Theme::line()))
             .into_any_element()
@@ -1149,8 +1154,12 @@ impl Workspace {
         let any = settings.providers.iter().any(|p| p.models.iter().any(|m| !m.model.trim().is_empty()));
         let warn = theme::status_colors("uncertain");
         let pick = |n: usize, task: Task, this: &Self, cx: &mut Context<Self>| {
-            let used = settings.profile_for_or_default(task);
-            let follows = task != Task::Chat && settings.tasks.get(task).is_empty();
+            // 生图 is done by a model that draws, or by none: it borrows no other task's model.
+            let any = if task.draws() { !settings.image_profiles().is_empty() } else { any };
+            let Some(used) = (if task.draws() { settings.profile_for(task) } else { Some(settings.profile_for_or_default(task)) }) else {
+                return div().id(("task-model", n)).flex().flex_none().items_center().gap(px(8.)).child(div().text_size(px(12.)).text_color(warn.0).child(t("还没有生图模型"))).child(button(("task-model-add", n), t("去添加")).on_click(this.on(Cmd::AiTab(AiTab::Models), cx)));
+            };
+            let follows = task != Task::Chat && !task.draws() && settings.tasks.get(task).is_empty();
             let shell = div()
                 .id(("task-model", n))
                 .flex()
@@ -1221,10 +1230,11 @@ impl Workspace {
             .w(px(column))
             .gap(px(16.))
             .child(card(vec![head(0, Task::Chat, "sparkle", "助手和单篇文献的对话。向导拟检索式、图片库里看图写图注和标签、写作页的改写、润色、配引用和让助手改稿也用它；看图需要能读图片的模型。", self, cx)]))
-            .child(card(vec![head(1, Task::Screen, "list-todo", "逐篇阅读文献：筛选页的批量建议、复核和单篇再问，以及提取页按词条填写。文献多的时候，可以给它一个更快、更便宜的模型。", self, cx), sub(row(t("同时阅读的篇数"), Some(t("批量筛选时同时发出的请求数。服务限速时调小。").into()), segmented("workers", workers, WORKERS.iter().position(|count| *count == settings.screen_workers).unwrap_or(usize::MAX), self, cx)))]))
+            .child(card(vec![head(1, Task::Screen, "list-todo", "逐篇阅读文献：筛选页的批量建议、复核和单篇再问，以及提取页按词条填写。文献多的时候，可以给它一个更快、更便宜的模型；也可以交给 Jev 这样的判断模型，它读摘要，只给结论和把握，不写理由，把握不足的留给你。选了判断模型时，提取仍用助手的模型。", self, cx), sub(row(t("同时阅读的篇数"), Some(t("批量筛选时同时发出的请求数。服务限速时调小。").into()), segmented("workers", workers, WORKERS.iter().position(|count| *count == settings.screen_workers).unwrap_or(usize::MAX), self, cx)))]))
             .child(card(vec![head(2, Task::Translate, "scan-text", "翻译题目、摘要和 PDF 里选中的文字；写作页把你写的话变成候选句的检索词也用它。翻译用不着思考：可以给它一个把「思考」设为关闭的小模型。", self, cx), sub(row(t("同时翻译的篇数"), Some(t("批量翻译标题或摘要时同时发出的请求数。服务限速时调小。").into()), segmented("translate-workers", translators, WORKERS.iter().position(|count| *count == settings.translate_workers).unwrap_or(usize::MAX), self, cx))), prompt]))
             .child(card(vec![head(3, Task::Structure, "file-text", "写作页的准备工作：把全文按导言、方法、结果、讨论分开，以及读出扫描件页面上的文字（需要能看图的模型）。", self, cx)]))
-            .child(note(t("没有单独指定模型的任务，使用助手的模型；助手没有指定时，用第一个填好了 API Key 的模型。译过的文字保存在文献库里，不会再次请求。")))
+            .child(card(vec![head(4, Task::Image, "image", "按一段描述画图：图片库里的「生成图片」。只能用带「生图」标记的模型，比如 OpenAI 的 gpt-image、Gemini 的图像模型、火山方舟的 Seedream；在「模型」里给一个服务添加这样的模型。", self, cx)]))
+            .child(note(t("没有单独指定模型的任务，使用助手的模型；助手没有指定时，用第一个填好了 API Key 的模型。生图除外：它只用生图模型。译过的文字保存在文献库里，不会再次请求。")))
             .into_any_element()
     }
 

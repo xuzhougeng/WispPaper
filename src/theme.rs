@@ -121,6 +121,9 @@ pub fn provider_tile(preset: &str) -> (Hsla, Hsla) {
         "glm" => (0x7B6BFF, 0x4338E0),
         "claude" => (0xE69477, 0xC9603E),
         "openai" => (0x19B48E, 0x0B7A5F),
+        "gemini" => (0x5B9BFF, 0x7A5CF0),
+        "ark" => (0x2FC4D8, 0x1677E0),
+        "typesafe" => (0x2B2F3A, 0x0F1115),
         _ => (0x9AA0AA, 0x6E737D),
     };
     (c(top), c(bottom))

@@ -50,6 +50,12 @@ pub struct Profile {
     pub effort: String,
     /// A proxy for this service alone: empty uses the global one, `direct` none at all.
     pub proxy: String,
+    /// For a model that draws: how it is asked for a picture, a key of `imagegen::INTERFACES`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub interface: String,
+    /// What kind of model it is (`provider::Model::kind`): empty for one that answers in words.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub kind: String,
 }
 
 /// The thinking settings a profile may have, and what they are called.
@@ -60,7 +66,7 @@ pub const DEFAULT_MODEL: &str = "claude-opus-5-5";
 
 impl Default for Profile {
     fn default() -> Self {
-        Profile { id: String::new(), name: "Claude".into(), provider: String::new(), protocol: Protocol::Anthropic, base_url: ANTHROPIC_BASE.into(), api_key: String::new(), key_env: String::new(), model: DEFAULT_MODEL.into(), effort: String::new(), proxy: String::new() }
+        Profile { id: String::new(), name: "Claude".into(), provider: String::new(), protocol: Protocol::Anthropic, base_url: ANTHROPIC_BASE.into(), api_key: String::new(), key_env: String::new(), model: DEFAULT_MODEL.into(), effort: String::new(), proxy: String::new(), interface: String::new(), kind: String::new() }
     }
 }
 
@@ -69,6 +75,11 @@ impl Profile {
     pub fn title(&self) -> String {
         let name = if self.name.trim().is_empty() { self.model.trim() } else { self.name.trim() };
         if name.is_empty() { "未命名模型".into() } else { name.to_string() }
+    }
+
+    /// Whether it is a model that judges (`judge`): it decides among given answers and writes nothing.
+    pub fn judges(&self) -> bool {
+        self.kind == crate::judge::KIND
     }
 
     /// The model with its provider: `deepseek-v4-pro · DeepSeek`.
@@ -1780,7 +1791,8 @@ pub fn stop_note(reason: &str) -> Option<&'static str> {
 
 /// The message inside an error response body; the body itself when it is not JSON.
 pub fn error_message(status: u16, body: &str) -> String {
-    let detail = serde_json::from_str::<Value>(body).ok().and_then(|v| v["error"]["message"].as_str().or(v["message"].as_str()).map(String::from)).unwrap_or_else(|| body.chars().take(300).collect());
+    // `error.message` is what most services say; `detail` (a sentence, or a list of what is wrong with which field) is TypeSafe's.
+    let detail = serde_json::from_str::<Value>(body).ok().and_then(|v| v["error"]["message"].as_str().or(v["message"].as_str()).or(v["detail"].as_str()).or(v["detail"][0]["msg"].as_str()).map(String::from)).unwrap_or_else(|| body.chars().take(300).collect());
     let hint = match status {
         401 | 403 => "API Key 无效或没有权限",
         404 => "地址或模型名称不存在",

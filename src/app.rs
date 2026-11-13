@@ -208,6 +208,10 @@ pub enum Cmd {
     RemoveModel(usize),
     /// How hard the n-th model of the provider on show thinks, a key of `ai::EFFORTS`.
     SetEffort(usize, String),
+    /// What kind the n-th model of the provider on show is: one that answers in words (empty), draws, or judges.
+    SetModelKind(usize, String),
+    /// How the n-th model of the provider on show is asked for a picture, a key of `imagegen::INTERFACES`.
+    SetModelInterface(usize, String),
     /// Bind a task to a profile id; an empty id follows the default.
     SetTaskModel(Task, String),
     SetScreenWorkers(usize),
@@ -513,6 +517,12 @@ pub enum Cmd {
     FigureAddTag(String),
     /// Have a model that sees pictures write a field of the dialog: the legend, tags, or a reading for the notes.
     FigureInfer(wisp_core::figure::Ask),
+    /// 生图: the dialog a picture is drawn in from a description, to keep as a figure.
+    DrawFigure,
+    /// Have the model that draws make the dialog's picture from its description; while it draws, stop it.
+    FigureDraw,
+    /// The shape of the picture the dialog asks for.
+    FigureShape(wisp_core::imagegen::Shape),
     /// 提取: everything the page, its dialog and the sparkles by a paper's fields do (`src/extract.rs`).
     Extract(crate::extract::Do),
     // Dialogs
@@ -1740,25 +1750,44 @@ impl Workspace {
             }
             MenuKind::ModelEffort(index) => {
                 let Some(view) = self.settings_view.as_ref() else { return };
-                let effort = self.settings.providers.get(view.provider()).and_then(|p| p.models.get(index)).map(|m| m.effort.clone()).unwrap_or_default();
-                for (key, name) in ai::EFFORTS {
-                    items.push(MenuItem { label: t(name).into(), checked: effort == key, note: None, cmd: Cmd::SetEffort(index, key.to_string()) });
+                let Some(model) = self.settings.providers.get(view.provider()).and_then(|p| p.models.get(index)) else { return };
+                if model.judges() {
+                    // A model that judges has nothing to set: it is asked one way and does not think aloud.
+                } else if model.draws() {
+                    // A model that draws does not think: what is chosen is how it is asked for a picture.
+                    let guessed = wisp_core::imagegen::guess(&self.settings.providers[view.provider()].base_url, &model.model);
+                    for (key, name) in wisp_core::imagegen::INTERFACES {
+                        let note = key.is_empty().then(|| SharedString::from(t(guessed.name())));
+                        items.push(MenuItem { label: t(name).into(), checked: model.interface == key, note, cmd: Cmd::SetModelInterface(index, key.to_string()) });
+                    }
+                } else {
+                    for (key, name) in ai::EFFORTS {
+                        items.push(MenuItem { label: t(name).into(), checked: model.effort == key, note: None, cmd: Cmd::SetEffort(index, key.to_string()) });
+                    }
+                }
+                if !items.is_empty() { breaks.push(items.len()) }
+                // What kind of model it is: the name tells when it is added, and here it can be said otherwise.
+                for (kind, name) in [("", t("对话模型")), (wisp_core::imagegen::KIND, t("生图模型")), (wisp_core::judge::KIND, t("判断模型"))] {
+                    items.push(MenuItem { label: name.into(), checked: model.kind == kind, note: None, cmd: Cmd::SetModelKind(index, kind.to_string()) });
                 }
             }
             MenuKind::TaskModel(task) => {
                 let bound = self.settings.tasks.get(task).to_string();
                 // Questions always have a model: the first one until another is chosen.
-                let chosen = if task == Task::Chat { self.settings.profile_for(task).map(|p| p.id).unwrap_or_default() } else { bound };
-                if task != Task::Chat {
+                let chosen = if task == Task::Chat || task.draws() { self.settings.profile_for(task).map(|p| p.id).unwrap_or_default() } else { bound };
+                if task != Task::Chat && !task.draws() {
                     items.push(MenuItem { label: t("与助手相同").into(), checked: chosen.is_empty(), note: None, cmd: Cmd::SetTaskModel(task, String::new()) });
                     breaks.push(items.len());
                 }
-                // Each provider's models, in its group; one without a key says so beside it.
-                let mut providers = self.settings.providers.iter().filter(|p| p.models.iter().any(|m| !m.model.trim().is_empty())).peekable();
+                // Each provider's models of the task's kind, in its group; one without a key says so beside it.
+                let fits = |m: &wisp_core::provider::Model| !m.model.trim().is_empty() && task.takes(m);
+                let mut providers = self.settings.providers.iter().filter(|p| p.models.iter().any(fits)).peekable();
                 while let Some(provider) = providers.next() {
                     let note: SharedString = if provider.key().is_empty() { tf!("{} · 缺 API Key", "{} · no API key", provider.title()).into() } else { provider.title().into() };
-                    for model in provider.models.iter().filter(|m| !m.model.trim().is_empty()) {
-                        items.push(MenuItem { label: model.model.trim().to_string().into(), checked: chosen == model.id, note: Some(note.clone()), cmd: Cmd::SetTaskModel(task, model.id.clone()) });
+                    for model in provider.models.iter().filter(|m| fits(m)) {
+                        // A model that judges is no model like the others in the list: it says so.
+                        let note = if model.judges() { tf!("{note} · 判断模型", "{note} · judging model").into() } else { note.clone() };
+                        items.push(MenuItem { label: model.model.trim().to_string().into(), checked: chosen == model.id, note: Some(note), cmd: Cmd::SetTaskModel(task, model.id.clone()) });
                     }
                     if providers.peek().is_some() { breaks.push(items.len()) }
                 }
@@ -1898,6 +1927,17 @@ impl Workspace {
             Cmd::AddModel => self.add_model(cx),
             Cmd::RemoveModel(index) => self.remove_model(index, cx),
             Cmd::SetEffort(index, value) => self.set_effort(index, value, cx),
+            Cmd::SetModelKind(index, kind) => {
+                let Some(provider) = self.settings_view.as_ref().map(|view| view.provider()) else { return };
+                self.settings.set_model_kind(provider, index, &kind);
+                self.save_settings(cx);
+            }
+            Cmd::SetModelInterface(index, value) => {
+                let Some(provider) = self.settings_view.as_ref().map(|view| view.provider()) else { return };
+                let Some(model) = self.settings.providers.get_mut(provider).and_then(|p| p.models.get_mut(index)) else { return };
+                model.interface = value;
+                self.save_settings(cx);
+            }
             Cmd::SetTaskModel(task, id) => {
                 self.settings.tasks.set(task, &id);
                 self.save_settings(cx);
@@ -2009,7 +2049,7 @@ impl Workspace {
                 }
             }
             Cmd::WriteSection(_) | Cmd::WriteManuscript(_) | Cmd::NewManuscript | Cmd::AskRemoveManuscript(_) | Cmd::RemoveManuscript(_) | Cmd::WriteLanguage(_) | Cmd::EditSection(_) | Cmd::PickSectionKind(_) | Cmd::MoveSection(..) | Cmd::AskRemoveSection(_) | Cmd::RemoveSection(_) | Cmd::SplitSection(_) | Cmd::MergeSection(_) | Cmd::WriteReading(_) | Cmd::WriteNav(_) | Cmd::ExportManuscript(_) | Cmd::WriteHistory | Cmd::HistoryPick(_) => self.run_manuscript(cmd, window, cx),
-            Cmd::FigureTag(_) | Cmd::OpenFigure(_) | Cmd::FigureSource(_) | Cmd::AskFigure(_) | Cmd::CopyFigure(_) | Cmd::SaveFigure(_) | Cmd::AskRemoveFigure(_) | Cmd::RemoveFigure(_) | Cmd::FigureAddTag(_) | Cmd::FigureInfer(_) => self.run_figures(cmd, window, cx),
+            Cmd::FigureTag(_) | Cmd::OpenFigure(_) | Cmd::FigureSource(_) | Cmd::AskFigure(_) | Cmd::CopyFigure(_) | Cmd::SaveFigure(_) | Cmd::AskRemoveFigure(_) | Cmd::RemoveFigure(_) | Cmd::FigureAddTag(_) | Cmd::FigureInfer(_) | Cmd::DrawFigure | Cmd::FigureDraw | Cmd::FigureShape(_) => self.run_figures(cmd, window, cx),
             Cmd::WriteCite(id) => {
                 self.cite_paper(&id, cx);
                 if let Some(lib) = self.lib.as_ref() { lib.writing.editor.read(cx).focus(window) }
@@ -4304,7 +4344,7 @@ impl Workspace {
         if lib.screen.running() { return }
         lib.screen.error.clear();
         // The key and address are checked once here, not once per paper.
-        if let Err(err) = ai::plain_request(&profile, "s", "p") {
+        if let Err(err) = if profile.judges() { wisp_core::judge::ready(&profile) } else { ai::plain_request(&profile, "s", "p").map(|_| ()) } {
             lib.screen.error = err;
             return cx.notify();
         }
@@ -4318,7 +4358,7 @@ impl Workspace {
         screen.run += 1;
         (screen.total, screen.done, screen.failed, screen.streak, screen.todo) = (todo.len(), 0, 0, 0, todo);
         screen.reading.clear();
-        screen.model = format!("{} · {}", profile.title(), profile.model);
+        screen.model = profile.labelled();
         let run = screen.run;
         for _ in 0..workers {
             self.screen_next(run, cx);
@@ -4336,7 +4376,7 @@ impl Workspace {
         let Some(paper) = lib.paper(&id).cloned() else { return self.screen_next(run, cx) };
         let pages = lib.store.paper_pages(&id).ok().flatten();
         let (system, prompt, basis) = ai::screen_prompt(&lib.info.topic, &lib.info.criteria, &paper, pages.as_deref());
-        let author = format!("{} · {}", profile.title(), profile.model);
+        let author = profile.labelled();
         // What it is judged against, kept with the answer: the goal may change while it is read.
         let criteria = Some(lib.info.criteria.clone());
         // Nothing to read: say so without asking, rather than have the model guess from a title.
@@ -4347,7 +4387,15 @@ impl Workspace {
             if saved.is_ok() { lib.suggestions.insert(suggestion.paper_id.clone(), suggestion); }
             return self.screen_next(run, cx);
         }
-        let request = match ai::plain_request(&profile, &system, &prompt) {
+        // A model that judges is asked its own way, about the abstract (the first pages without one): it answers
+        // with a verdict and how sure it is, and no reason. Any other model is asked in words and reads the full text.
+        let judge = profile.judges().then(|| wisp_core::judge::screen_request(&profile, &lib.info.topic, &lib.info.criteria, &paper, pages.as_deref()));
+        let (request, basis) = match judge {
+            Some(Ok((request, basis))) => (Ok(request), basis),
+            Some(Err(err)) => (Err(err), basis),
+            None => (ai::plain_request(&profile, &system, &prompt), basis),
+        };
+        let request = match request {
             Ok(request) => request,
             Err(err) => {
                 lib.screen.error = err;
@@ -4356,9 +4404,9 @@ impl Workspace {
             }
         };
         lib.screen.reading.push(id);
-        let (library, protocol) = (lib.info.id.clone(), profile.protocol);
+        let (library, protocol, judges) = (lib.info.id.clone(), profile.protocol, profile.judges());
         let work = cx.background_executor().spawn(async move {
-            let judged = wisp_net::complete(request, protocol).and_then(|reply| ai::parse_judgement(&reply, &paper, pages.as_deref()));
+            let judged = if judges { wisp_net::judge(request).and_then(|reply| wisp_core::judge::read_screening(&reply)) } else { wisp_net::complete(request, protocol).and_then(|reply| ai::parse_judgement(&reply, &paper, pages.as_deref())) };
             (paper, judged)
         });
         cx.spawn(async move |this, cx| {
@@ -5274,6 +5322,16 @@ impl Workspace {
                 }
                 // `figinfer:legend|tags|notes` has the model write that field of the figure's dialog, as its sparkle does.
                 "figinfer" => Some(Cmd::FigureInfer(match arg { "tags" => wisp_core::figure::Ask::Tags, "notes" => wisp_core::figure::Ask::Notes, _ => wisp_core::figure::Ask::Legend })),
+                // `figdraw` opens the dialog a picture is drawn in, `figdraw:go` has the model draw (again stops it);
+                // `figprompt:<text>` leaves the description in its box, `figshape:wide|tall|square` picks the shape.
+                "figdraw" => Some(if arg == "go" { Cmd::FigureDraw } else { Cmd::DrawFigure }),
+                "figshape" => Some(Cmd::FigureShape(match arg { "wide" => wisp_core::imagegen::Shape::Wide, "tall" => wisp_core::imagegen::Shape::Tall, _ => wisp_core::imagegen::Shape::Square })),
+                "figprompt" => {
+                    if let Some(prompt) = self.modal.as_ref().and_then(|modal| match modal { Modal::Figure(form) => form.draw.as_ref().map(|draw| draw.prompt.clone()), _ => None }) {
+                        prompt.update(cx, |input, cx| input.set_text(arg, cx));
+                    }
+                    return;
+                }
                 // `figlabel:` / `figlegend:` / `figtags:` / `fignotes:` leave text in a field of the figure's dialog, as if typed.
                 "figlabel" | "figlegend" | "figtags" | "fignotes" => {
                     if let Some(Modal::Figure(form)) = self.modal.as_ref() {
