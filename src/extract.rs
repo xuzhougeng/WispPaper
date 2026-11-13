@@ -331,7 +331,7 @@ impl Workspace {
     /// papers at a time (设置 › AI says how many; the model is the one that
     /// screens). What it says is kept as proposals; no field is written.
     fn extract_start(&mut self, papers: Vec<String>, fields: Vec<String>, again: bool, cx: &mut Context<Self>) -> Result<(), String> {
-        let profile = self.settings.profile_for_or_default(Task::Screen);
+        let profile = self.settings.speaking_profile_for(Task::Screen);
         let workers = self.settings.screen_workers;
         let Some(lib) = self.lib.as_mut() else { return Ok(()) };
         if lib.extract.running() { return Err(t("助手还在读上一轮，等它结束或先停止。").into()) }
@@ -362,7 +362,7 @@ impl Workspace {
     /// the answer is in. A paper without a usable answer is counted and
     /// left for another run; several of them in a row end this one.
     fn extract_next(&mut self, run: u64, cx: &mut Context<Self>) {
-        let profile = self.settings.profile_for_or_default(Task::Screen);
+        let profile = self.settings.speaking_profile_for(Task::Screen);
         let Some(lib) = self.lib.as_mut().filter(|l| l.extract.run == run) else { return };
         let Some((id, wanted)) = lib.extract.todo.pop() else { return };
         let Some(paper) = lib.paper(&id).cloned() else { return self.extract_next(run, cx) };
@@ -433,7 +433,7 @@ impl Workspace {
     /// The sparkle by a field of a paper: ask about that one field, whatever
     /// was said of it before. The answer waits under the field as a proposal.
     fn extract_ask(&mut self, key: Key, cx: &mut Context<Self>) {
-        let profile = self.settings.profile_for_or_default(Task::Screen);
+        let profile = self.settings.speaking_profile_for(Task::Screen);
         let Some(lib) = self.lib.as_mut() else { return };
         if lib.extract.asking.contains(&key) { return }
         lib.extract.ask_errors.remove(&key);
@@ -603,7 +603,7 @@ impl Workspace {
         let with_text = plan.iter().filter(|(id, _)| lib.paper(id).is_some_and(|paper| paper.fulltext == "stored")).count();
         let unreadable = form.papers.iter().filter_map(|id| lib.paper(id)).filter(|paper| !readable(paper)).count();
         let resting = form.papers.len() - plan.len() - unreadable;
-        let profile = self.settings.profile_for_or_default(Task::Screen);
+        let profile = self.settings.speaking_profile_for(Task::Screen);
         let configured = self.screen_configured();
         let rows: Vec<Stateful<Div>> = lib.fields.iter().enumerate().map(|(n, field)| {
             let on = form.fields.contains(&field.id);

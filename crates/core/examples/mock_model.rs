@@ -26,6 +26,14 @@
 //! Asked to work on a paragraph of the manuscript (写作), it streams the
 //! paragraph back in pieces with a few words changed (a translation is
 //! marked as one), so the result card and its marks can be watched.
+//! Asked for a picture (生图) through any of the three interfaces (the
+//! Images API, Gemini's own, chat completions), it draws one of the shape
+//! asked for, coloured by the description, and answers the way that
+//! interface does; a description containing 「试试失败」 is refused. Asked
+//! the way a model that judges is asked (a System One request: a state
+//! and questions), it answers every choice question with probabilities: for
+//! a screening it is sure of a paper that mentions Arabidopsis, torn about
+//! one that mentions a root, and sure the rest have nothing to do with it.
 //!
 //! Requests are answered side by side, each after the given number of
 //! milliseconds (none by default), so a run of several screening requests
@@ -76,6 +84,103 @@ fn sent(request: &str, name: &str) -> String {
     rest[..end].to_string()
 }
 
+/// A PNG of the given size: a soft gradient with rings on it, its colours taken from `seed`.
+fn png(width: u32, height: u32, seed: u32) -> Vec<u8> {
+    let tint = |shift: u32| 96. + ((seed >> shift) & 0x7f) as f32;
+    let (red, green, blue) = (tint(0), tint(7), tint(14));
+    let mut raw = Vec::with_capacity((width * height * 3 + height) as usize);
+    for y in 0..height {
+        raw.push(0);
+        for x in 0..width {
+            let (fx, fy) = (x as f32 / width as f32, y as f32 / height as f32);
+            let ring = (((fx - 0.5).hypot(fy - 0.5) * 18.).sin() * 0.5 + 0.5) * 0.25 + 0.75;
+            for (channel, slope) in [(red, fx), (green, fy), (blue, 1. - fx)] {
+                raw.push(((channel * (0.6 + 0.4 * slope) + 40.) * ring).min(255.) as u8);
+            }
+        }
+    }
+    let mut packer = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+    packer.write_all(&raw).unwrap();
+    let packed = packer.finish().unwrap();
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut chunk = |kind: &[u8; 4], data: &[u8]| {
+        out.extend((data.len() as u32).to_be_bytes());
+        let mut crc = flate2::Crc::new();
+        crc.update(kind);
+        crc.update(data);
+        out.extend(kind);
+        out.extend(data);
+        out.extend(crc.sum().to_be_bytes());
+    };
+    let mut header = vec![];
+    header.extend(width.to_be_bytes());
+    header.extend(height.to_be_bytes());
+    header.extend([8, 2, 0, 0, 0]);
+    chunk(b"IHDR", &header);
+    chunk(b"IDAT", &packed);
+    chunk(b"IEND", &[]);
+    out
+}
+
+/// The answer to a request for a picture, as its interface gives it; `None` for a request that asks for words.
+fn picture(request: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(request).ok()?;
+    let (images, gemini, chat) = (value["prompt"].is_string(), value["generationConfig"]["responseModalities"].is_array(), value["modalities"].is_array());
+    if !images && !gemini && !chat { return None }
+    let prompt = value["prompt"].as_str().or(value["contents"][0]["parts"][0]["text"].as_str()).or(value["messages"][0]["content"].as_str()).unwrap_or("");
+    println!("picture: model {} for {:?}", value["model"].as_str().unwrap_or("(in the address)"), prompt.chars().take(40).collect::<String>());
+    if prompt.contains("试试失败") {
+        let body = r#"{"error":{"message":"（假模型）这个描述画不了。"}}"#;
+        return Some(format!("HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len()));
+    }
+    let shape = value["size"].as_str().map(|size| size.split_once('x').map_or((1., 1.), |(w, h)| (w.parse().unwrap_or(1.), h.parse().unwrap_or(1.)))).or_else(|| {
+        let ratio = value["generationConfig"]["imageConfig"]["aspectRatio"].as_str().or(value["image_config"]["aspect_ratio"].as_str())?;
+        ratio.split_once(':').map(|(w, h)| (w.parse().unwrap_or(1.), h.parse().unwrap_or(1.)))
+    });
+    let (w, h): (f32, f32) = shape.unwrap_or((1., 1.));
+    let (width, height) = if w > h { (720, (720. * h / w) as u32) } else { ((720. * w / h) as u32, 720) };
+    let seed = prompt.bytes().fold(2166136261u32, |hash, byte| (hash ^ byte as u32).wrapping_mul(16777619));
+    let data = wisp_core::ai::base64(&png(width, height, seed));
+    let body = if images {
+        serde_json::json!({"created": 0, "data": [{"b64_json": data}]})
+    } else if gemini {
+        serde_json::json!({"candidates": [{"content": {"role": "model", "parts": [{"text": "（假模型）画好了。"}, {"inlineData": {"mimeType": "image/png", "data": data}}]}}]})
+    } else {
+        serde_json::json!({"choices": [{"message": {"role": "assistant", "content": "（假模型）画好了。", "images": [{"type": "image_url", "image_url": {"url": format!("data:image/png;base64,{data}")}}]}}]})
+    }
+    .to_string();
+    Some(format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len()))
+}
+
+/// The answer to a System One request (a state and typed questions); `None` for any other request.
+fn judgement(request: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(request).ok()?;
+    let questions = value["questions"].as_object()?;
+    // What is judged is the paper; the topic it is judged against is said beside it.
+    let state = if value["state"]["paper"].is_object() { value["state"]["paper"].to_string() } else { value["state"].to_string() };
+    println!("judge: model {} with {} question(s)", value["model"].as_str().unwrap_or(""), questions.len());
+    let mut answers = serde_json::Map::new();
+    for (name, question) in questions {
+        let options: Vec<String> = question["criteria"].as_object().map(|options| options.keys().cloned().collect()).unwrap_or_default();
+        let answer = match question["type"].as_str().unwrap_or("") {
+            "choice" => {
+                // The shares for include, related and irrelevant; any other set of options gets its first.
+                let shares = if state.contains("rabidopsis") { [0.92, 0.06, 0.02] } else if state.to_lowercase().contains("root") { [0.34, 0.45, 0.21] } else { [0.03, 0.07, 0.90] };
+                let share = |option: &str, at: usize| match option { "include" => shares[0], "related" => shares[1], "irrelevant" => shares[2], _ => if at == 0 { 0.9 } else { 0.1 / (options.len().max(2) - 1) as f64 } };
+                let probabilities: serde_json::Map<String, serde_json::Value> = options.iter().enumerate().map(|(at, option)| (option.clone(), serde_json::json!(share(option, at)))).collect();
+                let (choice, top) = options.iter().enumerate().map(|(at, option)| (option.clone(), share(option, at))).fold((String::new(), -1.), |best, next| if next.1 > best.1 { next } else { best });
+                // Sure when one answer has nearly all of it, as the real one's confidence is.
+                serde_json::json!({"type": "choice", "choice": choice, "confidence": ((top - 0.34) / 0.66f64).max(0.05), "probabilities": probabilities})
+            }
+            "noul" => serde_json::json!({"type": "noul", "noul": if state.contains("rabidopsis") { 0.95 } else { 0.1 }}),
+            _ => serde_json::json!({"type": "score", "score": 1.0, "confidence": 0.5, "legend": {}, "probabilities": {}}),
+        };
+        answers.insert(name.clone(), answer);
+    }
+    let body = serde_json::json!({"model": "jev-mock", "answers": answers, "usage": {"input_tokens": state.len() / 4, "output_tokens": 1}}).to_string();
+    Some(format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len()))
+}
+
 fn main() {
     let port = std::env::args().nth(1).unwrap_or_else(|| "8787".into());
     let delay: u64 = std::env::args().nth(2).and_then(|ms| ms.parse().ok()).unwrap_or(0);
@@ -90,6 +195,11 @@ fn main() {
 fn answer(mut stream: TcpStream, delay: u64) {
     {
         let request = body(&mut stream);
+        if let Some(reply) = judgement(&request).or_else(|| picture(&request)) {
+            std::thread::sleep(std::time::Duration::from_millis(delay));
+            let _ = stream.write_all(reply.as_bytes());
+            return;
+        }
         let kind = if request.contains("图片库助手") { "figure" } else if request.contains("文献检索助手") { "search words for citations" } else if request.contains("只能从给出的候选里选") { "papers to cite" } else if request.contains("改稿助手") { "revise a section" } else if request.contains("审稿助手") { "review of a section" } else if request.contains("学术写作助手") { "write" } else if request.contains("文献筛选助手") { "screen" } else if request.contains("文献信息提取助手") { "extract" } else if request.contains("写作检索词助手") { "search words" } else if request.contains("翻译助手") { "translate" } else if request.contains("\"tools\"") { "chat" } else { "queries" };
         println!("{kind}: model {} thinking {} output_config {}", sent(&request, "model"), sent(&request, "thinking"), sent(&request, "output_config"));
         std::thread::sleep(std::time::Duration::from_millis(delay));

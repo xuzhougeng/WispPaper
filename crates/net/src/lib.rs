@@ -6,6 +6,7 @@ use serde_json::Value;
 use std::io::{BufRead, BufReader};
 use std::time::Duration;
 use wisp_core::ai::{self, ChatEvent, HttpRequest, Protocol, TurnReader};
+use wisp_core::imagegen;
 use wisp_core::lookup::{self, Identifier};
 use wisp_core::model::Paper;
 use wisp_core::update::{self, Release};
@@ -34,11 +35,16 @@ fn proxy_for(own: &str) -> Result<Option<ureq::Proxy>, String> {
 }
 
 fn agent(overall: Option<Duration>, proxy: &str) -> Result<ureq::Agent, String> {
+    patient_agent(overall, proxy, Duration::from_secs(120))
+}
+
+/// An agent that waits `answer` for a response to begin.
+fn patient_agent(overall: Option<Duration>, proxy: &str, answer: Duration) -> Result<ureq::Agent, String> {
     Ok(ureq::Agent::config_builder()
         // Error responses carry the reason in their body; read it rather than a bare status.
         .http_status_as_error(false)
         .timeout_connect(Some(Duration::from_secs(20)))
-        .timeout_recv_response(Some(Duration::from_secs(120)))
+        .timeout_recv_response(Some(answer))
         .timeout_global(overall)
         .user_agent(USER_AGENT)
         .proxy(proxy_for(proxy)?)
@@ -255,6 +261,69 @@ pub fn complete(request: HttpRequest, protocol: Protocol) -> Result<String, Stri
     }
     if text.trim().is_empty() { return Err("模型没有返回内容。".into()) }
     Ok(text)
+}
+
+/// How long a service may take over one picture: the large ones take minutes.
+const PICTURE_WAIT: Duration = Duration::from_secs(300);
+
+/// The most an answer with a picture in it, or the picture itself, may be.
+const MAX_PICTURE: u64 = 96 << 20;
+
+/// Ask a model service for a picture (`imagegen::request`) and wait for
+/// it: the bytes of a PNG, JPEG or WebP. A service too busy to take the
+/// request is asked again like a chat request; one that answers with an
+/// address has the picture fetched from there, through the same proxy.
+pub fn generate_image(request: HttpRequest, interface: imagegen::Interface) -> Result<Vec<u8>, String> {
+    let reply = post_json(&request, PICTURE_WAIT)?;
+    let picture = match imagegen::read(interface, &reply)? {
+        imagegen::Made::Picture(bytes) => bytes,
+        imagegen::Made::Address(url) => {
+            let mut response = patient_agent(Some(Duration::from_secs(180)), &request.proxy, Duration::from_secs(120))?.get(&url).call().map_err(network_error)?;
+            let status = response.status().as_u16();
+            if !(200..300).contains(&status) { return Err(format!("图片画好了，但取不回来（HTTP {status}）。")) }
+            response.body_mut().with_config().limit(MAX_PICTURE).read_to_vec().map_err(|e| format!("图片画好了，但取不回来：{e}"))?
+        }
+    };
+    if wisp_core::figure::picture_kind(&picture).is_none() { return Err("模型服务返回的不是 PNG、JPEG 或 WebP 图片。".into()) }
+    Ok(picture)
+}
+
+/// Ask a model that judges (`judge::request`) and wait for its answer, a
+/// JSON document read by `judge::read_screening`. These models answer in a
+/// fraction of a second; a busy service is asked again like any other.
+pub fn judge(request: HttpRequest) -> Result<Value, String> {
+    post_json(&request, Duration::from_secs(60))
+}
+
+/// POST a request whose answer is one JSON document, waiting `answer` for
+/// it to begin. A service too busy to take it (or never reached) is asked
+/// again, up to twice; an error response is said in the service's words.
+fn post_json(request: &HttpRequest, answer: Duration) -> Result<Value, String> {
+    let agent = patient_agent(None, &request.proxy, answer)?;
+    let body = request.body.to_string();
+    let mut tries = 0;
+    let mut response = loop {
+        let mut call = agent.post(&request.url);
+        for (name, value) in &request.headers {
+            call = call.header(name, value);
+        }
+        let last = tries >= RETRY_WAITS.len();
+        match call.send(body.as_str()) {
+            Ok(response) if last || !retryable(response.status().as_u16()) => break response,
+            Ok(_) => {}
+            // Minutes were waited already: asking again would only double them.
+            Err(err) if last || matches!(err, ureq::Error::Timeout(_)) => return Err(network_error(err)),
+            Err(_) => {}
+        }
+        std::thread::sleep(Duration::from_millis(RETRY_WAITS[tries]));
+        tries += 1;
+    };
+    let status = response.status().as_u16();
+    if !(200..300).contains(&status) {
+        let body = response.body_mut().read_to_string().unwrap_or_default();
+        return Err(ai::error_message(status, &body));
+    }
+    response.body_mut().with_config().limit(MAX_PICTURE).read_json::<Value>().map_err(|e| format!("无法解析模型服务的返回内容：{e}"))
 }
 
 #[cfg(test)]
@@ -492,6 +561,113 @@ event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{
         let (events, _) = ask(base, Protocol::Anthropic);
         assert!(matches!(&events[..], [ChatEvent::Retrying(1, _), ChatEvent::Retrying(2, _), ChatEvent::Error(e)] if e.contains("Overloaded")), "{events:?}");
         server.join().unwrap();
+    }
+
+    /// A picture asked for through each interface: what is sent where, and what comes back.
+    #[test]
+    fn pictures() {
+        // "\x89PNG\r\n\x1a\n" in base64.
+        const PNG: &str = "iVBORw0KGgo=";
+        let profile = |base: String, model: &str, interface: &str| Profile { protocol: Protocol::OpenAI, base_url: base, api_key: "test-key".into(), model: model.into(), interface: interface.into(), ..Default::default() };
+        let draw = |profile: &Profile| generate_image(imagegen::request(profile, "a root tip", imagegen::Shape::Wide).unwrap(), imagegen::interface(profile));
+
+        let (base, server) = serve("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{\"created\":1,\"data\":[{\"b64_json\":\"iVBORw0KGgo=\"}]}");
+        assert_eq!(draw(&profile(format!("{base}/v1"), "gpt-image-2", "")).as_deref(), Ok(&b"\x89PNG\r\n\x1a\n"[..]));
+        let received = server.join().unwrap();
+        assert!(received.starts_with("POST /v1/images/generations "), "{received}");
+        assert!(received.to_lowercase().contains("authorization: bearer test-key") && received.contains("\"size\":\"1536x1024\"") && received.contains("a root tip"), "{received}");
+
+        let (base, server) = serve("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Here.\"},{\"inlineData\":{\"mimeType\":\"image/png\",\"data\":\"iVBORw0KGgo=\"}}]}}]}");
+        assert_eq!(draw(&profile(format!("{base}/v1beta/openai"), "gemini-3-pro-image-preview", "gemini")).map(|bytes| bytes.len()), Ok(8));
+        let received = server.join().unwrap();
+        assert!(received.starts_with("POST /v1beta/models/gemini-3-pro-image-preview:generateContent "), "{received}");
+        assert!(received.to_lowercase().contains("x-goog-api-key: test-key") && received.contains("\"aspectRatio\":\"3:2\""), "{received}");
+
+        let (base, server) = serve("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"\",\"images\":[{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgo=\"}}]}}]}");
+        assert_eq!(draw(&profile(format!("{base}/v1"), "gemini-3.1-flash-image-preview", "")).map(|bytes| bytes.len()), Ok(8));
+        assert!(server.join().unwrap().starts_with("POST /v1/chat/completions "));
+        assert_eq!(PNG, ai::base64(b"\x89PNG\r\n\x1a\n"));
+
+        // Words in place of a picture, bytes that are no picture, and a refusal are each said as they are.
+        let (base, server) = serve("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{\"choices\":[{\"message\":{\"content\":\"I can only describe it.\"}}]}");
+        assert_eq!(draw(&profile(format!("{base}/v1"), "some-model", "chat")), Err("模型没有返回图片，它说：I can only describe it.".into()));
+        server.join().unwrap();
+        let (base, server) = serve("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{\"data\":[{\"b64_json\":\"JVBERi0xLjc=\"}]}");
+        assert!(draw(&profile(format!("{base}/v1"), "gpt-image-2", "")).unwrap_err().contains("不是 PNG"));
+        server.join().unwrap();
+        let (base, server) = serve("HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{\"error\":{\"message\":\"Your request was rejected by the safety system.\"}}");
+        assert_eq!(draw(&profile(format!("{base}/v1"), "gpt-image-2", "")), Err("请求被拒绝（HTTP 400）：Your request was rejected by the safety system.".into()));
+        server.join().unwrap();
+    }
+
+    /// A paper judged by a model that judges: what is sent where, what is made of the answer, and how its errors read.
+    #[test]
+    fn judgements() {
+        let paper = Paper { title: "A single-cell atlas of the root".into(), abstract_text: "We profile 100,000 cells.".into(), ..Default::default() };
+        let jev = |base: String| Profile { protocol: Protocol::OpenAI, base_url: format!("{base}/v1"), api_key: "test-key".into(), model: "jev-latest".into(), kind: wisp_core::judge::KIND.into(), ..Default::default() };
+        let ask = |base: String| judge(wisp_core::judge::screen_request(&jev(base), "root development", "", &paper, None).unwrap().0);
+
+        let (base, server) = serve("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{\"model\":\"jev-1.13.0\",\"answers\":{\"verdict\":{\"type\":\"choice\",\"choice\":\"include\",\"confidence\":0.88,\"probabilities\":{\"include\":0.93,\"related\":0.05,\"irrelevant\":0.02}}},\"usage\":{\"input_tokens\":212,\"output_tokens\":1}}");
+        let judged = wisp_core::judge::read_screening(&ask(base).unwrap()).unwrap();
+        assert_eq!((judged.verdict.as_str(), judged.confidence), ("included", Some(0.88)));
+        let received = server.join().unwrap();
+        assert!(received.starts_with("POST /v1/systemone "), "{received}");
+        assert!(received.to_lowercase().contains("authorization: bearer test-key") && received.contains("\"type\":\"choice\"") && received.contains("A single-cell atlas of the root"), "{received}");
+
+        // What is wrong with a request comes as `detail`: a sentence, or a list naming the field.
+        let (base, server) = serve("HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{\"detail\":\"Invalid API key\"}");
+        assert_eq!(ask(base), Err("API Key 无效或没有权限（HTTP 401）：Invalid API key".into()));
+        server.join().unwrap();
+        let (base, server) = serve("HTTP/1.1 422 Unprocessable Entity\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{\"detail\":[{\"loc\":[\"body\",\"model\"],\"msg\":\"Unknown model\",\"type\":\"value_error\"}]}");
+        assert_eq!(ask(base), Err("请求被拒绝（HTTP 422）：Unknown model".into()));
+        server.join().unwrap();
+        // Overloaded twice, then answered.
+        const BUSY: &str = "HTTP/1.1 529 Overloaded\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+        let (base, server) = serve_in_turn(vec![BUSY, BUSY, "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{\"answers\":{\"verdict\":{\"choice\":\"irrelevant\",\"confidence\":0.95}}}"]);
+        assert_eq!(ask(base).map(|reply| wisp_core::judge::read_screening(&reply).map(|j| j.verdict)), Ok(Ok("irrelevant".to_string())));
+        server.join().unwrap();
+    }
+
+    /// A service that answers with an address: the picture is fetched from there.
+    #[test]
+    fn a_picture_at_an_address() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let address = format!("{base}/out/a.png");
+        let server = std::thread::spawn(move || {
+            let mut asked = vec![];
+            for n in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut received = vec![];
+                let mut buffer = [0u8; 4096];
+                loop {
+                    let read = stream.read(&mut buffer).unwrap();
+                    received.extend_from_slice(&buffer[..read]);
+                    let text = String::from_utf8_lossy(&received).to_lowercase();
+                    // The whole request: its body is either counted or chunked, ending with a zero-length chunk.
+                    if let Some(end) = text.find("\r\n\r\n") {
+                        let length: usize = text.lines().find_map(|l| l.strip_prefix("content-length:").map(|v| v.trim().parse().unwrap())).unwrap_or(0);
+                        let chunked = text.contains("transfer-encoding: chunked");
+                        if (chunked && text.ends_with("0\r\n\r\n")) || (!chunked && received.len() >= end + 4 + length) { break }
+                    }
+                    if read == 0 { break }
+                }
+                asked.push(String::from_utf8_lossy(&received).to_string());
+                if n == 0 {
+                    let body = format!("{{\"data\":[{{\"url\":\"{address}\"}}]}}");
+                    stream.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len()).as_bytes()).unwrap();
+                } else {
+                    stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: image/jpeg\r\ncontent-length: 4\r\nconnection: close\r\n\r\n\xff\xd8\xff\xe0").unwrap();
+                }
+            }
+            asked
+        });
+        let profile = Profile { protocol: Protocol::OpenAI, base_url: format!("{base}/api/v3"), api_key: "k".into(), model: "doubao-seedream-4-0-250828".into(), ..Default::default() };
+        let picture = generate_image(imagegen::request(&profile, "根尖", imagegen::Shape::Square).unwrap(), imagegen::interface(&profile));
+        assert_eq!(picture.as_deref(), Ok(&b"\xff\xd8\xff\xe0"[..]));
+        let asked = server.join().unwrap();
+        assert!(asked[0].starts_with("POST /api/v3/images/generations ") && asked[0].contains("\"watermark\":false"), "{}", asked[0]);
+        assert!(asked[1].starts_with("GET /out/a.png "), "{}", asked[1]);
     }
 
     #[test]

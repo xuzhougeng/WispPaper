@@ -3,7 +3,9 @@
 //! legend, the person's own tags and notes, and the place it was cut from
 //! (paper, file, page, box), so it always leads back to its source. The
 //! pictures are files under `figures/` in the library folder; one that is
-//! removed moves to `removed/` like any other file.
+//! removed moves to `removed/` like any other file. A picture a model drew
+//! from a description (`imagegen`) is a figure too, one without a paper:
+//! its `paper_id` is empty and it leads back to nothing.
 //!
 //! The legend is not typed when the page says it: `caption` finds the
 //! caption that belongs to a piece of a page among the page's lines, for
@@ -27,7 +29,10 @@ use std::path::PathBuf;
 pub(crate) const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS figures (
     id TEXT PRIMARY KEY NOT NULL,
-    paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    -- The paper it was cut from; empty for a picture a model drew. Not a
+    -- reference, so that it can be empty: the trigger below is what takes a
+    -- paper's figures along with it.
+    paper_id TEXT NOT NULL DEFAULT '',
     -- The file it was cut from. Not a reference: the figure stays when that file is taken off its paper.
     resource_id TEXT NOT NULL DEFAULT '',
     -- The 1-based page it stands on (0 when unknown), and its box there in
@@ -48,7 +53,26 @@ CREATE TABLE IF NOT EXISTS figures (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_figures_paper ON figures(paper_id);
+CREATE TRIGGER IF NOT EXISTS figures_follow_paper AFTER DELETE ON papers BEGIN
+    DELETE FROM figures WHERE paper_id = old.id;
+END;
 "#;
+
+/// A library from before pictures could be drawn has `paper_id` as a
+/// reference to `papers`, which an empty one would break. Its table is made
+/// again without the reference, the rows as they are. An older build reads
+/// the result as before: the columns are the same, and the trigger removes a
+/// deleted paper's figures as the reference did.
+pub(crate) fn migrate(db: &mut rusqlite::Connection) -> Result<()> {
+    let made: Option<String> = db.query_row("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'figures'", [], |r| r.get(0)).optional()?;
+    if !made.is_some_and(|sql| sql.contains("REFERENCES papers")) { return Ok(()) }
+    let tx = db.transaction()?;
+    tx.execute_batch("ALTER TABLE figures RENAME TO figures_referring; DROP INDEX IF EXISTS idx_figures_paper; DROP TRIGGER IF EXISTS figures_follow_paper;")?;
+    tx.execute_batch(SCHEMA)?;
+    tx.execute_batch(&format!("INSERT INTO figures({COLUMNS}) SELECT {COLUMNS} FROM figures_referring; DROP TABLE figures_referring;"))?;
+    tx.commit()?;
+    Ok(())
+}
 
 /// The folder of a library that holds its figures' pictures.
 pub const FOLDER: &str = "figures";
@@ -61,6 +85,7 @@ pub const MAX_BYTES: usize = 40_000_000;
 pub struct Figure {
     /// Empty until it is first kept.
     pub id: String,
+    /// The paper it was cut from; empty for a picture a model drew.
     pub paper_id: String,
     /// The file it was cut from; empty when unknown.
     pub resource_id: String,
@@ -83,6 +108,11 @@ pub struct Figure {
 }
 
 impl Figure {
+    /// Whether a model drew it: it was cut from no paper.
+    pub fn drawn(&self) -> bool {
+        self.paper_id.is_empty()
+    }
+
     /// What stands for the figure in a line: its number, else the start of its legend.
     pub fn headline(&self) -> &str {
         if !self.label.trim().is_empty() { return self.label.trim() }
@@ -165,13 +195,16 @@ fn tidy(figure: &mut Figure) {
 }
 
 impl Store {
-    /// Keep a picture as a figure of a paper. The figure gets its id, its
-    /// file under `figures/` and its dates; the bytes must be a PNG, JPEG or WebP.
+    /// Keep a picture as a figure of a paper, or, with no paper named, as one
+    /// a model drew. The figure gets its id, its file under `figures/` and
+    /// its dates; the bytes must be a PNG, JPEG or WebP.
     pub fn add_figure(&mut self, figure: &mut Figure, picture: &[u8]) -> Result<()> {
         let Some(kind) = picture_kind(picture) else { bail!("这不是一张可以收藏的图片（支持 PNG、JPEG 和 WebP）。") };
         if picture.len() > MAX_BYTES { bail!("这张图片太大了（{} MB），收藏不了。", picture.len() / 1_000_000) }
-        let held: Option<String> = self.db.query_row("SELECT id FROM papers WHERE id = ?1", [&figure.paper_id], |r| r.get(0)).optional()?;
-        if held.is_none() { bail!("文献不存在：{}", figure.paper_id) }
+        if !figure.drawn() {
+            let held: Option<String> = self.db.query_row("SELECT id FROM papers WHERE id = ?1", [&figure.paper_id], |r| r.get(0)).optional()?;
+            if held.is_none() { bail!("文献不存在：{}", figure.paper_id) }
+        }
         tidy(figure);
         figure.id = new_id("G");
         figure.local_path = format!("{FOLDER}/{}.{kind}", figure.id);
@@ -223,7 +256,7 @@ impl Store {
         Ok(())
     }
 
-    /// Every figure whose paper is outside the trash, the newest first.
+    /// Every figure whose paper is outside the trash, and those a model drew, the newest first.
     pub fn list_figures(&self) -> Result<Vec<Figure>> {
         let mut stmt = self.db.prepare(&format!("SELECT {COLUMNS} FROM figures WHERE paper_id NOT IN (SELECT paper_id FROM trashed_papers) ORDER BY added_at DESC, id DESC"))?;
         let figures = stmt.query_map([], row_to_figure)?.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -536,6 +569,56 @@ mod tests {
         store.delete_paper(&paper.id).unwrap();
         assert!(store.get_figure(&figure.id).is_err() && !store.figure_path(&figure).exists());
         assert!(root.join("removed").join(format!("{}.png", figure.id)).is_file());
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_picture_a_model_drew_has_no_paper() {
+        let (root, mut store, _) = library("drawn");
+        // A paper as the library gives it out, with an id of its own.
+        let paper = store.add_paper(Paper { title: "Cytokinin in the shoot".into(), ..Default::default() }).unwrap();
+        let mut drawn = Figure { legend: "A schematic of the root tip.".into(), tags: vec!["生成".into()], ..Default::default() };
+        store.add_figure(&mut drawn, &png(1024, 1024)).unwrap();
+        assert!(drawn.drawn() && store.figure_path(&drawn).is_file());
+        // It is listed with the others, and stays when papers come and go.
+        let mut cut = Figure { paper_id: paper.id.clone(), ..Default::default() };
+        store.add_figure(&mut cut, &png(10, 10)).unwrap();
+        assert_eq!(store.list_figures().unwrap().len(), 2);
+        store.trash_paper(&paper.id).unwrap();
+        assert_eq!(store.list_figures().unwrap(), vec![drawn.clone()]);
+        store.delete_paper(&paper.id).unwrap();
+        assert_eq!(store.list_figures().unwrap(), vec![drawn.clone()]);
+        store.remove_figure(&drawn.id).unwrap();
+        assert!(root.join("removed").join(format!("{}.png", drawn.id)).is_file());
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// A library whose figures still refer to their papers is made over, rows kept.
+    #[test]
+    fn an_older_table_is_made_over() {
+        let root = std::env::temp_dir().join(format!("wisp-figure-older-{}", new_id("T")));
+        let mut figure;
+        let paper;
+        {
+            let mut store = Store::open(&root).unwrap();
+            let held = store.add_paper(Paper { title: "Auxin".into(), ..Default::default() }).unwrap();
+            figure = Figure { paper_id: held.id.clone(), label: "Fig. 1".into(), tags: vec!["root".into()], ..Default::default() };
+            store.add_figure(&mut figure, &png(10, 10)).unwrap();
+            paper = held;
+            // The table as builds before this one made it.
+            let old = SCHEMA.replace("paper_id TEXT NOT NULL DEFAULT ''", "paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE");
+            let old = old.split("CREATE TRIGGER").next().unwrap().replace("CREATE TABLE IF NOT EXISTS figures", "CREATE TABLE figures_old");
+            store.db.execute_batch(&format!("{old} INSERT INTO figures_old SELECT * FROM figures; DROP TABLE figures; DROP TRIGGER IF EXISTS figures_follow_paper; ALTER TABLE figures_old RENAME TO figures;")).unwrap();
+            let mut drawn = Figure::default();
+            assert!(store.add_figure(&mut drawn, &png(10, 10)).is_err());
+        }
+        let mut store = Store::open(&root).unwrap();
+        assert_eq!(store.list_figures().unwrap(), vec![figure.clone()]);
+        let mut drawn = Figure::default();
+        store.add_figure(&mut drawn, &png(10, 10)).unwrap();
+        // A deleted paper still takes its own figures along, and only those.
+        store.delete_paper(&paper.id).unwrap();
+        assert_eq!(store.list_figures().unwrap(), vec![drawn]);
         std::fs::remove_dir_all(root).ok();
     }
 

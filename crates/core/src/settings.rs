@@ -94,10 +94,29 @@ pub enum Task {
     Translate,
     /// 写作's groundwork: sorting a full text into the parts of a paper, reading the pages of a scan.
     Structure,
+    /// 生图: pictures made from a description (`imagegen`). Done only by a model that draws, which does nothing else.
+    Image,
 }
 
 impl Task {
-    pub const ALL: [Task; 4] = [Task::Chat, Task::Screen, Task::Translate, Task::Structure];
+    pub const ALL: [Task; 5] = [Task::Chat, Task::Screen, Task::Translate, Task::Structure, Task::Image];
+    /// The tasks a model that answers in words does.
+    pub const WORDS: [Task; 4] = [Task::Chat, Task::Screen, Task::Translate, Task::Structure];
+
+    /// Whether the task is done by a model that draws.
+    pub fn draws(self) -> bool {
+        self == Task::Image
+    }
+
+    /// Whether a model can do the task: drawing takes a model that draws, every other task one that
+    /// answers in words, and screening, which wants one of a few verdicts, one that judges as well.
+    pub fn takes(self, model: &Model) -> bool {
+        match self {
+            Task::Image => model.draws(),
+            Task::Screen => model.speaks() || model.judges(),
+            _ => model.speaks(),
+        }
+    }
 
     pub fn label(self) -> &'static str {
         match self {
@@ -105,6 +124,7 @@ impl Task {
             Task::Screen => "批量筛选",
             Task::Translate => "翻译",
             Task::Structure => "整理全文",
+            Task::Image => "生图",
         }
     }
 }
@@ -119,6 +139,8 @@ pub struct Tasks {
     pub screen: String,
     pub translate: String,
     pub structure: String,
+    /// The model that draws; empty is the first one that can.
+    pub image: String,
 }
 
 impl Tasks {
@@ -128,6 +150,7 @@ impl Tasks {
             Task::Screen => &self.screen,
             Task::Translate => &self.translate,
             Task::Structure => &self.structure,
+            Task::Image => &self.image,
         }
     }
 
@@ -137,6 +160,7 @@ impl Tasks {
             Task::Screen => &mut self.screen,
             Task::Translate => &mut self.translate,
             Task::Structure => &mut self.structure,
+            Task::Image => &mut self.image,
         } = id.to_string();
     }
 }
@@ -251,8 +275,9 @@ impl Settings {
                 }
             }
         }
+        // A task keeps only a model that can do it: one that draws or judges answers no question.
         for task in Task::ALL {
-            if self.model(self.tasks.get(task)).is_none() { self.tasks.set(task, "") }
+            if !self.model(self.tasks.get(task)).is_some_and(|(_, model)| task.takes(model)) { self.tasks.set(task, "") }
         }
         self.screen_workers = self.screen_workers.clamp(1, MAX_SCREEN_WORKERS);
         self.translate_workers = self.translate_workers.clamp(1, MAX_SCREEN_WORKERS);
@@ -278,17 +303,32 @@ impl Settings {
         self.model(id).map(|(provider, model)| provider.profile(model))
     }
 
-    /// Every model of every provider, in the order they are listed.
+    /// Every model that answers in words, of every provider, in the order they are listed.
     pub fn profiles(&self) -> Vec<Profile> {
-        self.providers.iter().flat_map(|provider| provider.models.iter().map(|model| provider.profile(model))).collect()
+        self.providers.iter().flat_map(|provider| provider.models.iter().filter(|model| model.speaks()).map(|model| provider.profile(model))).collect()
+    }
+
+    /// Every model that draws, in the order they are listed.
+    pub fn image_profiles(&self) -> Vec<Profile> {
+        self.providers.iter().flat_map(|provider| provider.models.iter().filter(|model| model.draws()).map(|model| provider.profile(model))).collect()
     }
 
     /// The model a task uses: its own, else the one for questions, else the
-    /// first that can answer (a key and a model name), else the first.
+    /// first that can answer (a key and a model name), else the first. 生图
+    /// has no part in that: it uses its own model, else the first that draws
+    /// and can be asked, else the first that draws, and none when no model draws.
+    /// A model that judges serves only the task it was chosen for, never by default.
     pub fn profile_for(&self, task: Task) -> Option<Profile> {
-        if let Some(profile) = self.profile(self.tasks.get(task)).or_else(|| self.profile(&self.tasks.chat)) { return Some(profile) }
-        let all = self.profiles();
+        if let Some((provider, model)) = self.model(self.tasks.get(task)).filter(|(_, model)| task.takes(model)) { return Some(provider.profile(model)) }
+        let all = if task.draws() { self.image_profiles() } else { self.profiles() };
+        if let Some(profile) = all.iter().find(|profile| !task.draws() && !self.tasks.chat.is_empty() && profile.id == self.tasks.chat) { return Some(profile.clone()) }
         all.iter().find(|profile| profile.missing().is_none()).or(all.first()).cloned()
+    }
+
+    /// The model a task's writing is done with: the task's own when it answers in words, else the
+    /// one for questions. 提取 shares screening's model, and cannot be done by one that only judges.
+    pub fn speaking_profile_for(&self, task: Task) -> Profile {
+        self.profile_for(task).filter(|profile| !profile.judges()).or_else(|| self.profile_for(Task::Chat)).unwrap_or_default()
     }
 
     /// The model a task uses; without any model at all, the built-in
@@ -312,11 +352,25 @@ impl Settings {
         self.tidy();
     }
 
-    /// One more model of a provider, and its id.
+    /// One more model of a provider, and its id. A name that says it draws
+    /// (`imagegen::looks_like`) or judges (`judge::looks_like`) makes it that
+    /// kind of model; `set_model_kind` says otherwise.
     pub fn add_model(&mut self, provider: usize, model: &str) -> Option<String> {
         let id = self.free_id();
-        self.providers.get_mut(provider)?.models.push(Model { id: id.clone(), model: model.trim().to_string(), effort: String::new() });
+        let kind = if crate::judge::looks_like(model) { crate::judge::KIND } else if crate::imagegen::looks_like(model) { crate::imagegen::KIND } else { "" };
+        self.providers.get_mut(provider)?.models.push(Model { id: id.clone(), model: model.trim().to_string(), kind: kind.into(), ..Default::default() });
         Some(id)
+    }
+
+    /// Say what kind a provider's model is: empty for one that answers in words, `imagegen::KIND`,
+    /// or `judge::KIND`. The tasks it served and can no longer do follow the default again.
+    pub fn set_model_kind(&mut self, provider: usize, index: usize, kind: &str) {
+        let Some(model) = self.providers.get_mut(provider).and_then(|provider| provider.models.get_mut(index)) else { return };
+        model.kind = kind.to_string();
+        // What only another kind has is let go of: thinking is for words, the interface for pictures.
+        if !model.speaks() { model.effort.clear() }
+        if !model.draws() { model.interface.clear() }
+        self.tidy();
     }
 
     pub fn remove_model(&mut self, provider: usize, index: usize) {
@@ -347,7 +401,7 @@ fn migrate(legacy: Vec<Profile>, defaults: Vec<Provider>) -> Vec<Provider> {
     let mut providers: Vec<Provider> = vec![];
     for profile in legacy {
         let base = profile.base_url.trim().trim_end_matches('/').to_string();
-        let model = Model { id: profile.id.clone(), model: profile.model.trim().to_string(), effort: profile.effort.clone() };
+        let model = Model { id: profile.id.clone(), model: profile.model.trim().to_string(), effort: profile.effort.clone(), ..Default::default() };
         let same = providers.iter_mut().find(|p| p.protocol == profile.protocol && p.base_url.trim_end_matches('/') == base && p.api_key == profile.api_key.trim() && p.proxy == profile.proxy.trim());
         match same {
             Some(provider) => provider.models.push(model),
@@ -448,9 +502,9 @@ mod tests {
         s.providers[1].api_key.clear();
         // Unbound, everything is the first; screening and translation follow the one for questions.
         s.tasks.set(Task::Chat, "m4");
-        assert_eq!(Task::ALL.map(|task| uses(&s, task)), ["glm-5.3", "glm-5.3", "glm-5.3", "glm-5.3"]);
+        assert_eq!(Task::WORDS.map(|task| uses(&s, task)), ["glm-5.3", "glm-5.3", "glm-5.3", "glm-5.3"]);
         s.tasks.set(Task::Translate, "m2");
-        assert_eq!(Task::ALL.map(|task| uses(&s, task)), ["glm-5.3", "glm-5.3", "deepseek-v4-flash", "glm-5.3"]);
+        assert_eq!(Task::WORDS.map(|task| uses(&s, task)), ["glm-5.3", "glm-5.3", "deepseek-v4-flash", "glm-5.3"]);
         // A removed model or provider takes its bindings along; an id is not handed out twice while in use.
         s.remove_provider(2);
         assert_eq!((s.tasks.chat.as_str(), s.tasks.translate.as_str(), uses(&s, Task::Chat).as_str()), ("", "m2", "deepseek-v4-pro"));
@@ -481,6 +535,65 @@ mod tests {
         old.save(&path).unwrap();
         assert_eq!(Settings::load(&path).unwrap(), old);
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn models_that_draw() {
+        let mut s = Settings::default();
+        // No model draws yet: 生图 has none, and never borrows one that answers in words.
+        assert_eq!((s.profile_for(Task::Image), s.image_profiles().len(), s.profiles().len()), (None, 0, 5));
+        // A name that says so makes a drawing model; it is no candidate for questions.
+        let seedream = s.add_model(0, "doubao-seedream-4-0-250828").unwrap();
+        assert!(s.model(&seedream).unwrap().1.draws());
+        assert_eq!((s.profiles().len(), s.profile_for(Task::Image).map(|p| p.model)), (5, Some("doubao-seedream-4-0-250828".into())));
+        // A service added from a preset brings its own; the first that can be asked is used until one is chosen.
+        let openai = s.add_provider(Provider::from_preset(provider::preset("openai").unwrap()));
+        s.providers[openai].api_key = "k".into();
+        assert_eq!(s.profile_for(Task::Image).map(|p| (p.model, p.provider)), Some(("gpt-image-2".into(), "OpenAI".into())));
+        s.tasks.set(Task::Image, &seedream);
+        assert_eq!(s.profile_for(Task::Image).map(|p| p.model), Some("doubao-seedream-4-0-250828".into()));
+        assert_eq!(s.profile_for(Task::Chat).map(|p| p.model), Some("deepseek-v4-pro".into()));
+        // A task bound to a model of the other kind lets go of it, on reading and when a model changes its kind.
+        s.tasks.set(Task::Chat, &seedream);
+        s.tidy();
+        assert_eq!((s.tasks.chat.as_str(), s.tasks.image.as_str()), ("", seedream.as_str()));
+        s.providers[0].models[2].interface = "chat".into();
+        s.set_model_kind(0, 2, "");
+        assert_eq!((s.tasks.image.as_str(), s.providers[0].models[2].interface.as_str(), s.profiles().len()), ("", "", 6));
+        s.set_model_kind(0, 0, crate::imagegen::KIND);
+        assert_eq!((s.providers[0].models[0].draws(), s.profile_for(Task::Chat).map(|p| p.model)), (true, Some("deepseek-v4-flash".into())));
+        // Kept in the file, and read back as it was.
+        let dir = std::env::temp_dir().join(format!("wisp-settings-{}", crate::model::new_id("T")));
+        let path = dir.join("settings.json");
+        s.tasks.set(Task::Image, &s.providers[openai].models[0].id.clone());
+        s.save(&path).unwrap();
+        assert!(std::fs::read_to_string(&path).unwrap().contains("\"kind\": \"image\""));
+        assert_eq!(Settings::load(&path).unwrap(), s);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn models_that_judge() {
+        let mut s = Settings::default();
+        let typesafe = s.add_provider(Provider::from_preset(provider::preset("typesafe").unwrap()));
+        s.providers[typesafe].api_key = "k".into();
+        let jev = s.providers[typesafe].models[0].id.clone();
+        // It is the only model with a key, and still no task falls to it by itself.
+        assert_eq!(Task::WORDS.map(|task| s.profile_for(task).unwrap().model), ["deepseek-v4-pro"; 4]);
+        assert!(s.profiles().iter().all(|p| !p.judges()) && s.profile_for(Task::Image).is_none());
+        // Screening can be given to it; nothing else can, and what shares screening's model keeps to words.
+        for task in Task::ALL { s.tasks.set(task, &jev) }
+        s.tidy();
+        assert_eq!((s.tasks.screen.as_str(), s.tasks.chat.as_str(), s.tasks.translate.as_str(), s.tasks.image.as_str()), (jev.as_str(), "", "", ""));
+        assert_eq!(s.profile_for(Task::Screen).map(|p| (p.model.clone(), p.judges())), Some(("jev-latest".into(), true)));
+        assert_eq!(s.speaking_profile_for(Task::Screen).model, "deepseek-v4-pro");
+        assert_eq!(s.speaking_profile_for(Task::Translate).model, "deepseek-v4-pro");
+        // A name that says so makes a judging model; made a model of words, it lets go of screening only if it must.
+        assert!(s.add_model(0, "jev-1.13.0").and_then(|id| s.model(&id).map(|(_, m)| m.judges())).unwrap());
+        s.set_model_kind(typesafe, 0, "");
+        assert_eq!((s.tasks.screen.as_str(), s.profile_for(Task::Screen).map(|p| p.judges())), (jev.as_str(), Some(false)));
+        s.set_model_kind(typesafe, 0, crate::imagegen::KIND);
+        assert_eq!((s.tasks.screen.as_str(), s.profile_for(Task::Screen).map(|p| p.model)), ("", Some("deepseek-v4-pro".into())));
     }
 
     #[test]
