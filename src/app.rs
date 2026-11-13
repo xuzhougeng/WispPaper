@@ -110,6 +110,31 @@ pub enum MenuKind {
     Answer(bool, String),
 }
 
+/// What a person does to a review's record from the conversation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ReviewDo {
+    Requirements,
+    ConfirmRequirements,
+    Outline,
+    ConfirmOutline,
+    /// Keep a text as a section; its citations become rows of evidence.
+    Section,
+    Checks,
+    Complete,
+}
+
+/// A text of a review's record that can be changed by hand.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ReviewText {
+    Requirements,
+    Outline,
+    /// The free notes on the evidence.
+    Notes,
+    Checks,
+    /// A section, by its name.
+    Section(String),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Cmd {
     // Home
@@ -273,19 +298,26 @@ pub enum Cmd {
     CopyText(String),
     /// Save an answer and its source labels to a new manuscript, at the person's request.
     AnswerToManuscript(String, String),
-    /// Start or update the review record tied to the current conversation.
+    /// Start the review record of the conversation with the library (`src/chat.rs`; `/review` does it by itself).
     StartReview,
     ReviewToManuscript,
+    /// The review's record in place of the conversation, or the conversation again.
     ToggleReview,
+    /// A step of the review with the text it takes (an answer, or what is selected in one; empty for a confirmation).
+    Review(ReviewDo, String),
+    /// The dialog that changes a text of the review's record.
+    EditReviewText(ReviewText),
     AskRemoveReviewSection(String),
-    ReviewAction(String, String),
-    /// Edit a user-entered link between a claim and a source.
+    RemoveReviewSection(String),
+    /// The dialog for a claim and its source: a row of the record (its id), or a new one for this claim.
     EditReviewEvidence(Option<String>, String),
     PickEvidencePaper(String),
     PickEvidenceSource(String),
-    JudgeReviewEvidence(String, String, String, String, i64),
-    AskRemoveReviewEvidence(String, String, String, i64),
-    RemoveReviewEvidence(String, String, String, i64),
+    PickEvidenceSection(String),
+    /// The person's judgment of a row of evidence; the one it has already takes it back.
+    JudgeReviewEvidence(String, wisp_core::review::EvidenceJudgment),
+    AskRemoveReviewEvidence(String),
+    RemoveReviewEvidence(String),
     /// Copy what is selected in a text of the window that is not an answer (`src/select.rs`).
     CopySelected,
     /// A tag of the library under another name (the dialog), or taken off every paper (after asking).
@@ -843,7 +875,11 @@ pub struct Chat {
     pub tools_open: HashSet<usize>,
     /// The list of what the model was (or will be) given is unfolded.
     pub materials_open: bool,
-    /// Show the current review record.
+    /// The review this conversation writes, as last read from the library (`Library::load_review`); only the conversation with the library has one.
+    pub review: Option<wisp_core::review::Review>,
+    /// The quotations of the review's evidence looked up in their papers, by the row's id.
+    pub review_checks: HashMap<String, ai::Quoted>,
+    /// The review's record is on show in place of the conversation.
     pub review_open: bool,
     /// What is selected in an answer: the answer's place among the messages, the two ends in order of selecting, and whether the pointer is still held.
     pub picked: Option<(usize, crate::markdown::Place, crate::markdown::Place, bool)>,
@@ -917,8 +953,10 @@ pub enum Modal {
     Section { editing: Option<String>, name: Entity<TextInput>, kind: String },
     /// 写作: a section's earlier versions, newest first.
     History { section: String, snapshots: Vec<Snapshot>, chosen: usize },
-    /// A manually maintained claim/source pair in a review.
+    /// A claim of a review and the source it rests on.
     ReviewEvidence(Box<crate::chat::EvidenceForm>),
+    /// A text of a review's record, to change by hand.
+    ReviewText { what: ReviewText, input: Entity<TextInput> },
 }
 
 pub struct Library {
@@ -1061,6 +1099,8 @@ impl Chat {
             running: vec![],
             tools_open: Default::default(),
             materials_open: false,
+            review: None,
+            review_checks: HashMap::new(),
             review_open: false,
             picked: None,
             checks: HashMap::new(),
@@ -1165,6 +1205,9 @@ impl Chat {
         self.allow_changes = false;
         self.running.clear();
         self.tools_open.clear();
+        self.review = None;
+        self.review_checks.clear();
+        self.review_open = false;
         self.picked = None;
         self.checks.clear();
         self.started = None;
@@ -1301,6 +1344,22 @@ impl Library {
         self.chat_mut(about_paper).checks.extend(checks);
     }
 
+    /// Read the review of the conversation with the library again, and look its quotations up in the papers.
+    /// Called when the conversation, the record or the papers change, never while drawing.
+    pub fn load_review(&mut self) -> anyhow::Result<()> {
+        let review = if self.library_chat.id.is_empty() { None } else { self.store.review_for_conversation(&self.library_chat.id)? };
+        let mut texts: HashMap<String, Option<Vec<String>>> = HashMap::new();
+        let mut checks = HashMap::new();
+        for row in review.iter().flat_map(|review| &review.evidence_rows).filter(|row| !row.quote.is_empty()) {
+            let Some(paper) = self.papers.iter().find(|paper| paper.id == row.paper_id) else { continue };
+            let pages = texts.entry(row.paper_id.clone()).or_insert_with(|| self.store.paper_pages(&row.paper_id).ok().flatten());
+            checks.insert(row.id.clone(), ai::check_quote(&row.quote, row.page, paper, pages.as_deref()));
+        }
+        if review.is_none() { self.library_chat.review_open = false }
+        (self.library_chat.review, self.library_chat.review_checks) = (review, checks);
+        Ok(())
+    }
+
     pub fn refilter(&mut self) {
         self.shown = filter::filter_papers(&self.papers, &self.filters, time::now_millis());
     }
@@ -1331,6 +1390,8 @@ impl Library {
             self.asked.retain(|id| held.contains(id));
         }
         self.refilter();
+        // A paper changed or gone is another source for the review's evidence.
+        self.load_review()?;
         Ok(())
     }
 }
@@ -1951,28 +2012,16 @@ impl Workspace {
             }
             Cmd::AskRemoveChat(paper, id) => {
                 let Some(title) = self.lib.as_ref().and_then(|l| l.chat(paper).history.as_ref()?.iter().find(|c| c.id == id).map(|c| c.title.clone())) else { return };
-                let linked = match self.lib.as_ref().map(|l| l.store.review_for_conversation(&id)) {
-                    Some(Ok(Some(review))) if !review.evidence_rows.is_empty() => return self.fail("该对话有证据表记录，暂不能删除。请先保留所需内容，再打开「查看记录」删除全部证据。", cx),
-                    Some(Ok(review)) => review.is_some(),
-                    Some(Err(err)) => return self.fail(format!("无法检查关联的综述：{err:#}"), cx),
-                    None => return,
-                };
+                // A review is reached through its conversation alone, so it goes with it: say so first.
+                let reviewed = self.lib.as_ref().is_some_and(|l| l.store.review_for_conversation(&id).is_ok_and(|review| review.is_some()));
                 self.modal_error.clear();
-                let warning = if linked { "\n\n这次对话关联了综述和证据表。删除后记录仍在数据库中，但目前无法通过界面找回或重新关联；请先保留需要的内容。" } else { "" };
+                let warning = if reviewed { "\n\n这次对话的综述记录（写作要求、大纲、正文和证据）会一起删除；已经存为稿件的内容不受影响。" } else { "" };
                 self.modal = Some(Modal::Confirm { title: "删除这次对话？".into(), message: format!("「{title}」连同其中的图片会从这个文献库的历史对话里删除，不能恢复。文献库里的文献不受影响。{warning}"), action: "删除".into(), cmd: Cmd::RemoveChat(paper, id) });
             }
             Cmd::RemoveChat(paper, id) => {
                 if let Some(lib) = self.lib.as_mut() {
                     let about = if paper { lib.selected.clone().unwrap_or_default() } else { String::new() };
-                    if let Err(err) = lib.store.remove_conversation(&id) {
-                        // The database also protects against a second window
-                        // adding evidence after the confirmation was opened.
-                        let blocked = lib.store.review_for_conversation(&id).is_ok_and(|review| review.is_some_and(|r| !r.evidence_rows.is_empty()));
-                        let message = if blocked { "该对话有证据表记录，暂不能删除。请先保留所需内容，再打开「查看记录」删除全部证据。".to_string() } else { format!("删除对话失败：{err:#}") };
-                        self.run(Cmd::CloseModal, window, cx);
-                        return self.fail(message, cx)
-                    }
-                    let result = lib.store.list_conversations(&about);
+                    let result = lib.store.remove_conversation(&id).and_then(|()| lib.store.list_conversations(&about));
                     let chat = lib.chat_mut(paper);
                     // The conversation in hand, once removed, would only be saved again with the next answer.
                     if chat.id == id {
@@ -2032,12 +2081,19 @@ impl Workspace {
             Cmd::AnswerToManuscript(question, answer) => self.answer_to_manuscript(question, answer, window, cx),
             Cmd::StartReview => self.start_review(cx),
             Cmd::ReviewToManuscript => self.review_to_manuscript(window, cx),
-            Cmd::ToggleReview => { if let Some(lib) = self.lib.as_mut() { lib.library_chat.review_open = !lib.library_chat.review_open; } },
+            Cmd::ToggleReview => {
+                if let Some(lib) = self.lib.as_mut() { lib.library_chat.review_open = !lib.library_chat.review_open && lib.library_chat.review.is_some() }
+            }
+            Cmd::Review(what, text) => self.review_do(what, text, cx),
+            Cmd::EditReviewText(what) => self.edit_review_text(what, window, cx),
             Cmd::AskRemoveReviewSection(name) => {
                 self.modal_error.clear();
-                self.modal = Some(Modal::Confirm { title: format!("删除综述记录中的「{name}」？"), message: "这一节会从综述记录中移除，已创建的稿件不受影响。".into(), action: "删除".into(), cmd: Cmd::ReviewAction("remove_section".into(), name) });
+                self.modal = Some(Modal::Confirm { title: format!("删除综述记录中的「{name}」？"), message: "这一节会从综述记录中移除，它的引用带来的、你还没有判断过的证据也一起移除。已创建的稿件不受影响。".into(), action: "删除".into(), cmd: Cmd::RemoveReviewSection(name) });
             }
-            Cmd::ReviewAction(action, text) => self.review_action(&action, text, cx),
+            Cmd::RemoveReviewSection(name) => {
+                self.review_apply(wisp_core::review::ReviewAction::RemoveSection { name }, "这一节已从综述记录中移除", cx);
+                self.run(Cmd::CloseModal, window, cx);
+            }
             Cmd::EditReviewEvidence(id, claim) => self.edit_review_evidence(id, claim, window, cx),
             Cmd::PickEvidencePaper(id) => {
                 if let Some(Modal::ReviewEvidence(form)) = self.modal.as_mut() { form.paper_id = id }
@@ -2045,17 +2101,22 @@ impl Workspace {
             Cmd::PickEvidenceSource(source) => {
                 if let Some(Modal::ReviewEvidence(form)) = self.modal.as_mut() { form.source = source }
             }
-            Cmd::JudgeReviewEvidence(review_id, conversation_id, id, judgment, revision) => self.judge_review_evidence(review_id, conversation_id, id, &judgment, revision, cx),
-            Cmd::AskRemoveReviewEvidence(review_id, conversation_id, id, revision) => {
-                let current = self.lib.as_ref().filter(|lib| lib.library_chat.id == conversation_id).and_then(|lib| lib.store.review_for_conversation(&conversation_id).ok().flatten());
-                if !current.is_some_and(|review| review.id == review_id && review.revision == revision && review.evidence_rows.iter().any(|row| row.id == id)) {
-                    return self.fail("证据记录已变化，请重新查看后再删除。", cx)
-                }
-                self.modal_error.clear();
-                self.modal = Some(Modal::Confirm { title: "删除这条证据记录？".into(), message: "这条论断与来源的关联会从综述记录中移除，文献和正文不受影响。".into(), action: "删除".into(), cmd: Cmd::RemoveReviewEvidence(review_id, conversation_id, id, revision) });
+            Cmd::PickEvidenceSection(section) => {
+                if let Some(Modal::ReviewEvidence(form)) = self.modal.as_mut() { form.section = section }
             }
-            Cmd::RemoveReviewEvidence(review_id, conversation_id, id, revision) => {
-                self.remove_review_evidence(review_id, conversation_id, id, revision, cx);
+            Cmd::JudgeReviewEvidence(id, judgment) => {
+                use wisp_core::review::{EvidenceJudgment, ReviewAction};
+                // The judgment a row already has, clicked again, is taken back.
+                let has = self.lib.as_ref().and_then(|lib| lib.library_chat.review.as_ref()?.evidence_rows.iter().find(|row| row.id == id).map(|row| row.judgment == judgment && row.source_current));
+                let judgment = if has == Some(true) { EvidenceJudgment::Unreviewed } else { judgment };
+                self.review_apply(ReviewAction::JudgeEvidence { id, judgment }, "", cx);
+            }
+            Cmd::AskRemoveReviewEvidence(id) => {
+                self.modal_error.clear();
+                self.modal = Some(Modal::Confirm { title: "删除这条证据记录？".into(), message: "这条论断与来源的关联会从综述记录中移除，文献和正文不受影响。".into(), action: "删除".into(), cmd: Cmd::RemoveReviewEvidence(id) });
+            }
+            Cmd::RemoveReviewEvidence(id) => {
+                self.review_apply(wisp_core::review::ReviewAction::RemoveEvidence { id }, "证据记录已删除", cx);
                 self.run(Cmd::CloseModal, window, cx);
             }
             Cmd::CopyText(text) => {
@@ -3315,21 +3376,12 @@ impl Workspace {
         } else {
             (format!("我在文献的 PDF 里选中了下面的原文，问题是就它提的；引用它时沿用这里的出处写法。\n{}\n\n{prompt}", quoted.join("\n")), [quoted.join("\n"), question].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n"))
         };
-        // The saved record, not an assistant's claim, identifies the user-confirmed stages.
-        // Keep it with the sent question so replay uses the same context.
-        let prompt = if !about_paper && !chat.id.is_empty() {
-            match lib.store.review_for_conversation(&chat.id) {
-                Ok(Some(review)) => {
-                    let stage = if !review.requirements_confirmed { "写作要求尚未确认。先整理并请用户在界面确认，不要写大纲或正文。" }
-                        else if !review.outline_confirmed { "大纲尚未确认。可检索、提出和调整大纲，等待用户在界面确认，不要写正文。" }
-                        else { "要求和大纲已由用户确认。围绕大纲补充证据、按节写作或检查；如用户要改变要求或大纲，请提示在界面重新记录并确认。" };
-                    let sections = review.sections.iter().map(|section| format!("## {}\n{}", section.name, section.body)).collect::<Vec<_>>().join("\n\n");
-                    format!("{prompt}\n\n[当前综述记录]\n{stage}\n写作要求：\n{}\n\n大纲：\n{}\n\n证据记录：\n{}\n\n已保存正文（修改要求或大纲后可能需要重新审阅）：\n{}", review.requirements, review.outline, review.evidence, sections)
-                }
-                Ok(None) => prompt,
-                Err(err) => { chat.error = format!("无法读取综述记录：{err:#}"); chat.quotes = quotes; return cx.notify() }
-            }
-        } else { prompt };
+        // The record, not what the model says of itself, is where the review stands: each question of a review's conversation says so.
+        // Only what steers the writing goes along (the sections by name: their text was said in this conversation, and sending it with every question would send it many times over).
+        let prompt = match chat.review.as_ref().filter(|_| !about_paper) {
+            Some(review) => format!("{prompt}\n\n{}", crate::chat::review_note(review)),
+            None => prompt,
+        };
         let images = std::mem::take(&mut chat.attachments);
         chat.wire.push(ai::user_message_with(profile.protocol, &prompt, &wire_images(&images)));
         // Kept with the question, so the conversation taken up later asks what was asked now, whatever the command says by then.
@@ -3597,6 +3649,11 @@ impl Workspace {
     /// again, and the next question continues it. The model is given the
     /// library as it is now, under the labels the old answers use.
     fn open_chat(&mut self, about_paper: bool, id: &str, cx: &mut Context<Self>) {
+        self.open_chat_said(about_paper, id, cx);
+        if !about_paper && let Some(Err(err)) = self.lib.as_mut().map(|lib| lib.load_review()) { self.fail(format!("无法读取综述记录：{err:#}"), cx) }
+    }
+
+    fn open_chat_said(&mut self, about_paper: bool, id: &str, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
         let conversation = match lib.store.conversation(id) {
             Ok(Some(conversation)) => conversation,
@@ -4225,6 +4282,7 @@ impl Workspace {
             Modal::ImportReport => self.run(Cmd::CloseModal, window, cx),
             Modal::Section { .. } | Modal::History { .. } => self.submit_manuscript_modal(window, cx),
             Modal::ReviewEvidence(_) => self.submit_review_evidence(window, cx),
+            Modal::ReviewText { .. } => self.submit_review_text(window, cx),
             Modal::Complete(form) => {
                 if form.chosen.is_some() { self.complete_apply(window, cx) } else { self.complete_find(cx) }
             }
@@ -4607,6 +4665,26 @@ impl Workspace {
                     None
                 }
                 "materials" => Some(Cmd::ToggleMaterials),
+                // `review:requirements|outline|section|checks` takes the last answer for that step, `review:confirm` confirms what the step waits for,
+                // `review:record` shows the record or the conversation, `review:judge` says the first row of evidence is borne out, `review:manuscript` makes the manuscript.
+                "review" => self.lib.as_ref().and_then(|lib| {
+                    let answer = lib.library_chat.messages.iter().rev().find_map(|item| if let ChatItem::Answer(text) = item { Some(text.clone()) } else { None }).unwrap_or_default();
+                    let review = lib.library_chat.review.as_ref();
+                    match arg {
+                        "requirements" => Some(Cmd::Review(ReviewDo::Requirements, answer)),
+                        "outline" => Some(Cmd::Review(ReviewDo::Outline, answer)),
+                        "section" => Some(Cmd::Review(ReviewDo::Section, answer)),
+                        "checks" => Some(Cmd::Review(ReviewDo::Checks, answer)),
+                        "confirm" => Some(Cmd::Review(if review.is_some_and(|review| review.step() == 1) { ReviewDo::ConfirmRequirements } else { ReviewDo::ConfirmOutline }, String::new())),
+                        "complete" => Some(Cmd::Review(ReviewDo::Complete, String::new())),
+                        "record" => Some(Cmd::ToggleReview),
+                        "judge" => review.and_then(|review| review.evidence_rows.first()).map(|row| Cmd::JudgeReviewEvidence(row.id.clone(), wisp_core::review::EvidenceJudgment::Supports)),
+                        "evidence" => Some(Cmd::EditReviewEvidence(None, String::new())),
+                        "edit" => Some(Cmd::EditReviewText(ReviewText::Requirements)),
+                        "manuscript" => Some(Cmd::ReviewToManuscript),
+                        _ => Some(Cmd::StartReview),
+                    }
+                }),
                 "history-paper" => Some(Cmd::ToggleHistory(true)),
                 "newchat" => Some(Cmd::NewChat(arg == "paper")),
                 "note" => {

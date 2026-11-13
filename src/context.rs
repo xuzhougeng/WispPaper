@@ -231,6 +231,11 @@ impl Workspace {
                     breaks.push(items.len());
                 }
                 items.push(item("复制整段回答", Cmd::CopyText(text.clone())));
+                // `/review` starts a review's record by itself; a conversation that began otherwise can be made one here.
+                if !*paper && !lib.library_chat.id.is_empty() && lib.library_chat.review.is_none() && !lib.library_chat.busy {
+                    breaks.push(items.len());
+                    items.push(item("把这次对话作为综述来写", Cmd::StartReview));
+                }
             }
             _ => {}
         }
