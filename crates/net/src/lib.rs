@@ -2,6 +2,8 @@
 //! request and the update check. Shared by the app and `wisp`. Everything
 //! here blocks, so the app runs it on the background executor.
 
+pub mod mcp;
+
 use serde_json::Value;
 use std::io::{BufRead, BufReader};
 use std::time::Duration;
@@ -333,12 +335,12 @@ mod tests {
     use wisp_core::ai::{Context, Profile, chat_request, user_message};
 
     /// Serve one canned HTTP response on a local port; returns the base URL and the request it received.
-    fn serve(response: &'static str) -> (String, std::thread::JoinHandle<String>) {
+    pub(crate) fn serve(response: &'static str) -> (String, std::thread::JoinHandle<String>) {
         serve_in_turn(vec![response])
     }
 
     /// Serve one canned response to each connection in turn; returns the base URL and the last request received.
-    fn serve_in_turn(responses: Vec<&'static str>) -> (String, std::thread::JoinHandle<String>) {
+    pub(crate) fn serve_in_turn(responses: Vec<&'static str>) -> (String, std::thread::JoinHandle<String>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let handle = std::thread::spawn(move || {

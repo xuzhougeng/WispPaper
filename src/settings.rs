@@ -1,5 +1,5 @@
 //! 设置: a view of its own, with a sidebar of pages (通用, 外观, 快捷键, AI,
-//! 网络, 关于) and 返回 at the bottom. AI has three tabs: 模型 (the providers,
+//! 自定义 (`custom.rs`), 网络, 关于) and 返回 at the bottom. AI has three tabs: 模型 (the providers,
 //! a list at the left and the one picked at the right), 任务 (which model
 //! does what, with its instructions) and 命令 (the person's own slash commands). The library that was open stays open
 //! underneath. Every change is saved at once; there is no 保存 button.
@@ -40,12 +40,13 @@ pub enum SettingsPage {
     Appearance,
     Shortcuts,
     Ai,
+    Customize,
     Network,
     About,
 }
 
 impl SettingsPage {
-    const ALL: [SettingsPage; 6] = [SettingsPage::General, SettingsPage::Appearance, SettingsPage::Shortcuts, SettingsPage::Ai, SettingsPage::Network, SettingsPage::About];
+    const ALL: [SettingsPage; 7] = [SettingsPage::General, SettingsPage::Appearance, SettingsPage::Shortcuts, SettingsPage::Ai, SettingsPage::Customize, SettingsPage::Network, SettingsPage::About];
 
     fn title(self) -> &'static str {
         match self {
@@ -53,6 +54,7 @@ impl SettingsPage {
             SettingsPage::Appearance => t("外观"),
             SettingsPage::Shortcuts => t("快捷键"),
             SettingsPage::Ai => "AI",
+            SettingsPage::Customize => t("自定义"),
             SettingsPage::Network => t("网络"),
             SettingsPage::About => t("关于"),
         }
@@ -64,6 +66,7 @@ impl SettingsPage {
             SettingsPage::Appearance => "palette",
             SettingsPage::Shortcuts => "keyboard",
             SettingsPage::Ai => "sparkle",
+            SettingsPage::Customize => "plug",
             SettingsPage::Network => "link",
             SettingsPage::About => "info",
         }
@@ -99,6 +102,8 @@ pub struct SettingsView {
     font_scroll: ScrollHandle,
     /// The command of the person's own whose fields 命令 shows, as an index into `Settings::commands`.
     command: Option<(usize, CommandFields)>,
+    /// The connector whose fields 自定义 shows, as an index into `Settings::connectors`.
+    pub(crate) connector: Option<(usize, crate::custom::Fields)>,
     /// The shortcut waiting for its new key. While it waits, every key
     /// binding is cleared, so the keys pressed reach `record_key`.
     recording: Option<String>,
@@ -208,7 +213,7 @@ pub enum UpdateState {
 // ---- controls
 
 /// Rows in one rounded card split by hairlines, under an optional caption.
-fn group(title: Option<&'static str>, rows: Vec<AnyElement>) -> Div {
+pub(crate) fn group(title: Option<&'static str>, rows: Vec<AnyElement>) -> Div {
     let count = rows.len();
     div()
         .flex()
@@ -220,7 +225,7 @@ fn group(title: Option<&'static str>, rows: Vec<AnyElement>) -> Div {
 }
 
 /// One setting: its name and an optional explanation on the left, the control on the right.
-fn row(title: impl Into<SharedString>, detail: Option<SharedString>, control: impl IntoElement) -> Div {
+pub(crate) fn row(title: impl Into<SharedString>, detail: Option<SharedString>, control: impl IntoElement) -> Div {
     div()
         .flex()
         .flex_wrap()
@@ -236,11 +241,11 @@ fn row(title: impl Into<SharedString>, detail: Option<SharedString>, control: im
 }
 
 /// The small print under a group.
-fn note(text: &'static str) -> Div {
+pub(crate) fn note(text: &'static str) -> Div {
     div().px(px(4.)).text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text_tertiary()).child(text)
 }
 
-fn switch(id: &'static str, on: bool) -> Stateful<Div> {
+pub(crate) fn switch(id: impl Into<ElementId>, on: bool) -> Stateful<Div> {
     div().id(id).flex().flex_none().items_center().w(px(34.)).h(px(20.)).p(px(2.)).rounded_full().cursor_pointer().when(on, |d| d.bg(Theme::accent()).justify_end()).when(!on, |d| d.bg(Theme::groove()).justify_start()).child(div().size(px(16.)).rounded_full().bg(gpui::white()).shadow(theme::shadow_card()))
 }
 
@@ -263,7 +268,7 @@ pub(crate) fn segmented(id: &'static str, choices: Vec<(&'static str, Cmd)>, cho
     }))
 }
 
-fn button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
+pub(crate) fn button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
     ui::secondary_button(id, label).h(text_px(28.))
 }
 
@@ -319,6 +324,8 @@ impl Workspace {
     pub fn open_settings(&mut self, page: SettingsPage, window: &mut Window, cx: &mut Context<Self>) {
         self.modal = None;
         self.modal_subscriptions.clear();
+        // What was put into the skills' folder meanwhile is read on opening the page.
+        if page == SettingsPage::Customize { self.load_skills() }
         match self.settings_view.as_mut() {
             Some(view) => {
                 if view.page != page { view.scroll = ScrollHandle::new() }
@@ -364,7 +371,7 @@ impl Workspace {
                         }
                     }),
                 ];
-                self.settings_view = Some(SettingsView { page, ai_tab: AiTab::default(), scroll: ScrollHandle::new(), provider: index, protocol: shown.protocol, fields, proxy, author, translation_prompt, font_search, font_names, font_picker: false, font_scroll: ScrollHandle::new(), command: None, recording: None, shortcut_error: None, _subscriptions: subscriptions });
+                self.settings_view = Some(SettingsView { page, ai_tab: AiTab::default(), scroll: ScrollHandle::new(), provider: index, protocol: shown.protocol, fields, proxy, author, translation_prompt, font_search, font_names, font_picker: false, font_scroll: ScrollHandle::new(), command: None, connector: None, recording: None, shortcut_error: None, _subscriptions: subscriptions });
             }
         }
         window.focus(&self.focus);
@@ -819,6 +826,7 @@ impl Workspace {
             SettingsPage::Appearance => self.appearance_page(window, cx),
             SettingsPage::Shortcuts => self.shortcuts_page(cx),
             SettingsPage::Ai => self.ai_page(window, cx),
+            SettingsPage::Customize => self.customize_page(window, cx),
             SettingsPage::Network => self.network_page(window, cx),
             SettingsPage::About => self.about_page(cx),
         };

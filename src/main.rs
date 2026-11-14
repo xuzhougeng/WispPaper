@@ -13,6 +13,7 @@ mod chat;
 mod cite;
 mod comments;
 mod context;
+mod custom;
 mod detail;
 mod extract;
 mod figures;

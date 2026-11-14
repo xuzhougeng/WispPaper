@@ -2,6 +2,7 @@
 //! choices made on the settings pages.
 
 use crate::ai::{Command, Profile};
+use crate::connector::Connector;
 use crate::provider::{self, Model, Provider};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -82,6 +83,10 @@ pub struct Settings {
     pub translation_prompt: String,
     /// The slash commands the person wrote: prompt templates under a name (`ai::read_input`).
     pub commands: Vec<Command>,
+    /// The MCP servers whose tools the assistant may call (设置 › 自定义 › 连接器).
+    pub connectors: Vec<Connector>,
+    /// The skills switched off, by name; the skills themselves are folders (`skill::folder`).
+    pub skills_off: Vec<String>,
     /// Look for a newer release after launch and twice a day.
     pub auto_update: bool,
     /// "light" or "dark"; empty follows the system.
@@ -127,7 +132,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         let providers = provider::DEFAULT_PRESETS.iter().filter_map(|key| provider::preset(key)).map(Provider::from_preset).collect();
-        let mut settings = Settings { data_dir: String::new(), providers, legacy_profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translate_workers: 4, translation_prompt: String::new(), commands: vec![], auto_update: true, appearance: String::new(), high_contrast: false, language: Language::default(), density: String::new(), font_family: String::new(), font_size: DEFAULT_FONT_SIZE, reading_appearance: ReadingAppearance::default(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., floating: Default::default(), keep_running: true, agent_writing: false, agent_manuscript_width: 0., author: String::new() };
+        let mut settings = Settings { data_dir: String::new(), providers, legacy_profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translate_workers: 4, translation_prompt: String::new(), commands: vec![], connectors: vec![], skills_off: vec![], auto_update: true, appearance: String::new(), high_contrast: false, language: Language::default(), density: String::new(), font_family: String::new(), font_size: DEFAULT_FONT_SIZE, reading_appearance: ReadingAppearance::default(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., floating: Default::default(), keep_running: true, agent_writing: false, agent_manuscript_width: 0., author: String::new() };
         settings.tidy();
         settings
     }

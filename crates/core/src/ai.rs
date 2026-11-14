@@ -669,6 +669,12 @@ pub fn assistant_message(text: &str) -> Value {
 /// turns exactly as it sent them, and tool results. It only ever grows, so
 /// the prefix stays cacheable and the model's thinking blocks stay valid.
 pub fn chat_request(profile: &Profile, ctx: &Context, wire: &[Value], tools: &[ToolDef]) -> Result<HttpRequest, String> {
+    chat_request_with(profile, ctx, wire, tools, &[])
+}
+
+/// The same with tools from outside the catalog after the library's: the connectors' and the skills'.
+pub fn chat_request_with(profile: &Profile, ctx: &Context, wire: &[Value], tools: &[ToolDef], more: &[crate::connector::Tool]) -> Result<HttpRequest, String> {
+    let tools: Vec<(&str, &str, &Value)> = tools.iter().map(|t| (t.name, t.description, &t.input_schema)).chain(more.iter().map(|t| (t.name.as_str(), t.description.as_str(), &t.input_schema))).collect();
     let key = profile.key();
     if key.is_empty() { return Err("还没有配置 API Key。请在「设置 › AI」里填写，或设置对应的环境变量。".into()) }
     if profile.model.trim().is_empty() { return Err("请在「设置 › AI」里填写模型名称。".into()) }
@@ -691,7 +697,7 @@ pub fn chat_request(profile: &Profile, ctx: &Context, wire: &[Value], tools: &[T
                 "messages": wire,
             });
             if !tools.is_empty() {
-                body["tools"] = tools.iter().map(|t| json!({"name": t.name, "description": t.description, "input_schema": t.input_schema})).collect();
+                body["tools"] = tools.iter().map(|(name, description, schema)| json!({"name": name, "description": description, "input_schema": schema})).collect();
             }
             apply_effort(profile, base, &mut body);
             // Only on Anthropic's own API: the other platforms and proxies reject these parameters.
@@ -710,7 +716,7 @@ pub fn chat_request(profile: &Profile, ctx: &Context, wire: &[Value], tools: &[T
             all.extend(wire.iter().cloned());
             let mut body = json!({"model": profile.model.trim(), "stream": true, "messages": all});
             if !tools.is_empty() {
-                body["tools"] = tools.iter().map(|t| json!({"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.input_schema}})).collect();
+                body["tools"] = tools.iter().map(|(name, description, schema)| json!({"type": "function", "function": {"name": name, "description": description, "parameters": schema}})).collect();
             }
             apply_effort(profile, base, &mut body);
             Ok(HttpRequest { url: format!("{base}/chat/completions"), headers: vec![("authorization".to_string(), format!("Bearer {key}")), ("content-type".to_string(), "application/json".to_string())], body, proxy: profile.proxy.trim().to_string() })
@@ -727,7 +733,7 @@ pub fn chat_request(profile: &Profile, ctx: &Context, wire: &[Value], tools: &[T
                 "include": ["reasoning.encrypted_content"],
             });
             if !tools.is_empty() {
-                body["tools"] = tools.iter().map(|t| json!({"type": "function", "name": t.name, "description": t.description, "parameters": t.input_schema})).collect();
+                body["tools"] = tools.iter().map(|(name, description, schema)| json!({"type": "function", "name": name, "description": description, "parameters": schema})).collect();
             }
             apply_effort(profile, base, &mut body);
             Ok(HttpRequest { url: format!("{base}/responses"), headers: vec![("authorization".to_string(), format!("Bearer {key}")), ("content-type".to_string(), "application/json".to_string())], body, proxy: profile.proxy.trim().to_string() })
