@@ -12,7 +12,7 @@ use crate::app::{Cmd, Workspace};
 use crate::i18n::t;
 use crate::input::{InputEvent, TextInput};
 use crate::settings::SettingsPage;
-use crate::theme::Theme;
+use crate::theme::{Theme, text_px};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
 use std::ops::Range;
@@ -467,10 +467,10 @@ impl Workspace {
         let configured = self.settings.profile_for_or_default(Task::Chat).missing().is_none();
         let focused = revise.input.focus_handle(cx).is_focused(window);
         let ready = !busy && !revise.input.read(cx).text().trim().is_empty();
-        let small = |id: &'static str, name: &'static str| ui::ghost_button(id, None, Some(name.into())).h(px(22.)).px(px(6.)).text_size(px(12.));
+        let small = |id: &'static str, name: &'static str| ui::ghost_button(id, None, Some(name.into())).h(text_px(22.)).px(px(6.)).text_size(text_px(12.));
         let frame = div().flex().flex_col().flex_none().gap(px(6.)).mx(px(20.)).mb(px(8.)).px(px(10.)).py(px(8.)).rounded(px(10.)).border_1().border_color(if focused || busy { Theme::accent().opacity(0.55) } else { Theme::line() }).bg(Theme::bg_body());
         if !configured {
-            return frame.child(div().flex().items_center().gap(px(8.)).child(ui::icon("sparkle", 14., Theme::text_tertiary())).child(div().flex_1().min_w_0().text_size(px(12.)).text_color(Theme::text_tertiary()).child(t("配置模型后，可以在这里让助手按你的话修改这一节。"))).child(small("revise-settings", t("配置模型")).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx))));
+            return frame.child(div().flex().items_center().gap(px(8.)).child(ui::icon("sparkle", 14., Theme::text_tertiary())).child(div().flex_1().min_w_0().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(t("配置模型后，可以在这里让助手按你的话修改这一节。"))).child(small("revise-settings", t("配置模型")).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx))));
         }
         let send = div()
             .id("revise-send")
@@ -490,15 +490,15 @@ impl Workspace {
                     .flex()
                     .items_end()
                     .gap(px(8.))
-                    .child(div().flex().flex_none().items_center().h(px(26.)).child(ui::icon("sparkle", 14., Theme::accent())))
-                    .child(div().flex_none().w(px((width - 20. - 14. - 26. - 16.).max(120.))).py(px(3.)).text_size(px(13.)).line_height(px(20.)).text_color(Theme::text()).child(revise.input.clone()))
+                    .child(div().flex().flex_none().items_center().h(text_px(26.)).child(ui::icon("sparkle", 14., Theme::accent())))
+                    .child(div().flex_none().w(px((width - 20. - 14. - 26. - 16.).max(120.))).py(px(3.)).text_size(text_px(13.)).line_height(text_px(20.)).text_color(Theme::text()).child(revise.input.clone()))
                     .child(send),
             )
     }
 
     /// One request above the field: what was asked, where it stands, what the model says and the changes it made.
     fn render_revise_run(&self, run: &Run, cx: &mut Context<Self>) -> Div {
-        let small = |id: &'static str, name: &'static str| ui::ghost_button(id, None, Some(name.into())).h(px(22.)).px(px(6.)).text_size(px(12.));
+        let small = |id: &'static str, name: &'static str| ui::ghost_button(id, None, Some(name.into())).h(text_px(22.)).px(px(6.)).text_size(text_px(12.));
         let (count, standing) = (run.made.len(), run.made.iter().filter(|made| !made.undone && made.range.is_some()).count());
         let state = if run.busy {
             if run.target.is_some() { tf!("正在改第 {} 处…", "Writing change {}…", count + 1) } else if count == 0 { t("正在读这一节…").to_string() } else { tf!("已改 {count} 处，接着看…", "{count} changed, reading on…") }
@@ -530,21 +530,21 @@ impl Workspace {
                             .min_w_0()
                             .items_center()
                             .gap(px(8.))
-                            .h(px(26.))
+                            .h(text_px(26.))
                             .px(px(4.))
                             .rounded(px(6.))
                             .when(made.range.is_some(), |d| d.cursor_pointer().hover(|s| s.bg(Theme::hover())).on_click(self.on(Cmd::Revise(Do::Go(n)), cx)))
-                            .child(div().flex_none().w(px(14.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child((n + 1).to_string()))
-                            .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(if gone { Theme::text_tertiary() } else { Theme::text() }).child(StyledText::new(line).with_highlights(marks))),
+                            .child(div().flex_none().w(px(14.)).text_size(text_px(11.)).text_color(Theme::text_tertiary()).child((n + 1).to_string()))
+                            .child(div().flex_1().min_w_0().truncate().text_size(text_px(12.)).text_color(if gone { Theme::text_tertiary() } else { Theme::text() }).child(StyledText::new(line).with_highlights(marks))),
                     )
                     .child(if made.undone {
-                        div().flex_none().px(px(6.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(t("已撤销")).into_any_element()
+                        div().flex_none().px(px(6.)).text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(t("已撤销")).into_any_element()
                     } else if made.range.is_none() {
-                        div().flex_none().px(px(6.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(t("后来改过")).into_any_element()
+                        div().flex_none().px(px(6.)).text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(t("后来改过")).into_any_element()
                     } else if run.busy {
                         div().into_any_element()
                     } else {
-                        ui::ghost_button(("revise-undo", n), None, Some(t("撤销").into())).h(px(22.)).px(px(6.)).text_size(px(11.)).on_click(self.on(Cmd::Revise(Do::Undo(n)), cx)).into_any_element()
+                        ui::ghost_button(("revise-undo", n), None, Some(t("撤销").into())).h(text_px(22.)).px(px(6.)).text_size(text_px(11.)).on_click(self.on(Cmd::Revise(Do::Undo(n)), cx)).into_any_element()
                     })
                     .into_any_element()
             })
@@ -561,8 +561,8 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text_secondary()).child(run.wish.clone()))
-                    .child(div().flex_none().max_w(px(200.)).truncate().text_size(px(11.)).text_color(Theme::text_tertiary()).child(run.model.clone()))
+                    .child(div().flex_1().min_w_0().truncate().text_size(text_px(12.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text_secondary()).child(run.wish.clone()))
+                    .child(div().flex_none().max_w(px(200.)).truncate().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(run.model.clone()))
                     .when(!run.busy, |d| d.child(ui::ghost_button("revise-close", Some("x"), None).size(px(22.)).min_w(px(22.)).on_click(self.on(Cmd::Revise(Do::Keep), cx)))),
             )
             .child(
@@ -573,20 +573,20 @@ impl Workspace {
                     .gap(px(4.))
                     .min_h(px(22.))
                     .when(run.busy, |d| d.child(ui::spinner("revise-busy", 12., Theme::accent())))
-                    .when(!state.is_empty(), |d| d.child(div().flex_none().text_size(px(12.)).text_color(if run.busy { Theme::accent() } else { Theme::text_secondary() }).child(state)))
-                    .when(!run.missed.is_empty(), |d| d.child(div().flex_none().text_size(px(12.)).text_color(Theme::warning()).child(tf!("{} 处没有对上原文，没有改", "{} not found in the text, left alone", run.missed.len()))))
+                    .when(!state.is_empty(), |d| d.child(div().flex_none().text_size(text_px(12.)).text_color(if run.busy { Theme::accent() } else { Theme::text_secondary() }).child(state)))
+                    .when(!run.missed.is_empty(), |d| d.child(div().flex_none().text_size(text_px(12.)).text_color(Theme::warning()).child(tf!("{} 处没有对上原文，没有改", "{} not found in the text, left alone", run.missed.len()))))
                     .child(div().flex_1())
                     .when(!run.busy && standing > 1, |d| {
                         d.child(ui::ghost_button("revise-prev", Some("chevron-up"), None).size(px(22.)).min_w(px(22.)).on_click(self.on(Cmd::Revise(Do::Step(false)), cx)))
-                            .child(div().flex_none().text_size(px(11.)).text_color(Theme::text_tertiary()).child(format!("{}/{count}", place.map_or("–".to_string(), |at| at.to_string()))))
+                            .child(div().flex_none().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(format!("{}/{count}", place.map_or("–".to_string(), |at| at.to_string()))))
                             .child(ui::ghost_button("revise-next", Some("chevron-down"), None).size(px(22.)).min_w(px(22.)).on_click(self.on(Cmd::Revise(Do::Step(true)), cx)))
                     })
-                    .when(!run.busy && standing > 0, |d| d.child(small("revise-undo-all", t("全部撤销")).on_click(self.on(Cmd::Revise(Do::UndoAll), cx))).child(ui::primary_button("revise-keep", t("保留")).h(px(22.)).px(px(9.)).text_size(px(12.)).on_click(self.on(Cmd::Revise(Do::Keep), cx)))),
+                    .when(!run.busy && standing > 0, |d| d.child(small("revise-undo-all", t("全部撤销")).on_click(self.on(Cmd::Revise(Do::UndoAll), cx))).child(ui::primary_button("revise-keep", t("保留")).h(text_px(22.)).px(px(9.)).text_size(text_px(12.)).on_click(self.on(Cmd::Revise(Do::Keep), cx)))),
             )
-            .when(!run.said.is_empty(), |d| d.child(div().id("revise-said").max_h(px(58.)).overflow_y_scroll().text_size(px(12.)).line_height(px(19.)).text_color(Theme::text()).child(run.said.clone())))
+            .when(!run.said.is_empty(), |d| d.child(div().id("revise-said").max_h(px(58.)).overflow_y_scroll().text_size(text_px(12.)).line_height(text_px(19.)).text_color(Theme::text()).child(run.said.clone())))
             .when(!rows.is_empty(), |d| d.child(div().id("revise-changes").flex().flex_col().max_h(px(108.)).overflow_y_scroll().children(rows)))
-            .when(!run.missed.is_empty() && !run.busy, |d| d.child(div().text_size(px(11.)).line_height(px(17.)).text_color(Theme::text_tertiary()).child(tf!("没有对上的原文：{}", "Not found: {}", run.missed.iter().take(2).map(|old| format!("「{}」", clipped(old, 40))).collect::<Vec<_>>().join(" ")))))
-            .when(!run.note.is_empty(), |d| d.child(div().text_size(px(11.)).text_color(Theme::text_tertiary()).child(run.note.clone())))
+            .when(!run.missed.is_empty() && !run.busy, |d| d.child(div().text_size(text_px(11.)).line_height(text_px(17.)).text_color(Theme::text_tertiary()).child(tf!("没有对上的原文：{}", "Not found: {}", run.missed.iter().take(2).map(|old| format!("「{}」", clipped(old, 40))).collect::<Vec<_>>().join(" ")))))
+            .when(!run.note.is_empty(), |d| d.child(div().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(run.note.clone())))
             .when(!run.error.is_empty(), |d| d.child(ui::error_line(t(&run.error))))
     }
 }

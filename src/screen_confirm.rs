@@ -8,7 +8,7 @@
 use crate::i18n::{label, t};
 use crate::app::{Cmd, Confirmed, Library, ScreenMode, Workspace};
 use crate::context::Nav;
-use crate::theme::{self, Theme};
+use crate::theme::{self, Theme, text_px};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
 use std::ops::Range;
@@ -169,8 +169,8 @@ impl Workspace {
             .px(px(16.))
             .pt(px(16.))
             .pb(px(12.))
-            .child(div().flex().flex_wrap().items_center().gap(px(10.)).child(div().flex_none().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("确认建议"))).child(div().flex_1()).child(back))
-            .child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(t("助手的建议在这里一起过目：不同意的改掉，拿不准的不勾选，再把勾选的一次写成收录判断。写入之前什么都不会改动，写入之后也能撤销。")));
+            .child(div().flex().flex_wrap().items_center().gap(px(10.)).child(div().flex_none().text_size(text_px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("确认建议"))).child(div().flex_1()).child(back))
+            .child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(t("助手的建议在这里一起过目：不同意的改掉，拿不准的不勾选，再把勾选的一次写成收录判断。写入之前什么都不会改动，写入之后也能撤销。")));
 
         // What the last confirmation wrote, with the way back.
         let done = lib.screen.confirmed.as_ref().map(|confirmed| {
@@ -187,7 +187,7 @@ impl Workspace {
                 .bg(fill)
                 .child(ui::icon("check", 14., color))
                 .child(div().flex_1().min_w_0().text_color(color).child(tf!("已确认 {} 篇：{}。", "Confirmed {} papers: {}.", confirmed.before.len(), breakdown(&confirmed.counts))))
-                .child(ui::ghost_button("confirm-undo", None, Some(t("撤销").into())).h(px(24.)).text_size(px(12.)).on_click(self.on(Cmd::ConfirmUndo, cx)))
+                .child(ui::ghost_button("confirm-undo", None, Some(t("撤销").into())).h(text_px(24.)).text_size(text_px(12.)).on_click(self.on(Cmd::ConfirmUndo, cx)))
         });
         if all.is_empty() {
             return div().flex().flex_col().size_full().child(head).children(done).child(self.render_confirm_empty(cx)).into_any_element();
@@ -197,7 +197,7 @@ impl Workspace {
         let part = |n: usize, key: &str, text: String, this: &Self, cx: &mut Context<Self>| {
             let on = on_show == key;
             let (color, fill) = if key.is_empty() { (Theme::text_secondary(), Theme::groove()) } else { theme::status_colors(key) };
-            div().id(("confirm-part", n)).flex().flex_none().items_center().h(px(26.)).px(px(10.)).rounded(px(13.)).text_size(px(12.)).cursor_pointer().border_1().when(on, |d| d.bg(fill).text_color(color).border_color(color.opacity(0.35)).font_weight(FontWeight::MEDIUM)).when(!on, |d| d.border_color(Theme::line()).text_color(Theme::text_secondary()).hover(|s| s.bg(Theme::hover()))).on_click(this.on(Cmd::ConfirmPart(key.to_string()), cx)).child(text)
+            div().id(("confirm-part", n)).flex().flex_none().items_center().h(text_px(26.)).px(px(10.)).rounded(px(13.)).text_size(text_px(12.)).cursor_pointer().border_1().when(on, |d| d.bg(fill).text_color(color).border_color(color.opacity(0.35)).font_weight(FontWeight::MEDIUM)).when(!on, |d| d.border_color(Theme::line()).text_color(Theme::text_secondary()).hover(|s| s.bg(Theme::hover()))).on_click(this.on(Cmd::ConfirmPart(key.to_string()), cx)).child(text)
         };
         let mut bar: Vec<AnyElement> = vec![part(0, "", tf!("全部 {}", "All {}", all.len()), self, cx).into_any_element()];
         for (n, (key, name)) in SCREENINGS.iter().enumerate().skip(1) {
@@ -205,7 +205,7 @@ impl Workspace {
             let count = all.iter().filter(|(_, s)| s.verdict == *key).count();
             if count > 0 { bar.push(part(n, key, tf!("建议{name} {count}", "Suggest {name} {count}"), self, cx).into_any_element()) }
         }
-        let small = |id: &'static str, text: &'static str| ui::ghost_button(id, None, Some(text.into())).h(px(26.)).text_size(px(12.));
+        let small = |id: &'static str, text: &'static str| ui::ghost_button(id, None, Some(text.into())).h(text_px(26.)).text_size(text_px(12.));
         let tools = div()
             .flex()
             .items_center()
@@ -223,7 +223,7 @@ impl Workspace {
         // The row the keys are on, in full: a row of the list has one line for the reason.
         let cursor = confirm.cursor.as_ref().and_then(|id| rows.iter().find(|(p, _)| p.id == *id)).map(|(paper, _)| {
             let beside = lib.selected.as_deref() == Some(paper.id.as_str());
-            let open = ui::ghost_button("confirm-beside", Some("file-text"), Some(if beside { t("收起").into() } else if lib.pdf_file(&paper.id).is_some() { t("对照 PDF").into() } else { t("完整记录").into() })).h(px(24.)).text_size(px(12.)).on_click(self.on(Cmd::ScreenBeside, cx));
+            let open = ui::ghost_button("confirm-beside", Some("file-text"), Some(if beside { t("收起").into() } else if lib.pdf_file(&paper.id).is_some() { t("对照 PDF").into() } else { t("完整记录").into() })).h(text_px(24.)).text_size(text_px(12.)).on_click(self.on(Cmd::ScreenBeside, cx));
             div()
                 .id("confirm-cursor")
                 .flex()
@@ -264,10 +264,10 @@ impl Workspace {
                     .flex_wrap()
                     .items_center()
                     .gap(px(10.))
-                    .child(div().flex_1().min_w(px(160.)).text_size(px(12.)).text_color(Theme::text_secondary()).child(summary))
+                    .child(div().flex_1().min_w(px(160.)).text_size(text_px(12.)).text_color(Theme::text_secondary()).child(summary))
                     .child(ui::primary_button("confirm-apply", if plan.is_empty() { t("确认").to_string() } else { tf!("确认这 {} 篇", "Confirm {} papers", plan.len()) }).when(plan.is_empty(), |d| d.opacity(0.5)).on_click(self.on(Cmd::ConfirmApply, cx))),
             )
-            .child(div().flex().flex_wrap().items_center().gap_x(px(14.)).gap_y(px(6.)).text_size(px(11.)).line_height(px(18.)).text_color(Theme::text_tertiary()).child(hint("↑↓", t("移动"))).child(hint("Space", t("勾选 / 不勾选"))).child(hint("Y", t("已纳入"))).child(hint("R", t("相关"))).child(hint("U", t("证据不足"))).child(hint("N", t("不相关"))).child(hint("A", t("按建议"))).child(hint("Enter", t("对照 PDF"))).child(hint("Esc", t("回到队列"))));
+            .child(div().flex().flex_wrap().items_center().gap_x(px(14.)).gap_y(px(6.)).text_size(text_px(11.)).line_height(text_px(18.)).text_color(Theme::text_tertiary()).child(hint("↑↓", t("移动"))).child(hint("Space", t("勾选 / 不勾选"))).child(hint("Y", t("已纳入"))).child(hint("R", t("相关"))).child(hint("U", t("证据不足"))).child(hint("N", t("不相关"))).child(hint("A", t("按建议"))).child(hint("Enter", t("对照 PDF"))).child(hint("Esc", t("回到队列"))));
 
         div().id("confirm-page").flex().flex_col().size_full().overflow_y_scroll().child(head).children(done).child(tools).child(div().flex().flex_col().flex_1().min_h(px(240.)).border_t_1().border_color(Theme::line()).child(list)).children(cursor).child(foot).into_any_element()
     }
@@ -319,7 +319,7 @@ impl Workspace {
                     .cursor_pointer()
                     .on_click(self.on(Cmd::ConfirmCursor(paper.id.clone()), cx))
                     .child(div().truncate().when(on_cursor, |d| d.font_weight(FontWeight::MEDIUM)).child(paper.title.clone()))
-                    .child(div().truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(about.join(" · ")));
+                    .child(div().truncate().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(about.join(" · ")));
                 // The status the paper will get: the suggested one unless the person picks another.
                 let choices = DECISIONS.iter().enumerate().map(|(n, (key, _, _))| {
                     let (color, fill) = theme::status_colors(key);
@@ -330,10 +330,10 @@ impl Workspace {
                         .flex_none()
                         .items_center()
                         .gap(px(4.))
-                        .h(px(24.))
+                        .h(text_px(24.))
                         .px(px(8.))
                         .rounded(px(6.))
-                        .text_size(px(12.))
+                        .text_size(text_px(12.))
                         .cursor_pointer()
                         .when(chosen, |d| d.bg(fill).text_color(color).font_weight(FontWeight::MEDIUM))
                         .when(!chosen, |d| d.text_color(Theme::text_tertiary()).hover(|s| s.bg(Theme::hover()).text_color(Theme::text())))
@@ -348,7 +348,7 @@ impl Workspace {
                         .items_center()
                         .gap(px(8.))
                         .w_full()
-                        .h(px(if narrow { 112. } else { 58. }))
+                        .h(text_px(if narrow { 112. } else { 58. }))
                         .when(narrow, |d| d.flex_col().items_start().justify_center())
                         .pl(px(10.))
                         .pr(px(16.))
@@ -356,7 +356,7 @@ impl Workspace {
                         .border_color(Theme::line())
                         .when(on_cursor, |d| d.bg(Theme::accent_soft()))
                         .when(!on_cursor, |d| d.hover(|s| s.bg(Theme::hover())))
-                        .child(div().flex().flex_1().min_w_0().h_full().items_center().gap(px(8.)).when(narrow, |d| d.flex_none().w_full().h(px(46.))).child(tick).child(text.when(!ticked, |d| d.opacity(0.5))))
+                        .child(div().flex().flex_1().min_w_0().h_full().items_center().gap(px(8.)).when(narrow, |d| d.flex_none().w_full().h(text_px(46.))).child(tick).child(text.when(!ticked, |d| d.opacity(0.5))))
                         .child(div().flex().flex_wrap().flex_none().max_w_full().items_center().gap(px(2.)).when(!ticked, |d| d.opacity(0.5)).children(choices))
                         .into_any_element(),
                 )

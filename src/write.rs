@@ -10,7 +10,7 @@
 use crate::i18n::{label, t};
 use crate::app::{Cmd, MenuItem, MenuKind, Side, Workspace};
 use crate::settings::SettingsPage;
-use crate::theme::Theme;
+use crate::theme::{self, Theme, text_px};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
 use serde_json::Value;
@@ -19,9 +19,6 @@ use wisp_core::structure::SECTIONS;
 
 /// The tags offered for narrowing the candidates, in a menu: the commonest.
 const NARROWING_TAGS: usize = 24;
-
-/// The widest the manuscript's text is set, padding included.
-const EDITOR_MEASURE: f32 = 720.;
 
 /// The manuscript's right margin while comments mark it: room for their markers.
 const MARGIN: f32 = 36.;
@@ -99,7 +96,7 @@ impl Workspace {
                         .border_1()
                         .border_color(if focused { Theme::accent().opacity(0.55) } else { Theme::line() })
                         .bg(Theme::bg_body())
-                        .child(div().relative().w_full().max_w(px(EDITOR_MEASURE)).mx_auto().pl(px(18.)).pr(px(if markers.is_empty() { 18. } else { MARGIN })).py(px(14.)).text_size(px(15.)).line_height(px(26.)).text_color(Theme::text()).child(crate::input::with_selection_toolbar(&writing.editor, self.render_assist_bar(true, cx))).children(markers).children(bars))
+                        .child(div().relative().w_full().max_w(theme::manuscript_width()).mx_auto().pl(px(18.)).pr(px(if markers.is_empty() { 18. } else { MARGIN })).py(px(14.)).text_size(text_px(15.)).line_height(theme::body_line(26.)).text_color(Theme::text()).child(crate::input::with_selection_toolbar(&writing.editor, self.render_assist_bar(true, cx))).children(markers).children(bars))
                         .into_any_element()
                 }),
             )
@@ -108,7 +105,7 @@ impl Workspace {
             .children(if writing.reading { None } else { self.render_source_strip(if stacked { width } else { width - panel } - 40., cx) })
             // Under the manuscript, the box where the assistant is told what to change in this section.
             .when(!writing.reading, |d| d.child(self.render_revise(if stacked { width } else { width - panel } - 40., window, cx)))
-            .child(div().flex().flex_none().px(px(22.)).pb(px(12.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(div().flex_1().min_w_0().child(if writing.reading {
+            .child(div().flex().flex_none().px(px(22.)).pb(px(12.)).text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(div().flex_1().min_w_0().child(if writing.reading {
                 let whole: String = writing.current().map_or(String::new(), |m| m.sections.iter().map(|s| s.body.as_str()).collect::<Vec<_>>().join("\n"));
                 tf!("全文 {} · 点一节的名称，回到那一节写", "Manuscript: {} · Click a section name to edit it", length_label(&whole))
             } else if characters == 0 {
@@ -171,7 +168,7 @@ impl Workspace {
             .groups
             .iter()
             // One text each: a row of two wrapping texts is measured narrower than it is drawn.
-            .map(|group| div().text_size(px(11.)).line_height(px(16.)).text_color(Theme::text_secondary()).child(if group.kind.is_empty() { group.words.clone() } else { format!("{} · {}", group.kind, group.words) }).into_any_element())
+            .map(|group| div().text_size(text_px(11.)).line_height(text_px(16.)).text_color(Theme::text_secondary()).child(if group.kind.is_empty() { group.words.clone() } else { format!("{} · {}", group.kind, group.words) }).into_any_element())
             .collect();
         let key = self.find_key();
         // What the panel is for, said once on hover rather than over the manuscript every time.
@@ -179,7 +176,7 @@ impl Workspace {
         let find_button = ui::icon_action("write-find", "scan-text", Theme::accent(), tf!("查找与选中的文字相近的句子；没有选中时，找光标所在的一段（{key}）", "Find sentences similar to the selection, or to the paragraph at the caret ({key})")).on_click(self.on(Cmd::WriteFind, cx));
         // How much there was to search: the number in the header, the rest on hover.
         let count = found.map(|value| value["sentencesInSection"].as_u64().unwrap_or(0));
-        let drawn_on = count.zip(drawn_on).map(|(count, text)| div().id("write-drawn-on").flex_none().text_size(px(11.)).text_color(Theme::text_tertiary()).child(tf!("{count} 句", "{count} sentences")).tooltip(move |_, cx| cx.new(|_| crate::write_assist::Tip(text.clone())).into()));
+        let drawn_on = count.zip(drawn_on).map(|(count, text)| div().id("write-drawn-on").flex_none().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(tf!("{count} 句", "{count} sentences")).tooltip(move |_, cx| cx.new(|_| crate::write_assist::Tip(text.clone())).into()));
 
         let side = div().flex().flex_col().flex_none().w(px(width)).h_full().border_l_1().border_color(Theme::line()).bg(Theme::bg_sunken()).child(self.render_side_switch(cx));
         // What an action on the text came to stands over any page of the panel.
@@ -203,7 +200,7 @@ impl Workspace {
                             .flex()
                             .items_center()
                             .gap(px(6.))
-                            .child(div().flex_none().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child(tf!("候选句 · {name}", "Candidates · {name}")))
+                            .child(div().flex_none().text_size(text_px(14.)).font_weight(FontWeight::SEMIBOLD).child(tf!("候选句 · {name}", "Candidates · {name}")))
                             .child(ui::hint("write-about", about))
                             .when(search.searching, |d| d.child(ui::spinner("write-searching", 13., Theme::accent())))
                             .child(div().flex_1())
@@ -221,12 +218,12 @@ impl Workspace {
                                 .child(div().flex_none().w(px(width - 28. - 18.)).flex().flex_col().gap(px(3.)).children(groups)),
                         )
                     })
-                    .when(!search.note.is_empty(), |d| d.child(div().text_size(px(11.)).text_color(Theme::warning()).child(search.note.clone())))
+                    .when(!search.note.is_empty(), |d| d.child(div().text_size(text_px(11.)).text_color(Theme::warning()).child(search.note.clone())))
                     .child(self.render_narrowing(cx))
                     .child(self.render_groundwork(cx)),
             )
             .children(self.render_assist_card(width, cx))
-            .when(!heading.is_empty(), |d| d.child(div().flex_none().px(px(14.)).pb(px(6.)).text_size(px(11.)).text_color(Theme::text_tertiary()).truncate().child(heading)))
+            .when(!heading.is_empty(), |d| d.child(div().flex_none().px(px(14.)).pb(px(6.)).text_size(text_px(11.)).text_color(Theme::text_tertiary()).truncate().child(heading)))
             .child(match empty {
                 Some(empty) => div().flex().flex_col().flex_1().min_h_0().px(px(14.)).child(empty).into_any_element(),
                 None => div().id("write-candidates").flex().flex_col().flex_1().min_h_0().overflow_y_scroll().track_scroll(&writing.scroll).px(px(10.)).pb(px(12.)).gap(px(6.)).children(rows).into_any_element(),
@@ -248,10 +245,10 @@ impl Workspace {
         let name = if narrowed { shown.join(" · ") } else { t("全部文献").to_string() };
         div().flex().items_center().child(
             ui::ghost_button("write-only", Some("sliders"), Some(name.into()))
-                .h(px(24.))
+                .h(text_px(24.))
                 .px(px(7.))
                 .max_w_full()
-                .text_size(px(12.))
+                .text_size(text_px(12.))
                 .when(narrowed, |d| d.bg(Theme::accent_soft()).text_color(Theme::accent()))
                 .child(ui::icon("chevron-down", 12., Theme::text_tertiary()))
                 .on_click(self.on_menu(MenuKind::WriteNarrow, cx)),
@@ -286,10 +283,10 @@ impl Workspace {
         // Who, which page and under what heading: the journal's name is cut short in a panel this wide.
         let mut about = vec![cite.clone(), page.map(|page| tf!("第 {page} 页", "Page {page}")).unwrap_or_default(), field("heading")];
         about.retain(|part| !part.is_empty());
-        let small = |id: SharedString, name: &'static str| ui::ghost_button(id, None, Some(name.into())).h(px(22.)).px(px(6.)).text_size(px(12.));
+        let small = |id: SharedString, name: &'static str| ui::ghost_button(id, None, Some(name.into())).h(text_px(22.)).px(px(6.)).text_size(text_px(12.));
         // 引用 stays in view; the others come up when the card is under the pointer.
         let group = id("group");
-        let around = |text: String| div().text_size(px(12.)).line_height(px(19.)).text_color(Theme::text_tertiary()).child(text);
+        let around = |text: String| div().text_size(text_px(12.)).line_height(text_px(19.)).text_color(Theme::text_tertiary()).child(text);
         let card_view = div()
             .flex()
             .flex_col()
@@ -304,14 +301,14 @@ impl Workspace {
             .relative()
             .group(group.clone())
             .when(unfolded && !before.is_empty(), |d| d.child(around(before.clone())))
-            .child(div().text_size(px(13.)).line_height(px(21.)).text_color(Theme::text()).child(text.clone()))
+            .child(div().text_size(text_px(13.)).line_height(text_px(21.)).text_color(Theme::text()).child(text.clone()))
             .when(unfolded && !after.is_empty(), |d| d.child(around(after.clone())))
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap(px(2.))
-                    .child(div().flex_1().min_w_0().truncate().text_size(px(11.)).text_color(Theme::text_tertiary()).child(about.join(" · ")))
+                    .child(div().flex_1().min_w_0().truncate().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(about.join(" · ")))
                     .child(small(id("cite"), t("引用")).text_color(Theme::accent()).on_click(self.on(Cmd::WriteCiteFrom(paper.clone(), wisp_core::passage::Candidate { text: text.clone(), part, page: page.unwrap_or(0) }), cx))),
             )
             // Over the end of that line while the card is under the pointer, so it takes no width otherwise.
@@ -368,10 +365,10 @@ impl Workspace {
         let unread = unread + in_part;
         if reading_now > 0 { facts.push(tf!("正在读取 {reading_now}", "Reading {reading_now}")) }
         let configured = !self.settings.profile_for_or_default(Task::Structure).key().is_empty();
-        let button = |id: &'static str, text: String| ui::secondary_button(id, text).h(px(24.)).px(px(8.)).text_size(px(12.));
+        let button = |id: &'static str, text: String| ui::secondary_button(id, text).h(text_px(24.)).px(px(8.)).text_size(text_px(12.));
         // A model's run, as an icon with how many papers it would read; what it does is said on hover.
         let sparkle = |id: &'static str, icon: &'static str, n: usize, tip: String| {
-            ui::ghost_button(id, None, Some(n.to_string().into())).h(px(24.)).px(px(6.)).gap(px(4.)).text_size(px(12.)).text_color(Theme::accent()).flex_row_reverse().child(ui::icon(icon, 13., Theme::accent())).tooltip(move |_, cx| cx.new(|_| crate::write_assist::Tip(tip.clone())).into())
+            ui::ghost_button(id, None, Some(n.to_string().into())).h(text_px(24.)).px(px(6.)).gap(px(4.)).text_size(text_px(12.)).text_color(Theme::accent()).flex_row_reverse().child(ui::icon(icon, 13., Theme::accent())).tooltip(move |_, cx| cx.new(|_| crate::write_assist::Tip(tip.clone())).into())
         };
         let running = sorting.running();
         let titles: Vec<String> = sorting.working.iter().filter_map(|id| lib.files.iter().find(|f| f.id == *id)).filter_map(|file| lib.paper(&file.paper_id)).map(|paper| paper.title.clone()).collect();
@@ -386,7 +383,7 @@ impl Workspace {
                     .flex_wrap()
                     .gap(px(6.))
                     // The first fact in words, the others on hover: they are bookkeeping, not what is written by.
-                    .child(div().flex_none().text_size(px(11.)).text_color(Theme::text_tertiary()).child(facts[0].clone()))
+                    .child(div().flex_none().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(facts[0].clone()))
                     .when(facts.len() > 1, |d| d.child(ui::hint("write-groundwork-about", facts.join(" · "))))
                     .child(div().flex_1())
                     .when(!running && !configured && open + unread > 0, |d| d.child(ui::icon_action("write-settings", "settings-gear", Theme::text_secondary(), t("配置模型后，可以让模型为没有标题的全文分节、读出没有文字的页面")).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx))))
@@ -410,7 +407,7 @@ impl Workspace {
                                 .flex()
                                 .items_center()
                                 .gap(px(8.))
-                                .text_size(px(12.))
+                                .text_size(text_px(12.))
                                 .child(div().flex_none().font_weight(FontWeight::MEDIUM).child(match (running, sorting.reading) {
                                     (true, true) => t("模型正在读页面"),
                                     (true, false) => t("模型正在分节"),
@@ -419,17 +416,17 @@ impl Workspace {
                                 }))
                                 .child(div().flex_none().text_color(Theme::text_secondary()).child(format!("{} / {}", sorting.done, sorting.total)))
                                 .when(sorting.failed > 0, |d| d.child(ui::chip(tf!("没成 {}", "{} failed", sorting.failed), Theme::danger(), Theme::danger_soft())))
-                                .child(div().flex_1().min_w_0().truncate().text_right().text_size(px(11.)).text_color(Theme::text_tertiary()).child(sorting.model.clone())),
+                                .child(div().flex_1().min_w_0().truncate().text_right().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(sorting.model.clone())),
                         )
                         .child(crate::screen::progress_bar(sorting.done, sorting.total))
                         // A file longer than one run reads: how far it got, and that the next run goes on from there.
                         .when(!sorting.cut.is_empty(), |d| {
                             let first = &sorting.cut[0];
                             let more = if sorting.cut.len() > 1 { tf!("等 {} 篇", "{} papers waiting", sorting.cut.len()) } else { String::new() };
-                            d.child(div().text_size(px(11.)).text_color(Theme::text_secondary()).child(tf!("「{}」{more}页数较多，这次只读了 {} / {} 页；再点「让模型读页面」从第 {} 页接着读。", "“{}”{more} has many pages; {} / {} were read. Click “Ask model to read” again to continue from page {}.", first.0, first.1, first.2, first.1 + 1)))
+                            d.child(div().text_size(text_px(11.)).text_color(Theme::text_secondary()).child(tf!("「{}」{more}页数较多，这次只读了 {} / {} 页；再点「让模型读页面」从第 {} 页接着读。", "“{}”{more} has many pages; {} / {} were read. Click “Ask model to read” again to continue from page {}.", first.0, first.1, first.2, first.1 + 1)))
                         })
                         .children(titles.iter().enumerate().map(|(n, title)| {
-                            let line = div().flex().items_center().gap(px(6.)).text_size(px(11.)).text_color(Theme::text_secondary()).child(ui::spinner(("write-working", n), 11., Theme::accent())).child(div().flex_1().min_w_0().truncate().child(title.clone()));
+                            let line = div().flex().items_center().gap(px(6.)).text_size(text_px(11.)).text_color(Theme::text_secondary()).child(ui::spinner(("write-working", n), 11., Theme::accent())).child(div().flex_1().min_w_0().truncate().child(title.clone()));
                             ui::fade_in(SharedString::from(format!("write-working-{title}")), line)
                         })),
                 )

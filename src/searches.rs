@@ -3,7 +3,7 @@
 
 use crate::i18n::{label, t};
 use crate::app::{Cmd, Workspace};
-use crate::theme::Theme;
+use crate::theme::{Theme, text_px};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
 use serde_json::Value;
@@ -29,9 +29,9 @@ impl Workspace {
             let last = match &search.last_run {
                 Some(batch) => {
                     let (summary, failed) = run_summary(batch);
-                    div().text_size(px(12.)).text_color(if failed { Theme::danger() } else { Theme::text_tertiary() }).child(tf!("上次运行 {}：{summary}", "Last run {}: {summary}", time::short_time(&batch.started_at)))
+                    div().text_size(text_px(12.)).text_color(if failed { Theme::danger() } else { Theme::text_tertiary() }).child(tf!("上次运行 {}：{summary}", "Last run {}: {summary}", time::short_time(&batch.started_at)))
                 }
-                None => div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(t("还没有运行过")),
+                None => div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(t("还没有运行过")),
             };
             let trial = lib.trial.as_ref().filter(|(id, _)| *id == search.id).map(|(_, found)| self.render_trial(found.as_ref(), cx));
             cards.push(
@@ -59,8 +59,8 @@ impl Workspace {
                             .child(ui::ghost_button(("edit-search", i), Some("pen-line"), None).on_click(self.on(Cmd::EditSearch(search.id.clone()), cx)))
                             .child(ui::ghost_button(("remove-search", i), Some("bin"), None).on_click(self.on(Cmd::AskRemoveSearch(search.id.clone()), cx))),
                     )
-                    .child(div().px(px(10.)).py(px(8.)).rounded(px(6.)).bg(Theme::bg_sunken()).text_size(px(13.)).line_height(px(20.)).child(search.query.clone()))
-                    .child(div().flex().items_center().flex_wrap().gap(px(12.)).child(last).child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(tf!("每次取回最新的 {} 篇", "Retrieve the latest {} papers each run", search.max_results))))
+                    .child(div().px(px(10.)).py(px(8.)).rounded(px(6.)).bg(Theme::bg_sunken()).text_size(text_px(13.)).line_height(text_px(20.)).child(search.query.clone()))
+                    .child(div().flex().items_center().flex_wrap().gap(px(12.)).child(last).child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(tf!("每次取回最新的 {} 篇", "Retrieve the latest {} papers each run", search.max_results))))
                     .children(trial)
                     .into_any_element(),
             );
@@ -80,8 +80,8 @@ impl Workspace {
                     .py(px(8.))
                     .border_b_1()
                     .border_color(Theme::line())
-                    .child(div().flex_none().w(px(84.)).text_size(px(12.)).text_color(Theme::text_tertiary()).child(time::short_time(&batch.started_at)))
-                    .child(div().flex().flex_col().flex_1().min_w_0().child(div().truncate().text_size(px(13.)).child(batch.label.clone())).child(div().truncate().text_size(px(12.)).text_color(if failed { Theme::danger() } else { Theme::text_tertiary() }).child(summary)))
+                    .child(div().flex_none().w(px(84.)).text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(time::short_time(&batch.started_at)))
+                    .child(div().flex().flex_col().flex_1().min_w_0().child(div().truncate().text_size(text_px(13.)).child(batch.label.clone())).child(div().truncate().text_size(text_px(12.)).text_color(if failed { Theme::danger() } else { Theme::text_tertiary() }).child(summary)))
                     .when(undone, |d| d.child(ui::chip(t("已撤销"), Theme::text_tertiary(), Theme::bg_sunken())))
                     .when(!undone && !failed && batch.added > 0, |d| d.child(ui::ghost_button(("undo-import", i), None, Some(t("撤销").into())).on_click(self.on(Cmd::AskUndoImport(batch.id.clone()), cx))))
                     .into_any_element()
@@ -98,7 +98,7 @@ impl Workspace {
             .gap(px(6.))
             .px(px(16.))
             .pb(px(12.))
-            .child(div().pr(px(4.)).text_size(px(13.)).text_color(Theme::text_secondary()).child(t("自动更新")))
+            .child(div().pr(px(4.)).text_size(text_px(13.)).text_color(Theme::text_secondary()).child(t("自动更新")))
             .children([(0, t("关闭")), (6, t("每 6 小时")), (24, t("每天")), (168, t("每周"))].into_iter().map(|(value, name)| {
                 let on = hours == value;
                 div()
@@ -106,18 +106,18 @@ impl Workspace {
                     .flex()
                     .flex_none()
                     .items_center()
-                    .h(px(26.))
+                    .h(text_px(26.))
                     .px(px(10.))
                     .rounded(px(6.))
                     .border_1()
                     .border_color(if on { Theme::accent() } else { Theme::line() })
                     .when(on, |d| d.bg(Theme::accent_soft()).text_color(Theme::accent()))
-                    .text_size(px(12.))
+                    .text_size(text_px(12.))
                     .cursor_pointer()
                     .child(name)
                     .on_click(self.on(Cmd::SetAutoSync(value), cx))
             }))
-            .child(div().pl(px(6.)).min_w_0().truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(if hours == 0 { t("只在点「运行并导入」时访问数据库。") } else { t("应用开着时按这个间隔运行已启用的检索式；关着时错过的，下次打开时补上。") }));
+            .child(div().pl(px(6.)).min_w_0().truncate().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(if hours == 0 { t("只在点「运行并导入」时访问数据库。") } else { t("应用开着时按这个间隔运行已启用的检索式；关着时错过的，下次打开时补上。") }));
         div()
             .flex()
             .flex_col()
@@ -138,8 +138,8 @@ impl Workspace {
                             .flex_col()
                             .flex_1()
                             .min_w_0()
-                            .child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("检索与导入")))
-                            .child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(t("为文献数据库保存检索式：先试检索，满意了再运行导入。导入的文献都是「待判断」，已有的会跳过，每次导入可以整批撤销。"))),
+                            .child(div().text_size(text_px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("检索与导入")))
+                            .child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(t("为文献数据库保存检索式：先试检索，满意了再运行导入。导入的文献都是「待判断」，已有的会跳过，每次导入可以整批撤销。"))),
                     )
                     .when(!empty, |d| d.child(ui::secondary_button("run-all-searches", t("全部运行")).on_click(self.on(Cmd::RunAllSearches, cx))))
                     .child(ui::secondary_button("open-guide", t("让助手拟检索式")).on_click(self.on(Cmd::OpenGuide(false), cx)))
@@ -172,7 +172,7 @@ impl Workspace {
         let close = ui::ghost_button("close-trial", Some("x"), None).on_click(self.on(Cmd::CloseTrial, cx));
         let panel = div().flex().flex_col().gap(px(6.)).p(px(10.)).rounded(px(8.)).border_1().border_color(Theme::line()).bg(Theme::bg_body());
         let found = match found {
-            None => return panel.child(div().flex().items_center().child(div().flex_1().text_size(px(12.)).text_color(Theme::text_tertiary()).child(t("正在检索…"))).child(close)).into_any_element(),
+            None => return panel.child(div().flex().items_center().child(div().flex_1().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(t("正在检索…"))).child(close)).into_any_element(),
             Some(Err(error)) => return panel.child(div().flex().items_center().child(div().flex_1().child(ui::error_line(error))).child(close)).into_any_element(),
             Some(Ok(found)) => found,
         };
@@ -191,9 +191,9 @@ impl Workspace {
                 .py(px(5.))
                 .border_t_1()
                 .border_color(Theme::line())
-                .child(div().flex().flex_col().flex_1().min_w_0().child(div().truncate().text_size(px(13.)).text_color(if known.is_some() { Theme::text_tertiary() } else { Theme::text() }).child(text("title"))).child(div().truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(about.join(" · "))))
+                .child(div().flex().flex_col().flex_1().min_w_0().child(div().truncate().text_size(text_px(13.)).text_color(if known.is_some() { Theme::text_tertiary() } else { Theme::text() }).child(text("title"))).child(div().truncate().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(about.join(" · "))))
                 .children(known.map(|known| ui::chip(known, Theme::text_secondary(), Theme::bg_sunken())))
         });
-        panel.child(div().flex().items_center().child(div().flex_1().text_size(px(12.)).text_color(Theme::text_secondary()).child(head)).child(close)).children(rows).into_any_element()
+        panel.child(div().flex().items_center().child(div().flex_1().text_size(text_px(12.)).text_color(Theme::text_secondary()).child(head)).child(close)).children(rows).into_any_element()
     }
 }

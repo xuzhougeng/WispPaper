@@ -190,6 +190,15 @@ pub enum Cmd {
     SetAppearance(String),
     SetLanguage(Language),
     SetDensity(String),
+    SetFontFamily(String),
+    SetFontSize(f32),
+    ResetTypography,
+    SetLineSpacing(wisp_core::settings::Spacing),
+    SetParagraphSpacing(wisp_core::settings::Spacing),
+    SetTextWidth(wisp_core::settings::TextWidth),
+    ResetReadingAppearance,
+    ToggleHighContrast,
+    ResetAppearance,
     RecordShortcut(String),
     ClearShortcut(String),
     ResetShortcut(String),
@@ -1638,6 +1647,7 @@ impl Workspace {
         let libraries = libraries::list(&root);
         let mut this = Workspace { focus, settings, settings_path, root, libraries, lib: None, settings_view: None, update: UpdateState::Idle, update_told: None, modal: None, modal_error: String::new(), modal_subscriptions: vec![], menu: None, toast, home_scroll: ScrollHandle::new(), resizing: None, picked: None, pinning: false };
         this.apply_appearance(window);
+        this.apply_typography(window, cx);
         cx.observe_window_appearance(window, |this, window, _| this.apply_appearance(window)).detach();
         this.watch_updates(cx);
         this.watch_searches(cx);
@@ -1915,9 +1925,54 @@ impl Workspace {
                 self.save_settings(cx);
                 self.apply_appearance(window);
             }
+            Cmd::SetFontFamily(value) => self.set_font_family(value, window, cx),
+            Cmd::SetFontSize(value) => {
+                self.settings.font_size = wisp_core::settings::font_size(value);
+                self.save_settings(cx);
+                self.apply_typography(window, cx);
+            }
+            Cmd::ResetTypography => {
+                self.settings.font_family.clear();
+                self.settings.font_size = wisp_core::settings::DEFAULT_FONT_SIZE;
+                self.save_settings(cx);
+                self.apply_typography(window, cx);
+            }
+            Cmd::SetLineSpacing(value) => {
+                self.settings.reading_appearance.line_spacing = value;
+                self.save_settings(cx);
+                self.apply_typography(window, cx);
+            }
+            Cmd::SetParagraphSpacing(value) => {
+                self.settings.reading_appearance.paragraph_spacing = value;
+                self.save_settings(cx);
+                self.apply_typography(window, cx);
+            }
+            Cmd::SetTextWidth(value) => {
+                self.settings.reading_appearance.width = value;
+                self.save_settings(cx);
+                self.apply_typography(window, cx);
+            }
+            Cmd::ResetReadingAppearance => {
+                self.settings.reading_appearance = Default::default();
+                self.save_settings(cx);
+                self.apply_typography(window, cx);
+            }
+            Cmd::ToggleHighContrast => {
+                self.settings.high_contrast = !self.settings.high_contrast;
+                self.save_settings(cx);
+                self.apply_appearance(window);
+            }
+            Cmd::ResetAppearance => {
+                self.settings.reset_appearance();
+                self.dismiss_font_picker(window, cx);
+                self.save_settings(cx);
+                self.apply_typography(window, cx);
+                self.apply_appearance(window);
+            }
             Cmd::SetDensity(value) => {
                 self.settings.density = value;
                 self.save_settings(cx);
+                window.refresh();
             }
             Cmd::SetLanguage(language) => {
                 self.settings.language = language;
@@ -2770,6 +2825,7 @@ impl Workspace {
         if self.menu.take().is_some() {
         } else if self.modal.is_some() {
             self.run(Cmd::CloseModal, window, cx);
+        } else if self.dismiss_font_picker(window, cx) {
         } else if self.settings_view.is_some() {
             self.close_settings(window, cx);
         } else if self.picked.take().is_some() {
@@ -5489,6 +5545,24 @@ impl Workspace {
                 "command" => Some(Cmd::SelectCommand(arg.parse().unwrap_or(0))),
                 // Saved like the choice in 设置 › 外观: "light", "dark", or empty for the system's.
                 "theme" => Some(Cmd::SetAppearance(arg.to_string())),
+                // Typography is saved just as through the appearance controls.
+                "fontsize" => arg.parse().ok().map(Cmd::SetFontSize),
+                "fontpicker" => {
+                    self.toggle_font_picker(window, cx);
+                    return;
+                }
+                "fontsearch" => {
+                    self.search_settings_fonts(arg, cx);
+                    return;
+                }
+                "fontfamily" => Some(Cmd::SetFontFamily(arg.to_string())),
+                "fontreset" => Some(Cmd::ResetTypography),
+                "linespacing" => Some(Cmd::SetLineSpacing(match arg { "compact" => wisp_core::settings::Spacing::Compact, "relaxed" => wisp_core::settings::Spacing::Relaxed, _ => wisp_core::settings::Spacing::Standard })),
+                "paragraphspacing" => Some(Cmd::SetParagraphSpacing(match arg { "compact" => wisp_core::settings::Spacing::Compact, "relaxed" => wisp_core::settings::Spacing::Relaxed, _ => wisp_core::settings::Spacing::Standard })),
+                "textwidth" => Some(Cmd::SetTextWidth(match arg { "narrow" => wisp_core::settings::TextWidth::Narrow, "wide" => wisp_core::settings::TextWidth::Wide, _ => wisp_core::settings::TextWidth::Standard })),
+                "density" => Some(Cmd::SetDensity(arg.to_string())),
+                "contrast" => Some(Cmd::ToggleHighContrast),
+                "appearancereset" => Some(Cmd::ResetAppearance),
                 "language" => Some(Cmd::SetLanguage(if arg == "en" { Language::En } else { Language::Zh })),
                 "record" => Some(Cmd::RecordShortcut(arg.to_string())),
                 "update" => Some(Cmd::CheckUpdate),

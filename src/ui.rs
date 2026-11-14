@@ -2,7 +2,7 @@
 
 use crate::i18n::t;
 use crate::input::TextInput;
-use crate::theme::{self, Theme};
+use crate::theme::{self, Theme, text_px};
 use gpui::{prelude::FluentBuilder, *};
 use std::time::Duration;
 
@@ -68,7 +68,7 @@ pub fn progress_bar(total: usize, segments: &[ProgressSegment]) -> Div {
 pub fn progress_entry(id: &'static str, label: &'static str, done: usize, total: usize, running: bool, segments: &[ProgressSegment]) -> Stateful<Div> {
     div().id(id).flex().flex_none().flex_col().gap(px(7.)).px(px(8.)).py(px(10.)).rounded(px(6.))
         .cursor_pointer().hover(|s| s.bg(Theme::hover()))
-        .child(div().flex().items_center().gap(px(6.)).text_size(px(12.)).line_height(px(17.))
+        .child(div().flex().items_center().gap(px(6.)).text_size(text_px(12.)).line_height(text_px(17.))
             .when(running, |d| d.child(spinner((id, 0_usize), 12., theme::accent_of("blue").strong())))
             .child(div().flex_1().min_w_0().truncate().text_color(Theme::text_secondary()).child(label))
             .child(div().flex_none().text_color(Theme::text_tertiary()).child(if running && total == 0 { t("准备中").into() } else { format!("{done}/{total}") }))
@@ -80,14 +80,14 @@ pub fn progress_overview(done: usize, total: usize, state: &'static str, running
     let color = if running { theme::accent_of("blue").strong() } else { Theme::text_secondary() };
     div().flex().flex_none().flex_col().gap(px(12.)).px(px(20.)).py(px(14.))
         .child(div().flex().items_center().gap(px(8.))
-            .child(div().text_size(px(20.)).font_weight(FontWeight::SEMIBOLD).child(if running && total == 0 { t("正在准备…").into() } else { format!("{done} / {total}") }))
+            .child(div().text_size(text_px(20.)).font_weight(FontWeight::SEMIBOLD).child(if running && total == 0 { t("正在准备…").into() } else { format!("{done} / {total}") }))
             .when(total > 0, |d| d.child(div().text_color(Theme::text_tertiary()).child(t("项已处理"))))
             .child(div().flex_1())
             .when(running, |d| d.child(spinner("progress-modal-working", 13., color)))
             .child(div().text_color(color).child(state)))
         .child(progress_bar(total, segments).h(px(9.)))
         .child(div().flex().flex_wrap().gap(px(14.)).children(segments.iter().map(|(count, label, color)| {
-            div().flex().items_center().gap(px(5.)).text_size(px(12.))
+            div().flex().items_center().gap(px(5.)).text_size(text_px(12.))
                 .child(div().flex_none().size(px(7.)).rounded_full().bg(*color))
                 .child(div().text_color(Theme::text_secondary()).child(format!("{label} {count}")))
         })))
@@ -117,12 +117,12 @@ pub fn primary_button(id: impl Into<ElementId>, label: impl Into<SharedString>) 
         .items_center()
         .justify_center()
         .gap(px(6.))
-        .h(px(32.))
+        .h(text_px(32.))
         .px(px(14.))
         .rounded(px(8.))
         .bg(Theme::accent())
         .text_color(Theme::on_accent())
-        .text_size(px(13.))
+        .text_size(text_px(13.))
         .font_weight(FontWeight::MEDIUM)
         .cursor_pointer()
         .hover(|s| s.opacity(0.9))
@@ -138,14 +138,14 @@ pub fn secondary_button(id: impl Into<ElementId>, label: impl Into<SharedString>
         .items_center()
         .justify_center()
         .gap(px(6.))
-        .h(px(32.))
+        .h(text_px(32.))
         .px(px(12.))
         .rounded(px(8.))
         .border_1()
         .border_color(Theme::line_strong())
         .bg(Theme::bg_body())
         .text_color(Theme::text())
-        .text_size(px(13.))
+        .text_size(text_px(13.))
         .cursor_pointer()
         .hover(|s| s.bg(Theme::bg_sunken()))
         .active(|s| s.bg(Theme::pressed()))
@@ -161,12 +161,12 @@ pub fn ghost_button(id: impl Into<ElementId>, icon_name: Option<&str>, label: Op
         .items_center()
         .justify_center()
         .gap(px(5.))
-        .h(px(28.))
+        .h(text_px(28.))
         .min_w(px(28.))
         .when(label.is_some(), |d| d.px(px(8.)))
         .rounded(px(6.))
         .text_color(Theme::text_secondary())
-        .text_size(px(13.))
+        .text_size(text_px(13.))
         .cursor_pointer()
         .hover(|s| s.bg(Theme::hover()))
         .active(|s| s.bg(Theme::pressed()))
@@ -176,7 +176,7 @@ pub fn ghost_button(id: impl Into<ElementId>, icon_name: Option<&str>, label: Op
 
 /// A small rounded label: statuses, tags, field values.
 pub fn chip(label: impl Into<SharedString>, text: Hsla, fill: Hsla) -> Div {
-    div().flex().flex_none().items_center().h(px(22.)).px(px(8.)).rounded(px(11.)).bg(fill).text_color(text).text_size(px(12.)).whitespace_nowrap().child(label.into())
+    div().flex().flex_none().items_center().h(text_px(22.)).px(px(8.)).rounded(px(11.)).bg(fill).text_color(text).text_size(text_px(12.)).whitespace_nowrap().child(label.into())
 }
 
 pub fn status_chip(value: &str, label: &str) -> Div {
@@ -186,7 +186,7 @@ pub fn status_chip(value: &str, label: &str) -> Div {
 
 /// A key as it is on the keyboard, beside what it does.
 pub fn keycap(key: impl Into<SharedString>) -> Div {
-    div().flex().flex_none().items_center().justify_center().min_w(px(18.)).h(px(18.)).px(px(4.)).rounded(px(4.)).border_1().border_color(Theme::line_strong()).bg(Theme::bg_sunken()).text_size(px(11.)).line_height(px(14.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text_secondary()).child(key.into())
+    div().flex().flex_none().items_center().justify_center().min_w(px(18.)).h(text_px(18.)).px(px(4.)).rounded(px(4.)).border_1().border_color(Theme::line_strong()).bg(Theme::bg_sunken()).text_size(text_px(11.)).line_height(text_px(14.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text_secondary()).child(key.into())
 }
 
 /// The bordered shell around a text input.
@@ -202,15 +202,15 @@ pub fn field(input: &Entity<TextInput>, window: &Window, cx: &App) -> Div {
         .border_1()
         .border_color(if focused { Theme::accent() } else { Theme::line_strong() })
         .bg(Theme::bg_body())
-        .text_size(px(13.))
-        .line_height(px(20.))
+        .text_size(text_px(13.))
+        .line_height(text_px(20.))
         .text_color(Theme::text())
         .child(input.clone())
 }
 
 /// A labelled row of a form.
 pub fn form_row(label: impl Into<SharedString>, content: impl IntoElement) -> Div {
-    div().flex().flex_col().gap(px(5.)).child(div().text_size(px(12.)).text_color(Theme::text_secondary()).child(label.into())).child(content)
+    div().flex().flex_col().gap(px(5.)).child(div().text_size(text_px(12.)).text_color(Theme::text_secondary()).child(label.into())).child(content)
 }
 
 /// The floating shell of a menu.
@@ -227,8 +227,8 @@ pub fn popover() -> Div {
         .border_1()
         .border_color(Theme::line())
         .shadow(theme::shadow_panel())
-        .font_family(theme::UI_FONT)
-        .text_size(px(13.))
+        .font_family(theme::ui_font())
+        .text_size(text_px(13.))
         .text_color(Theme::text())
 }
 
@@ -238,14 +238,14 @@ pub fn menu_row(id: impl Into<ElementId>, label: impl Into<SharedString>, checke
         .flex()
         .items_center()
         .gap(px(8.))
-        .h(px(30.))
+        .h(text_px(30.))
         .px(px(8.))
         .rounded(px(6.))
         .cursor_pointer()
         .hover(|s| s.bg(Theme::hover()))
         .child(div().w(px(14.)).flex_none().when(checked, |d| d.child(icon("check", 14., Theme::accent()))))
         .child(div().flex_1().min_w_0().truncate().child(label.into()))
-        .when_some(note, |d, note| d.child(div().flex_none().text_size(px(12.)).text_color(Theme::text_tertiary()).child(note)))
+        .when_some(note, |d, note| d.child(div().flex_none().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(note)))
 }
 
 /// The white card of a dialog, centred by the caller over a scrim.
@@ -260,17 +260,17 @@ pub fn dialog(width: f32) -> Div {
         .rounded(px(14.))
         .bg(Theme::bg_body())
         .shadow(theme::shadow_panel())
-        .font_family(theme::UI_FONT)
+        .font_family(theme::ui_font())
         .text_color(Theme::text())
-        .text_size(px(13.))
+        .text_size(text_px(13.))
 }
 
 pub fn dialog_title(title: impl Into<SharedString>) -> Div {
-    div().px(px(20.)).pt(px(18.)).pb(px(6.)).text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(title.into())
+    div().px(px(20.)).pt(px(18.)).pb(px(6.)).text_size(text_px(16.)).font_weight(FontWeight::SEMIBOLD).child(title.into())
 }
 
 pub fn error_line(message: &str) -> Div {
-    div().when(!message.is_empty(), |d| d.px(px(10.)).py(px(7.)).rounded(px(8.)).bg(Theme::danger_soft()).text_color(Theme::danger()).text_size(px(12.)).child(message.to_string()))
+    div().when(!message.is_empty(), |d| d.px(px(10.)).py(px(7.)).rounded(px(8.)).bg(Theme::danger_soft()).text_color(Theme::danger()).text_size(text_px(12.)).child(message.to_string()))
 }
 
 /// The centred message of an empty list.
@@ -286,13 +286,13 @@ pub fn empty_state(icon_name: &str, title: &str, hint: &str) -> Div {
         .min_w_0()
         .max_w_full()
         .child(icon(icon_name, 30., Theme::text_placeholder()))
-        .child(div().text_size(px(14.)).text_color(Theme::text_secondary()).child(title.to_string()))
-        .child(div().max_w(px(360.)).text_size(px(12.)).text_color(Theme::text_tertiary()).child(hint.to_string()))
+        .child(div().text_size(text_px(14.)).text_color(Theme::text_secondary()).child(title.to_string()))
+        .child(div().max_w(px(360.)).text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(hint.to_string()))
 }
 
 /// A section caption inside a panel.
 pub fn caption(text: impl Into<SharedString>) -> Div {
-    div().text_size(px(11.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text_tertiary()).child(text.into())
+    div().text_size(text_px(11.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text_tertiary()).child(text.into())
 }
 
 // ---- window chrome

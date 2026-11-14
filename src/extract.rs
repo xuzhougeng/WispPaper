@@ -14,7 +14,7 @@
 use crate::app::{Cmd, Library, Modal, Page, Tab, Workspace};
 use crate::context::Nav;
 use crate::i18n::t;
-use crate::theme::Theme;
+use crate::theme::{Theme, text_px};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
 use std::collections::{HashMap, HashSet};
@@ -620,8 +620,8 @@ impl Workspace {
                 .on_click(self.on(Cmd::Extract(Do::PickField(field.id.clone())), cx))
                 .child(tick_box(on, true))
                 .child(div().flex_none().max_w(px(180.)).truncate().child(field.name.clone()))
-                .child(div().flex_none().text_size(px(12.)).text_color(Theme::text_tertiary()).child(t(field.kind.label())))
-                .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(if field.hint.is_empty() && field.kind == FieldKind::Select { field.options.join(" / ") } else { field.hint.clone() }))
+                .child(div().flex_none().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(t(field.kind.label())))
+                .child(div().flex_1().min_w_0().truncate().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(if field.hint.is_empty() && field.kind == FieldKind::Select { field.options.join(" / ") } else { field.hint.clone() }))
         }).collect();
         // The one thing to extract that needs no field of the person's own making.
         let summary = (!lib.has_summary()).then(|| {
@@ -633,7 +633,7 @@ impl Workspace {
                 .px(px(8.))
                 .child(div().flex().flex_none().items_center().justify_center().size(px(16.)).child(ui::icon("plus", 13., Theme::text_tertiary())))
                 .child(div().flex_1().min_w_0().truncate().text_color(Theme::text_secondary()).child(tf!("「{}」：一两句话概括每篇文献发现了什么", "“{}”: what each paper found, in a sentence or two", t(extract::SUMMARY))))
-                .child(ui::ghost_button("extract-summary", None, Some(t("添加这个词条").into())).h(px(24.)).text_size(px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::Extract(Do::AddSummary), cx)))
+                .child(ui::ghost_button("extract-summary", None, Some(t("添加这个词条").into())).h(text_px(24.)).text_size(text_px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::Extract(Do::AddSummary), cx)))
         });
         let scope = if form.marked { tf!("选中的 {} 篇", "the {} selected papers", form.papers.len()) } else { tf!("列表里的 {} 篇", "the {} papers in the list", form.papers.len()) };
         let count = if form.fields.is_empty() {
@@ -672,18 +672,18 @@ impl Workspace {
                         .gap(px(12.))
                         .px(px(20.))
                         .py(px(8.))
-                        .child(div().text_size(px(12.)).line_height(px(19.)).text_color(Theme::text_tertiary()).child(t("助手逐篇阅读（有全文读全文，否则读摘要），为勾选的词条提出取值，并摘一句原文作依据。它只提出建议：读完后在「提取」里过目，勾选的才写入词条。")))
+                        .child(div().text_size(text_px(12.)).line_height(text_px(19.)).text_color(Theme::text_tertiary()).child(t("助手逐篇阅读（有全文读全文，否则读摘要），为勾选的词条提出取值，并摘一句原文作依据。它只提出建议：读完后在「提取」里过目，勾选的才写入词条。")))
                         .child(if lib.fields.is_empty() {
                             div().flex().flex_col().gap(px(2.)).child(div().px(px(8.)).py(px(6.)).text_color(Theme::text_secondary()).child(t("这个文献库还没有自定义词条。先添加要提取的词条，例如物种、研究方法、样本量。"))).children(summary).child(div().flex().px(px(2.)).child(ui::ghost_button("extract-fields", Some("list"), Some(t("管理自定义词条").into())).on_click(self.on(Cmd::ManageFields, cx))))
                         } else {
                             div().flex().flex_col().gap(px(2.)).children(rows).children(summary)
                         })
                         .when(!lib.fields.is_empty(), |d| d.child(again))
-                        .child(div().px(px(8.)).text_size(px(12.)).line_height(px(19.)).text_color(Theme::text_secondary()).child(count))
+                        .child(div().px(px(8.)).text_size(text_px(12.)).line_height(text_px(19.)).text_color(Theme::text_secondary()).child(count))
                         .child(if configured {
-                            div().px(px(8.)).text_size(px(12.)).text_color(Theme::text_tertiary()).child(tf!("用筛选的模型：{} · {}，同时读 {} 篇。", "Uses the screening model: {} · {}, {} papers at a time.", profile.title(), profile.model, self.settings.screen_workers))
+                            div().px(px(8.)).text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(tf!("用筛选的模型：{} · {}，同时读 {} 篇。", "Uses the screening model: {} · {}, {} papers at a time.", profile.title(), profile.model, self.settings.screen_workers))
                         } else {
-                            div().flex().items_center().gap(px(6.)).px(px(8.)).text_size(px(12.)).text_color(Theme::warning()).child(t("还没有配置模型。")).child(self.screen_setup_button(cx))
+                            div().flex().items_center().gap(px(6.)).px(px(8.)).text_size(text_px(12.)).text_color(Theme::warning()).child(t("还没有配置模型。")).child(self.screen_setup_button(cx))
                         })
                         .child(ui::error_line(&self.modal_error)),
                 )
@@ -732,26 +732,26 @@ impl Workspace {
                     div().flex_1().min_w_0().pt(px(1.)).text_color(Theme::text_placeholder()).child(if standing == Some(Standing::Silent) { t("未填写 · 助手没有在文中找到") } else { t("未填写") })
                 } else if field.kind == FieldKind::Text {
                     // A line of text may be a sentence or two: it wraps, and can be selected.
-                    self.selectable(format!("field-value-{}-{}", paper.id, field.id), values.join("；"), cx).flex_1().min_w_0().line_height(px(20.)).text_color(Theme::text_secondary())
+                    self.selectable(format!("field-value-{}-{}", paper.id, field.id), values.join("；"), cx).flex_1().min_w_0().line_height(text_px(20.)).text_color(Theme::text_secondary())
                 } else {
                     div().flex().flex_wrap().flex_1().min_w_0().gap(px(4.)).children(values.into_iter().map(|v| ui::chip(v, Theme::text_secondary(), Theme::bg_sunken())))
                 };
-                let small = |id: (&'static str, usize), text: &'static str| ui::ghost_button(id, None, Some(text.into())).h(px(22.)).px(px(6.)).text_size(px(12.));
+                let small = |id: (&'static str, usize), text: &'static str| ui::ghost_button(id, None, Some(text.into())).h(text_px(22.)).px(px(6.)).text_size(text_px(12.));
                 // The sentence a value rests on; with a page, a click opens the PDF there.
                 let quote = |proposal: &Proposal, cx: &mut Context<Self>| {
-                    let line = div().id(("field-quote", n)).flex().items_start().gap(px(6.)).text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_tertiary()).child(div().flex_1().min_w_0().child(format!("“{}”", proposal.excerpt)));
+                    let line = div().id(("field-quote", n)).flex().items_start().gap(px(6.)).text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text_tertiary()).child(div().flex_1().min_w_0().child(format!("“{}”", proposal.excerpt)));
                     match proposal.page {
                         Some(page) => line.cursor_pointer().hover(|s| s.text_color(Theme::text_secondary())).child(div().flex_none().text_color(Theme::accent()).child(tf!("第 {page} 页", "Page {page}"))).on_click(self.on(Cmd::GotoSource(paper.id.clone(), Some(page), proposal.excerpt.clone()), cx)),
                         None => line.child(div().flex_none().child(t("摘要"))),
                     }
                 };
                 let under: Option<Div> = match (proposal, standing) {
-                    _ if lib.extract.ask_errors.contains_key(&key) => Some(div().text_size(px(12.)).line_height(px(18.)).text_color(Theme::warning()).child(lib.extract.ask_errors[&key].clone())),
+                    _ if lib.extract.ask_errors.contains_key(&key) => Some(div().text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::warning()).child(lib.extract.ask_errors[&key].clone())),
                     (Some(proposal), Some(Standing::Open)) => {
                         let fits = extract::fits(field, &proposal.values);
-                        let said = if fits && field.kind == FieldKind::Text { div().flex_1().min_w_0().line_height(px(20.)).text_color(Theme::accent()).child(proposal.values.join("；")) } else if fits { div().flex().flex_wrap().flex_1().min_w_0().gap(px(4.)).children(proposal.values.iter().map(|v| ui::chip(v.clone(), Theme::accent(), Theme::accent_soft()))) } else { div().flex_1().min_w_0().text_size(px(12.)).line_height(px(18.)).text_color(Theme::warning()).child(tf!("助手答「{}」，不在选项里。", "The assistant said “{}”, which is not one of the options.", proposal.values.join("；"))) };
+                        let said = if fits && field.kind == FieldKind::Text { div().flex_1().min_w_0().line_height(text_px(20.)).text_color(Theme::accent()).child(proposal.values.join("；")) } else if fits { div().flex().flex_wrap().flex_1().min_w_0().gap(px(4.)).children(proposal.values.iter().map(|v| ui::chip(v.clone(), Theme::accent(), Theme::accent_soft()))) } else { div().flex_1().min_w_0().text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::warning()).child(tf!("助手答「{}」，不在选项里。", "The assistant said “{}”, which is not one of the options.", proposal.values.join("；"))) };
                         let line = div().flex().items_start().gap(px(4.)).child(said).when(fits, |d| d.child(small(("field-take", n), t("采纳")).text_color(Theme::accent()).on_click(self.on(Cmd::Extract(Do::Take(key.clone())), cx)))).child(small(("field-drop", n), t("忽略")).on_click(self.on(Cmd::Extract(Do::Dismiss(Some(vec![key.clone()]))), cx)));
-                        Some(div().flex().flex_col().gap(px(4.)).child(line).when(!proposal.excerpt.is_empty(), |d| d.child(quote(proposal, cx))).when(proposal.excerpt.is_empty(), |d| d.child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(tf!("没有找到原文依据 · {}", "No sentence of the paper found for it · {}", basis(proposal))))))
+                        Some(div().flex().flex_col().gap(px(4.)).child(line).when(!proposal.excerpt.is_empty(), |d| d.child(quote(proposal, cx))).when(proposal.excerpt.is_empty(), |d| d.child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(tf!("没有找到原文依据 · {}", "No sentence of the paper found for it · {}", basis(proposal))))))
                     }
                     (Some(proposal), Some(Standing::Held)) if !proposal.excerpt.is_empty() => Some(div().child(quote(proposal, cx))),
                     _ => None,
@@ -760,7 +760,7 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .gap(px(4.))
-                    .child(div().flex().items_start().gap(px(8.)).child(div().flex_none().w(px(84.)).pt(px(1.)).truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(field.name.clone())).child(held).child(sparkle))
+                    .child(div().flex().items_start().gap(px(8.)).child(div().flex_none().w(px(84.)).pt(px(1.)).truncate().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(field.name.clone())).child(held).child(sparkle))
                     .children(under.map(|under| div().pl(px(92.)).pr(px(4.)).child(under)))
                     .into_any_element()
             })
@@ -787,8 +787,8 @@ impl Workspace {
             .px(px(16.))
             .pt(px(16.))
             .pb(px(12.))
-            .child(div().flex().flex_wrap().items_center().gap(px(10.)).child(div().flex_none().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("提取"))).child(div().flex_1()).when(!lib.fields.is_empty() && !state.running(), |d| d.child(start)))
-            .child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(t("助手读文献，为自定义词条提出取值，每个取值附一句原文。在这里过目：不对的不勾选，再把勾选的一次写入词条。写入之前什么都不会改动，写入之后也能撤销。")))
+            .child(div().flex().flex_wrap().items_center().gap(px(10.)).child(div().flex_none().text_size(text_px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("提取"))).child(div().flex_1()).when(!lib.fields.is_empty() && !state.running(), |d| d.child(start)))
+            .child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(t("助手读文献，为自定义词条提出取值，每个取值附一句原文。在这里过目：不对的不勾选，再把勾选的一次写入词条。写入之前什么都不会改动，写入之后也能撤销。")))
             .when(state.total > 0, |d| d.child(self.render_extract_run(cx)))
             .when(!state.error.is_empty(), |d| d.child(ui::error_line(&state.error)));
 
@@ -799,7 +799,7 @@ impl Workspace {
                 Last::Wrote { before, papers, .. } => tf!("已写入 {} 个取值，涉及 {papers} 篇文献。", "Saved {} values for {papers} papers.", before.len()),
                 Last::SetAside(keys) => tf!("已清除 {} 条建议：不再列出，也不会再问。", "Set aside {} proposals: not listed, and not asked again.", keys.len()),
             };
-            div().flex().items_center().gap(px(8.)).mx(px(16.)).mb(px(10.)).px(px(12.)).py(px(8.)).rounded(px(8.)).bg(fill).child(ui::icon("check", 14., color)).child(div().flex_1().min_w_0().text_color(color).child(text)).child(ui::ghost_button("extract-undo", None, Some(t("撤销").into())).h(px(24.)).text_size(px(12.)).on_click(self.on(Cmd::Extract(Do::Undo), cx)))
+            div().flex().items_center().gap(px(8.)).mx(px(16.)).mb(px(10.)).px(px(12.)).py(px(8.)).rounded(px(8.)).bg(fill).child(ui::icon("check", 14., color)).child(div().flex_1().min_w_0().text_color(color).child(text)).child(ui::ghost_button("extract-undo", None, Some(t("撤销").into())).h(text_px(24.)).text_size(text_px(12.)).on_click(self.on(Cmd::Extract(Do::Undo), cx)))
         });
         if all.is_empty() {
             return div().flex().flex_col().size_full().child(head).children(done).child(self.render_extract_empty(cx)).into_any_element();
@@ -808,14 +808,14 @@ impl Workspace {
         // One part per field that has something waiting.
         let part = |n: usize, key: &str, text: String, this: &Self, cx: &mut Context<Self>| {
             let on = on_show == key;
-            div().id(("extract-part", n)).flex().flex_none().items_center().h(px(26.)).px(px(10.)).rounded(px(13.)).text_size(px(12.)).cursor_pointer().border_1().when(on, |d| d.bg(Theme::groove()).text_color(Theme::text()).border_color(Theme::line_strong()).font_weight(FontWeight::MEDIUM)).when(!on, |d| d.border_color(Theme::line()).text_color(Theme::text_secondary()).hover(|s| s.bg(Theme::hover()))).on_click(this.on(Cmd::Extract(Do::Part(key.to_string())), cx)).child(text)
+            div().id(("extract-part", n)).flex().flex_none().items_center().h(text_px(26.)).px(px(10.)).rounded(px(13.)).text_size(text_px(12.)).cursor_pointer().border_1().when(on, |d| d.bg(Theme::groove()).text_color(Theme::text()).border_color(Theme::line_strong()).font_weight(FontWeight::MEDIUM)).when(!on, |d| d.border_color(Theme::line()).text_color(Theme::text_secondary()).hover(|s| s.bg(Theme::hover()))).on_click(this.on(Cmd::Extract(Do::Part(key.to_string())), cx)).child(text)
         };
         let mut bar: Vec<AnyElement> = vec![part(0, "", tf!("全部 {}", "All {}", all.len()), self, cx).into_any_element()];
         for (n, field) in lib.fields.iter().enumerate() {
             let count = all.iter().filter(|row| row.field.id == field.id).count();
             if count > 0 { bar.push(part(n + 1, &field.id, format!("{} {count}", field.name), self, cx).into_any_element()) }
         }
-        let small = |id: &'static str, text: &'static str| ui::ghost_button(id, None, Some(text.into())).h(px(26.)).text_size(px(12.));
+        let small = |id: &'static str, text: &'static str| ui::ghost_button(id, None, Some(text.into())).h(text_px(26.)).text_size(text_px(12.));
         let tools = div().flex().items_center().flex_wrap().gap(px(6.)).px(px(16.)).pb(px(10.)).children(bar).child(div().flex_1()).child(small("extract-all", t("全选")).on_click(self.on(Cmd::Extract(Do::TickAll(true)), cx))).child(small("extract-none", t("全不选")).on_click(self.on(Cmd::Extract(Do::TickAll(false)), cx)));
 
         let list = uniform_list("extract-rows", rows.len(), cx.processor(move |this, range: Range<usize>, _, cx| this.render_extract_rows(range, cx))).track_scroll(state.scroll.clone()).flex_1();
@@ -823,8 +823,8 @@ impl Workspace {
         let cursor = review.cursor.as_ref().and_then(|key| rows.iter().find(|row| row.key() == *key)).map(|row| {
             let (paper, proposal) = (row.paper, row.proposal);
             let beside = lib.selected.as_deref() == Some(paper.id.as_str());
-            let open = ui::ghost_button("extract-beside", Some("file-text"), Some(if beside { t("收起").into() } else if lib.pdf_file(&paper.id).is_some() { t("对照 PDF").into() } else { t("完整记录").into() })).h(px(24.)).text_size(px(12.)).on_click(self.on(Cmd::Extract(Do::Beside), cx));
-            let again = ui::ghost_button("extract-ask-again", Some("sparkle"), Some(t("再问一次").into())).h(px(24.)).text_size(px(12.)).on_click(self.on(Cmd::Extract(Do::Ask(row.key())), cx));
+            let open = ui::ghost_button("extract-beside", Some("file-text"), Some(if beside { t("收起").into() } else if lib.pdf_file(&paper.id).is_some() { t("对照 PDF").into() } else { t("完整记录").into() })).h(text_px(24.)).text_size(text_px(12.)).on_click(self.on(Cmd::Extract(Do::Beside), cx));
+            let again = ui::ghost_button("extract-ask-again", Some("sparkle"), Some(t("再问一次").into())).h(text_px(24.)).text_size(text_px(12.)).on_click(self.on(Cmd::Extract(Do::Ask(row.key())), cx));
             let asking = state.asking.contains(&row.key());
             let mut about = vec![basis(proposal).to_string(), proposal.author.clone()];
             if !row.held().is_empty() { about.push(tf!("词条现为：{}", "The field holds: {}", row.held().join("；"))) }
@@ -841,16 +841,16 @@ impl Workspace {
                 .py(px(10.))
                 .border_t_1()
                 .border_color(Theme::line())
-                .child(div().flex().items_center().gap(px(8.)).child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(paper.title.clone())).child(if asking { div().flex().flex_none().items_center().gap(px(5.)).text_size(px(12.)).text_color(Theme::accent()).child(ui::spinner("extract-asking", 13., Theme::accent())).child(t("正在读这一篇…")).into_any_element() } else { again.into_any_element() }).child(open))
-                .child(div().flex().items_start().gap(px(8.)).child(div().flex_none().pt(px(1.)).text_size(px(12.)).text_color(Theme::text_tertiary()).child(row.field.name.clone())).child(self.selectable(format!("extract-value-{}-{}", paper.id, row.field.id), review.values(row).join("；"), cx).flex_1().min_w_0().line_height(px(21.))));
+                .child(div().flex().items_center().gap(px(8.)).child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(paper.title.clone())).child(if asking { div().flex().flex_none().items_center().gap(px(5.)).text_size(text_px(12.)).text_color(Theme::accent()).child(ui::spinner("extract-asking", 13., Theme::accent())).child(t("正在读这一篇…")).into_any_element() } else { again.into_any_element() }).child(open))
+                .child(div().flex().items_start().gap(px(8.)).child(div().flex_none().pt(px(1.)).text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(row.field.name.clone())).child(self.selectable(format!("extract-value-{}-{}", paper.id, row.field.id), review.values(row).join("；"), cx).flex_1().min_w_0().line_height(text_px(21.))));
             if !proposal.excerpt.is_empty() {
-                let quote = div().id("extract-quote").flex().gap(px(8.)).px(px(10.)).py(px(8.)).rounded(px(6.)).bg(Theme::bg_sunken()).border_l_2().border_color(Theme::accent()).text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_secondary()).child(div().flex_1().min_w_0().child(proposal.excerpt.clone()));
+                let quote = div().id("extract-quote").flex().gap(px(8.)).px(px(10.)).py(px(8.)).rounded(px(6.)).bg(Theme::bg_sunken()).border_l_2().border_color(Theme::accent()).text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text_secondary()).child(div().flex_1().min_w_0().child(proposal.excerpt.clone()));
                 block = block.child(match proposal.page {
                     Some(page) => quote.cursor_pointer().child(div().flex_none().text_color(Theme::accent()).child(tf!("第 {page} 页", "Page {page}"))).on_click(self.on(Cmd::GotoSource(paper.id.clone(), Some(page), proposal.excerpt.clone()), cx)),
                     None => quote.child(div().flex_none().text_color(Theme::text_tertiary()).child(t("摘要"))),
                 });
             }
-            block.child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(about.join(" · "))).when_some(state.ask_errors.get(&row.key()), |d, err| d.child(div().text_size(px(12.)).text_color(Theme::warning()).child(err.clone())))
+            block.child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(about.join(" · "))).when_some(state.ask_errors.get(&row.key()), |d, err| d.child(div().text_size(text_px(12.)).text_color(Theme::warning()).child(err.clone())))
         });
 
         let summary = if plan.is_empty() {
@@ -876,11 +876,11 @@ impl Workspace {
                     .flex_wrap()
                     .items_center()
                     .gap(px(10.))
-                    .child(div().flex_1().min_w(px(160.)).text_size(px(12.)).text_color(Theme::text_secondary()).child(summary))
-                    .when(unticked > 0, |d| d.child(ui::ghost_button("extract-dismiss", None, Some(tf!("清除没勾选的 {unticked} 条", "Set aside the {unticked} unchecked").into())).h(px(30.)).text_size(px(12.)).on_click(self.on(Cmd::Extract(Do::Dismiss(None)), cx))))
+                    .child(div().flex_1().min_w(px(160.)).text_size(text_px(12.)).text_color(Theme::text_secondary()).child(summary))
+                    .when(unticked > 0, |d| d.child(ui::ghost_button("extract-dismiss", None, Some(tf!("清除没勾选的 {unticked} 条", "Set aside the {unticked} unchecked").into())).h(text_px(30.)).text_size(text_px(12.)).on_click(self.on(Cmd::Extract(Do::Dismiss(None)), cx))))
                     .child(ui::primary_button("extract-apply", if plan.is_empty() { t("写入").to_string() } else { tf!("写入这 {} 个取值", "Save {} values", plan.len()) }).when(plan.is_empty(), |d| d.opacity(0.5)).on_click(self.on(Cmd::Extract(Do::Apply), cx))),
             )
-            .child(div().flex().flex_wrap().items_center().gap_x(px(14.)).gap_y(px(6.)).text_size(px(11.)).line_height(px(18.)).text_color(Theme::text_tertiary()).child(hint("↑↓", t("移动"))).child(hint("Space", t("勾选 / 不勾选"))).child(hint("Enter", t("对照 PDF"))).child(div().flex_1().min_w_0().truncate().text_right().child(t("默认勾选：词条还空着、且找到了原文依据的取值。"))));
+            .child(div().flex().flex_wrap().items_center().gap_x(px(14.)).gap_y(px(6.)).text_size(text_px(11.)).line_height(text_px(18.)).text_color(Theme::text_tertiary()).child(hint("↑↓", t("移动"))).child(hint("Space", t("勾选 / 不勾选"))).child(hint("Enter", t("对照 PDF"))).child(div().flex_1().min_w_0().truncate().text_right().child(t("默认勾选：词条还空着、且找到了原文依据的取值。"))));
 
         div().id("extract-page").flex().flex_col().size_full().overflow_y_scroll().child(head).children(done).child(tools).child(div().flex().flex_col().flex_1().min_h(px(240.)).border_t_1().border_color(Theme::line()).child(list)).children(cursor).child(foot).into_any_element()
     }
@@ -907,17 +907,17 @@ impl Workspace {
                     .items_center()
                     .gap(px(8.))
                     .child(div().flex_none().font_weight(FontWeight::MEDIUM).child(heading))
-                    .child(div().flex_none().text_size(px(12.)).text_color(Theme::text_secondary()).child(format!("{} / {}", state.done, state.total)))
-                    .when(state.found > 0, |d| d.child(div().flex_none().text_size(px(12.)).text_color(Theme::text_secondary()).child(tf!("提出 {} 个取值", "{} values proposed", state.found))))
+                    .child(div().flex_none().text_size(text_px(12.)).text_color(Theme::text_secondary()).child(format!("{} / {}", state.done, state.total)))
+                    .when(state.found > 0, |d| d.child(div().flex_none().text_size(text_px(12.)).text_color(Theme::text_secondary()).child(tf!("提出 {} 个取值", "{} values proposed", state.found))))
                     .when(state.unread > 0, |d| d.child(ui::chip(tf!("没有可读的内容 {}", "{} with nothing to read", state.unread), Theme::warning(), Theme::groove())))
                     .when(state.failed > 0, |d| d.child(ui::chip(tf!("没读成 {}", "{} could not be read", state.failed), Theme::danger(), Theme::danger_soft())))
-                    .child(div().flex_1().min_w_0().truncate().text_right().text_size(px(11.)).text_color(Theme::text_tertiary()).child(tf!("{} · 同时 {} 篇", "{} · {} papers at a time", state.model, self.settings.screen_workers)))
-                    .when(running, |d| d.child(ui::secondary_button("extract-stop", t("停止")).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::Extract(Do::Stop), cx)))),
+                    .child(div().flex_1().min_w_0().truncate().text_right().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(tf!("{} · 同时 {} 篇", "{} · {} papers at a time", state.model, self.settings.screen_workers)))
+                    .when(running, |d| d.child(ui::secondary_button("extract-stop", t("停止")).h(text_px(26.)).text_size(text_px(12.)).on_click(self.on(Cmd::Extract(Do::Stop), cx)))),
             )
             .child(crate::screen::progress_bar(state.done, state.total))
             .when(running, |d| {
                 d.children(titles.into_iter().enumerate().map(|(n, title)| {
-                    let line = div().flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(Theme::text_secondary()).child(ui::spinner(("extract-reading", n), 12., Theme::accent())).child(div().flex_1().min_w_0().truncate().child(title.clone()));
+                    let line = div().flex().items_center().gap(px(6.)).text_size(text_px(12.)).text_color(Theme::text_secondary()).child(ui::spinner(("extract-reading", n), 12., Theme::accent())).child(div().flex_1().min_w_0().truncate().child(title.clone()));
                     // Keyed by the title, so a line that takes another paper's place appears anew.
                     ui::fade_in(SharedString::from(format!("extract-reading-{title}")), line)
                 }))
@@ -955,7 +955,7 @@ impl Workspace {
                 let id = |part: &str| SharedString::from(format!("extract-{part}-{}-{}", paper.id, field.id));
                 let (ticked, writable, on_cursor) = (review.ticked(row), review.writable(row), review.cursor.as_ref() == Some(&key));
                 let (values, chosen) = (review.values(row), review.chosen(row));
-                let tick = div().id(id("tick")).flex().flex_none().items_center().justify_center().w(px(28.)).h(px(22.)).when(writable, |d| d.cursor_pointer()).on_click(self.on(Cmd::Extract(Do::Tick(key.clone())), cx)).child(tick_box(ticked, writable));
+                let tick = div().id(id("tick")).flex().flex_none().items_center().justify_center().w(px(28.)).h(text_px(22.)).when(writable, |d| d.cursor_pointer()).on_click(self.on(Cmd::Extract(Do::Tick(key.clone())), cx)).child(tick_box(ticked, writable));
                 // What the row would write. A Select answer that is none of the options says so, until one is picked.
                 let value = if writable { values_view(field, if chosen.is_some() { &values } else { &proposal.values }).font_weight(FontWeight::MEDIUM) } else { div().flex_1().min_w_0().truncate().text_color(Theme::warning()).child(tf!("助手答「{}」，不在选项里：选一个，或留着不写", "The assistant said “{}”, not one of the options: pick one, or leave it", proposal.values.join("；"))) };
                 // The options of a Select field: the one to be written stands out, another can be picked.
@@ -967,10 +967,10 @@ impl Workspace {
                             .flex()
                             .flex_none()
                             .items_center()
-                            .h(px(22.))
+                            .h(text_px(22.))
                             .px(px(8.))
                             .rounded(px(6.))
-                            .text_size(px(12.))
+                            .text_size(text_px(12.))
                             .cursor_pointer()
                             .when(chosen, |d| d.bg(Theme::accent_soft()).text_color(Theme::accent()).font_weight(FontWeight::MEDIUM))
                             .when(!chosen, |d| d.text_color(Theme::text_tertiary()).hover(|s| s.bg(Theme::hover()).text_color(Theme::text())))
@@ -979,15 +979,15 @@ impl Workspace {
                     }))
                 });
                 // What the field holds now, and what writing would do to it: a multi-value field keeps it, another is replaced.
-                let held = (!row.held().is_empty()).then(|| div().flex_none().max_w(px(260.)).truncate().text_size(px(12.)).text_color(Theme::warning()).child(if field.kind == FieldKind::Tags { tf!("已有：{}（加在后面）", "Has: {} (added after)", row.held().join("；")) } else { tf!("现为：{}（会被替换）", "Holds: {} (will be replaced)", row.held().join("；")) }));
+                let held = (!row.held().is_empty()).then(|| div().flex_none().max_w(px(260.)).truncate().text_size(text_px(12.)).text_color(Theme::warning()).child(if field.kind == FieldKind::Tags { tf!("已有：{}（加在后面）", "Has: {} (added after)", row.held().join("；")) } else { tf!("现为：{}（会被替换）", "Holds: {} (will be replaced)", row.held().join("；")) }));
                 // With options on show, the one picked out is the value: words stand before them only where the answer was none of them.
                 let with_options = options.is_some();
                 let said = if options.is_some() && writable { div().flex_none() } else if options.is_some() { value.flex_initial() } else { value };
-                let first = div().flex().items_center().gap(px(8.)).h(px(22.)).child(div().flex_none().w(px(88.)).truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(field.name.clone())).child(said).children(options).when(with_options, |d| d.child(div().flex_1())).children(held);
+                let first = div().flex().items_center().gap(px(8.)).h(text_px(22.)).child(div().flex_none().w(px(88.)).truncate().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(field.name.clone())).child(said).children(options).when(with_options, |d| d.child(div().flex_1())).children(held);
                 let quote = if proposal.excerpt.is_empty() {
-                    div().id(id("quote")).truncate().text_size(px(12.)).text_color(Theme::warning()).child(tf!("没有找到原文依据 · {}", "No sentence of the paper found for it · {}", basis(proposal)))
+                    div().id(id("quote")).truncate().text_size(text_px(12.)).text_color(Theme::warning()).child(tf!("没有找到原文依据 · {}", "No sentence of the paper found for it · {}", basis(proposal)))
                 } else {
-                    let line = div().id(id("quote")).flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(Theme::text_secondary()).child(div().min_w_0().truncate().child(format!("“{}”", proposal.excerpt)));
+                    let line = div().id(id("quote")).flex().items_center().gap(px(6.)).text_size(text_px(12.)).text_color(Theme::text_secondary()).child(div().min_w_0().truncate().child(format!("“{}”", proposal.excerpt)));
                     match proposal.page {
                         Some(page) => line.cursor_pointer().hover(|s| s.text_color(Theme::text())).child(div().flex_none().text_color(Theme::accent()).child(tf!("第 {page} 页", "Page {page}"))).on_click(self.on(Cmd::GotoSource(paper.id.clone(), Some(page), proposal.excerpt.clone()), cx)),
                         None => line.child(div().flex_none().text_color(Theme::text_tertiary()).child(t("摘要"))),
@@ -1006,14 +1006,14 @@ impl Workspace {
                     .on_click(self.on(Cmd::Extract(Do::Cursor(key.clone())), cx))
                     .child(first)
                     .child(div().pl(px(96.)).child(quote))
-                    .child(div().pl(px(96.)).truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(about.join(" · ")));
+                    .child(div().pl(px(96.)).truncate().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(about.join(" · ")));
                 Some(
                     div()
                         .flex()
                         .items_start()
                         .gap(px(6.))
                         .w_full()
-                        .h(px(ROW_H))
+                        .h(text_px(ROW_H))
                         .pt(px(9.))
                         .pl(px(10.))
                         .pr(px(16.))

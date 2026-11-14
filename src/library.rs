@@ -4,7 +4,7 @@
 use crate::i18n::{label, t};
 use crate::app::{Cmd, Edge, FilterKey, Library, MenuKind, Page, Tab, Translated, Workspace};
 use crate::settings::SettingsPage;
-use crate::theme::{self, Theme};
+use crate::theme::{self, Theme, text_px};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
 use std::ops::Range;
@@ -128,11 +128,13 @@ impl Workspace {
     /// How tall a paper's row is: in the table, or in the narrow list beside a paper that is asked
     /// about, where a title has two lines. 设置 › 外观: the compact rows still fit the title and its line of details.
     pub fn row_height(&self, narrow: bool) -> f32 {
-        match (narrow, self.settings.density == "compact") {
-            (false, false) => 56.,
-            (true, false) => 68.,
-            (_, true) => 44.,
-        }
+        f32::from(text_px(match (narrow, self.settings.density.as_str()) {
+            (_, "compact") => 44.,
+            (false, "comfortable") => 72.,
+            (true, "comfortable") => 84.,
+            (false, _) => 56.,
+            (true, _) => 68.,
+        }))
     }
 
     /// The detail panel's width for this window: the width the reader
@@ -281,7 +283,7 @@ impl Workspace {
     /// A narrow sidebar keeps the arrow and drops its words.
     pub(crate) fn render_corner(&self, roomy: bool, cx: &mut Context<Self>) -> Div {
         ui::title_strip()
-            .when(!ui::custom_titlebar(), |d| d.h(px(28.)))
+            .when(!ui::custom_titlebar(), |d| d.h(text_px(28.)))
             .pl(px(ui::traffic_lights_width()))
             .child(ui::ghost_button("toggle-sidebar", Some("panel-left"), None).occlude().on_click(self.on(Cmd::ToggleSidebar, cx)))
             .child(ui::ghost_button("back-home", Some("arrow-left"), roomy.then(|| t("所有文献库").into())).occlude().on_click(self.on(Cmd::GoHome, cx)))
@@ -311,7 +313,7 @@ impl Workspace {
                 .flex()
                 .items_center()
                 .gap(px(8.))
-                .h(px(30.))
+                .h(text_px(30.))
                 .px(px(8.))
                 .rounded(px(6.))
                 .cursor_pointer()
@@ -320,7 +322,7 @@ impl Workspace {
                 .on_click(this.on(cmd, cx))
                 .child(ui::icon(icon, 16., if active { Theme::accent() } else { Theme::text_secondary() }))
                 .child(div().flex_1().min_w_0().truncate().child(label))
-                .when_some(count, |d, n| d.child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(n.to_string())))
+                .when_some(count, |d, n| d.child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(n.to_string())))
         };
         let on_papers = lib.page == Page::Papers;
         let view_rows: Vec<AnyElement> = VIEWS
@@ -344,7 +346,7 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap(px(8.))
-                    .h(px(28.))
+                    .h(text_px(28.))
                     .px(px(8.))
                     .rounded(px(6.))
                     .cursor_pointer()
@@ -354,7 +356,7 @@ impl Workspace {
                     .on_mouse_down(MouseButton::Right, self.on_context(MenuKind::Tag(tag.clone()), cx))
                     .child(div().size(px(6.)).flex_none().rounded_full().bg(if active { Theme::accent() } else { Theme::text_placeholder() }))
                     .child(div().flex_1().min_w_0().truncate().child(tag.clone()))
-                    .child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(count.to_string()))
+                    .child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(count.to_string()))
                     .into_any_element()
             })
             .collect();
@@ -371,7 +373,7 @@ impl Workspace {
             .pb(px(10.))
             .pt(px(Self::corner_top()))
             .gap(px(10.))
-            .child(self.render_corner(width >= ui::traffic_lights_width() + 150., cx).when(ui::custom_titlebar(), |d| d.mb(px(4.))))
+            .child(self.render_corner(width >= ui::traffic_lights_width() + f32::from(text_px(150.)), cx).when(ui::custom_titlebar(), |d| d.mb(px(4.))))
             .child(
                 div()
                     .id("library-head")
@@ -384,7 +386,7 @@ impl Workspace {
                     .cursor_pointer()
                     .hover(|s| s.bg(Theme::hover()))
                     .on_click(self.on(Cmd::EditLibrary(lib.info.id.clone()), cx))
-                    .child(div().flex().items_center().gap(px(8.)).child(div().size(px(10.)).flex_none().rounded(px(3.)).bg(Theme::accent())).child(div().flex_1().min_w_0().truncate().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(lib.info.name.clone())))
+                    .child(div().flex().items_center().gap(px(8.)).child(div().size(px(10.)).flex_none().rounded(px(3.)).bg(Theme::accent())).child(div().flex_1().min_w_0().truncate().text_size(text_px(15.)).font_weight(FontWeight::SEMIBOLD).child(lib.info.name.clone())))
             )
             .child(ui::primary_button("add-paper", t("添加文献")).w_full().on_click(self.on_menu(MenuKind::Add, cx)))
             .child(div().flex().flex_col().gap(px(1.)).children(view_rows))
@@ -397,7 +399,7 @@ impl Workspace {
                     .min_h(px(80.))
                     .gap(px(2.))
                     .child(ui::caption(t("标签")).px(px(8.)).py(px(4.)))
-                    .child(div().id("tags").flex().flex_col().flex_1().min_h_0().overflow_y_scroll().gap(px(1.)).children(tag_rows).when(tags.is_empty(), |d| d.child(div().px(px(8.)).text_size(px(12.)).text_color(Theme::text_placeholder()).child(t("编辑文献时添加标签")))))
+                    .child(div().id("tags").flex().flex_col().flex_1().min_h_0().overflow_y_scroll().gap(px(1.)).children(tag_rows).when(tags.is_empty(), |d| d.child(div().px(px(8.)).text_size(text_px(12.)).text_color(Theme::text_placeholder()).child(t("编辑文献时添加标签")))))
             )
             .children(self.render_import(cx))
             .when_some(lib.zotero.as_ref(), |d, run| d.child(
@@ -468,12 +470,12 @@ impl Workspace {
                 .flex_none()
                 .items_center()
                 .gap(px(4.))
-                .h(px(26.))
+                .h(text_px(26.))
                 .px(px(9.))
                 .rounded(px(13.))
                 .border_1()
                 .cursor_pointer()
-                .text_size(px(12.))
+                .text_size(text_px(12.))
                 .when(set, |d| d.bg(Theme::accent_soft()).border_color(Theme::accent_soft()).text_color(Theme::accent()))
                 .when(!set, |d| d.border_color(Theme::line_strong()).text_color(Theme::text_secondary()).hover(|s| s.bg(Theme::hover())))
                 .on_click(this.on_menu(MenuKind::Filter(key), cx))
@@ -496,7 +498,7 @@ impl Workspace {
         chips.push(chip("f-preprint".into(), t("预印本"), match f.preprint.as_str() { "yes" => t("只看").into(), "no" => t("不含").into(), _ => String::new() }, FilterKey::Preprint, self, cx).into_any_element());
         let filtered = f.active() > 0 || !f.search.trim().is_empty();
         if filtered {
-            chips.push(ui::ghost_button("f-clear", Some("x"), Some(t("清空筛选").into())).h(px(26.)).on_click(self.on(Cmd::ClearFilters, cx)).into_any_element());
+            chips.push(ui::ghost_button("f-clear", Some("x"), Some(t("清空筛选").into())).h(text_px(26.)).on_click(self.on(Cmd::ClearFilters, cx)).into_any_element());
         }
 
         let columns = Self::columns(lib, width);
@@ -569,7 +571,7 @@ impl Workspace {
                             .min_w(px(180.))
                             .items_center()
                             .gap(px(8.))
-                            .h(px(34.))
+                            .h(text_px(34.))
                             .px(px(10.))
                             .rounded(px(8.))
                             .bg(Theme::bg_sunken())
@@ -583,7 +585,7 @@ impl Workspace {
                     .child(ui::secondary_button("export", t("导出")).child(ui::icon("export", 14., Theme::text_secondary())).on_click(self.on_menu(MenuKind::Export, cx))),
             )
             .child(div().id("filters").flex().flex_wrap().items_center().gap(px(6.)).px(px(16.)).py(px(10.)).children(chips))
-            .child(div().flex().flex_none().h(px(32.)).px(px(8.)).border_t_1().border_b_1().border_color(Theme::line()).bg(Theme::bg_sunken()).text_size(px(12.)).text_color(Theme::text_tertiary()).children(header))
+            .child(div().flex().flex_none().h(text_px(32.)).px(px(8.)).border_t_1().border_b_1().border_color(Theme::line()).bg(Theme::bg_sunken()).text_size(text_px(12.)).text_color(Theme::text_tertiary()).children(header))
             // The papers without a PDF: the open ones among them can be fetched in one go.
             .when(lib.filters.view == View::NoPdf && lookable > 0 && lib.fetching.as_ref().is_none_or(|run| !run.running()), |d| {
                 d.child(
@@ -597,8 +599,8 @@ impl Workspace {
                         .border_b_1()
                         .border_color(Theme::line())
                         .bg(Theme::accent_soft())
-                        .child(div().flex_1().min_w_0().text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_secondary()).child(tf!("这些文献还没有 PDF。可以替你找开放获取的全文（arXiv、开放获取期刊、作者存档的版本），下载后附到各自的条目上；要付费或登录的不会去取。查找时会把 DOI 或 PMID 发给 OpenAlex、Europe PMC 和出版商。{}", "Find open access full text from arXiv, journals and author repositories, then attach it to each paper. Paid or login-only files are skipped. DOI or PMID will be sent to OpenAlex, Europe PMC and publishers.{}", if lookable < shown { tf!("另有 {} 篇没有 DOI、PMID 或 arXiv 编号，查不了。", "Another {} papers have no DOI, PMID or arXiv ID and cannot be searched.", shown - lookable) } else { String::new() })))
-                        .child(ui::primary_button("find-pdfs", tf!("为 {lookable} 篇查找开放全文", "Find open full text for {lookable} papers")).h(px(30.)).flex_none().on_click(self.on(Cmd::FindPdfs(None), cx))),
+                        .child(div().flex_1().min_w_0().text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text_secondary()).child(tf!("这些文献还没有 PDF。可以替你找开放获取的全文（arXiv、开放获取期刊、作者存档的版本），下载后附到各自的条目上；要付费或登录的不会去取。查找时会把 DOI 或 PMID 发给 OpenAlex、Europe PMC 和出版商。{}", "Find open access full text from arXiv, journals and author repositories, then attach it to each paper. Paid or login-only files are skipped. DOI or PMID will be sent to OpenAlex, Europe PMC and publishers.{}", if lookable < shown { tf!("另有 {} 篇没有 DOI、PMID 或 arXiv 编号，查不了。", "Another {} papers have no DOI, PMID or arXiv ID and cannot be searched.", shown - lookable) } else { String::new() })))
+                        .child(ui::primary_button("find-pdfs", tf!("为 {lookable} 篇查找开放全文", "Find open full text for {lookable} papers")).h(text_px(30.)).flex_none().on_click(self.on(Cmd::FindPdfs(None), cx))),
                 )
             })
             .child(body)
@@ -608,11 +610,11 @@ impl Workspace {
                     .flex_none()
                     .items_center()
                     .justify_between()
-                    .h(px(30.))
+                    .h(text_px(30.))
                     .px(px(16.))
                     .border_t_1()
                     .border_color(Theme::line())
-                    .text_size(px(12.))
+                    .text_size(text_px(12.))
                     .text_color(Theme::text_tertiary())
                     .gap(px(12.))
                     .child(div().flex_none().child(if filtered || shown != total { tf!("显示 {shown} / {total} 篇", "Showing {shown} / {total} papers") } else { tf!("共 {total} 篇", "{total} papers in total") }))
@@ -681,8 +683,8 @@ impl Workspace {
                                                 .flex()
                                                 .items_center()
                                                 .gap(px(6.))
-                                                .text_size(px(12.))
-                                                .line_height(px(18.))
+                                                .text_size(text_px(12.))
+                                                .line_height(text_px(18.))
                                                 .text_color(Theme::text_tertiary())
                                                 .child(div().min_w_0().truncate().child(if meta.is_empty() { t("作者、年份待补").to_string() } else { meta.join(" · ") }))
                                                 .when(p.publication_status == "preprint", |d| d.child(div().flex_none().text_color(theme::status_colors("preprint").0).child(t("预印本"))))
@@ -766,7 +768,7 @@ impl Workspace {
         let (shown, total) = (lib.shown.len(), filter::view_count(&lib.papers, View::All, 0));
         let filtered = lib.filters.active() > 0 || !lib.search.read(cx).text().trim().is_empty();
         let body = if shown == 0 {
-            div().flex_1().px(px(8.)).pt(px(8.)).text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_placeholder()).child(t("没有匹配的文献。换个搜索词，或按 Esc 回到完整列表调整筛选。")).into_any_element()
+            div().flex_1().px(px(8.)).pt(px(8.)).text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text_placeholder()).child(t("没有匹配的文献。换个搜索词，或按 Esc 回到完整列表调整筛选。")).into_any_element()
         } else {
             uniform_list("ask-papers", shown, cx.processor(move |this, range: Range<usize>, _, cx| this.render_ask_rows(range, cx))).track_scroll(lib.table_scroll.clone()).flex_1().into_any_element()
         };
@@ -781,14 +783,14 @@ impl Workspace {
             .pb(px(8.))
             .pt(px(Self::corner_top()))
             .gap(px(8.))
-            .child(self.render_corner(width >= ui::traffic_lights_width() + 150., cx).when(ui::custom_titlebar(), |d| d.mb(px(4.))))
+            .child(self.render_corner(width >= ui::traffic_lights_width() + f32::from(text_px(150.)), cx).when(ui::custom_titlebar(), |d| d.mb(px(4.))))
             .child(
                 div()
                     .flex()
                     .flex_none()
                     .items_center()
                     .gap(px(8.))
-                    .h(px(32.))
+                    .h(text_px(32.))
                     .px(px(10.))
                     .rounded(px(8.))
                     .bg(Theme::bg_body())
@@ -806,10 +808,10 @@ impl Workspace {
                     .gap(px(8.))
                     .px(px(8.))
                     .child(ui::caption(if lib.filters.tag.is_empty() { view_label(lib.filters.view).to_string() } else { format!("{} · #{}", view_label(lib.filters.view), lib.filters.tag) }).min_w_0().truncate())
-                    .child(div().flex_none().text_size(px(11.)).text_color(Theme::text_tertiary()).child(if filtered || shown != total { tf!("{shown} / {total} 篇", "{shown} / {total} papers") } else { tf!("{total} 篇", "{total} papers") })),
+                    .child(div().flex_none().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(if filtered || shown != total { tf!("{shown} / {total} 篇", "{shown} / {total} papers") } else { tf!("{total} 篇", "{total} papers") })),
             )
             .child(body)
-            .child(div().flex_none().px(px(8.)).truncate().text_size(px(11.)).text_color(Theme::text_placeholder()).child(tf!("↑↓ 切换文献 · {} 回到完整列表", "↑↓ Switch paper · {} Back to full list", crate::shortcuts::pretty("escape"))))
+            .child(div().flex_none().px(px(8.)).truncate().text_size(text_px(11.)).text_color(Theme::text_placeholder()).child(tf!("↑↓ 切换文献 · {} 回到完整列表", "↑↓ Switch paper · {} Back to full list", crate::shortcuts::pretty("escape"))))
             .into_any_element()
     }
 
@@ -852,14 +854,14 @@ impl Workspace {
                                 .when(selected, |d| d.bg(Theme::accent_soft()))
                                 .when(!selected && pointed, |d| d.bg(Theme::hover()))
                                 .when(!selected && !pointed, |d| d.hover(|s| s.bg(Theme::hover())))
-                                .child(div().w_full().text_size(px(13.)).line_height(px(19.)).map(|d| if compact { d.truncate() } else { d.line_clamp(2) }).font_weight(if unread || selected { FontWeight::MEDIUM } else { FontWeight::NORMAL }).text_color(if selected { Theme::accent() } else if unread { Theme::text() } else { Theme::text_secondary() }).child(self.listed_title(lib, p).clone()))
+                                .child(div().w_full().text_size(text_px(13.)).line_height(text_px(19.)).map(|d| if compact { d.truncate() } else { d.line_clamp(2) }).font_weight(if unread || selected { FontWeight::MEDIUM } else { FontWeight::NORMAL }).text_color(if selected { Theme::accent() } else if unread { Theme::text() } else { Theme::text_secondary() }).child(self.listed_title(lib, p).clone()))
                                 .child(
                                     div()
                                         .flex()
                                         .items_center()
                                         .gap(px(6.))
-                                        .text_size(px(12.))
-                                        .line_height(px(18.))
+                                        .text_size(text_px(12.))
+                                        .line_height(text_px(18.))
                                         .text_color(Theme::text_tertiary())
                                         .child(div().min_w_0().truncate().child(if meta.is_empty() { t("作者、年份待补").to_string() } else { meta.join(" · ") }))
                                         .when(p.starred, |d| d.child(ui::icon("star", 11., Theme::star())))
@@ -890,7 +892,7 @@ impl Workspace {
                     .border_b_1()
                     .border_color(Theme::line())
                     .on_mouse_down(MouseButton::Right, self.on_context(MenuKind::Trashed(p.id.clone()), cx))
-                    .child(div().flex().flex_col().flex_1().min_w_0().child(div().truncate().child(p.title.clone())).child(div().truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(tf!("{} · 删除于 {}", "{} · Deleted {}", if p.authors.is_empty() { t("作者待补").to_string() } else { p.short_authors() }, time::date_text(&entry.deleted_at)))))
+                    .child(div().flex().flex_col().flex_1().min_w_0().child(div().truncate().child(p.title.clone())).child(div().truncate().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(tf!("{} · 删除于 {}", "{} · Deleted {}", if p.authors.is_empty() { t("作者待补").to_string() } else { p.short_authors() }, time::date_text(&entry.deleted_at)))))
                     .child(ui::secondary_button(("restore", i), t("恢复")).on_click(self.on(Cmd::RestorePaper(p.id.clone()), cx)))
                     .child(ui::ghost_button(("delete", i), Some("bin"), Some(t("彻底删除").into())).text_color(Theme::danger()).on_click(self.on(Cmd::AskDeletePaper(p.id.clone()), cx)))
                     .into_any_element()
@@ -900,7 +902,7 @@ impl Workspace {
             .flex()
             .flex_col()
             .size_full()
-            .child(div().px(px(16.)).pt(px(16.)).pb(px(10.)).child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("回收站"))).child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(t("这里的文献保留着笔记、词条和 PDF，可以恢复。它们仍会阻止同一篇文献被重复导入。"))))
+            .child(div().px(px(16.)).pt(px(16.)).pb(px(10.)).child(div().text_size(text_px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("回收站"))).child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(t("这里的文献保留着笔记、词条和 PDF，可以恢复。它们仍会阻止同一篇文献被重复导入。"))))
             .child(if rows.is_empty() { ui::empty_state("bin", t("回收站是空的"), "").into_any_element() } else { div().id("trash").flex().flex_col().flex_1().min_h_0().overflow_y_scroll().border_t_1().border_color(Theme::line()).children(rows).into_any_element() })
             .into_any_element()
     }

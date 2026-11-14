@@ -6,7 +6,7 @@
 
 use crate::i18n::t;
 use crate::app::Translated;
-use crate::theme::Theme;
+use crate::theme::{Theme, text_px};
 use crate::ui;
 use crate::input::TextInput;
 use gpui::{prelude::FluentBuilder, *};
@@ -773,7 +773,7 @@ impl PdfView {
         let sheet = div().relative().flex_none().ml(px(self.sheet_left(width))).w(px(width)).h(px(height)).bg(gpui::white()).border_1().border_color(Theme::line()).overflow_hidden();
         let sheet = match image {
             Some((image, _)) => sheet.when(cutting, |d| d.cursor_crosshair()).when(!cutting, |d| d.cursor_text()).child(img(image).w(px(width)).h(px(height))).children(annotations).children(selected).children(marks).children(cut),
-            None => sheet.flex().items_center().justify_center().text_size(px(12.)).text_color(Theme::text_placeholder()).child(if self.broken.contains(&index) { tf!("第 {} 页无法渲染", "Cannot render page {}", index + 1) } else { tf!("第 {} 页", "Page {}", index + 1) }),
+            None => sheet.flex().items_center().justify_center().text_size(text_px(12.)).text_color(Theme::text_placeholder()).child(if self.broken.contains(&index) { tf!("第 {} 页无法渲染", "Cannot render page {}", index + 1) } else { tf!("第 {} 页", "Page {}", index + 1) }),
         };
         // Draw over the image without changing its size or covering the text.
         // This also makes page-only citations visible while a page is loading.
@@ -971,7 +971,7 @@ impl PdfView {
         let (x, y) = (f32::from(item.left() - view.left()) + self.sheet_left(self.sizes.get(selection.page)?.0 * scale), f32::from(item.top() - view.top()));
         let (left, right) = boxes.iter().fold((f32::MAX, f32::MIN), |(l, r), line| (l.min(line[0]), r.max(line[2])));
         let place = card_place([x + left * scale, y + first[1] * scale, x + right * scale, y + last[3] * scale], CARD_W, CARD_TALL, (self.width, self.height));
-        let button = |id: &'static str, label: &'static str| div().id(id).flex().flex_none().items_center().h(px(24.)).px(px(8.)).rounded(px(6.)).cursor_pointer().text_color(Theme::accent()).hover(|s| s.bg(Theme::hover())).child(label);
+        let button = |id: &'static str, label: &'static str| div().id(id).flex().flex_none().items_center().h(text_px(24.)).px(px(8.)).rounded(px(6.)).cursor_pointer().text_color(Theme::accent()).hover(|s| s.bg(Theme::hover())).child(label);
         let body = match &card.state {
             Translated::Busy => div().flex().items_center().gap(px(8.)).text_color(Theme::text_secondary()).child(ui::spinner("pdf-translation-busy", 14., Theme::text_tertiary())).child(t("正在翻译…")),
             Translated::Done(text) => div().text_color(Theme::text()).child(text.clone()),
@@ -995,8 +995,8 @@ impl PdfView {
                 .p(px(4.))
                 .border_b_1()
                 .border_color(Theme::line())
-                .text_size(px(13.))
-                .child(div().px(px(8.)).py(px(4.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(t("只这一次换用，不改设置")))
+                .text_size(text_px(13.))
+                .child(div().px(px(8.)).py(px(4.)).text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(t("只这一次换用，不改设置")))
                 .when(rows.is_empty(), |d| d.child(div().px(px(8.)).py(px(6.)).text_color(Theme::text_secondary()).child(t("还没有配置模型：在 设置 › AI 里添加。"))))
                 .children(rows)
         });
@@ -1013,12 +1013,12 @@ impl PdfView {
             .flex_none()
             .items_center()
             .gap(px(4.))
-            .h(px(34.))
+            .h(text_px(34.))
             .pl(px(12.))
             .pr(px(4.))
             .border_b_1()
             .border_color(Theme::line())
-            .child(div().flex_1().text_size(px(12.)).text_color(Theme::text_tertiary()).child(t("译文")))
+            .child(div().flex_1().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(t("译文")))
             .child(
                 div()
                     .id("pdf-translation-model")
@@ -1026,11 +1026,11 @@ impl PdfView {
                     .min_w_0()
                     .items_center()
                     .gap(px(4.))
-                    .h(px(24.))
+                    .h(text_px(24.))
                     .px(px(8.))
                     .rounded(px(6.))
                     .cursor_pointer()
-                    .text_size(px(12.))
+                    .text_size(text_px(12.))
                     .text_color(Theme::text_secondary())
                     .hover(|s| s.bg(Theme::hover()))
                     .when(card.menu, |d| d.bg(Theme::pressed()))
@@ -1075,9 +1075,9 @@ impl PdfView {
                 .border_1()
                 .border_color(Theme::line_strong())
                 .shadow(crate::theme::shadow_card())
-                .font_family(crate::theme::UI_FONT)
-                .text_size(px(13.))
-                .line_height(px(20.))
+                .font_family(crate::theme::ui_font())
+                .text_size(text_px(13.))
+                .line_height(text_px(20.))
                 .occlude()
                 // A press on the card is not a press on the page.
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -1108,7 +1108,7 @@ impl PdfView {
         // Under the last line of the selection, kept inside the viewer.
         let left = f32::from(item.left() - view.left()) + self.sheet_left(self.sizes.get(page)?.0 * scale) + last[0] * scale;
         let top = f32::from(item.top() - view.top()) + last[3] * scale + 6.;
-        let button = |id: &'static str, label: &'static str| div().id(id).flex().flex_none().items_center().h(px(26.)).px(px(9.)).rounded(px(6.)).cursor_pointer().hover(|s| s.bg(Theme::hover())).child(label);
+        let button = |id: &'static str, label: &'static str| div().id(id).flex().flex_none().items_center().h(text_px(26.)).px(px(9.)).rounded(px(6.)).cursor_pointer().hover(|s| s.bg(Theme::hover())).child(label);
         Some(
             div()
                 .absolute()
@@ -1128,7 +1128,7 @@ impl PdfView {
                 .border_1()
                 .border_color(Theme::line_strong())
                 .shadow(crate::theme::shadow_card())
-                .text_size(px(12.))
+                .text_size(text_px(12.))
                 .occlude()
                 // A press on the bar is not a press on the page.
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -1180,7 +1180,7 @@ impl PdfView {
                 .when(self.annotations.is_empty(), |d| d.child(div().p(px(12.)).text_color(Theme::text_secondary()).child(t("选中 PDF 文字后，可添加下划线或高亮。"))))
                 .children(rows)
         });
-        div().absolute().top(px(8.)).right(px(8.)).max_w(px(width)).flex().flex_col().items_end().gap(px(6.)).text_size(px(12.)).line_height(px(18.)).text_color(Theme::text()).occlude()
+        div().absolute().top(px(8.)).right(px(8.)).max_w(px(width)).flex().flex_col().items_end().gap(px(6.)).text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text()).occlude()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(div().id("pdf-annotations-toggle").px(px(10.)).py(px(5.)).rounded(px(6.)).bg(Theme::bg_body()).border_1().border_color(Theme::line_strong()).cursor_pointer()
                 .child(tf!("标注 ({})", "Annotations ({})", self.annotations.len()))
@@ -1260,7 +1260,7 @@ impl Render for PdfView {
             // Explain whether the citation names a page or a passage within it.
             .children(bar)
             .children(card)
-            .children(notice.map(|notice| div().absolute().top(px(8.)).left_0().w_full().px(px(8.)).flex().justify_center().child(div().px(px(10.)).py(px(5.)).rounded(px(6.)).bg(Theme::bg_body()).border_1().border_color(Theme::line()).text_size(px(12.)).text_color(Theme::text_secondary()).child(notice))))
+            .children(notice.map(|notice| div().absolute().top(px(8.)).left_0().w_full().px(px(8.)).flex().justify_center().child(div().px(px(10.)).py(px(5.)).rounded(px(6.)).bg(Theme::bg_body()).border_1().border_color(Theme::line()).text_size(text_px(12.)).text_color(Theme::text_secondary()).child(notice))))
             .child(self.annotation_panel(window, cx))
             .into_any_element()
     }
