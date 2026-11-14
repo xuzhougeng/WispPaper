@@ -14,8 +14,9 @@ pub const VERSION: &str = "2025-06-18";
 #[serde(default)]
 pub struct Connector {
     pub name: String,
-    /// An address (`https://…`, Streamable HTTP) or a command line that
-    /// speaks MCP on its standard streams (`npx -y some-mcp-server`).
+    /// An address (`https://…`, Streamable HTTP or the event stream of an
+    /// older server, `…/sse`) or a command line that speaks MCP on its
+    /// standard streams (`npx -y some-mcp-server`).
     pub target: String,
     /// Sent as `Authorization: Bearer …` to an address; empty sends none.
     pub token: String,
@@ -88,6 +89,61 @@ pub fn hear(text: &str, id: u64) -> Heard {
     })
 }
 
+/// One event of a server's event stream (`text/event-stream`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Event {
+    /// Its `event:` field; `message` when it has none.
+    pub name: String,
+    pub data: String,
+}
+
+/// An event stream read line by line: an event is complete at the blank line after it.
+#[derive(Default)]
+pub struct Events {
+    name: String,
+    data: Vec<String>,
+}
+
+impl Events {
+    /// Take one line of the stream; the event it completes, if it does.
+    pub fn line(&mut self, line: &str) -> Option<Event> {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        if line.is_empty() {
+            let name = std::mem::take(&mut self.name);
+            if self.data.is_empty() { return None }
+            return Some(Event { name: if name.is_empty() { "message".into() } else { name }, data: std::mem::take(&mut self.data).join("\n") });
+        }
+        // A line beginning with a colon is a comment, which servers send to keep the stream open.
+        if line.starts_with(':') { return None }
+        let (field, value) = line.split_once(':').map_or((line, ""), |(field, value)| (field, value.strip_prefix(' ').unwrap_or(value)));
+        match field {
+            "event" => self.name = value.to_string(),
+            "data" => self.data.push(value.to_string()),
+            _ => {}
+        }
+        None
+    }
+}
+
+/// Where a server of the transport before Streamable HTTP (2024-11-05)
+/// wants messages posted: what its `endpoint` event says, read against the
+/// address of the stream. `None` on another origin, where the token must not go.
+pub fn endpoint(stream: &str, said: &str) -> Option<String> {
+    let (stream, said) = (stream.trim(), said.trim());
+    let origin = crate::oauth::origin(stream)?;
+    let address = if said.starts_with("https://") || said.starts_with("http://") {
+        said.to_string()
+    } else if said.starts_with('/') {
+        format!("{origin}{said}")
+    } else {
+        // Beside the stream's own path, as a browser reads a relative link.
+        let path = stream.split(['?', '#']).next().unwrap_or(stream);
+        let cut = path.rfind('/').filter(|&at| at >= origin.len()).unwrap_or(path.len());
+        format!("{}/{said}", &path[..cut])
+    };
+    (crate::oauth::origin(&address)? == origin).then_some(address)
+}
+
 /// The tools of a `tools/list` result, named for the model.
 pub fn read_tools(connector: &Connector, result: &Value) -> Vec<Tool> {
     let slug = connector.slug();
@@ -139,6 +195,27 @@ mod tests {
         assert!(matches!(hear("starting…", 3), Heard::Nothing));
         assert!(matches!(hear(r#"{"jsonrpc":"2.0","id":"a","method":"ping"}"#, 3), Heard::Answer(answer) if answer["id"] == "a" && answer["result"].is_object()));
         assert!(matches!(hear(r#"{"jsonrpc":"2.0","id":9,"method":"roots/list"}"#, 3), Heard::Answer(answer) if answer["error"]["code"] == -32601));
+    }
+
+    #[test]
+    fn an_event_stream_is_read_event_by_event() {
+        let mut events = Events::default();
+        let lines = [": keep-alive", "", "event: endpoint", "data: /messages?session=s1", "", "data: {\"a\":", "data:1}\r", "", "retry: 10", "", "event:message", "data:", ""];
+        let heard: Vec<Event> = lines.iter().filter_map(|line| events.line(line)).collect();
+        let event = |name: &str, data: &str| Event { name: name.into(), data: data.into() };
+        assert_eq!(heard, [event("endpoint", "/messages?session=s1"), event("message", "{\"a\":\n1}"), event("message", "")]);
+    }
+
+    #[test]
+    fn the_endpoint_of_an_old_server_is_read_against_its_stream() {
+        let stream = "https://mcp.example.com/v1/sse?key=k";
+        assert_eq!(endpoint(stream, "/messages?sessionId=1").as_deref(), Some("https://mcp.example.com/messages?sessionId=1"));
+        assert_eq!(endpoint(stream, " messages?sessionId=1 ").as_deref(), Some("https://mcp.example.com/v1/messages?sessionId=1"));
+        assert_eq!(endpoint("http://127.0.0.1:9", "message").as_deref(), Some("http://127.0.0.1:9/message"));
+        assert_eq!(endpoint(stream, "https://MCP.example.com/m?s=2").as_deref(), Some("https://MCP.example.com/m?s=2"));
+        // The token goes with every message: never to another host.
+        assert_eq!(endpoint(stream, "https://elsewhere.example/messages"), None);
+        assert_eq!(endpoint(stream, "http://mcp.example.com/messages"), None);
     }
 
     #[test]
