@@ -32,7 +32,7 @@ impl Workspace {
                 .id(id)
                 .flex()
                 .items_center()
-                .h(text_px(34.))
+                .h_full()
                 .px(px(4.))
                 .border_b_2()
                 .cursor_pointer()
@@ -50,6 +50,7 @@ impl Workspace {
                 .flex_none()
                 .items_center()
                 .gap(px(16.))
+                .h(text_px(36.))
                 .px(px(16.))
                 .border_b_1()
                 .border_color(Theme::line())
@@ -63,28 +64,49 @@ impl Workspace {
                 } else {
                     ui::ghost_button("ask-leave", Some("x"), Some(tf!("退出提问 {}", "Leave chat {}", crate::shortcuts::pretty("escape")).into())).h(text_px(26.)).text_size(text_px(12.)).on_click(self.on(Cmd::LeaveAsk, cx))
                 })
-        } else { div()
+        } else {
+            // The title fills the band the column beside it uses for its header, and the tabs the band of the
+            // table's column names under that: the lines under both run on across the window.
+            let beside_table = lib.page == crate::app::Page::Papers && !lib.wide;
+            // The table's column names have a line over them as well as under: beside them the title's line is that
+            // upper one and the tabs, one pixel shorter, end on the lower one.
+            let (band, tabs) = if beside_table { (Self::papers_head() + px(1.), text_px(32.) - px(1.)) } else { (ui::head_h(), text_px(32.)) };
+            div()
             .flex()
             .flex_col()
             .flex_none()
-            .px(px(16.))
-            .pt(px(12.))
-            .border_b_1()
-            .border_color(Theme::line())
             .child(
                 div()
                     .flex()
-                    .items_start()
-                    .gap(px(6.))
-                    .child(self.selectable("detail-title", title.clone(), cx).flex_1().min_w_0().line_clamp(3).text_size(text_px(15.)).line_height(text_px(22.)).font_weight(FontWeight::SEMIBOLD))
-                    .child(ui::ghost_button("detail-wide", Some(if lib.wide { "panel-left-open" } else { "expand" }), None).on_click(self.on(Cmd::ToggleWide, cx)))
-                    .child(ui::ghost_button("detail-close", Some("x"), None).on_click(self.on(Cmd::CloseDetail, cx))),
+                    .flex_none()
+                    .items_center()
+                    .h(band)
+                    .px(px(16.))
+                    .border_b_1()
+                    .border_color(Theme::line())
+                    .child(
+                        div()
+                            .flex()
+                            .flex_1()
+                            .min_w_0()
+                            .items_start()
+                            .gap(px(6.))
+                            .child(self.selectable("detail-title", title.clone(), cx).flex_1().min_w_0().line_clamp(if beside_table { 3 } else { 2 }).text_size(text_px(ui::HEAD_TITLE)).line_height(text_px(22.)).font_weight(FontWeight::SEMIBOLD))
+                            .child(ui::ghost_button("detail-wide", Some(if lib.wide { "panel-left-open" } else { "expand" }), None).on_click(self.on(Cmd::ToggleWide, cx)))
+                            .child(ui::ghost_button("detail-close", Some("x"), None).on_click(self.on(Cmd::CloseDetail, cx))),
+                    ),
             )
             .child(
                 div()
                     .flex()
+                    .flex_none()
+                    .items_center()
                     .gap(px(16.))
-                    .pt(px(6.))
+                    .h(tabs)
+                    .px(px(16.))
+                    .border_b_1()
+                    .border_color(Theme::line())
+                    .bg(Theme::bg_sunken())
                     .child(tab_button("tab-info", t("信息"), Tab::Info, self, cx))
                     .child(tab_button("tab-pdf", if has_pdf { "PDF" } else { t("PDF（无）") }, Tab::Pdf, self, cx))
                     .child(tab_button("tab-ask", t("提问"), Tab::Ask, self, cx))

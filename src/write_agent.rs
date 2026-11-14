@@ -296,7 +296,7 @@ impl Workspace {
             // Widths in pixels for both: a conversation that shares the row is measured wider than it is drawn.
             .child(div().flex_none().w(px(width - manuscript_width)).h_full().overflow_hidden().child(chat))
             // The column fills a place of its own: it comes as one that shares a row, and its basis would outdo a width given to it here.
-            .child(div().flex().flex_none().w(px(manuscript_width)).h_full().border_l_1().border_color(Theme::line()).bg(Theme::bg_sunken()).child(manuscript))
+            .child(div().relative().flex().flex_none().w(px(manuscript_width)).h_full().border_l_1().border_color(Theme::line()).child(ui::strip_cap(Theme::bg_body())).child(manuscript))
             .child(between)
             .into_any_element()
     }

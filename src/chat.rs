@@ -566,6 +566,13 @@ impl Workspace {
             None => tf!("范围：当前列表的 {} 篇文献（受左侧视图、搜索和筛选影响），以及其中已存 PDF 的相关页面{textless_note}", "Scope: {} papers in the current list (affected by views, search and filters), with relevant saved PDF pages{textless_note}", lib.shown.len()),
         };
 
+        // The header says the scope in a few words; the whole sentence is its tooltip.
+        let brief = match &chat.ctx {
+            None if talk == Talk::Library && chat.messages.is_empty() && !lib.asked.is_empty() => tf!("范围：选定的 {} 篇", "Scope: {} picked papers", in_scope.len()),
+            None if talk == Talk::Library && chat.messages.is_empty() && lib.scope_hits.is_some() => tf!("范围：符合「{}」的 {} 篇", "Scope: {1} papers matching “{0}”", lib.scope_words.trim(), in_scope.len()),
+            None if talk == Talk::Library && chat.messages.is_empty() => tf!("范围：当前列表的 {} 篇", "Scope: {} papers in the current list", lib.shown.len()),
+            _ => scope.clone(),
+        };
         let listing = chat.history.is_some();
         // The review this conversation writes, as last read: drawing asks the library nothing.
         let review = chat.review.as_ref().filter(|_| talk == Talk::Library && !listing);
@@ -601,31 +608,26 @@ impl Workspace {
             .flex_col()
             .size_full()
             .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .flex_wrap()
-                    .gap(px(4.))
-                    .px(px(16.))
-                    .py(px(8.))
-                    .border_b_1()
-                    .border_color(Theme::line())
+                ui::column_head()
+                    // The paper's conversation sits under the paper's own header: one line is enough there.
+                    .when(talk == Talk::Paper && !listing, |d| d.h(text_px(40.)))
                     .child(
                         div()
                             .flex()
                             .flex_col()
                             .flex_1()
-                            .min_w(px(200.))
-                            .when(talk == Talk::Library, |d| d.child(div().text_size(text_px(15.)).font_weight(FontWeight::SEMIBOLD).child(if listing { t("助手的历史对话") } else { t("助手") })))
-                            .when(talk == Talk::Write, |d| d.child(div().text_size(text_px(15.)).font_weight(FontWeight::SEMIBOLD).child(if listing { t("这份稿件的历史对话") } else { t("助手写") })))
+                            .min_w_0()
+                            .when(talk == Talk::Library, |d| d.child(div().truncate().text_size(text_px(ui::HEAD_TITLE)).font_weight(FontWeight::SEMIBOLD).child(if listing { t("助手的历史对话") } else { t("助手") })))
+                            .when(talk == Talk::Write, |d| d.child(div().truncate().text_size(text_px(ui::HEAD_TITLE)).font_weight(FontWeight::SEMIBOLD).child(if listing { t("这份稿件的历史对话") } else { t("助手写") })))
                             // The paper's panel has its title above; its history says whose it is.
                             .when(talk == Talk::Paper && listing, |d| d.child(div().font_weight(FontWeight::MEDIUM).child(t("这篇文献的历史对话"))))
-                            .child(div().text_size(text_px(12.)).line_height(text_px(17.)).text_color(Theme::text_tertiary()).child(match (listing, talk) {
+                            .child(div().id(SharedString::from(format!("chat-scope-{side}"))).truncate().text_size(text_px(12.)).line_height(text_px(17.)).text_color(Theme::text_tertiary())
+                                .when(!listing && brief != scope, |d| { let whole = scope.clone(); d.tooltip(move |_, cx| cx.new(|_| crate::write_assist::Tip(whole.clone())).into()) })
+                                .child(match (listing, talk) {
                                 (true, Talk::Library) => t("和助手就整个文献库有过的对话；点开一次可以接着说。单篇文献的对话在各自的「提问」里").to_string(),
                                 (true, Talk::Paper) => t("就这篇文献提过的问题和回答；点开一次对话可以接着问").to_string(),
                                 (true, Talk::Write) => t("和助手就这份稿件有过的对话；点开一次可以接着说").to_string(),
-                                (false, _) => scope,
+                                (false, _) => brief,
                             })),
                     )
                     .children(self.render_float_switch(talk, window, cx))

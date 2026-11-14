@@ -161,15 +161,15 @@ impl Workspace {
         let skipped = rows.len() - plan.len();
 
         let back = ui::ghost_button("confirm-back", Some("arrow-left"), Some(t("回到队列").into())).on_click(self.on(Cmd::ScreenMode(ScreenMode::Batch), cx));
+        let top = ui::column_head().gap(px(10.)).child(div().flex_none().text_size(text_px(ui::HEAD_TITLE)).font_weight(FontWeight::SEMIBOLD).child(t("确认建议"))).child(div().flex_1()).child(back);
         let head = div()
             .flex()
             .flex_col()
             .flex_none()
             .gap(px(8.))
             .px(px(16.))
-            .pt(px(16.))
+            .pt(px(12.))
             .pb(px(12.))
-            .child(div().flex().flex_wrap().items_center().gap(px(10.)).child(div().flex_none().text_size(text_px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("确认建议"))).child(div().flex_1()).child(back))
             .child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(t("助手的建议在这里一起过目：不同意的改掉，拿不准的不勾选，再把勾选的一次写成收录判断。写入之前什么都不会改动，写入之后也能撤销。")));
 
         // What the last confirmation wrote, with the way back.
@@ -269,7 +269,7 @@ impl Workspace {
             )
             .child(div().flex().flex_wrap().items_center().gap_x(px(14.)).gap_y(px(6.)).text_size(text_px(11.)).line_height(text_px(18.)).text_color(Theme::text_tertiary()).child(hint("↑↓", t("移动"))).child(hint("Space", t("勾选 / 不勾选"))).child(hint("Y", t("已纳入"))).child(hint("R", t("相关"))).child(hint("U", t("证据不足"))).child(hint("N", t("不相关"))).child(hint("A", t("按建议"))).child(hint("Enter", t("对照 PDF"))).child(hint("Esc", t("回到队列"))));
 
-        div().id("confirm-page").flex().flex_col().size_full().overflow_y_scroll().child(head).children(done).child(tools).child(div().flex().flex_col().flex_1().min_h(px(240.)).border_t_1().border_color(Theme::line()).child(list)).children(cursor).child(foot).into_any_element()
+        div().flex().flex_col().size_full().child(top).child(div().id("confirm-page").flex().flex_col().flex_1().min_h_0().overflow_y_scroll().child(head).children(done).child(tools).child(div().flex().flex_col().flex_1().min_h(px(240.)).border_t_1().border_color(Theme::line()).child(list)).children(cursor).child(foot)).into_any_element()
     }
 
     /// Nothing left to confirm: what was just written, or that there never was anything.

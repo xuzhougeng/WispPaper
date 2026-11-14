@@ -658,18 +658,19 @@ impl Workspace {
             let on = shown == side;
             div().id(id).flex().flex_1().items_center().justify_center().gap(px(5.)).h(text_px(26.)).rounded(px(6.)).text_size(text_px(12.)).cursor_pointer().when(on, |d| d.bg(Theme::segment()).text_color(Theme::text()).font_weight(FontWeight::MEDIUM)).when(!on, |d| d.text_color(Theme::text_secondary()).hover(|s| s.text_color(Theme::text()))).on_click(this.on(Cmd::WriteSide(side), cx)).child(name).when(dot, |d| d.child(div().flex_none().size(px(6.)).rounded(px(3.)).bg(Theme::danger())))
         };
-        div()
-            .flex()
-            .flex_none()
-            .gap(px(2.))
-            .mx(px(14.))
-            .mt(px(14.))
-            .p(px(2.))
-            .rounded(px(8.))
-            .bg(Theme::groove())
-            .child(tab("write-side-candidates", t("候选句").into(), Side::Candidates, false, self, cx))
-            .child(tab("write-side-comments", if waiting > 0 { tf!("批注 {waiting}", "Comments {waiting}") } else { t("批注").into() }, Side::Comments, false, self, cx))
-            .child(tab("write-side-references", if cited > 0 { tf!("参考文献 {cited}", "References {cited}") } else { t("参考文献").into() }, Side::References, unresolved, self, cx))
+        // In the header band the manuscript's bar stands in, so the line under both runs on.
+        ui::column_head().px(px(14.)).child(
+            div()
+                .flex()
+                .flex_1()
+                .gap(px(2.))
+                .p(px(2.))
+                .rounded(px(8.))
+                .bg(Theme::groove())
+                .child(tab("write-side-candidates", t("候选句").into(), Side::Candidates, false, self, cx))
+                .child(tab("write-side-comments", if waiting > 0 { tf!("批注 {waiting}", "Comments {waiting}") } else { t("批注").into() }, Side::Comments, false, self, cx))
+                .child(tab("write-side-references", if cited > 0 { tf!("参考文献 {cited}", "References {cited}") } else { t("参考文献").into() }, Side::References, unresolved, self, cx)),
+        )
     }
 
     /// The comments on the section being written, beside the manuscript.

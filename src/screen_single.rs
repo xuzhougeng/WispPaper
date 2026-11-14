@@ -206,26 +206,21 @@ impl Workspace {
         // The round so far, as one bar: a stretch per decision, the rest still waiting.
         let segments: Vec<ui::ProgressSegment> = SCREENINGS.iter().enumerate().skip(1).map(|(n, (key, name))| (counts[n], t(name), theme::status_colors(key).0)).collect();
         let legend = segments.iter().filter(|(count, _, _)| *count > 0).map(|(count, name, color)| div().flex().flex_none().items_center().gap(px(5.)).child(div().flex_none().size(px(7.)).rounded_full().bg(*color)).child(format!("{name} {count}")));
+        let top = ui::column_head()
+                    .gap(px(12.))
+                    .child(div().flex_none().text_size(text_px(ui::HEAD_TITLE)).font_weight(FontWeight::SEMIBOLD).child(t("筛选")))
+                    .child(self.render_screen_modes(cx))
+                    .child(div().flex_1())
+                    .child(div().flex_none().text_size(text_px(12.)).text_color(Theme::text_secondary()).child(place))
+                    .child(div().flex().flex_none().child(ui::ghost_button("round-prev", Some("chevron-up"), None).when(at == 0, |d| d.opacity(0.4)).on_click(self.on(Cmd::ScreenGo(at.saturating_sub(1)), cx))).child(ui::ghost_button("round-next", Some("chevron-down"), None).when(at >= total, |d| d.opacity(0.4)).on_click(self.on(Cmd::ScreenGo((at + 1).min(total)), cx))));
         let head = div()
             .flex()
             .flex_col()
             .flex_none()
             .gap(px(10.))
             .px(px(16.))
-            .pt(px(16.))
+            .pt(px(12.))
             .pb(px(12.))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .flex_wrap()
-                    .gap(px(12.))
-                    .child(div().flex_none().text_size(text_px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("筛选")))
-                    .child(self.render_screen_modes(cx))
-                    .child(div().flex_1())
-                    .child(div().flex_none().text_size(text_px(12.)).text_color(Theme::text_secondary()).child(place))
-                    .child(div().flex().flex_none().child(ui::ghost_button("round-prev", Some("chevron-up"), None).when(at == 0, |d| d.opacity(0.4)).on_click(self.on(Cmd::ScreenGo(at.saturating_sub(1)), cx))).child(ui::ghost_button("round-next", Some("chevron-down"), None).when(at >= total, |d| d.opacity(0.4)).on_click(self.on(Cmd::ScreenGo((at + 1).min(total)), cx)))),
-            )
             .child(ui::progress_bar(total, &segments).h(px(5.)))
             .child(div().flex().flex_wrap().items_center().gap_x(px(14.)).gap_y(px(2.)).min_h(px(16.)).text_size(text_px(11.)).line_height(text_px(16.)).text_color(Theme::text_tertiary()).children(legend).when(counts[0] > 0, |d| d.child(tf!("待判断 {}", "{} pending", counts[0]))));
 
@@ -245,7 +240,7 @@ impl Workspace {
             Some(paper) => self.render_round_paper(paper, cx),
             None => self.render_round_end(&counts, total, cx),
         };
-        div().flex().flex_col().size_full().child(head).child(div().flex().flex_1().min_h_0().border_t_1().border_color(Theme::line()).children(rail).child(body)).into_any_element()
+        div().flex().flex_col().size_full().child(top).child(head).child(div().flex().flex_1().min_h_0().border_t_1().border_color(Theme::line()).children(rail).child(body)).into_any_element()
     }
 
     /// The round's papers, each with what became of it. A click shows the paper.

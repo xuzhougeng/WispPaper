@@ -748,12 +748,18 @@ impl Workspace {
 
 
     /// Above the editor: the title, the manuscript's own buttons, and its sections.
-    pub(crate) fn render_manuscript_bar(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn render_manuscript_bar(&self, width: f32, window: &Window, cx: &mut Context<Self>) -> Div {
         let lib = self.lib.as_ref().unwrap();
         let writing = &lib.writing;
         let Some(manuscript) = writing.current() else { return div() };
         let language = LANGUAGES.iter().find(|(code, _)| *code == manuscript.language).map_or(manuscript.language.as_str(), |(_, name)| t(name));
-        let tool = |id: &'static str, icon: &'static str, text: Option<SharedString>| ui::ghost_button(id, Some(icon), text).h(text_px(26.)).px(px(7.)).text_size(text_px(12.));
+        // The bar is one row: in a narrow column the tools keep their icons and say their names in a tooltip.
+        let roomy = width >= f32::from(text_px(560.));
+        let tool = |id: &'static str, icon: &'static str, text: Option<SharedString>| {
+            let tip = text.clone();
+            ui::ghost_button(id, Some(icon), text.filter(|_| roomy)).h(text_px(26.)).px(px(7.)).text_size(text_px(12.))
+                .when_some(tip.filter(|_| !roomy), |d, tip| d.tooltip(move |_, cx| cx.new(|_| crate::write_assist::Tip(tip.to_string())).into()))
+        };
         let pills: Vec<AnyElement> = manuscript
             .sections
             .iter()
@@ -791,17 +797,14 @@ impl Workspace {
         div()
             .flex()
             .flex_col()
-            .gap(px(10.))
+            .flex_none()
             .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap(px(4.))
+                ui::column_head()
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
+                            .overflow_hidden()
                             .px(px(6.))
                             .py(px(2.))
                             .ml(px(-6.))
@@ -811,17 +814,18 @@ impl Workspace {
                             .hover(|s| s.bg(Theme::hover()))
                             // Beside the outline it is only where the title is changed: the outline shows it.
                             .when(outlined, |d| d.text_size(text_px(13.)).text_color(Theme::text_secondary()))
-                            .when(!outlined, |d| d.text_size(text_px(17.)).font_weight(FontWeight::SEMIBOLD))
+                            .when(!outlined, |d| d.text_size(text_px(ui::HEAD_TITLE)).font_weight(FontWeight::SEMIBOLD))
                             .child(writing.title.clone()),
                     )
                     .when(!outlined, |d| d.child(self.render_mode_switch(cx)).child(tool("write-manuscripts", "list", Some(tf!("稿件 {}", "Manuscript {}", writing.manuscripts.len()).into())).on_click(self.on_menu(MenuKind::Manuscripts, cx))))
-                    .child(tool("write-language", "chevron-down", Some(language.to_string().into())).on_click(self.on_menu(MenuKind::WriteLanguage, cx)))
+                    // The language is said even in a narrow column: there is no icon that says it.
+                    .child(ui::ghost_button("write-language", Some("chevron-down"), Some(language.to_string().into())).h(text_px(26.)).px(px(7.)).text_size(text_px(12.)).on_click(self.on_menu(MenuKind::WriteLanguage, cx)))
                     .children(if self.settings.agent_writing { self.render_version_stepper(cx) } else { None })
                     .child(tool("write-history", "history", None).on_click(self.on(Cmd::WriteHistory, cx)))
                     .child(tool("write-export", "export", Some(t("导出").into())).on_click(self.on_menu(MenuKind::ManuscriptExport, cx)))
                     .child(if writing.reading { tool("write-reading", "pen-line", Some(t("写作").into())).on_click(self.on(Cmd::WriteReading(false), cx)) } else { tool("write-reading", "eye", Some(t("通读").into())).on_click(self.on(Cmd::WriteReading(true), cx)) }),
             )
-            .when(!outlined, |d| d.child(div().flex().items_center().flex_wrap().gap(px(6.)).children(pills).child(add)))
+            .when(!outlined, |d| d.child(div().flex().items_center().flex_wrap().gap(px(6.)).px(px(16.)).pt(px(12.)).children(pills).child(add)))
     }
 
     /// The whole manuscript, to be read through; a heading opens its section.

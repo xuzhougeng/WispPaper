@@ -314,7 +314,7 @@ impl Workspace {
             .flex_wrap()
             .gap(px(2.))
             .when(floating, |d| d.p(px(4.)).text_color(Theme::text()))
-            .when(!floating, |d| d.px(px(20.)).pb(px(6.)))
+            .when(!floating, |d| d.px(px(16.)).pb(px(6.)))
             .children(items)
             // What the bar under the manuscript works on, and what its groups are, said on hover instead of in front of it.
             .when(!floating, |d| d.child(ui::hint("write-assist-about", t("这些按钮对光标所在的段落；选中文字时它们出现在选区旁，对选中的文字。「找句子」「配引用」只在文献库里查找，不改文字；「润色」「翻译」「仿写」给出改后的文字，由你决定是否替换。"))))

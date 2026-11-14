@@ -79,6 +79,13 @@ enum ColumnKind {
     Screening,
 }
 
+impl ColumnKind {
+    /// A short value or a chip: its name and its cells stand centred, so the two line up whatever the chip's padding.
+    fn centred(&self) -> bool {
+        matches!(self, ColumnKind::Year | ColumnKind::Fulltext | ColumnKind::Reading | ColumnKind::Screening)
+    }
+}
+
 impl Workspace {
     /// The sidebar's width for this window: none while it is put away, else
     /// the width the reader dragged it to, or the one it comes with.
@@ -425,6 +432,13 @@ impl Workspace {
             .into_any_element()
     }
 
+    /// How far down the table's column names start: the search row and the filters over them, as
+    /// `render_papers` lays them out (14 + the search box, 10 + a filter chip + 10). The paper beside
+    /// the table gives its title this much, so its tabs stand level with the column names.
+    pub(crate) fn papers_head() -> Pixels {
+        px(14. + 20.) + text_px(34.) + text_px(26.)
+    }
+
     fn columns(lib: &Library, width: f32) -> Vec<Column> {
         let column = |label: &str, width: f32, sort: Option<&'static str>, kind: ColumnKind| Column { label: label.to_string(), width: Some(width), sort, kind };
         let mut columns = vec![column("", 34., None, ColumnKind::Star), Column { label: t("文献").into(), width: None, sort: Some("title"), kind: ColumnKind::Title }];
@@ -497,6 +511,8 @@ impl Workspace {
         chips.push(chip("f-source".into(), t("来源"), f.source.clone(), FilterKey::Source, self, cx).into_any_element());
         chips.push(chip("f-preprint".into(), t("预印本"), match f.preprint.as_str() { "yes" => t("只看").into(), "no" => t("不含").into(), _ => String::new() }, FilterKey::Preprint, self, cx).into_any_element());
         let filtered = f.active() > 0 || !f.search.trim().is_empty();
+        // A list too narrow for the buttons' words keeps their icons.
+        let roomy = width >= f32::from(text_px(620.));
         if filtered {
             chips.push(ui::ghost_button("f-clear", Some("x"), Some(t("清空筛选").into())).h(text_px(26.)).on_click(self.on(Cmd::ClearFilters, cx)).into_any_element());
         }
@@ -519,6 +535,7 @@ impl Workspace {
                         Some(w) => d.w(px(w)).flex_none(),
                         None => d.flex_1().min_w_0(),
                     })
+                    .when(c.kind.centred(), |d| d.justify_center())
                     .when_some(c.sort, |d, key| d.cursor_pointer().hover(|s| s.text_color(Theme::text())).on_click(self.on(Cmd::SetSort(filter::toggle_sort(&f.sort, key)), cx)))
                     .when(active, |d| d.text_color(Theme::text()))
                     .child(c.label.clone())
@@ -554,10 +571,12 @@ impl Workspace {
             .flex()
             .flex_col()
             .size_full()
+            // The search row and the filters keep one height however narrow the list is (`papers_head`): the buttons
+            // drop their words, the filters scroll sideways. The paper beside the list is laid out by that height.
             .child(
                 div()
                     .flex()
-                    .flex_wrap()
+                    .flex_none()
                     .items_center()
                     .gap(px(8.))
                     .px(px(16.))
@@ -568,7 +587,8 @@ impl Workspace {
                         div()
                             .flex()
                             .flex_1()
-                            .min_w(px(180.))
+                            .min_w(px(80.))
+                            .overflow_hidden()
                             .items_center()
                             .gap(px(8.))
                             .h(text_px(34.))
@@ -580,11 +600,11 @@ impl Workspace {
                             .child(ui::icon("search", 15., Theme::text_tertiary()))
                             .child(lib.search.clone()),
                     )
-                    .child(ui::secondary_button("sort", t("排序")).child(ui::icon("sort-down", 14., Theme::text_secondary())).on_click(self.on_menu(MenuKind::Sort, cx)))
-                    .child(ui::secondary_button("list-translation", if lib.show_translation { t("显示原文") } else { t("显示译文") }).on_click(self.on(Cmd::ToggleTranslation, cx)))
-                    .child(ui::secondary_button("export", t("导出")).child(ui::icon("export", 14., Theme::text_secondary())).on_click(self.on_menu(MenuKind::Export, cx))),
+                    .child(ui::secondary_button("sort", if roomy { t("排序") } else { "" }).when(!roomy, |d| d.px(px(9.))).child(ui::icon("sort-down", 14., Theme::text_secondary())).on_click(self.on_menu(MenuKind::Sort, cx)))
+                    .child(ui::secondary_button("list-translation", match (lib.show_translation, roomy) { (true, true) => t("显示原文"), (false, true) => t("显示译文"), (true, false) => t("原文"), (false, false) => t("译文") }).on_click(self.on(Cmd::ToggleTranslation, cx)))
+                    .child(ui::secondary_button("export", if roomy { t("导出") } else { "" }).when(!roomy, |d| d.px(px(9.))).child(ui::icon("export", 14., Theme::text_secondary())).on_click(self.on_menu(MenuKind::Export, cx))),
             )
-            .child(div().id("filters").flex().flex_wrap().items_center().gap(px(6.)).px(px(16.)).py(px(10.)).children(chips))
+            .child(div().id("filters").flex().flex_none().items_center().gap(px(6.)).px(px(16.)).py(px(10.)).overflow_x_scroll().children(chips))
             .child(div().flex().flex_none().h(text_px(32.)).px(px(8.)).border_t_1().border_b_1().border_color(Theme::line()).bg(Theme::bg_sunken()).text_size(text_px(12.)).text_color(Theme::text_tertiary()).children(header))
             // The papers without a PDF: the open ones among them can be fetched in one go.
             .when(lib.filters.view == View::NoPdf && lookable > 0 && lib.fetching.as_ref().is_none_or(|run| !run.running()), |d| {
@@ -640,7 +660,7 @@ impl Workspace {
                         let cell = div().flex().items_center().h_full().overflow_hidden().px(px(8.)).map(|d| match c.width {
                             Some(w) => d.w(px(w)).flex_none(),
                             None => d.flex_1().min_w_0(),
-                        });
+                        }).when(c.kind.centred(), |d| d.justify_center());
                         match &c.kind {
                             ColumnKind::Star => cell
                                 .px(px(4.))

@@ -305,6 +305,34 @@ pub fn caption(text: impl Into<SharedString>) -> Div {
 pub const TITLE_H: f32 = 36.;
 const CONTROL_W: f32 = 46.;
 
+/// The band under the title strip that a column's header fills, ending in a line: the
+/// conversation's, the manuscript's, the panel beside it and the paper's title share it,
+/// so the lines under them run on from column to column.
+pub fn head_h() -> Pixels {
+    text_px(56.)
+}
+
+/// The size of a column header's title: the paper's, the conversation's, the manuscript's, 筛选's.
+pub const HEAD_TITLE: f32 = 15.;
+
+/// A column's header: one row in `head_h`, a line under it.
+pub fn column_head() -> Div {
+    div().flex().flex_none().items_center().gap(px(4.)).h(head_h()).px(px(16.)).border_b_1().border_color(Theme::line())
+}
+
+/// The height of `title_strip`: none where the system draws the title bar.
+pub fn strip_h() -> f32 {
+    if custom_titlebar() { TITLE_H } else { 0. }
+}
+
+/// For a column of its own colour in a page under the main column's title strip: its colour
+/// and left line carried up through the strip, so it reaches the top like the sidebar and the
+/// paper do. The column is `relative`; the cap hears nothing, so the strip still drags the window.
+pub fn strip_cap(colour: Hsla) -> Div {
+    // From the column's outer left edge, where its own line is drawn, not inside it.
+    div().absolute().top(px(-strip_h())).left(px(-1.)).right_0().h(px(strip_h())).bg(colour).border_l_1().border_color(Theme::line())
+}
+
 pub fn custom_titlebar() -> bool {
     cfg!(any(target_os = "windows", target_os = "macos"))
 }
@@ -317,7 +345,7 @@ pub fn traffic_lights_width() -> f32 {
 /// A strip that works like a title bar: a press drags the window, a double
 /// press zooms it. Buttons placed on it call `.occlude()` to stay clickable.
 pub fn title_strip() -> Div {
-    let strip = div().flex().flex_none().items_center().w_full().h(px(if custom_titlebar() { TITLE_H } else { 0. }));
+    let strip = div().flex().flex_none().items_center().w_full().h(px(strip_h()));
     if cfg!(target_os = "windows") {
         // Keep the workspace's focus handler from preventing the native caption action
         // (activation, dragging and double-click maximising) on mouse down.

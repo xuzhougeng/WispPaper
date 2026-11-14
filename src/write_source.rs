@@ -484,7 +484,7 @@ impl Workspace {
                 .flex_col()
                 .flex_none()
                 .gap(px(4.))
-                .mx(px(20.))
+                .mx(px(16.))
                 .mb(px(8.))
                 .px(px(10.))
                 .py(px(6.))
