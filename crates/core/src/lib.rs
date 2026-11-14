@@ -61,6 +61,7 @@ pub mod retrieval;
 pub mod review;
 pub mod revise;
 pub mod screening;
+pub mod selection;
 pub mod settings;
 pub mod sources;
 pub mod store;
