@@ -11,7 +11,7 @@ use crate::i18n::t;
 use crate::app::{Cmd, MenuKind, Workspace, default_root};
 use crate::input::{InputEvent, TextInput};
 use crate::shortcuts::{self, GROUPS, SHORTCUTS};
-use crate::theme::{self, Theme};
+use crate::theme::{self, Theme, text_px};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
 use std::path::PathBuf;
@@ -20,7 +20,7 @@ use std::time::Duration;
 use wisp_core::ai::{self, Protocol};
 use wisp_core::provider::{self, Provider};
 use wisp_core::libraries;
-use wisp_core::settings::{Language, Task};
+use wisp_core::settings::{Language, Spacing, Task, TextWidth};
 use wisp_core::update::{self, Release};
 
 const SIDEBAR_W: f32 = 224.;
@@ -93,6 +93,10 @@ pub struct SettingsView {
     /// Whose name the comments and tracked changes of a Word export carry.
     author: Entity<TextInput>,
     translation_prompt: Entity<TextInput>,
+    font_search: Entity<TextInput>,
+    font_names: Vec<String>,
+    font_picker: bool,
+    font_scroll: ScrollHandle,
     /// The command of the person's own whose fields 命令 shows, as an index into `Settings::commands`.
     command: Option<(usize, CommandFields)>,
     /// The shortcut waiting for its new key. While it waits, every key
@@ -227,13 +231,13 @@ fn row(title: impl Into<SharedString>, detail: Option<SharedString>, control: im
         .min_h(px(48.))
         .px(px(16.))
         .py(px(10.))
-        .child(div().flex().flex_col().flex_1().min_w(px(120.)).gap(px(2.)).child(div().child(title.into())).children(detail.map(|d| div().text_size(px(12.)).line_height(px(17.)).text_color(Theme::text_tertiary()).child(d))))
+        .child(div().flex().flex_col().flex_1().min_w(px(120.)).gap(px(2.)).child(div().child(title.into())).children(detail.map(|d| div().text_size(text_px(12.)).line_height(text_px(17.)).text_color(Theme::text_tertiary()).child(d))))
         .child(div().flex().flex_none().max_w_full().items_center().gap(px(8.)).child(control))
 }
 
 /// The small print under a group.
 fn note(text: &'static str) -> Div {
-    div().px(px(4.)).text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_tertiary()).child(text)
+    div().px(px(4.)).text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text_tertiary()).child(text)
 }
 
 fn switch(id: &'static str, on: bool) -> Stateful<Div> {
@@ -248,7 +252,7 @@ pub(crate) fn segmented(id: &'static str, choices: Vec<(&'static str, Cmd)>, cho
             .flex()
             .items_center()
             .justify_center()
-            .h(px(24.))
+            .h(text_px(24.))
             .px(px(12.))
             .rounded(px(7.))
             .cursor_pointer()
@@ -260,12 +264,12 @@ pub(crate) fn segmented(id: &'static str, choices: Vec<(&'static str, Cmd)>, cho
 }
 
 fn button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
-    ui::secondary_button(id, label).h(px(28.))
+    ui::secondary_button(id, label).h(text_px(28.))
 }
 
 /// A text button in the accent (恢复默认 …).
 fn link_button(id: impl Into<ElementId>, label: &'static str) -> Stateful<Div> {
-    div().id(id).flex().flex_none().items_center().h(px(26.)).px(px(8.)).rounded(px(7.)).cursor_pointer().text_size(px(12.)).text_color(Theme::accent()).hover(|s| s.bg(Theme::hover())).child(label)
+    div().id(id).flex().flex_none().items_center().h(text_px(26.)).px(px(8.)).rounded(px(7.)).cursor_pointer().text_size(text_px(12.)).text_color(Theme::accent()).hover(|s| s.bg(Theme::hover())).child(label)
 }
 
 /// A shortcut's key; `recording` shows it waiting for the new one.
@@ -278,12 +282,12 @@ fn keycap(id: impl Into<ElementId>, key: &str, recording: bool) -> Stateful<Div>
         .items_center()
         .justify_center()
         .min_w(px(148.))
-        .h(px(28.))
+        .h(text_px(28.))
         .px(px(12.))
         .rounded(px(7.))
         .border_1()
         .cursor_pointer()
-        .text_size(px(12.))
+        .text_size(text_px(12.))
         .when(recording, |d| d.border_color(Theme::accent()).text_color(Theme::accent()))
         .when(!recording, |d| d.border_color(gpui::transparent_black()).bg(Theme::hover()).hover(|s| s.bg(Theme::pressed())).text_color(if key.is_empty() { Theme::text_tertiary() } else { Theme::text() }))
         .child(text)
@@ -330,7 +334,19 @@ impl Workspace {
                 let proxy = cx.new(|cx| TextInput::new("http://127.0.0.1:7890", cx).with_text(&self.settings.proxy));
                 let author = cx.new(|cx| TextInput::new(wisp_core::settings::Settings::default().author_name(), cx).with_text(&self.settings.author));
                 let translation_prompt = cx.new(|cx| TextInput::new("留空则使用默认要求：译成简体中文，保留术语、基因名、物种学名和数字原样，只输出译文。", cx).multiline(3).with_text(&self.settings.translation_prompt));
+                let font_search = cx.new(|cx| TextInput::new(t("搜索已安装的字体"), cx));
+                let font_names = cx.text_system().all_font_names().into_iter().filter(|name| !name.starts_with('.')).collect();
                 let subscriptions = vec![
+                    cx.subscribe_in(&font_search, window, |this, input, event: &InputEvent, window, cx| {
+                        if *event == InputEvent::Changed {
+                            if let Some(view) = this.settings_view.as_mut() { view.font_scroll = ScrollHandle::new() }
+                            cx.notify();
+                        } else if *event == InputEvent::Submit {
+                            let query = input.read(cx).text().trim().to_lowercase();
+                            let found = this.settings_view.as_ref().and_then(|view| view.font_names.iter().find(|name| name.to_lowercase().contains(&query))).cloned();
+                            if !query.is_empty() && let Some(family) = found { this.set_font_family(family, window, cx) }
+                        }
+                    }),
                     cx.subscribe(&proxy, |this, _, event: &InputEvent, cx| {
                         if *event == InputEvent::Changed { this.save_proxy(cx) }
                     }),
@@ -348,7 +364,7 @@ impl Workspace {
                         }
                     }),
                 ];
-                self.settings_view = Some(SettingsView { page, ai_tab: AiTab::default(), scroll: ScrollHandle::new(), provider: index, protocol: shown.protocol, fields, proxy, author, translation_prompt, command: None, recording: None, shortcut_error: None, _subscriptions: subscriptions });
+                self.settings_view = Some(SettingsView { page, ai_tab: AiTab::default(), scroll: ScrollHandle::new(), provider: index, protocol: shown.protocol, fields, proxy, author, translation_prompt, font_search, font_names, font_picker: false, font_scroll: ScrollHandle::new(), command: None, recording: None, shortcut_error: None, _subscriptions: subscriptions });
             }
         }
         window.focus(&self.focus);
@@ -462,6 +478,47 @@ impl Workspace {
 
     // ---- 外观
 
+    pub fn apply_typography(&self, window: &mut Window, cx: &App) {
+        let family = &self.settings.font_family;
+        let available = family.is_empty() || cx.text_system().all_font_names().contains(family);
+        theme::set_typography(if available { family } else { "" }, self.settings.font_size);
+        theme::set_reading(self.settings.reading_appearance);
+        window.refresh();
+    }
+
+    pub fn set_font_family(&mut self, family: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings.font_family = family;
+        if let Some(view) = self.settings_view.as_mut() { view.font_picker = false }
+        self.save_settings(cx);
+        self.apply_typography(window, cx);
+        window.focus(&self.focus);
+    }
+
+    pub(crate) fn toggle_font_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(view) = self.settings_view.as_mut() else { return };
+        view.font_picker = !view.font_picker;
+        if view.font_picker {
+            view.font_search.update(cx, |input, cx| input.set_text("", cx));
+            view.font_search.read(cx).focus_handle(cx).focus(window);
+        } else {
+            window.focus(&self.focus);
+        }
+        cx.notify();
+    }
+
+    #[cfg(debug_assertions)]
+    pub(crate) fn search_settings_fonts(&mut self, query: &str, cx: &mut Context<Self>) {
+        if let Some(view) = &self.settings_view { view.font_search.update(cx, |input, cx| input.set_text(query, cx)) }
+    }
+
+    pub fn dismiss_font_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(view) = self.settings_view.as_mut().filter(|view| view.font_picker && view.page == SettingsPage::Appearance) else { return false };
+        view.font_picker = false;
+        window.focus(&self.focus);
+        cx.notify();
+        true
+    }
+
     /// Use the light or the dark colours: the chosen one, else the system's.
     pub fn apply_appearance(&mut self, window: &mut Window) {
         let dark = match self.settings.appearance.as_str() {
@@ -470,6 +527,7 @@ impl Workspace {
             _ => matches!(window.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark),
         };
         theme::set_dark(dark);
+        theme::set_high_contrast(self.settings.high_contrast);
         window.refresh();
     }
 
@@ -729,7 +787,7 @@ impl Workspace {
                 .flex()
                 .items_center()
                 .gap(px(9.))
-                .h(px(32.))
+                .h(text_px(32.))
                 .px(px(8.))
                 .rounded(px(7.))
                 .cursor_pointer()
@@ -758,7 +816,7 @@ impl Workspace {
 
         let body = match page {
             SettingsPage::General => self.general_page(window, cx),
-            SettingsPage::Appearance => self.appearance_page(cx),
+            SettingsPage::Appearance => self.appearance_page(window, cx),
             SettingsPage::Shortcuts => self.shortcuts_page(cx),
             SettingsPage::Ai => self.ai_page(window, cx),
             SettingsPage::Network => self.network_page(window, cx),
@@ -769,7 +827,7 @@ impl Workspace {
             .flex()
             .items_center()
             .gap(px(16.))
-            .child(div().flex_1().min_w_0().px(px(4.)).text_size(px(22.)).line_height(px(28.)).font_weight(FontWeight::SEMIBOLD).child(page.title()))
+            .child(div().flex_1().min_w_0().px(px(4.)).text_size(text_px(22.)).line_height(text_px(28.)).font_weight(FontWeight::SEMIBOLD).child(page.title()))
             .when(changed, |d| d.child(link_button("shortcuts-reset", t("全部恢复默认")).on_click(self.on(Cmd::ResetShortcuts, cx))));
         let content = div()
             .flex()
@@ -835,24 +893,91 @@ impl Workspace {
             .into_any_element()
     }
 
-    fn appearance_page(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn appearance_page(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let mode = match self.settings.appearance.as_str() {
             "light" => 1,
             "dark" => 2,
             _ => 0,
         };
-        let compact = usize::from(self.settings.density == "compact");
+        let density_index = match self.settings.density.as_str() { "compact" => 0, "comfortable" => 2, _ => 1 };
         let set = |value: &str| Cmd::SetAppearance(value.to_string());
         let density = |value: &str| Cmd::SetDensity(value.to_string());
-        group(
+        let appearance = group(
             None,
             vec![
                 row(crate::i18n::tc("appearance.theme", "主题"), Some(t("跟随系统时，随系统的浅色 / 深色模式切换。").into()), segmented("appearance", vec![(t("跟随系统"), set("")), (t("浅色"), set("light")), (t("深色"), set("dark"))], mode, self, cx)).into_any_element(),
-                row(t("文献列表"), Some(t("紧凑的行更矮，一屏能看到更多文献。").into()), segmented("density", vec![(t("标准"), density("")), (t("紧凑"), density("compact"))], compact, self, cx)).into_any_element(),
+                row(t("文献列表"), Some(t("紧凑显示更多文献，舒适增加行间留白。").into()), segmented("density", vec![(t("紧凑"), density("compact")), (t("标准"), density("")), (t("舒适"), density("comfortable"))], density_index, self, cx)).into_any_element(),
+                row(t("增强对比度"), Some(t("加深辅助文字和分隔线，在浅色与深色主题下都生效。").into()), switch("high-contrast", self.settings.high_contrast).on_click(self.on(Cmd::ToggleHighContrast, cx))).into_any_element(),
             ],
         )
-        .child(note(t("标识色属于文献库：在文献库的「编辑名称与主题」里选择，打开文献库后界面随之变色。")))
-        .into_any_element()
+        .child(note(t("标识色属于文献库：在文献库的「编辑名称与主题」里选择，打开文献库后界面随之变色。")));
+        let Some(view) = &self.settings_view else { return appearance.into_any_element() };
+        let family = &self.settings.font_family;
+        let size = self.settings.font_size;
+        let family_label = if family.is_empty() { t("系统默认").to_string() } else { family.clone() };
+        let unavailable = !family.is_empty() && !view.font_names.contains(family);
+        let choose = button("font-family", family_label).max_w(px(280.)).overflow_hidden()
+            .child(ui::icon(if view.font_picker { "chevron-up" } else { "chevron-down" }, 14., Theme::text_secondary()))
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_font_picker(window, cx)));
+        let step = |id, label, delta, enabled: bool, cx: &mut Context<Self>| button(id, label).min_w(px(32.))
+            .when(!enabled, |d| d.opacity(0.35).cursor_default())
+            .when(enabled, |d| d.on_click(self.on(Cmd::SetFontSize(size + delta), cx)));
+        let sizes = div().flex().items_center().gap(px(8.))
+            .child(step("font-smaller", "−", -1., size > wisp_core::settings::MIN_FONT_SIZE, cx))
+            .child(div().min_w(px(52.)).text_center().child(format!("{size} px")))
+            .child(step("font-larger", "+", 1., size < wisp_core::settings::MAX_FONT_SIZE, cx));
+        let mut rows = vec![row(t("界面字体"), Some(t(if unavailable { "此字体未安装，当前使用系统默认字体。" } else { "选择本机已安装的字体，立即生效。" }).into()), choose).into_any_element()];
+        if view.font_picker {
+            let query = view.font_search.read(cx).text().trim().to_lowercase();
+            let fonts: Vec<_> = view.font_names.iter().filter(|name| name.to_lowercase().contains(&query)).collect();
+            let empty = fonts.is_empty();
+            let height = text_px(30. * fonts.len().clamp(1, 6) as f32).min(px(200.));
+            let choices = fonts.into_iter().enumerate().map(|(i, name)| {
+                ui::menu_row(("font-choice", i), name.clone(), name == family, None)
+                    .font_family(name.clone()).on_click(self.on(Cmd::SetFontFamily(name.clone()), cx)).into_any_element()
+            }).collect::<Vec<_>>();
+            rows.push(div().flex().flex_col().gap(px(8.)).px(px(16.)).py(px(12.))
+                .child(ui::field(&view.font_search, window, cx))
+                .child(ui::menu_row("font-default", t("系统默认"), family.is_empty(), None).on_click(self.on(Cmd::SetFontFamily(String::new()), cx)))
+                .child(div().id("font-choices").h(height).overflow_y_scroll().track_scroll(&view.font_scroll).children(choices)
+                    .when(empty, |d| d.child(note(t("没有匹配的字体")))))
+                .into_any_element());
+        }
+        rows.push(row(t("界面字号"), Some(t("11–20 px，标题与正文按比例调整。修改后自动保存。").into()), sizes).into_any_element());
+        rows.push(div().flex().flex_col().gap(px(8.)).p(px(16.)).bg(Theme::bg_sunken())
+            .child(div().text_size(text_px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("字体预览")))
+            .child(div().child("文献阅读与写作 · Reading & Writing"))
+            .child(div().text_size(text_px(12.)).text_color(Theme::text_secondary()).child("Aa Bb Cc · 0123456789 · α β γ"))
+            .into_any_element());
+        div().flex().flex_col().gap(px(24.)).child(appearance)
+            .child(group(Some(t("字体与字号")), rows))
+            .child(div().flex().flex_wrap().items_center().justify_between().gap(px(12.))
+                .child(note(t("仅调整应用内显示，PDF 页面和导出文档的排版保持原样。")).flex_1().min_w(px(200.)).max_w_full())
+                .child(link_button("font-reset", t("恢复默认字体与字号")).on_click(self.on(Cmd::ResetTypography, cx))))
+            .child(self.reading_appearance_page(cx))
+            .child(group(None, vec![row(t("恢复全部外观设置"), Some(t("恢复主题、字体、对比度、列表密度和阅读排版。").into()), button("appearance-reset", t("恢复默认")).on_click(self.on(Cmd::ResetAppearance, cx))).into_any_element()]))
+            .into_any_element()
+    }
+
+    fn reading_appearance_page(&self, cx: &mut Context<Self>) -> Div {
+        let reading = self.settings.reading_appearance;
+        let line_index = Spacing::ALL.iter().position(|value| *value == reading.line_spacing).unwrap_or(1);
+        let paragraph_index = Spacing::ALL.iter().position(|value| *value == reading.paragraph_spacing).unwrap_or(1);
+        let width_index = TextWidth::ALL.iter().position(|value| *value == reading.width).unwrap_or(1);
+        let lines = segmented("reading-lines", Spacing::ALL.into_iter().map(|value| (t(value.label()), Cmd::SetLineSpacing(value))).collect(), line_index, self, cx);
+        let paragraphs = segmented("reading-paragraphs", Spacing::ALL.into_iter().map(|value| (t(value.label()), Cmd::SetParagraphSpacing(value))).collect(), paragraph_index, self, cx);
+        let widths = segmented("reading-width", TextWidth::ALL.into_iter().map(|value| (t(value.label()), Cmd::SetTextWidth(value))).collect(), width_index, self, cx);
+        let preview = div().flex().flex_col().gap(px(10.)).p(px(16.)).bg(Theme::bg_sunken())
+            .child(div().font_weight(FontWeight::SEMIBOLD).child(t("阅读排版预览")))
+            .child(div().w_full().max_w(theme::manuscript_width()).child(crate::markdown::render("reading-preview", t("合适的行距让长段落更容易阅读。摘要、助手回答与稿件正文会随行距设置一起调整，方便连续阅读和对照资料。\n\n段落间距帮助区分不同的观点。这些设置只改变应用内的显示，导出内容仍保留原有排版。"), None, None)));
+        div().flex().flex_col().gap(px(12.))
+            .child(group(Some(t("阅读与写作")), vec![
+                row(t("正文行距"), Some(t("调整摘要、助手回答与稿件正文的行距。").into()), lines).into_any_element(),
+                row(t("段落间距"), Some(t("调整助手回答与稿件正文的段落间隔。").into()), paragraphs).into_any_element(),
+                row(t("稿件正文宽度"), Some(t("同时用于写作编辑与全文阅读；空间不足时自动适应窗口。").into()), widths).into_any_element(),
+                preview.into_any_element(),
+            ]))
+            .child(div().flex().justify_end().child(link_button("reading-reset", t("恢复默认阅读排版")).on_click(self.on(Cmd::ResetReadingAppearance, cx))))
     }
 
     fn shortcuts_page(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -884,13 +1009,13 @@ impl Workspace {
                     .px(px(16.))
                     .py(px(8.))
                     .child(line)
-                    .when(recording, |d| d.child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(t("按下新的组合键即可保存 · Esc 取消"))))
-                    .children(error.map(|why| div().text_size(px(12.)).line_height(px(17.)).text_color(Theme::danger()).child(why)))
+                    .when(recording, |d| d.child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(t("按下新的组合键即可保存 · Esc 取消"))))
+                    .children(error.map(|why| div().text_size(text_px(12.)).line_height(text_px(17.)).text_color(Theme::danger()).child(why)))
                     .into_any_element(),
             );
         }
         // Esc is not for sale: every dialog and menu relies on it.
-        groups[0].push(div().flex().items_center().w_full().px(px(16.)).py(px(8.)).min_h(px(44.)).child(div().flex_1().min_w_0().child(t("关闭对话框和菜单，返回上一层"))).child(div().min_w(px(148.)).text_size(px(12.)).text_color(Theme::text_tertiary()).flex().justify_center().child("Esc")).into_any_element());
+        groups[0].push(div().flex().items_center().w_full().px(px(16.)).py(px(8.)).min_h(px(44.)).child(div().flex_1().min_w_0().child(t("关闭对话框和菜单，返回上一层"))).child(div().min_w(px(148.)).text_size(text_px(12.)).text_color(Theme::text_tertiary()).flex().justify_center().child("Esc")).into_any_element());
         div()
             .flex()
             .flex_col()
@@ -899,7 +1024,7 @@ impl Workspace {
             .children(GROUPS.iter().zip(groups).map(|(title, rows)| group(Some(t(title)), rows)))
             .child(note(t("点一个快捷键，再按下新的组合键。文本框里的编辑按键（复制、粘贴、全选等）是固定的。")))
             // The keys of 筛选 are bare letters, and fixed: shown so that they can be found.
-            .child(group(Some(t("筛选")), shortcuts::SCREEN_KEYS.iter().map(|(key, what)| div().flex().items_center().w_full().px(px(16.)).py(px(8.)).min_h(px(44.)).child(div().flex_1().min_w_0().child(t(what))).child(div().min_w(px(148.)).text_size(px(12.)).text_color(Theme::text_tertiary()).flex().justify_center().child(*key)).into_any_element()).collect()))
+            .child(group(Some(t("筛选")), shortcuts::SCREEN_KEYS.iter().map(|(key, what)| div().flex().items_center().w_full().px(px(16.)).py(px(8.)).min_h(px(44.)).child(div().flex_1().min_w_0().child(t(what))).child(div().min_w(px(148.)).text_size(text_px(12.)).text_color(Theme::text_tertiary()).flex().justify_center().child(*key)).into_any_element()).collect()))
             .child(note(t("筛选页里的按键是固定的：在批量的队列里对点开的那一篇、在逐篇里对当前这一篇、在确认建议里对光标所在的一行生效。正在输入文字时它们不起作用。")))
             .into_any_element()
     }
@@ -913,7 +1038,7 @@ impl Workspace {
                 .id(("ai-tab", tab as usize))
                 .flex()
                 .items_center()
-                .h(px(32.))
+                .h(text_px(32.))
                 .px(px(14.))
                 .rounded(px(8.))
                 .cursor_pointer()
@@ -971,7 +1096,7 @@ impl Workspace {
                             .min_w_0()
                             .gap(px(1.))
                             .child(div().truncate().font_weight(FontWeight::MEDIUM).child(provider.title()))
-                            .child(div().truncate().text_size(px(12.)).text_color(if missing { warn.0 } else { Theme::text_tertiary() }).child(about)),
+                            .child(div().truncate().text_size(text_px(12.)).text_color(if missing { warn.0 } else { Theme::text_tertiary() }).child(about)),
                     )
                     // In use: some task's model is one of its models.
                     .when(busy, |d| d.child(div().flex_none().size(px(7.)).rounded_full().bg(Theme::accent())))
@@ -1019,7 +1144,7 @@ impl Workspace {
                 .p(px(32.))
                 .child(ui::icon("sparkle", 22., Theme::text_tertiary()))
                 .child(div().font_weight(FontWeight::MEDIUM).child(t("还没有模型服务")))
-                .child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(t("在左边添加一个服务，填上它的 API Key。")))
+                .child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(t("在左边添加一个服务，填上它的 API Key。")))
                 .into_any_element(),
         };
         div()
@@ -1067,7 +1192,7 @@ impl Workspace {
             .pt(px(16.))
             .pb(px(12.))
             .child(provider_tile(&provider.preset, 40.))
-            .child(div().flex().flex_col().flex_1().min_w_0().gap(px(1.)).child(div().truncate().text_size(px(16.)).line_height(px(22.)).font_weight(FontWeight::SEMIBOLD).child(provider.title())).child(div().truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(format!("{} · {}", protocol_name(view.protocol), provider.base_url.trim()))))
+            .child(div().flex().flex_col().flex_1().min_w_0().gap(px(1.)).child(div().truncate().text_size(text_px(16.)).line_height(text_px(22.)).font_weight(FontWeight::SEMIBOLD).child(provider.title())).child(div().truncate().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(format!("{} · {}", protocol_name(view.protocol), provider.base_url.trim()))))
             .children(console.map(|url| link_button("provider-console", t("获取 API Key")).on_click(self.on(Cmd::OpenUrl(url.to_string()), cx))));
 
         // The models, each with its thinking and the tasks it does.
@@ -1091,9 +1216,9 @@ impl Workspace {
                     .py(px(6.))
                     // A field's width has to be given here: under these widths it would be measured as narrow.
                     .child(div().flex_none().w(px(MODEL_W)).child(ui::field(input, window, cx)))
-                    .when(draws, |d| d.child(div().id(("model-draws", i)).flex().flex_none().items_center().gap(px(4.)).h(px(22.)).px(px(7.)).rounded(px(6.)).bg(Theme::accent_soft()).text_size(px(11.)).text_color(Theme::accent()).child(ui::icon("image", 12., Theme::accent())).child(t("生图模型")).tooltip(|_, cx| cx.new(|_| crate::write_assist::Tip(t("这个模型按描述画图，不回答问题。").to_string())).into())))
-                    .when(judges, |d| d.child(div().id(("model-judges", i)).flex().flex_none().items_center().gap(px(4.)).h(px(22.)).px(px(7.)).rounded(px(6.)).bg(Theme::accent_soft()).text_size(px(11.)).text_color(Theme::accent()).child(ui::icon("list-todo", 12., Theme::accent())).child(t("判断模型")).tooltip(|_, cx| cx.new(|_| crate::write_assist::Tip(t("这个模型只在给定的选项里作判断并给出概率，不写文字。").to_string())).into())))
-                    .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(Theme::accent()).child(if draws && !serves.is_empty() { t("在用").to_string() } else { serves.join(" · ") }))
+                    .when(draws, |d| d.child(div().id(("model-draws", i)).flex().flex_none().items_center().gap(px(4.)).h(text_px(22.)).px(px(7.)).rounded(px(6.)).bg(Theme::accent_soft()).text_size(text_px(11.)).text_color(Theme::accent()).child(ui::icon("image", 12., Theme::accent())).child(t("生图模型")).tooltip(|_, cx| cx.new(|_| crate::write_assist::Tip(t("这个模型按描述画图，不回答问题。").to_string())).into())))
+                    .when(judges, |d| d.child(div().id(("model-judges", i)).flex().flex_none().items_center().gap(px(4.)).h(text_px(22.)).px(px(7.)).rounded(px(6.)).bg(Theme::accent_soft()).text_size(text_px(11.)).text_color(Theme::accent()).child(ui::icon("list-todo", 12., Theme::accent())).child(t("判断模型")).tooltip(|_, cx| cx.new(|_| crate::write_assist::Tip(t("这个模型只在给定的选项里作判断并给出概率，不写文字。").to_string())).into())))
+                    .child(div().flex_1().min_w_0().truncate().text_size(text_px(12.)).text_color(Theme::accent()).child(if draws && !serves.is_empty() { t("在用").to_string() } else { serves.join(" · ") }))
                     .child(
                         div()
                             .id(("model-effort", i))
@@ -1101,11 +1226,11 @@ impl Workspace {
                             .flex_none()
                             .items_center()
                             .gap(px(4.))
-                            .h(px(28.))
+                            .h(text_px(28.))
                             .px(px(10.))
                             .rounded(px(7.))
                             .cursor_pointer()
-                            .text_size(px(12.))
+                            .text_size(text_px(12.))
                             .text_color(Theme::text_secondary())
                             .bg(Theme::hover())
                             .hover(|s| s.bg(Theme::pressed()))
@@ -1128,8 +1253,8 @@ impl Workspace {
             .child(div().flex_none().w(px(MODEL_W)).child(ui::field(&fields.new_model, window, cx)))
             .child(div().flex_1())
             .child(button("model-add", t("添加")).when(!typed, |d| d.opacity(0.5)).on_click(self.on(Cmd::AddModel, cx)));
-        let caption = |text: &'static str| div().px(px(16.)).pt(px(18.)).pb(px(6.)).text_size(px(12.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::text_secondary()).child(text);
-        let small = |text: &'static str| div().text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_tertiary()).child(text);
+        let caption = |text: &'static str| div().px(px(16.)).pt(px(18.)).pb(px(6.)).text_size(text_px(12.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::text_secondary()).child(text);
+        let small = |text: &'static str| div().text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text_tertiary()).child(text);
         div()
             .flex()
             .flex_col()
@@ -1157,7 +1282,7 @@ impl Workspace {
             // 生图 is done by a model that draws, or by none: it borrows no other task's model.
             let any = if task.draws() { !settings.image_profiles().is_empty() } else { any };
             let Some(used) = (if task.draws() { settings.profile_for(task) } else { Some(settings.profile_for_or_default(task)) }) else {
-                return div().id(("task-model", n)).flex().flex_none().items_center().gap(px(8.)).child(div().text_size(px(12.)).text_color(warn.0).child(t("还没有生图模型"))).child(button(("task-model-add", n), t("去添加")).on_click(this.on(Cmd::AiTab(AiTab::Models), cx)));
+                return div().id(("task-model", n)).flex().flex_none().items_center().gap(px(8.)).child(div().text_size(text_px(12.)).text_color(warn.0).child(t("还没有生图模型"))).child(button(("task-model-add", n), t("去添加")).on_click(this.on(Cmd::AiTab(AiTab::Models), cx)));
             };
             let follows = task != Task::Chat && !task.draws() && settings.tasks.get(task).is_empty();
             let shell = div()
@@ -1166,7 +1291,7 @@ impl Workspace {
                 .flex_none()
                 .items_center()
                 .gap(px(6.))
-                .h(px(30.))
+                .h(text_px(30.))
                 .max_w(px(360.))
                 .px(px(10.))
                 .rounded(px(8.))
@@ -1174,8 +1299,8 @@ impl Workspace {
                 .child(div().flex_none().font_weight(FontWeight::MEDIUM).child(used.title()))
                 // What still keeps the model from answering is said where it is chosen.
                 .child(match used.missing() {
-                    Some(what) => div().min_w_0().truncate().text_size(px(12.)).text_color(warn.0).child(if used.provider.is_empty() { t(what).to_string() } else { format!("{} · {}", used.provider, t(what)) }),
-                    None => div().min_w_0().truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(used.provider.clone()),
+                    Some(what) => div().min_w_0().truncate().text_size(text_px(12.)).text_color(warn.0).child(if used.provider.is_empty() { t(what).to_string() } else { format!("{} · {}", used.provider, t(what)) }),
+                    None => div().min_w_0().truncate().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(used.provider.clone()),
                 });
             if any { shell.bg(Theme::hover()).hover(|s| s.bg(Theme::pressed())).cursor_pointer().child(ui::icon("chevron-down", 12., Theme::text_secondary())).on_click(this.on_menu(MenuKind::TaskModel(task), cx)) } else { shell.text_color(Theme::text_secondary()) }
         };
@@ -1190,7 +1315,7 @@ impl Workspace {
                 .px(px(16.))
                 .py(px(14.))
                 .child(div().flex().flex_none().items_center().justify_center().size(px(34.)).rounded(px(9.)).bg(Theme::accent_soft()).child(ui::icon(icon, 17., Theme::accent())))
-                .child(div().flex().flex_col().flex_1().min_w(px(200.)).gap(px(2.)).child(div().font_weight(FontWeight::SEMIBOLD).child(t(task.label()))).child(div().text_size(px(12.)).line_height(px(17.)).text_color(Theme::text_tertiary()).child(t(about))))
+                .child(div().flex().flex_col().flex_1().min_w(px(200.)).gap(px(2.)).child(div().font_weight(FontWeight::SEMIBOLD).child(t(task.label()))).child(div().text_size(text_px(12.)).line_height(text_px(17.)).text_color(Theme::text_tertiary()).child(t(about))))
                 .child(pick(n, task, this, cx))
                 .into_any_element()
         };
@@ -1214,7 +1339,7 @@ impl Workspace {
                     .items_start()
                     .gap(px(16.))
                     .w(px(wide))
-                    .child(div().flex().flex_col().flex_1().gap(px(2.)).child(t("提示词")).child(div().text_size(px(12.)).line_height(px(17.)).text_color(Theme::text_tertiary()).child(t("留空则用默认的要求。可以指定别的目标语言、术语的译法或输出的格式；改了以后，同一段文字按新的要求重新翻译。"))))
+                    .child(div().flex().flex_col().flex_1().gap(px(2.)).child(t("提示词")).child(div().text_size(text_px(12.)).line_height(text_px(17.)).text_color(Theme::text_tertiary()).child(t("留空则用默认的要求。可以指定别的目标语言、术语的译法或输出的格式；改了以后，同一段文字按新的要求重新翻译。"))))
                     .when(!settings.translation_prompt.is_empty(), |d| d.child(link_button("translation-reset", t("恢复默认")).on_click(self.on(Cmd::ResetTranslationPrompt, cx)))),
             )
             .child(div().w(px(wide)).child(ui::field(&view.translation_prompt, window, cx)))
@@ -1257,7 +1382,7 @@ impl Workspace {
                 .min_h(px(48.))
                 .px(px(16.))
                 .py(px(10.))
-                .child(div().flex().flex_col().flex_1().min_w_0().gap(px(2.)).child(t("名称")).child(div().text_size(px(12.)).line_height(px(17.)).text_color(if wrong { Theme::danger() } else { Theme::text_tertiary() }).child(name_detail)))
+                .child(div().flex().flex_col().flex_1().min_w_0().gap(px(2.)).child(t("名称")).child(div().text_size(text_px(12.)).line_height(text_px(17.)).text_color(if wrong { Theme::danger() } else { Theme::text_tertiary() }).child(name_detail)))
                 .child(field(&fields.name));
             let template = div()
                 .flex()
@@ -1265,7 +1390,7 @@ impl Workspace {
                 .gap(px(8.))
                 .px(px(16.))
                 .py(px(12.))
-                .child(div().flex().flex_col().gap(px(2.)).w(px(wide)).child(t("模板")).child(div().text_size(px(12.)).line_height(px(17.)).text_color(Theme::text_tertiary()).child(t("发给模型的就是这段话。写上 {} 的地方换成命令后面的内容，这时命令后面必须写内容；不写 {} 的模板可以单独使用，后面写了内容就接在末尾。"))))
+                .child(div().flex().flex_col().gap(px(2.)).w(px(wide)).child(t("模板")).child(div().text_size(text_px(12.)).line_height(text_px(17.)).text_color(Theme::text_tertiary()).child(t("发给模型的就是这段话。写上 {} 的地方换成命令后面的内容，这时命令后面必须写内容；不写 {} 的模板可以单独使用，后面写了内容就接在末尾。"))))
                 .child(div().w(px(wide)).child(ui::field(&fields.template, window, cx)));
             let about = row(t("说明"), None, field(&fields.about));
             let remove = row(t("删除这个命令"), Some(t("用过它的对话保留着当时发出的内容，不受影响。").into()), button("command-remove", t("删除…")).text_color(Theme::danger()).on_click(self.on(Cmd::AskRemoveCommand(*index), cx)));
@@ -1296,7 +1421,7 @@ impl Workspace {
             })
             .collect();
         own.push(div().flex().items_center().w_full().px(px(16.)).py(px(10.)).child(button("command-add", t("添加命令")).on_click(self.on(Cmd::AddCommand, cx))).into_any_element());
-        let builtin = ai::SLASH.iter().map(|command| row(format!("/{}", command.name), Some(t(command.about).into()), div().max_w(px(280.)).truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(t(command.hint))).into_any_element()).collect();
+        let builtin = ai::SLASH.iter().map(|command| row(format!("/{}", command.name), Some(t(command.about).into()), div().max_w(px(280.)).truncate().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(t(command.hint))).into_any_element()).collect();
         div()
             .flex()
             .flex_col()
@@ -1348,7 +1473,7 @@ impl Workspace {
                     .gap(px(8.))
                     .pt(px(8.))
                     .child(img(about_icon()).size(px(88.)))
-                    .child(div().pt(px(4.)).text_size(px(20.)).line_height(px(26.)).font_weight(FontWeight::SEMIBOLD).child("Wisp Paper"))
+                    .child(div().pt(px(4.)).text_size(text_px(20.)).line_height(text_px(26.)).font_weight(FontWeight::SEMIBOLD).child("Wisp Paper"))
                     .child(div().text_color(Theme::text_secondary()).child(tf!("版本 {}", "Version {}", env!("CARGO_PKG_VERSION"))))
                     .child(div().text_color(Theme::text_tertiary()).child(t("本地优先的文献库：收集文献、整理、预览 PDF、对文献库提问。"))),
             )

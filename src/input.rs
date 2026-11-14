@@ -1055,7 +1055,7 @@ fn shape_markdown(input: &TextInput, style: &TextStyle, window: &mut Window, wra
             }
         }
         let scale = heading_scale(line.heading);
-        let (size, line_height) = if line.code { (font_size * 0.9, base_height) } else { (font_size * scale, (base_height * scale).round()) };
+        let (size, mut line_height) = if line.code { (font_size * 0.9, base_height) } else { (font_size * scale, (base_height * scale).round()) };
         let x = px(QUOTE_INDENT * line.quote as f32) + if line.code { px(CODE_INDENT) } else { px(0.) };
         let decor = if line.code {
             Decor::Code
@@ -1077,7 +1077,11 @@ fn shape_markdown(input: &TextInput, style: &TextStyle, window: &mut Window, wra
         } else {
             (base_height * 0.3).round()
         };
-        top += gap;
+        // A blank line is the paragraph separator in Markdown. Its visual height can change
+        // without inserting/removing characters, and the caret/selection use the same row metrics.
+        let paragraph_factor = crate::theme::paragraph_factor();
+        if empty(n) && !line.code { line_height *= paragraph_factor }
+        top += gap * paragraph_factor;
         let len = shown.len();
         let wrap = wrap.map(|w| (w - x).max(px(40.)));
         let shaped = window.text_system().shape_text(shown.into(), size, &runs, wrap, None).unwrap_or_default();

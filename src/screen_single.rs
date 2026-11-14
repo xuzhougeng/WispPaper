@@ -10,7 +10,7 @@ use crate::i18n::{label, t};
 use crate::app::{Cmd, Library, Page, ScreenMode, Tab, Translated, Workspace};
 use crate::context::Nav;
 use crate::settings::SettingsPage;
-use crate::theme::{self, Theme};
+use crate::theme::{self, Theme, text_px};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
 use std::collections::HashMap;
@@ -220,14 +220,14 @@ impl Workspace {
                     .items_center()
                     .flex_wrap()
                     .gap(px(12.))
-                    .child(div().flex_none().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("筛选")))
+                    .child(div().flex_none().text_size(text_px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("筛选")))
                     .child(self.render_screen_modes(cx))
                     .child(div().flex_1())
-                    .child(div().flex_none().text_size(px(12.)).text_color(Theme::text_secondary()).child(place))
+                    .child(div().flex_none().text_size(text_px(12.)).text_color(Theme::text_secondary()).child(place))
                     .child(div().flex().flex_none().child(ui::ghost_button("round-prev", Some("chevron-up"), None).when(at == 0, |d| d.opacity(0.4)).on_click(self.on(Cmd::ScreenGo(at.saturating_sub(1)), cx))).child(ui::ghost_button("round-next", Some("chevron-down"), None).when(at >= total, |d| d.opacity(0.4)).on_click(self.on(Cmd::ScreenGo((at + 1).min(total)), cx)))),
             )
             .child(ui::progress_bar(total, &segments).h(px(5.)))
-            .child(div().flex().flex_wrap().items_center().gap_x(px(14.)).gap_y(px(2.)).min_h(px(16.)).text_size(px(11.)).line_height(px(16.)).text_color(Theme::text_tertiary()).children(legend).when(counts[0] > 0, |d| d.child(tf!("待判断 {}", "{} pending", counts[0]))));
+            .child(div().flex().flex_wrap().items_center().gap_x(px(14.)).gap_y(px(2.)).min_h(px(16.)).text_size(text_px(11.)).line_height(text_px(16.)).text_color(Theme::text_tertiary()).children(legend).when(counts[0] > 0, |d| d.child(tf!("待判断 {}", "{} pending", counts[0]))));
 
         let rail = (width >= RAIL_MIN && total > 0).then(|| {
             div()
@@ -268,16 +268,16 @@ impl Workspace {
                     .px(px(8.))
                     .rounded(px(6.))
                     .cursor_pointer()
-                    .text_size(px(12.))
+                    .text_size(text_px(12.))
                     .when(current, |d| d.bg(Theme::accent_soft()).font_weight(FontWeight::MEDIUM))
                     // A decided paper steps back: what is left to do stands out.
                     .when(!current, |d| d.hover(|s| s.bg(Theme::hover())).when(status != "pending", |d| d.text_color(Theme::text_tertiary())))
                     .on_click(self.on(Cmd::ScreenGo(i), cx))
                     .child(status_dot(status, suggested))
-                    .child(div().flex_none().min_w(px(16.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child((i + 1).to_string()))
+                    .child(div().flex_none().min_w(px(16.)).text_size(text_px(11.)).text_color(Theme::text_tertiary()).child((i + 1).to_string()))
                     .child(div().flex().flex_col().flex_1().min_w_0().child(div().truncate().child(title)));
                 // A row of the list is as wide as the rail, whatever its title's length.
-                div().w_full().h(px(RAIL_ROW)).px(px(6.)).child(row).into_any_element()
+                div().w_full().h(text_px(RAIL_ROW)).px(px(6.)).child(row).into_any_element()
             })
             .collect()
     }
@@ -314,14 +314,14 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap(px(4.))
-            .child(self.selectable(format!("round-title-{}", paper.id), paper.title.clone(), cx).text_size(px(20.)).line_height(px(28.)).font_weight(FontWeight::SEMIBOLD))
+            .child(self.selectable(format!("round-title-{}", paper.id), paper.title.clone(), cx).text_size(text_px(20.)).line_height(text_px(28.)).font_weight(FontWeight::SEMIBOLD))
             // The translated title under its source: the source is what a search or a citation needs.
             .children(match translated(&paper.title) {
-                Some(Translated::Done(text)) => Some(div().text_size(px(15.)).line_height(px(23.)).text_color(Theme::text_secondary()).child(text.clone())),
+                Some(Translated::Done(text)) => Some(div().text_size(text_px(15.)).line_height(text_px(23.)).text_color(Theme::text_secondary()).child(text.clone())),
                 _ => None,
             })
             .when(!paper.authors.is_empty(), |d| d.child(div().pt(px(2.)).line_clamp(2).text_color(Theme::text_secondary()).child(paper.authors.clone())))
-            .when(!about.is_empty(), |d| d.child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(about.join(" · "))));
+            .when(!about.is_empty(), |d| d.child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(about.join(" · "))));
 
         let state = translated(&paper.abstract_text);
         let abstract_text = match state {
@@ -334,16 +334,16 @@ impl Workspace {
             .gap(px(8.))
             .child(ui::caption(t("摘要")))
             .child(div().flex_1())
-            .children(matches!(state, Some(Translated::Busy)).then(|| div().flex().items_center().gap(px(5.)).text_size(px(12.)).text_color(Theme::text_tertiary()).child(ui::spinner("round-translating", 12., Theme::accent())).child(t("正在翻译…"))))
+            .children(matches!(state, Some(Translated::Busy)).then(|| div().flex().items_center().gap(px(5.)).text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(ui::spinner("round-translating", 12., Theme::accent())).child(t("正在翻译…"))))
             .children(match state {
-                Some(Translated::Failed(_)) => Some(ui::ghost_button("round-translate-retry", None, Some(t("翻译没有成功，重试").into())).h(px(22.)).text_size(px(12.)).text_color(Theme::danger()).on_click(self.on(Cmd::RetryTranslation, cx))),
+                Some(Translated::Failed(_)) => Some(ui::ghost_button("round-translate-retry", None, Some(t("翻译没有成功，重试").into())).h(text_px(22.)).text_size(text_px(12.)).text_color(Theme::danger()).on_click(self.on(Cmd::RetryTranslation, cx))),
                 _ => None,
             })
-            .child(ui::ghost_button("round-translate", None, Some(if lib.show_translation { t("显示原文").into() } else { t("显示译文").into() })).h(px(22.)).text_size(px(12.)).when(lib.show_translation, |d| d.text_color(Theme::accent())).on_click(self.on(Cmd::ToggleTranslation, cx)));
+            .child(ui::ghost_button("round-translate", None, Some(if lib.show_translation { t("显示原文").into() } else { t("显示译文").into() })).h(text_px(22.)).text_size(text_px(12.)).when(lib.show_translation, |d| d.text_color(Theme::accent())).on_click(self.on(Cmd::ToggleTranslation, cx)));
         let abstract_body = if abstract_text.trim().is_empty() {
             div().text_color(Theme::text_placeholder()).child(if has_pdf { t("这篇文献没有摘要。按 Enter 对照它的 PDF。") } else { t("这篇文献没有摘要，也没有保存全文。") })
         } else {
-            self.selectable(format!("round-abstract-{}", paper.id), abstract_text, cx).text_size(px(14.)).line_height(px(23.))
+            self.selectable(format!("round-abstract-{}", paper.id), abstract_text, cx).text_size(text_px(14.)).line_height(text_px(23.))
         };
         let reason = (paper.screening != "pending" && !paper.screening_reason.is_empty()).then(|| div().flex().flex_col().gap(px(4.)).child(ui::caption(t("判断理由"))).child(div().text_color(Theme::text_secondary()).child(paper.screening_reason.clone())));
 
@@ -388,7 +388,7 @@ impl Workspace {
                 .flex_none()
                 .items_center()
                 .gap(px(8.))
-                .h(px(36.))
+                .h(text_px(36.))
                 .pl(px(8.))
                 .pr(px(12.))
                 .rounded(px(8.))
@@ -402,9 +402,9 @@ impl Workspace {
                 .child(ui::keycap(screening::key_of(status)))
                 .child(label(&SCREENINGS, status))
                 .when(mine, |d| d.child(ui::icon("check", 13., color)))
-                .when(advised && !mine, |d| d.child(div().text_size(px(11.)).text_color(Theme::accent()).child(t("建议"))))
+                .when(advised && !mine, |d| d.child(div().text_size(text_px(11.)).text_color(Theme::accent()).child(t("建议"))))
         }).collect();
-        let undo = lib.screen.round.can_undo().then(|| ui::ghost_button("round-undo", None, Some(t("撤销上一个判断").into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::ScreenUndo, cx)));
+        let undo = lib.screen.round.can_undo().then(|| ui::ghost_button("round-undo", None, Some(t("撤销上一个判断").into())).h(text_px(26.)).text_size(text_px(12.)).on_click(self.on(Cmd::ScreenUndo, cx)));
         div()
             .flex()
             .flex_col()
@@ -424,8 +424,8 @@ impl Workspace {
                     .items_center()
                     .gap_x(px(14.))
                     .gap_y(px(6.))
-                    .text_size(px(11.))
-                    .line_height(px(18.))
+                    .text_size(text_px(11.))
+                    .line_height(text_px(18.))
                     .text_color(Theme::text_tertiary())
                     .child(hint("↑↓", t("上一篇 / 下一篇")))
                     .when(suggested.is_some(), |d| d.child(hint("A", t("采纳建议"))))
@@ -462,7 +462,7 @@ impl Workspace {
             .gap(px(14.))
             .p(px(32.))
             .child(div().flex().items_center().justify_center().size(px(44.)).rounded_full().bg(theme::status_colors("included").1).child(ui::icon("check", 22., theme::status_colors("included").0)))
-            .child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("这一轮看完了")))
+            .child(div().text_size(text_px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("这一轮看完了")))
             .child(div().text_color(Theme::text_secondary()).child(message))
             .child(div().flex().flex_wrap().justify_center().gap(px(6.)).children(chips).when(counts[0] > 0, |d| d.child(ui::status_chip("pending", &tf!("待判断 {}", "{} pending", counts[0])))))
             .child(
@@ -478,7 +478,7 @@ impl Workspace {
                     .child(ui::secondary_button("round-review", t("从头回看")).on_click(self.on(Cmd::ScreenGo(0), cx)))
                     .child(ui::secondary_button("round-leave", t("回到队列")).on_click(self.on(Cmd::ScreenMode(ScreenMode::Batch), cx))),
             )
-            .when(round.can_undo(), |d| d.child(ui::ghost_button("round-end-undo", None, Some(t("撤销上一个判断").into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::ScreenUndo, cx))))
+            .when(round.can_undo(), |d| d.child(ui::ghost_button("round-end-undo", None, Some(t("撤销上一个判断").into())).h(text_px(26.)).text_size(text_px(12.)).on_click(self.on(Cmd::ScreenUndo, cx))))
             .into_any_element()
     }
 

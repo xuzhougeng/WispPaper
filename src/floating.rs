@@ -7,7 +7,7 @@
 
 use crate::i18n::t;
 use crate::app::{Cmd, Tab, Workspace};
-use crate::theme::{self, Theme};
+use crate::theme::{self, Theme, text_px};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
 use wisp_core::floating::{self as geo, Rect};
@@ -90,7 +90,7 @@ impl Workspace {
             .flex_none()
             .items_center()
             .gap(px(4.))
-            .h(px(TITLE_H))
+            .h(text_px(TITLE_H))
             .pl(px(12.))
             .pr(px(6.))
             .border_b_1()
@@ -100,7 +100,7 @@ impl Workspace {
             .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _, cx| this.float_press(Hold::Title, event.position, cx)))
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, window, cx| this.float_release(window, cx)))
             .child(ui::icon("sparkle", 14., Theme::accent()))
-            .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text_secondary()).child(t("就这篇文献提问")))
+            .child(div().flex_1().min_w_0().truncate().text_size(text_px(12.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text_secondary()).child(t("就这篇文献提问")))
             .child(
                 div()
                     .flex()
@@ -108,8 +108,8 @@ impl Workspace {
                     .items_center()
                     .cursor_default()
                     .on_mouse_down(MouseButton::Left, keep_press)
-                    .child(ui::ghost_button("float-chat-dock", Some("panel-left"), Some(t("分栏").into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::FloatChat(false), cx)))
-                    .child(ui::ghost_button("float-chat-fold", Some("minus"), None).h(px(26.)).min_w(px(26.)).on_click(self.on(Cmd::FoldChat(true), cx))),
+                    .child(ui::ghost_button("float-chat-dock", Some("panel-left"), Some(t("分栏").into())).h(text_px(26.)).text_size(text_px(12.)).on_click(self.on(Cmd::FloatChat(false), cx)))
+                    .child(ui::ghost_button("float-chat-fold", Some("minus"), None).h(text_px(26.)).min_w(px(26.)).on_click(self.on(Cmd::FoldChat(true), cx))),
             );
         // The corner: two short strokes, as on any window that can be sized.
         let corner = div()

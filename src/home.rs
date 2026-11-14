@@ -6,7 +6,7 @@ use crate::app::{Cmd, Edge, MenuKind, Workspace};
 use crate::context::Nav;
 use crate::settings::{SettingsPage, UpdateState};
 use crate::shortcuts::{AskAssistant, DecideIncluded, DecideIrrelevant, DecidePending, DecideRelated, DecideUncertain, StarScreened, TakeSuggestion, TickSuggestion, TranslateScreened, UndoDecision, MarkAll, MarkDown, MarkUp, MoveDown, MoveFirst, MoveLast, MoveLeft, MovePageDown, MovePageUp, MoveRight, MoveUp, OpenSelected, TrashSelected, AddPaper, AskLibrary, FocusSearch, ImportPdf, NewLibrary, ShowHome, ShowSettings, CopyPicked, FindCandidates, ToggleDetail, ToggleReading, ToggleSidebar, ZoomFit, ZoomIn, ZoomOut};
-use crate::theme::{self, Theme};
+use crate::theme::{self, Theme, text_px};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
 use wisp_core::time;
@@ -27,9 +27,9 @@ impl Render for Workspace {
             .relative()
             .size_full()
             .bg(Theme::bg_window())
-            .font_family(theme::UI_FONT)
-            .text_size(px(13.))
-            .line_height(px(20.))
+            .font_family(theme::ui_font())
+            .text_size(text_px(13.))
+            .line_height(text_px(20.))
             .text_color(Theme::text())
             // Only while 设置 › 快捷键 waits for a new key.
             .on_key_down(cx.listener(Self::record_key))
@@ -215,7 +215,7 @@ impl Workspace {
                                     .items_center()
                                     .gap(px(8.))
                                     .child(div().flex().flex_none().items_center().justify_center().size(px(28.)).rounded(px(8.)).bg(accent.soft()).child(ui::icon("library", 16., accent.strong())))
-                                    .child(div().flex_1().min_w_0().truncate().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(info.name.clone()))
+                                    .child(div().flex_1().min_w_0().truncate().text_size(text_px(15.)).font_weight(FontWeight::SEMIBOLD).child(info.name.clone()))
                                     .child(ui::ghost_button(SharedString::from(format!("library-menu-{}", info.id)), Some("ellipsis"), None).on_click({
                                         let open = self.on_menu(MenuKind::LibraryCard(info.id.clone()), cx);
                                         move |ev, window, cx| {
@@ -224,13 +224,13 @@ impl Workspace {
                                         }
                                     })),
                             )
-                            .child(div().flex_1().min_h_0().overflow_hidden().line_clamp(3).text_size(px(12.)).line_height(px(18.)).text_color(if info.topic.is_empty() { Theme::text_placeholder() } else { Theme::text_secondary() }).child(topic))
+                            .child(div().flex_1().min_h_0().overflow_hidden().line_clamp(3).text_size(text_px(12.)).line_height(text_px(18.)).text_color(if info.topic.is_empty() { Theme::text_placeholder() } else { Theme::text_secondary() }).child(topic))
                             .child(
                                 div()
                                     .flex()
                                     .items_center()
                                     .justify_between()
-                                    .text_size(px(12.))
+                                    .text_size(text_px(12.))
                                     .text_color(Theme::text_tertiary())
                                     .child(tf!("{} 篇文献", "{} papers", info.paper_count))
                                     .child(tf!("打开于 {}", "Opened {}", time::date_text(&info.opened_at))),
@@ -290,7 +290,7 @@ impl Workspace {
                                     .flex()
                                     .flex_col()
                                     .gap(px(4.))
-                                    .child(div().text_size(px(24.)).line_height(px(32.)).font_weight(FontWeight::SEMIBOLD).child("Wisp Paper"))
+                                    .child(div().text_size(text_px(24.)).line_height(text_px(32.)).font_weight(FontWeight::SEMIBOLD).child("Wisp Paper"))
                                     .child(div().text_color(Theme::text_secondary()).child(t("每个文献库是一个独立的主题：自己的文献、PDF、词条和提问。"))),
                             )
                             .child(
@@ -298,7 +298,7 @@ impl Workspace {
                                     .flex()
                                     .gap(px(4.))
                                     // Only while a newer release is on offer.
-                                    .when_some(new_version, |d, version| d.child(ui::primary_button("home-update", tf!("新版本 {version}", "New version {version}")).h(px(28.)).px(px(10.)).rounded_full().text_size(px(12.)).on_click(self.on(Cmd::OpenSettings(SettingsPage::About), cx))))
+                                    .when_some(new_version, |d, version| d.child(ui::primary_button("home-update", tf!("新版本 {version}", "New version {version}")).h(text_px(28.)).px(px(10.)).rounded_full().text_size(text_px(12.)).on_click(self.on(Cmd::OpenSettings(SettingsPage::About), cx))))
                                     .child(ui::ghost_button("home-folder", Some("folder-open"), Some(t("数据目录").into())).on_click(self.on(Cmd::RevealFolder, cx)))
                                     .child(ui::ghost_button("home-settings", Some("settings-gear"), Some(t("设置").into())).on_click(self.on(Cmd::OpenSettings(SettingsPage::General), cx))),
                             ),

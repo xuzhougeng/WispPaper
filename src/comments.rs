@@ -12,7 +12,7 @@ use crate::app::{Cmd, Modal, Page, Side, Workspace};
 use crate::i18n::t;
 use crate::input::{InputEvent, TextInput};
 use crate::settings::SettingsPage;
-use crate::theme::Theme;
+use crate::theme::{Theme, text_px};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
 use std::ops::Range;
@@ -599,8 +599,8 @@ impl Workspace {
                             .flex_1()
                             .min_w_0()
                             .gap(px(2.))
-                            .child(div().flex().items_baseline().gap(px(8.)).child(div().flex_1().min_w_0().truncate().text_color(if *on { Theme::text() } else { Theme::text_secondary() }).when(*on, |d| d.font_weight(FontWeight::MEDIUM)).child(guess.text.clone())).child(div().flex_none().text_size(px(11.)).text_color(Theme::text_tertiary()).child(sign_label(guess.sign))))
-                            .when(!next.is_empty(), |d| d.child(div().truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(next))),
+                            .child(div().flex().items_baseline().gap(px(8.)).child(div().flex_1().min_w_0().truncate().text_color(if *on { Theme::text() } else { Theme::text_secondary() }).when(*on, |d| d.font_weight(FontWeight::MEDIUM)).child(guess.text.clone())).child(div().flex_none().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(sign_label(guess.sign))))
+                            .when(!next.is_empty(), |d| d.child(div().truncate().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(next))),
                     )
             })
             .collect();
@@ -620,10 +620,10 @@ impl Workspace {
                         .gap(px(10.))
                         .px(px(20.))
                         .py(px(8.))
-                        .child(div().text_size(px(12.)).line_height(px(19.)).text_color(Theme::text_tertiary()).child(tf!("「{}」没有用 Word 的标题样式。下面这些段落看上去像标题：勾选的每一段开始新的一节，其余留在正文里。导出回 Word 时，它们仍是文件里原来的段落。{more}", "“{}” uses no Word heading styles. These paragraphs look like headings: each one ticked starts a section, the rest stay in the text. Exported back to Word they are the paragraphs they were. {more}", form.name)))
-                        .child(div().flex().gap(px(4.)).child(ui::ghost_button("headings-all", None, Some(t("全选").into())).h(px(24.)).text_size(px(12.)).on_click(self.on(Cmd::Comment(Do::Headings(true)), cx))).child(ui::ghost_button("headings-none", None, Some(t("全不选").into())).h(px(24.)).text_size(px(12.)).on_click(self.on(Cmd::Comment(Do::Headings(false)), cx))))
+                        .child(div().text_size(text_px(12.)).line_height(text_px(19.)).text_color(Theme::text_tertiary()).child(tf!("「{}」没有用 Word 的标题样式。下面这些段落看上去像标题：勾选的每一段开始新的一节，其余留在正文里。导出回 Word 时，它们仍是文件里原来的段落。{more}", "“{}” uses no Word heading styles. These paragraphs look like headings: each one ticked starts a section, the rest stay in the text. Exported back to Word they are the paragraphs they were. {more}", form.name)))
+                        .child(div().flex().gap(px(4.)).child(ui::ghost_button("headings-all", None, Some(t("全选").into())).h(text_px(24.)).text_size(text_px(12.)).on_click(self.on(Cmd::Comment(Do::Headings(true)), cx))).child(ui::ghost_button("headings-none", None, Some(t("全不选").into())).h(text_px(24.)).text_size(text_px(12.)).on_click(self.on(Cmd::Comment(Do::Headings(false)), cx))))
                         .child(div().flex().flex_col().gap(px(2.)).children(rows))
-                        .child(div().px(px(8.)).text_size(px(12.)).line_height(px(19.)).text_color(Theme::text_tertiary()).child(t("导入后也可以在写作里把光标所在的段落设为标题，或从那里拆成新的一节。")))
+                        .child(div().px(px(8.)).text_size(text_px(12.)).line_height(text_px(19.)).text_color(Theme::text_tertiary()).child(t("导入后也可以在写作里把光标所在的段落设为标题，或从那里拆成新的一节。")))
                         .child(ui::error_line(&self.modal_error)),
                 )
                 .child(
@@ -649,7 +649,7 @@ impl Workspace {
         let (cited, unresolved) = (lib.citing.listed.shown(lib.citing.whole).len(), lib.citing.listed.issues(lib.citing.whole, &lib.writing.section_id).next().is_some());
         let tab = |id: &'static str, name: String, side: Side, dot: bool, this: &Self, cx: &mut Context<Self>| {
             let on = shown == side;
-            div().id(id).flex().flex_1().items_center().justify_center().gap(px(5.)).h(px(26.)).rounded(px(6.)).text_size(px(12.)).cursor_pointer().when(on, |d| d.bg(Theme::segment()).text_color(Theme::text()).font_weight(FontWeight::MEDIUM)).when(!on, |d| d.text_color(Theme::text_secondary()).hover(|s| s.text_color(Theme::text()))).on_click(this.on(Cmd::WriteSide(side), cx)).child(name).when(dot, |d| d.child(div().flex_none().size(px(6.)).rounded(px(3.)).bg(Theme::danger())))
+            div().id(id).flex().flex_1().items_center().justify_center().gap(px(5.)).h(text_px(26.)).rounded(px(6.)).text_size(text_px(12.)).cursor_pointer().when(on, |d| d.bg(Theme::segment()).text_color(Theme::text()).font_weight(FontWeight::MEDIUM)).when(!on, |d| d.text_color(Theme::text_secondary()).hover(|s| s.text_color(Theme::text()))).on_click(this.on(Cmd::WriteSide(side), cx)).child(name).when(dot, |d| d.child(div().flex_none().size(px(6.)).rounded(px(3.)).bg(Theme::danger())))
         };
         div()
             .flex()
@@ -679,7 +679,7 @@ impl Workspace {
         let elsewhere = comments.list.iter().filter(|comment| comment.section_id != writing.section_id && comment.state != comment::DONE).count();
         let cards: Vec<AnyElement> = shown.iter().filter(|(_, comment)| comments.show_done || comment.state != comment::DONE).map(|(at, comment)| self.render_comment(comment, at.is_some(), width, cx)).collect();
         // The icon is added after the label: the row is turned round so that it leads.
-        let small = |id: &'static str, icon: Option<&'static str>, name: SharedString| ui::secondary_button(id, name).h(px(28.)).px(px(10.)).gap(px(5.)).text_size(px(12.)).when_some(icon, |d, icon| d.flex_row_reverse().child(ui::icon(icon, 13., Theme::accent())));
+        let small = |id: &'static str, icon: Option<&'static str>, name: SharedString| ui::secondary_button(id, name).h(text_px(28.)).px(px(10.)).gap(px(5.)).text_size(text_px(12.)).when_some(icon, |d, icon| d.flex_row_reverse().child(ui::icon(icon, 13., Theme::accent())));
         let source = comments.source.as_ref().filter(|source| source.kind == "docx");
         let empty = cards.is_empty() && comments.drafting.is_none();
 
@@ -705,14 +705,14 @@ impl Workspace {
                             .flex_wrap()
                             .gap(px(6.))
                             .when(configured && !comments.busy, |d| d.child(small("comment-review", Some("sparkle"), if selected { t("让助手审阅选中的文字").into() } else { t("让助手审阅这一节").into() }).on_click(self.on(Cmd::Comment(Do::Review), cx))))
-                            .when(!configured, |d| d.child(ui::ghost_button("comment-settings", Some("settings-gear"), Some(t("配置模型后可以让助手审阅").into())).h(px(28.)).text_size(px(12.)).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx))))
-                            .when(comments.busy, |d| d.child(div().flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(Theme::text_secondary()).child(ui::spinner("comment-busy", 12., Theme::accent())).child(t("助手正在审阅…"))).child(small("comment-stop", None, t("停止").into()).on_click(self.on(Cmd::Comment(Do::Stop), cx))))
+                            .when(!configured, |d| d.child(ui::ghost_button("comment-settings", Some("settings-gear"), Some(t("配置模型后可以让助手审阅").into())).h(text_px(28.)).text_size(text_px(12.)).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx))))
+                            .when(comments.busy, |d| d.child(div().flex().items_center().gap(px(6.)).text_size(text_px(12.)).text_color(Theme::text_secondary()).child(ui::spinner("comment-busy", 12., Theme::accent())).child(t("助手正在审阅…"))).child(small("comment-stop", None, t("停止").into()).on_click(self.on(Cmd::Comment(Do::Stop), cx))))
                             .child(small("comment-write", None, if selected { t("给选中的文字写批注").into() } else { t("写批注").into() }).on_click(self.on(Cmd::Comment(Do::Write), cx))),
                     )
-                    .when(comments.busy && !comments.model.is_empty(), |d| d.child(div().text_size(px(11.)).text_color(Theme::text_tertiary()).truncate().child(comments.model.clone())))
-                    .when(!comments.note.is_empty(), |d| d.child(div().text_size(px(11.)).line_height(px(16.)).text_color(Theme::text_secondary()).child(comments.note.clone())))
+                    .when(comments.busy && !comments.model.is_empty(), |d| d.child(div().text_size(text_px(11.)).text_color(Theme::text_tertiary()).truncate().child(comments.model.clone())))
+                    .when(!comments.note.is_empty(), |d| d.child(div().text_size(text_px(11.)).line_height(text_px(16.)).text_color(Theme::text_secondary()).child(comments.note.clone())))
                     .when(!comments.error.is_empty(), |d| d.child(ui::error_line(&comments.error)))
-                    .when(proposals > 1, |d| d.child(div().flex().child(ui::ghost_button("comment-take-all", Some("check"), Some(tf!("采纳全部 {proposals} 处修改", "Apply all {proposals} changes").into())).h(px(24.)).text_size(px(12.)).on_click(self.on(Cmd::Comment(Do::TakeAll), cx))))),
+                    .when(proposals > 1, |d| d.child(div().flex().child(ui::ghost_button("comment-take-all", Some("check"), Some(tf!("采纳全部 {proposals} 处修改", "Apply all {proposals} changes").into())).h(text_px(24.)).text_size(text_px(12.)).on_click(self.on(Cmd::Comment(Do::TakeAll), cx))))),
             )
             .children(comments.drafting.as_ref().map(|quote| {
                 div()
@@ -729,9 +729,9 @@ impl Workspace {
                     .border_1()
                     .border_color(Theme::accent().opacity(0.45))
                     .bg(Theme::bg_body())
-                    .child(if quote.is_empty() { div().text_size(px(11.)).text_color(Theme::text_tertiary()).child(t("没有选中文字：这条批注是对这一节说的。")) } else { quoted(quote, true) })
+                    .child(if quote.is_empty() { div().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(t("没有选中文字：这条批注是对这一节说的。")) } else { quoted(quote, true) })
                     .child(div().w(px(width - 46.)).child(ui::field(&comments.draft, window, cx)))
-                    .child(div().flex().justify_end().gap(px(6.)).child(ui::ghost_button("comment-cancel", None, Some(t("取消").into())).h(px(26.)).text_size(px(12.)).on_click(self.on(Cmd::Comment(Do::Cancel), cx))).child(ui::primary_button("comment-save", t("保存")).h(px(26.)).px(px(10.)).text_size(px(12.)).on_click(self.on(Cmd::Comment(Do::Save), cx))))
+                    .child(div().flex().justify_end().gap(px(6.)).child(ui::ghost_button("comment-cancel", None, Some(t("取消").into())).h(text_px(26.)).text_size(text_px(12.)).on_click(self.on(Cmd::Comment(Do::Cancel), cx))).child(ui::primary_button("comment-save", t("保存")).h(text_px(26.)).px(px(10.)).text_size(text_px(12.)).on_click(self.on(Cmd::Comment(Do::Save), cx))))
             }))
             .child(if empty {
                 let hint = match source {
@@ -753,11 +753,11 @@ impl Workspace {
                         .py(px(8.))
                         .border_t_1()
                         .border_color(Theme::line())
-                        .text_size(px(11.))
+                        .text_size(text_px(11.))
                         .text_color(Theme::text_tertiary())
                         .when(elsewhere > 0, |d| d.child(tf!("其他各节还有 {elsewhere} 条", "{elsewhere} more in other sections")))
                         .child(div().flex_1())
-                        .when(done > 0, |d| d.child(ui::ghost_button("comment-show-done", None, Some(if comments.show_done { tf!("收起已处理的 {done} 条", "Hide {done} resolved") } else { tf!("已处理 {done} 条", "{done} resolved") }.into())).h(px(22.)).text_size(px(11.)).on_click(self.on(Cmd::Comment(Do::ShowDone(!comments.show_done)), cx)))),
+                        .when(done > 0, |d| d.child(ui::ghost_button("comment-show-done", None, Some(if comments.show_done { tf!("收起已处理的 {done} 条", "Hide {done} resolved") } else { tf!("已处理 {done} 条", "{done} resolved") }.into())).h(text_px(22.)).text_size(text_px(11.)).on_click(self.on(Cmd::Comment(Do::ShowDone(!comments.show_done)), cx)))),
                 )
             })
     }
@@ -796,7 +796,7 @@ impl Workspace {
                     .justify_center()
                     .gap(px(2.))
                     .min_w(px(20.))
-                    .h(px(20.))
+                    .h(text_px(20.))
                     .px(px(4.))
                     .rounded(px(10.))
                     .border_1()
@@ -808,7 +808,7 @@ impl Workspace {
                     .on_click(self.on(Cmd::Comment(Do::Show(first)), cx))
                     .tooltip(move |_, cx| cx.new(|_| crate::write_assist::Tip(tip.clone())).into())
                     .child(ui::icon("message-square", 11., Theme::text_secondary()))
-                    .when(comments.len() > 1, |d| d.child(div().text_size(px(10.)).line_height(px(12.)).text_color(Theme::text_secondary()).child(comments.len().to_string())))
+                    .when(comments.len() > 1, |d| d.child(div().text_size(text_px(10.)).line_height(text_px(12.)).text_color(Theme::text_secondary()).child(comments.len().to_string())))
                     .into_any_element()
             })
             .collect()
@@ -817,7 +817,7 @@ impl Workspace {
     /// One comment: who said it, the words it is about, what it says, and what can be done about it.
     fn render_comment(&self, comment: &Comment, anchored: bool, width: f32, cx: &mut Context<Self>) -> AnyElement {
         let id = |part: &str| SharedString::from(format!("comment-{part}-{}", comment.id));
-        let small = |part: &str, name: &'static str| ui::ghost_button(id(part), None, Some(name.into())).h(px(24.)).px(px(7.)).text_size(px(12.));
+        let small = |part: &str, name: &'static str| ui::ghost_button(id(part), None, Some(name.into())).h(text_px(24.)).px(px(7.)).text_size(text_px(12.));
         let who = author(comment);
         let tint = match comment.origin.as_str() {
             comment::ASSISTANT => Theme::accent(),
@@ -855,22 +855,22 @@ impl Workspace {
                     .items_center()
                     .gap(px(6.))
                     .child(div().flex_none().size(px(7.)).rounded(px(4.)).bg(tint))
-                    .child(div().flex_none().max_w(px(width * 0.45)).truncate().text_size(px(12.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text()).child(who))
-                    .child(div().flex_1().min_w_0().truncate().text_size(px(11.)).text_color(Theme::text_tertiary()).child(about.join(" · ")))
+                    .child(div().flex_none().max_w(px(width * 0.45)).truncate().text_size(text_px(12.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text()).child(who))
+                    .child(div().flex_1().min_w_0().truncate().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(about.join(" · ")))
                     .when(comment.origin != comment::FILE, |d| d.child(ui::ghost_button(id("drop"), Some("x"), None).size(px(22.)).min_w(px(22.)).on_click(self.on(Cmd::Comment(Do::Drop(comment.id.clone())), cx)))),
             )
             .when(!comment.quote.is_empty(), |d| d.child(div().id(id("quote")).cursor_pointer().on_click(self.on(Cmd::Comment(Do::Show(comment.id.clone())), cx)).child(quoted(&comment.quote, anchored))))
-            .when(!anchored && !comment.quote.is_empty(), |d| d.child(div().text_size(px(11.)).text_color(Theme::warning()).child(t("这段文字已经改动，批注不再指向稿件里的位置。"))))
-            .when(!comment.body.is_empty(), |d| d.child(div().text_size(px(13.)).line_height(px(21.)).text_color(Theme::text()).child(comment.body.clone())))
-            .when_some(change, |d, change| d.child(div().flex().flex_col().gap(px(3.)).child(div().text_size(px(11.)).text_color(Theme::text_tertiary()).child(t("建议改为"))).child(div().px(px(10.)).py(px(7.)).rounded(px(8.)).bg(Theme::bg_sunken()).text_size(px(12.)).line_height(px(19.)).text_color(Theme::text()).child(change))))
-            .when(comment.state == comment::APPLIED && !comment.replaced.is_empty(), |d| d.child(div().flex().flex_col().gap(px(3.)).child(div().text_size(px(11.)).text_color(Theme::text_tertiary()).child(t("已修改，原文是"))).child(div().px(px(10.)).py(px(7.)).rounded(px(8.)).bg(Theme::bg_sunken()).text_size(px(12.)).line_height(px(19.)).text_color(Theme::text_secondary()).child(clipped(&comment.replaced, 260)))))
+            .when(!anchored && !comment.quote.is_empty(), |d| d.child(div().text_size(text_px(11.)).text_color(Theme::warning()).child(t("这段文字已经改动，批注不再指向稿件里的位置。"))))
+            .when(!comment.body.is_empty(), |d| d.child(div().text_size(text_px(13.)).line_height(text_px(21.)).text_color(Theme::text()).child(comment.body.clone())))
+            .when_some(change, |d, change| d.child(div().flex().flex_col().gap(px(3.)).child(div().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(t("建议改为"))).child(div().px(px(10.)).py(px(7.)).rounded(px(8.)).bg(Theme::bg_sunken()).text_size(text_px(12.)).line_height(text_px(19.)).text_color(Theme::text()).child(change))))
+            .when(comment.state == comment::APPLIED && !comment.replaced.is_empty(), |d| d.child(div().flex().flex_col().gap(px(3.)).child(div().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(t("已修改，原文是"))).child(div().px(px(10.)).py(px(7.)).rounded(px(8.)).bg(Theme::bg_sunken()).text_size(text_px(12.)).line_height(text_px(19.)).text_color(Theme::text_secondary()).child(clipped(&comment.replaced, 260)))))
             .child(
                 div()
                     .flex()
                     .items_center()
                     .flex_wrap()
                     .gap(px(2.))
-                    .when(comment.proposes() && anchored, |d| d.child(ui::primary_button(id("take"), t("采纳修改")).h(px(24.)).px(px(9.)).text_size(px(12.)).on_click(self.on(Cmd::Comment(Do::Take(comment.id.clone())), cx))))
+                    .when(comment.proposes() && anchored, |d| d.child(ui::primary_button(id("take"), t("采纳修改")).h(text_px(24.)).px(px(9.)).text_size(text_px(12.)).on_click(self.on(Cmd::Comment(Do::Take(comment.id.clone())), cx))))
                     .when(comment.proposes(), |d| d.child(small("ignore", t("忽略")).on_click(self.on(Cmd::Comment(Do::Drop(comment.id.clone())), cx))))
                     .when(comment.state == comment::APPLIED && !comment.replaced.is_empty() && anchored, |d| d.child(small("back", t("撤回修改")).on_click(self.on(Cmd::Comment(Do::Back(comment.id.clone())), cx))))
                     .child(div().flex_1())
@@ -903,7 +903,7 @@ fn clipped(text: &str, most: usize) -> String {
 
 /// The words a comment is about, as a line by its side.
 fn quoted(quote: &str, anchored: bool) -> Div {
-    div().pl(px(8.)).border_l_2().border_color(if anchored { Theme::note_line() } else { Theme::line_strong() }).text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_secondary()).child(clipped(quote, 160))
+    div().pl(px(8.)).border_l_2().border_color(if anchored { Theme::note_line() } else { Theme::line_strong() }).text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text_secondary()).child(clipped(quote, 160))
 }
 
 #[cfg(test)]

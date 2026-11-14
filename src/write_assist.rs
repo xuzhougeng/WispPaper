@@ -14,7 +14,7 @@
 use crate::i18n::t;
 use crate::app::{Cmd, Workspace, Writing};
 use crate::settings::SettingsPage;
-use crate::theme::Theme;
+use crate::theme::{Theme, text_px};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
 use std::ops::Range;
@@ -269,7 +269,7 @@ impl Workspace {
             ui::ghost_button(id, icon, Some(name.into()))
                 .h(px(height))
                 .px(px(7.))
-                .text_size(px(12.))
+                .text_size(text_px(12.))
                 .when(!able, |d| d.opacity(0.45).cursor_default())
                 .when(able, |d| d.on_click(self.on(cmd, cx)))
                 .when(!tip.is_empty(), |d| d.tooltip(move |_, cx| cx.new(|_| Tip(tip.clone())).into()))
@@ -325,7 +325,7 @@ impl Workspace {
     pub fn render_assist_card(&self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
         let lib = self.lib.as_ref().unwrap();
         let card = lib.writing.assist.card.as_ref().filter(|card| card.section == lib.writing.section_id)?;
-        let small = |id: &'static str, name: &'static str| ui::ghost_button(id, None, Some(name.into())).h(px(24.)).px(px(7.)).text_size(px(12.));
+        let small = |id: &'static str, name: &'static str| ui::ghost_button(id, None, Some(name.into())).h(text_px(24.)).px(px(7.)).text_size(text_px(12.));
         // 配引用 lists papers; every other action shows a version of the words beside the original.
         let (body, actions, working) = match &card.cite {
             Some(found) => ((card.busy || !found.rows.is_empty()).then(|| self.render_cite_body(card, found, cx)), (!card.busy && found.offering()).then(|| self.render_cite_actions(found, cx)), false),
@@ -354,15 +354,15 @@ impl Workspace {
                     .items_center()
                     .gap(px(6.))
                     .child(ui::icon(if card.cite.is_some() { "library" } else { "sparkle" }, 13., Theme::accent()))
-                    .child(div().flex_none().text_size(px(12.)).font_weight(FontWeight::MEDIUM).child(crate::i18n::assist_title(&card.assist, &card.language)))
+                    .child(div().flex_none().text_size(text_px(12.)).font_weight(FontWeight::MEDIUM).child(crate::i18n::assist_title(&card.assist, &card.language)))
                     .when(working, |d| d.child(ui::spinner("write-assist-busy", 11., Theme::accent())))
-                    .child(div().flex_1().min_w_0().truncate().text_right().text_size(px(11.)).text_color(Theme::text_tertiary()).child(card.model.clone()))
+                    .child(div().flex_1().min_w_0().truncate().text_right().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(card.model.clone()))
                     .when(card.busy, |d| d.child(small("write-assist-stop", t("停止")).on_click(self.on(Cmd::WriteAssistStop, cx))))
                     .when(!card.busy, |d| d.child(ui::ghost_button("write-assist-close", Some("x"), None).size(px(22.)).min_w(px(22.)).on_click(self.on(Cmd::WriteAssistUse(Use::Drop), cx)))),
             )
             // A request refused before it was sent has nothing to show.
             .children(body)
-            .when(!card.note.is_empty(), |d| d.child(div().text_size(px(11.)).line_height(px(16.)).text_color(Theme::text_tertiary()).child(card.note.clone())))
+            .when(!card.note.is_empty(), |d| d.child(div().text_size(text_px(11.)).line_height(text_px(16.)).text_color(Theme::text_tertiary()).child(card.note.clone())))
             .when(!card.error.is_empty(), |d| d.child(ui::error_line(&card.error)))
             .children(actions);
         Some(card_el.into_any_element())
@@ -377,7 +377,7 @@ impl Workspace {
             Some((before, after)) => (marked(before), marked(after)),
             None => (plain(&card.original), plain(card.result.trim())),
         };
-        let label = |text: &'static str| div().text_size(px(11.)).text_color(Theme::text_tertiary()).child(text);
+        let label = |text: &'static str| div().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(text);
         div()
             .id("write-assist-body")
             .flex()
@@ -386,29 +386,29 @@ impl Workspace {
             .max_h(px(380.))
             .overflow_y_scroll()
             .child(label(t("原文")))
-            .child(div().px(px(10.)).py(px(8.)).rounded(px(8.)).bg(Theme::bg_sunken()).text_size(px(12.)).line_height(px(19.)).text_color(Theme::text_secondary()).child(before))
+            .child(div().px(px(10.)).py(px(8.)).rounded(px(8.)).bg(Theme::bg_sunken()).text_size(text_px(12.)).line_height(text_px(19.)).text_color(Theme::text_secondary()).child(before))
             .child(label(match card.assist { Assist::Translate => t("译文"), Assist::Own(_) => t("结果"), _ => t("改后") }))
             .child(if card.result.trim().is_empty() && card.busy {
-                div().flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(Theme::text_tertiary()).child(ui::spinner("write-assist-wait", 12., Theme::accent())).child(if card.note.is_empty() { t("正在写…") } else { "" })
+                div().flex().items_center().gap(px(6.)).text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(ui::spinner("write-assist-wait", 12., Theme::accent())).child(if card.note.is_empty() { t("正在写…") } else { "" })
             } else {
-                div().text_size(px(13.)).line_height(px(21.)).text_color(Theme::text()).child(after)
+                div().text_size(text_px(13.)).line_height(text_px(21.)).text_color(Theme::text()).child(after)
             })
     }
 
     /// What can be done with a new version of the words.
     fn render_assist_actions(&self, cx: &mut Context<Self>) -> Div {
-        let small = |id: &'static str, name: &'static str| ui::ghost_button(id, None, Some(name.into())).h(px(24.)).px(px(7.)).text_size(px(12.));
+        let small = |id: &'static str, name: &'static str| ui::ghost_button(id, None, Some(name.into())).h(text_px(24.)).px(px(7.)).text_size(text_px(12.));
         div()
             .flex()
             .items_center()
             .flex_wrap()
             .gap(px(4.))
-            .child(ui::primary_button("write-assist-replace", t("替换原文")).h(px(26.)).px(px(10.)).text_size(px(12.)).on_click(self.on(Cmd::WriteAssistUse(Use::Replace), cx)))
-            .child(ui::secondary_button("write-assist-below", t("插在下面")).h(px(26.)).px(px(10.)).text_size(px(12.)).on_click(self.on(Cmd::WriteAssistUse(Use::Below), cx)))
+            .child(ui::primary_button("write-assist-replace", t("替换原文")).h(text_px(26.)).px(px(10.)).text_size(text_px(12.)).on_click(self.on(Cmd::WriteAssistUse(Use::Replace), cx)))
+            .child(ui::secondary_button("write-assist-below", t("插在下面")).h(text_px(26.)).px(px(10.)).text_size(text_px(12.)).on_click(self.on(Cmd::WriteAssistUse(Use::Below), cx)))
             .child(small("write-assist-copy", t("复制")).on_click(self.on(Cmd::WriteAssistUse(Use::Copy), cx)))
             .child(small("write-assist-drop", t("放弃")).on_click(self.on(Cmd::WriteAssistUse(Use::Drop), cx)))
             .child(div().flex_1())
-            .child(div().flex_none().text_size(px(11.)).text_color(Theme::text_tertiary()).child(if cfg!(target_os = "macos") { t("⌘Z 可撤销") } else { t("Ctrl+Z 可撤销") }))
+            .child(div().flex_none().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(if cfg!(target_os = "macos") { t("⌘Z 可撤销") } else { t("Ctrl+Z 可撤销") }))
     }
 }
 
@@ -448,6 +448,6 @@ pub(crate) struct Tip(pub(crate) String);
 
 impl Render for Tip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().max_w(px(280.)).px(px(8.)).py(px(5.)).rounded(px(6.)).border_1().border_color(Theme::line()).bg(Theme::bg_body()).text_size(px(12.)).text_color(Theme::text_secondary()).child(self.0.clone())
+        div().max_w(px(280.)).px(px(8.)).py(px(5.)).rounded(px(6.)).border_1().border_color(Theme::line()).bg(Theme::bg_body()).text_size(text_px(12.)).text_color(Theme::text_secondary()).child(self.0.clone())
     }
 }

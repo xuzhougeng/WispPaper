@@ -12,7 +12,7 @@
 use crate::i18n::t;
 use crate::app::{Cmd, Library, Side, Workspace};
 use crate::input::{InputEvent, TextInput};
-use crate::theme::Theme;
+use crate::theme::{Theme, text_px};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
 use std::collections::BTreeMap;
@@ -330,7 +330,7 @@ impl Workspace {
                     .iter()
                     .enumerate()
                     .map(|(m, pick)| {
-                        let button = ui::ghost_button(SharedString::from(format!("cite-pick-{n}-{m}")), None, Some(pick.label.clone().into())).h(px(22.)).px(px(6.)).max_w(px(inner)).truncate().text_size(px(12.));
+                        let button = ui::ghost_button(SharedString::from(format!("cite-pick-{n}-{m}")), None, Some(pick.label.clone().into())).h(text_px(22.)).px(px(6.)).max_w(px(inner)).truncate().text_size(text_px(12.));
                         match &pick.fix {
                             Some(fix) => button.on_click(self.on(Cmd::WriteCiteFix(vec![fix.clone()]), cx)),
                             None => button.on_click(self.on(Cmd::GotoSource(pick.paper_id.clone(), None, String::new()), cx)),
@@ -338,7 +338,7 @@ impl Workspace {
                         .into_any_element()
                     })
                     .collect();
-                div().flex().flex_col().w(px(inner)).gap(px(2.)).child(div().text_size(px(12.)).line_height(px(18.)).text_color(if issue.trashed { Theme::warning() } else { Theme::danger() }).child(said)).children(picks).into_any_element()
+                div().flex().flex_col().w(px(inner)).gap(px(2.)).child(div().text_size(text_px(12.)).line_height(text_px(18.)).text_color(if issue.trashed { Theme::warning() } else { Theme::danger() }).child(said)).children(picks).into_any_element()
             })
             .collect();
 
@@ -358,8 +358,8 @@ impl Workspace {
                     .rounded(px(6.))
                     .cursor_pointer()
                     .hover(|s| s.bg(Theme::hover()))
-                    .child(div().truncate().text_size(px(12.)).text_color(Theme::text()).child(offer.title.clone()))
-                    .child(div().flex().items_center().gap(px(6.)).text_size(px(11.)).child(div().flex_none().text_color(Theme::accent()).child(format!("@{}", offer.key))).child(div().flex_1().min_w_0().truncate().text_color(Theme::text_tertiary()).child(offer.about.clone())))
+                    .child(div().truncate().text_size(text_px(12.)).text_color(Theme::text()).child(offer.title.clone()))
+                    .child(div().flex().items_center().gap(px(6.)).text_size(text_px(11.)).child(div().flex_none().text_color(Theme::accent()).child(format!("@{}", offer.key))).child(div().flex_1().min_w_0().truncate().text_color(Theme::text_tertiary()).child(offer.about.clone())))
                     .on_click(self.on(Cmd::WriteCite(offer.paper_id.clone()), cx))
                     .into_any_element()
             })
@@ -395,8 +395,8 @@ impl Workspace {
                             .rounded(px(6.))
                             .cursor_pointer()
                             .hover(|s| s.bg(Theme::hover()))
-                            .child(div().text_size(px(12.)).line_height(px(18.)).text_color(if reference.trashed { Theme::text_tertiary() } else { Theme::text() }).child(reference.text.clone()))
-                            .child(div().flex().items_center().gap(px(6.)).text_size(px(11.)).child(div().flex_none().text_color(Theme::accent()).child(format!("@{}", reference.key))).child(div().flex_1().min_w_0().truncate().text_color(Theme::text_tertiary()).child(cited_in)))
+                            .child(div().text_size(text_px(12.)).line_height(text_px(18.)).text_color(if reference.trashed { Theme::text_tertiary() } else { Theme::text() }).child(reference.text.clone()))
+                            .child(div().flex().items_center().gap(px(6.)).text_size(text_px(11.)).child(div().flex_none().text_color(Theme::accent()).child(format!("@{}", reference.key))).child(div().flex_1().min_w_0().truncate().text_color(Theme::text_tertiary()).child(cited_in)))
                             .on_click(self.on(Cmd::GotoSource(reference.paper_id.clone(), None, String::new()), cx)),
                     )
                     .when(!passages.is_empty(), |d| d.child(div().flex().flex_col().gap(px(4.)).pl(px(8.)).pb(px(6.)).children(passages)))
@@ -406,10 +406,10 @@ impl Workspace {
 
         let mut scope = |id: &'static str, name: String, on_whole: bool| {
             let on = whole == on_whole;
-            div().id(id).flex().flex_none().items_center().h(px(22.)).px(px(8.)).rounded(px(11.)).text_size(px(12.)).cursor_pointer().when(on, |d| d.bg(Theme::accent_soft()).text_color(Theme::accent())).when(!on, |d| d.text_color(Theme::text_secondary()).hover(|s| s.bg(Theme::hover()))).on_click(self.on(Cmd::WriteCiteScope(on_whole), cx)).child(name)
+            div().id(id).flex().flex_none().items_center().h(text_px(22.)).px(px(8.)).rounded(px(11.)).text_size(text_px(12.)).cursor_pointer().when(on, |d| d.bg(Theme::accent_soft()).text_color(Theme::accent())).when(!on, |d| d.text_color(Theme::text_secondary()).hover(|s| s.bg(Theme::hover()))).on_click(self.on(Cmd::WriteCiteScope(on_whole), cx)).child(name)
         };
         let (part, all) = (scope("cite-scope-part", t("本节").into(), false), scope("cite-scope-whole", tf!("全文", "Manuscript"), true));
-        let small = |id: &'static str, name: &'static str| ui::ghost_button(id, None, Some(name.into())).h(px(22.)).px(px(6.)).text_size(px(12.));
+        let small = |id: &'static str, name: &'static str| ui::ghost_button(id, None, Some(name.into())).h(text_px(22.)).px(px(6.)).text_size(text_px(12.));
         let empty = if !whole && !listed.whole.is_empty() {
             ui::empty_state("library", t("这一节还没有引用"), &tf!("全文引用了 {} 篇，点「全文」查看。在候选句上点「引用」，或在上面找一篇文献，就引用到光标处。", "The manuscript cites {} papers: see Manuscript. Click Cite on a candidate, or find a paper above, to cite it at the caret.", listed.whole.len()))
         } else {
@@ -435,7 +435,7 @@ impl Workspace {
                             .flex()
                             .items_center()
                             .gap(px(6.))
-                            .child(div().flex_none().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child(t("参考文献")))
+                            .child(div().flex_none().text_size(text_px(14.)).font_weight(FontWeight::SEMIBOLD).child(t("参考文献")))
                             .child(ui::hint("cite-about", t("在候选句上点「引用」，或在这里找一篇文献。引用写作 [@Zhang2024]，导出的 Markdown 和 BibTeX 可以直接交给 Pandoc。每篇文献下面是出处：引用它的那句话依据的文献原文，点一下在 PDF 里看。")))
                             .child(div().flex_1())
                             .child(part)
@@ -443,7 +443,7 @@ impl Workspace {
                     )
                     // Finding a paper to cite: what is typed is offered right under the box.
                     .child(ui::field(&citing.find, window, cx))
-                    .when(typing, |d| d.child(if offered.is_empty() { div().px(px(8.)).text_size(px(12.)).text_color(Theme::text_tertiary()).child(t("没有对得上的文献")).into_any_element() } else { div().flex().flex_col().children(offered).into_any_element() }))
+                    .when(typing, |d| d.child(if offered.is_empty() { div().px(px(8.)).text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(t("没有对得上的文献")).into_any_element() } else { div().flex().flex_col().children(offered).into_any_element() }))
                     .children(issues)
                     .when(!listed.upgrades.is_empty(), |d| d.child(div().flex().child(small("cite-upgrade", t("旧式引用改为引用键")).on_click(self.on(Cmd::WriteCiteFix(listed.upgrades.clone()), cx))))),
             )
@@ -457,7 +457,7 @@ impl Workspace {
                         .pl(px(18.))
                         .pr(px(10.))
                         .pb(px(4.))
-                        .child(div().flex_1().min_w_0().truncate().text_size(px(11.)).text_color(Theme::text_tertiary()).child(if whole { tf!("全文引用 {} 篇", "{} papers cited in the manuscript", entries.len()) } else { tf!("本节引用 {} 篇", "{} papers cited in this section", entries.len()) }))
+                        .child(div().flex_1().min_w_0().truncate().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(if whole { tf!("全文引用 {} 篇", "{} papers cited in the manuscript", entries.len()) } else { tf!("本节引用 {} 篇", "{} papers cited in this section", entries.len()) }))
                         .children(source_actions)
                         .child(small("cite-copy", t("复制")).on_click(self.on(Cmd::WriteCopyReferences, cx)))
                         .child(small("cite-bib", t("导出 BibTeX")).on_click(self.on(Cmd::WriteExportCited, cx))),
@@ -470,7 +470,7 @@ impl Workspace {
     pub(crate) fn render_references_read(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let lib = self.lib.as_ref()?;
         let listed = &lib.citing.listed;
-        let issues: Vec<AnyElement> = listed.issues(true, "").map(|issue| div().text_size(px(12.)).line_height(px(18.)).text_color(if issue.trashed { Theme::warning() } else { Theme::danger() }).child(format!("{}：{}", issue.place, issue.said)).into_any_element()).collect();
+        let issues: Vec<AnyElement> = listed.issues(true, "").map(|issue| div().text_size(text_px(12.)).line_height(text_px(18.)).text_color(if issue.trashed { Theme::warning() } else { Theme::danger() }).child(format!("{}：{}", issue.place, issue.said)).into_any_element()).collect();
         if listed.whole.is_empty() && issues.is_empty() { return None }
         let rows: Vec<AnyElement> = listed
             .whole
@@ -485,8 +485,8 @@ impl Workspace {
                     .rounded(px(6.))
                     .cursor_pointer()
                     .hover(|s| s.bg(Theme::hover()))
-                    .text_size(px(13.))
-                    .line_height(px(21.))
+                    .text_size(text_px(13.))
+                    .line_height(text_px(21.))
                     .text_color(if reference.trashed { Theme::text_tertiary() } else { Theme::text() })
                     .child(reference.text.clone())
                     .on_click(self.on(Cmd::GotoSource(reference.paper_id.clone(), None, String::new()), cx))
@@ -503,8 +503,8 @@ impl Workspace {
                         .flex()
                         .items_baseline()
                         .gap(px(8.))
-                        .child(div().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::text()).child(t("参考文献")))
-                        .when(!listed.whole.is_empty(), |d| d.child(div().text_size(px(11.)).text_color(Theme::text_tertiary()).child(tf!("{} 篇", "{} papers", listed.whole.len())))),
+                        .child(div().text_size(text_px(17.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::text()).child(t("参考文献")))
+                        .when(!listed.whole.is_empty(), |d| d.child(div().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(tf!("{} 篇", "{} papers", listed.whole.len())))),
                 )
                 .children(issues)
                 .child(div().flex().flex_col().gap(px(2.)).children(rows))

@@ -21,7 +21,7 @@ use crate::i18n::{t, tc};
 use crate::app::{Cmd, MenuItem, MenuKind, Modal, Page, Picture, Tab, Workspace};
 use crate::input::{InputEvent, TextInput};
 use crate::pdf::Piece;
-use crate::theme::Theme;
+use crate::theme::{Theme, text_px};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -609,14 +609,14 @@ impl Workspace {
                 let (w, h) = fit((natural.width.0 as f32 / density, natural.height.0 as f32 / density), (stage.0 - 40., stage.1 - 40.));
                 div().flex_none().bg(gpui::white()).border_1().border_color(Theme::line()).shadow(crate::theme::shadow_card()).when(drawing, |d| d.opacity(0.45)).child(img(image.clone()).w(px(w)).h(px(h))).into_any_element()
             }
-            None if drawing => div().flex().flex_col().items_center().gap(px(10.)).text_size(px(12.)).text_color(Theme::text_tertiary()).child(ui::spinner("figure-drawing", 18., Theme::accent())).child(t("正在画，大图可能要一两分钟…")).into_any_element(),
-            None if form.draw.is_some() && form.png.is_none() => div().flex().flex_col().items_center().gap(px(8.)).max_w(px(320.)).text_color(Theme::text_tertiary()).child(ui::icon("image", 30., Theme::text_placeholder())).child(div().text_color(Theme::text_secondary()).child(t("在下面写下要画什么"))).child(div().text_size(px(12.)).line_height(px(18.)).text_center().child(t("比如一张机制示意图、图文摘要的草图，或者报告里的配图。画好以后可以再画，满意了再收藏。"))).into_any_element(),
+            None if drawing => div().flex().flex_col().items_center().gap(px(10.)).text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(ui::spinner("figure-drawing", 18., Theme::accent())).child(t("正在画，大图可能要一两分钟…")).into_any_element(),
+            None if form.draw.is_some() && form.png.is_none() => div().flex().flex_col().items_center().gap(px(8.)).max_w(px(320.)).text_color(Theme::text_tertiary()).child(ui::icon("image", 30., Theme::text_placeholder())).child(div().text_color(Theme::text_secondary()).child(t("在下面写下要画什么"))).child(div().text_size(text_px(12.)).line_height(text_px(18.)).text_center().child(t("比如一张机制示意图、图文摘要的草图，或者报告里的配图。画好以后可以再画，满意了再收藏。"))).into_any_element(),
             None if self.modal_error.is_empty() => ui::spinner("figure-large", 18., Theme::text_tertiary()).into_any_element(),
             None => ui::icon("image-broken", 30., Theme::text_placeholder()).into_any_element(),
         };
         let mut where_from = if drawn { t("模型生成的图片，不出自任何文献").to_string() } else { source_line(paper) };
         if form.page > 0 { where_from = tf!("第 {} 页 · {where_from}", "Page {} · {where_from}", form.page) }
-        let tool = |id: &'static str, label: &'static str, cmd: Cmd, this: &Self, cx: &mut Context<Self>| ui::ghost_button(id, None, Some(label.into())).flex_none().h(px(26.)).text_size(px(12.)).on_click(this.on(cmd, cx));
+        let tool = |id: &'static str, label: &'static str, cmd: Cmd, this: &Self, cx: &mut Context<Self>| ui::ghost_button(id, None, Some(label.into())).flex_none().h(text_px(26.)).text_size(text_px(12.)).on_click(this.on(cmd, cx));
         let under = div()
             .flex()
             .flex_wrap()
@@ -628,7 +628,7 @@ impl Workspace {
             .px(px(16.))
             .border_t_1()
             .border_color(Theme::line())
-            .text_size(px(12.))
+            .text_size(text_px(12.))
             .text_color(Theme::text_secondary())
             .child(div().flex_1().min_w(px(140.)).truncate().child(where_from))
             .when_some(held, |d, figure| {
@@ -659,7 +659,7 @@ impl Workspace {
                     .p(px(16.))
                     .border_t_1()
                     .border_color(Theme::line())
-                    .child(div().id("figure-prompt").w(px(wide)).h(px(94.)).overflow_y_scroll().px(px(10.)).py(px(8.)).rounded(px(8.)).border_1().border_color(if focused { Theme::accent() } else { Theme::line_strong() }).bg(Theme::bg_body()).line_height(px(20.)).child(div().w(px(wide - 22.)).child(draw.prompt.clone())))
+                    .child(div().id("figure-prompt").w(px(wide)).h(px(94.)).overflow_y_scroll().px(px(10.)).py(px(8.)).rounded(px(8.)).border_1().border_color(if focused { Theme::accent() } else { Theme::line_strong() }).bg(Theme::bg_body()).line_height(text_px(20.)).child(div().w(px(wide - 22.)).child(draw.prompt.clone())))
                     .child(
                         div()
                             .flex()
@@ -667,7 +667,7 @@ impl Workspace {
                             .gap(px(10.))
                             .w(px(wide))
                             .child(crate::settings::segmented("figure-shape", shapes, imagegen::SHAPES.iter().position(|(shape, _)| *shape == draw.shape).unwrap_or(0), self, cx))
-                            .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(model.map_or_else(|| t("还没有生图模型").to_string(), |profile| profile.labelled())))
+                            .child(div().flex_1().min_w_0().truncate().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(model.map_or_else(|| t("还没有生图模型").to_string(), |profile| profile.labelled())))
                             .child(go.flex_none().on_click(self.on(Cmd::FigureDraw, cx))),
                     )
             }
@@ -697,12 +697,12 @@ impl Workspace {
                     .flex()
                     .flex_none()
                     .items_center()
-                    .h(px(22.))
+                    .h(text_px(22.))
                     .px(px(8.))
                     .rounded(px(11.))
                     .border_1()
                     .border_color(Theme::line_strong())
-                    .text_size(px(12.))
+                    .text_size(text_px(12.))
                     .text_color(Theme::text_secondary())
                     .cursor_pointer()
                     .hover(|s| s.bg(Theme::hover()).border_color(Theme::accent()))
@@ -727,7 +727,7 @@ impl Workspace {
                 .when(!busy, |d| d.cursor_pointer().hover(|s| s.bg(Theme::accent_soft())).active(|s| s.bg(Theme::pressed())).child(ui::icon("sparkle", 14., Theme::accent())).on_click(this.on(Cmd::FigureInfer(ask), cx)))
                 .tooltip(move |_, cx| cx.new(|_| crate::write_assist::Tip(tip.to_string())).into())
         };
-        let named = |label: &'static str, sparkle: Stateful<Div>, field: Div| div().flex().flex_col().gap(px(3.)).w(px(wide)).child(div().flex().items_center().justify_between().h(px(22.)).child(div().text_size(px(12.)).text_color(Theme::text_secondary()).child(label)).child(sparkle)).child(field);
+        let named = |label: &'static str, sparkle: Stateful<Div>, field: Div| div().flex().flex_col().gap(px(3.)).w(px(wide)).child(div().flex().items_center().justify_between().h(text_px(22.)).child(div().text_size(text_px(12.)).text_color(Theme::text_secondary()).child(label)).child(sparkle)).child(field);
         let sparkles = [sparkle("figure-ask-legend", Ask::Legend, t("让模型看图写图注"), self, cx), sparkle("figure-ask-tags", Ask::Tags, t("让模型看图建议标签"), self, cx), sparkle("figure-ask-notes", Ask::Notes, t("让模型看图写一段解读"), self, cx)];
         let [ask_legend, ask_tags, ask_notes] = sparkles;
         // A wrapping field under percentages is measured too narrow: each gets the column's width.
@@ -735,7 +735,7 @@ impl Workspace {
         // A legend can run to half a page: its field keeps a height and scrolls, so the tags stay in view under it.
         let tall = |id: &'static str, input: &Entity<TextInput>, most: f32| {
             let focused = input.focus_handle(cx).is_focused(window);
-            div().child(div().id(id).w(px(wide)).max_h(px(most)).overflow_y_scroll().px(px(10.)).py(px(8.)).rounded(px(8.)).border_1().border_color(if focused { Theme::accent() } else { Theme::line_strong() }).bg(Theme::bg_body()).line_height(px(20.)).child(div().w(px(wide - 22.)).child(input.clone())))
+            div().child(div().id(id).w(px(wide)).max_h(px(most)).overflow_y_scroll().px(px(10.)).py(px(8.)).rounded(px(8.)).border_1().border_color(if focused { Theme::accent() } else { Theme::line_strong() }).bg(Theme::bg_body()).line_height(text_px(20.)).child(div().w(px(wide - 22.)).child(input.clone())))
         };
         let fresh = form.id.is_none();
         let hint = if !fresh {
@@ -757,7 +757,7 @@ impl Workspace {
             .gap(px(12.))
             .px(px(20.))
             .py(px(8.))
-            .when_some(hint, |d, hint| d.child(div().w(px(wide)).text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_tertiary()).child(hint)))
+            .when_some(hint, |d, hint| d.child(div().w(px(wide)).text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text_tertiary()).child(hint)))
             .child(row(t("图号"), &form.label))
             .child(named(t("图注"), ask_legend, tall("figure-legend", &form.legend, 190.)))
             .child(named(t("标签"), ask_tags, div().w(px(wide)).child(ui::field(&form.tags, window, cx))).when(!offered.is_empty(), |d| d.child(div().flex().flex_wrap().gap(px(5.)).pt(px(3.)).w(px(wide)).children(offered))))
@@ -844,7 +844,7 @@ impl Workspace {
             .flex()
             .flex_none()
             .gap(px(2.))
-            .h(px(34.))
+            .h(text_px(34.))
             .p(px(3.))
             .rounded(px(9.))
             .bg(Theme::groove())
@@ -867,12 +867,12 @@ impl Workspace {
                 .flex()
                 .flex_none()
                 .items_center()
-                .h(px(26.))
+                .h(text_px(26.))
                 .px(px(10.))
                 .rounded(px(13.))
                 .border_1()
                 .cursor_pointer()
-                .text_size(px(12.))
+                .text_size(text_px(12.))
                 .when(chosen, |d| d.bg(Theme::accent_soft()).border_color(Theme::accent_soft()).text_color(Theme::accent()))
                 .when(!chosen, |d| d.border_color(Theme::line_strong()).text_color(Theme::text_secondary()).hover(|s| s.bg(Theme::hover())))
                 .on_click(this.on(cmd, cx))
@@ -907,8 +907,8 @@ impl Workspace {
                     .px(px(16.))
                     .pt(px(14.))
                     .child(self.render_collection_switch(cx))
-                    .child(div().flex().flex_1().items_center().gap(px(8.)).h(px(34.)).px(px(10.)).rounded(px(8.)).bg(Theme::bg_sunken()).border_1().border_color(if focused { Theme::accent() } else { Theme::bg_sunken() }).child(ui::icon("search", 15., Theme::text_tertiary())).child(gallery.search.clone()))
-                    .child(ui::ghost_button("figure-draw", Some("sparkle"), Some(t("生成图片").into())).flex_none().h(px(34.)).on_click(self.on(Cmd::DrawFigure, cx))),
+                    .child(div().flex().flex_1().items_center().gap(px(8.)).h(text_px(34.)).px(px(10.)).rounded(px(8.)).bg(Theme::bg_sunken()).border_1().border_color(if focused { Theme::accent() } else { Theme::bg_sunken() }).child(ui::icon("search", 15., Theme::text_tertiary())).child(gallery.search.clone()))
+                    .child(ui::ghost_button("figure-draw", Some("sparkle"), Some(t("生成图片").into())).flex_none().h(text_px(34.)).on_click(self.on(Cmd::DrawFigure, cx))),
             )
             .child(div().id("figure-tags").flex().flex_wrap().items_center().gap(px(6.)).px(px(16.)).py(px(10.)).when(total > 0, |d| d.children(chips)))
             .child(div().flex().flex_col().flex_1().min_h_0().border_t_1().border_color(Theme::line()).pt(px(GAP)).child(body))
@@ -918,11 +918,11 @@ impl Workspace {
                     .flex_none()
                     .items_center()
                     .justify_between()
-                    .h(px(30.))
+                    .h(text_px(30.))
                     .px(px(16.))
                     .border_t_1()
                     .border_color(Theme::line())
-                    .text_size(px(12.))
+                    .text_size(text_px(12.))
                     .text_color(Theme::text_tertiary())
                     .gap(px(12.))
                     .child(div().flex_none().child(if total == 0 {
@@ -945,7 +945,7 @@ impl Workspace {
         range
             .map(|row| {
                 let cards: Vec<AnyElement> = shown.iter().skip(row * columns).take(columns).map(|&at| self.render_figure_card(at, card, cx)).collect();
-                div().flex().flex_none().gap(px(GAP)).w_full().h(px(CARD_H + GAP)).px(px(16.)).pb(px(GAP)).children(cards).into_any_element()
+                div().flex().flex_none().gap(px(GAP)).w_full().h(px(PICTURE_H + GAP) + text_px(CARD_H - PICTURE_H)).px(px(16.)).pb(px(GAP)).children(cards).into_any_element()
             })
             .collect()
     }
@@ -968,14 +968,14 @@ impl Workspace {
         let source = if figure.drawn() { t("模型生成").to_string() } else { source_line(paper) };
         let (head, below) = if figure.label.is_empty() { (source.clone(), String::new()) } else { (figure.label.clone(), source) };
         let said = if !figure.legend.is_empty() { figure.legend.clone() } else { figure.notes.clone() };
-        let tags: Vec<Div> = figure.tags.iter().take(4).map(|tag| ui::chip(tag.clone(), Theme::text_secondary(), Theme::bg_sunken()).h(px(20.)).text_size(px(11.))).collect();
+        let tags: Vec<Div> = figure.tags.iter().take(4).map(|tag| ui::chip(tag.clone(), Theme::text_secondary(), Theme::bg_sunken()).h(text_px(20.)).text_size(text_px(11.))).collect();
         div()
             .id(SharedString::from(format!("figure-{}", figure.id)))
             .flex()
             .flex_col()
             .flex_none()
             .w(px(width))
-            .h(px(CARD_H))
+            .h(px(PICTURE_H) + text_px(CARD_H - PICTURE_H))
             .rounded(px(10.))
             .border_1()
             .border_color(Theme::line())
@@ -1001,11 +1001,11 @@ impl Workspace {
                             .items_center()
                             .gap(px(6.))
                             .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(head))
-                            .when(figure.page > 0, |d| d.child(div().flex_none().text_size(px(11.)).text_color(Theme::text_tertiary()).child(tf!("第 {} 页", "Page {}", figure.page)))),
+                            .when(figure.page > 0, |d| d.child(div().flex_none().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(tf!("第 {} 页", "Page {}", figure.page)))),
                     )
-                    .child(div().h(px(36.)).overflow_hidden().text_size(px(12.)).line_height(px(18.)).line_clamp(2).text_color(if said.is_empty() { Theme::text_placeholder() } else { Theme::text_secondary() }).child(if said.is_empty() { t("还没有图注").to_string() } else { said }))
-                    .when(!below.is_empty(), |d| d.child(div().truncate().text_size(px(11.)).text_color(Theme::text_tertiary()).child(below)))
-                    .child(div().flex().flex_none().gap(px(4.)).h(px(20.)).overflow_hidden().children(tags)),
+                    .child(div().h(text_px(36.)).overflow_hidden().text_size(text_px(12.)).line_height(text_px(18.)).line_clamp(2).text_color(if said.is_empty() { Theme::text_placeholder() } else { Theme::text_secondary() }).child(if said.is_empty() { t("还没有图注").to_string() } else { said }))
+                    .when(!below.is_empty(), |d| d.child(div().truncate().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(below)))
+                    .child(div().flex().flex_none().gap(px(4.)).h(text_px(20.)).overflow_hidden().children(tags)),
             )
             .into_any_element()
     }

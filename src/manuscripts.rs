@@ -7,7 +7,7 @@
 use crate::i18n::{label, t};
 use crate::app::{Cmd, MenuItem, MenuKind, Modal, Page, Workspace, Writing};
 use crate::input::TextInput;
-use crate::theme::Theme;
+use crate::theme::{self, Theme, text_px};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
 use wisp_core::manuscript::{self, LANGUAGES, Manuscript, Section};
@@ -624,7 +624,7 @@ impl Workspace {
                     .py(px(6.))
                     .on_click(self.on(Cmd::WriteSection(section.id.clone()), cx))
                     .when(on, |d| d.on_mouse_down(MouseButton::Right, self.on_context(MenuKind::Section(section.id.clone()), cx)))
-                    .child(div().flex_none().w(px(16.)).text_size(px(11.)).text_color(if on { Theme::accent() } else { Theme::text_placeholder() }).child((n + 1).to_string()))
+                    .child(div().flex_none().w(px(16.)).text_size(text_px(11.)).text_color(if on { Theme::accent() } else { Theme::text_placeholder() }).child((n + 1).to_string()))
                     .child(
                         div()
                             .flex()
@@ -632,18 +632,18 @@ impl Workspace {
                             .flex_1()
                             .min_w_0()
                             .gap(px(1.))
-                            .child(div().truncate().text_size(px(13.)).when(on, |d| d.text_color(Theme::accent()).font_weight(FontWeight::MEDIUM)).when(!on, |d| d.text_color(if empty { Theme::text_tertiary() } else { Theme::text() })).child(section.name.clone()))
-                            .child(div().truncate().text_size(px(11.)).text_color(Theme::text_tertiary()).child(said.join(" · "))),
+                            .child(div().truncate().text_size(text_px(13.)).when(on, |d| d.text_color(Theme::accent()).font_weight(FontWeight::MEDIUM)).when(!on, |d| d.text_color(if empty { Theme::text_tertiary() } else { Theme::text() })).child(section.name.clone()))
+                            .child(div().truncate().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(said.join(" · "))),
                     )
                     // How many comments wait in the section.
-                    .when(noted > 0, |d| d.child(div().flex().flex_none().items_center().justify_center().min_w(px(18.)).h(px(18.)).px(px(5.)).rounded(px(9.)).bg(Theme::note_strong()).text_size(px(10.)).text_color(Theme::text()).child(noted.to_string())))
+                    .when(noted > 0, |d| d.child(div().flex().flex_none().items_center().justify_center().min_w(px(18.)).h(text_px(18.)).px(px(5.)).rounded(px(9.)).bg(Theme::note_strong()).text_size(text_px(10.)).text_color(Theme::text()).child(noted.to_string())))
                     .when(on, |d| d.child(div().id("outline-section-menu").flex().flex_none().items_center().justify_center().size(px(20.)).rounded(px(10.)).hover(|s| s.bg(Theme::accent().opacity(0.12))).on_click(self.on_menu(MenuKind::Section(section.id.clone()), cx)).child(ui::icon("chevron-down", 12., Theme::accent()))))
                     .into_any_element()
             })
             .collect();
         let (cited, unresolved, references_on) = self.references_row();
         let small_row = |id: &'static str, icon: &'static str, name: String, on: bool| {
-            row(id.into(), on).h(px(30.)).text_size(px(13.)).text_color(if on { Theme::accent() } else { Theme::text_secondary() }).child(div().flex().flex_none().w(px(16.)).justify_center().child(ui::icon(icon, 14., if on { Theme::accent() } else { Theme::text_tertiary() }))).child(div().flex_1().min_w_0().truncate().child(name))
+            row(id.into(), on).h(text_px(30.)).text_size(text_px(13.)).text_color(if on { Theme::accent() } else { Theme::text_secondary() }).child(div().flex().flex_none().w(px(16.)).justify_center().child(ui::icon(icon, 14., if on { Theme::accent() } else { Theme::text_tertiary() }))).child(div().flex_1().min_w_0().truncate().child(name))
         };
         div()
             .id("write-outline")
@@ -656,7 +656,7 @@ impl Workspace {
             .pb(px(10.))
             .pt(px(Self::corner_top()))
             .gap(px(10.))
-            .child(self.render_corner(width >= ui::traffic_lights_width() + 150., cx).when(ui::custom_titlebar(), |d| d.mb(px(4.))))
+            .child(self.render_corner(width >= ui::traffic_lights_width() + f32::from(text_px(150.)), cx).when(ui::custom_titlebar(), |d| d.mb(px(4.))))
             // Back to the tags and the views, staying on this page.
             .child(
                 div()
@@ -664,11 +664,11 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .h(px(28.))
+                    .h(text_px(28.))
                     .px(px(8.))
                     .rounded(px(6.))
                     .cursor_pointer()
-                    .text_size(px(12.))
+                    .text_size(text_px(12.))
                     .text_color(Theme::text_secondary())
                     .hover(|s| s.bg(Theme::hover()).text_color(Theme::text()))
                     .on_click(self.on(Cmd::WriteNav(true), cx))
@@ -681,8 +681,8 @@ impl Workspace {
                     .flex_col()
                     .gap(px(3.))
                     .px(px(8.))
-                    .child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).line_height(px(21.)).text_color(Theme::text()).child(crate::i18n::manuscript_title(manuscript).to_string()))
-                    .child(div().text_size(px(11.)).text_color(Theme::text_tertiary()).child(about.join(" · "))),
+                    .child(div().text_size(text_px(15.)).font_weight(FontWeight::SEMIBOLD).line_height(text_px(21.)).text_color(Theme::text()).child(crate::i18n::manuscript_title(manuscript).to_string()))
+                    .child(div().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(about.join(" · "))),
             )
             .child(
                 div()
@@ -707,7 +707,7 @@ impl Workspace {
                         small_row("outline-references", "library", t("参考文献").into(), references_on)
                             .on_click(self.on(Cmd::WriteReferences, cx))
                             .when(unresolved, |d| d.child(div().flex_none().size(px(6.)).rounded(px(3.)).bg(Theme::danger())))
-                            .when(cited > 0, |d| d.child(div().flex_none().text_size(px(11.)).text_color(Theme::text_tertiary()).child(cited.to_string()))),
+                            .when(cited > 0, |d| d.child(div().flex_none().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(cited.to_string()))),
                     )
                     .child(small_row("outline-reading", "eye", t("通读全文").into(), writing.reading).on_click(self.on(Cmd::WriteReading(!writing.reading), cx)))
                     .child(small_row("outline-manuscripts", "list", tf!("稿件 {}", "Manuscripts {}", writing.manuscripts.len()), false).on_click(self.on_menu(MenuKind::Manuscripts, cx))),
@@ -722,7 +722,7 @@ impl Workspace {
         let writing = &lib.writing;
         let Some(manuscript) = writing.current() else { return div() };
         let language = LANGUAGES.iter().find(|(code, _)| *code == manuscript.language).map_or(manuscript.language.as_str(), |(_, name)| t(name));
-        let tool = |id: &'static str, icon: &'static str, text: Option<SharedString>| ui::ghost_button(id, Some(icon), text).h(px(26.)).px(px(7.)).text_size(px(12.));
+        let tool = |id: &'static str, icon: &'static str, text: Option<SharedString>| ui::ghost_button(id, Some(icon), text).h(text_px(26.)).px(px(7.)).text_size(text_px(12.));
         let pills: Vec<AnyElement> = manuscript
             .sections
             .iter()
@@ -737,10 +737,10 @@ impl Workspace {
                     .flex_none()
                     .items_center()
                     .gap(px(5.))
-                    .h(px(28.))
+                    .h(text_px(28.))
                     .px(px(12.))
                     .rounded(px(14.))
-                    .text_size(px(13.))
+                    .text_size(text_px(13.))
                     .cursor_pointer()
                     .border_1()
                     .when(on, |d| d.bg(Theme::accent_soft()).text_color(Theme::accent()).border_color(Theme::accent().opacity(0.35)).font_weight(FontWeight::MEDIUM))
@@ -748,7 +748,7 @@ impl Workspace {
                     .on_click(self.on(Cmd::WriteSection(section.id.clone()), cx))
                     .child(section.name.clone())
                     // How many comments wait in the section.
-                    .when(noted > 0, |d| d.child(div().flex().flex_none().items_center().justify_center().min_w(px(16.)).h(px(16.)).px(px(4.)).rounded(px(8.)).bg(Theme::note_strong()).text_size(px(10.)).text_color(Theme::text()).child(noted.to_string())))
+                    .when(noted > 0, |d| d.child(div().flex().flex_none().items_center().justify_center().min_w(px(16.)).h(px(16.)).px(px(4.)).rounded(px(8.)).bg(Theme::note_strong()).text_size(text_px(10.)).text_color(Theme::text()).child(noted.to_string())))
                     .when(on, |d| d.child(div().id("write-part-menu").flex().items_center().justify_center().size(px(18.)).rounded(px(9.)).hover(|s| s.bg(Theme::accent().opacity(0.12))).on_click(self.on_menu(MenuKind::Section(section.id.clone()), cx)).child(ui::icon("chevron-down", 12., Theme::accent()))))
                     .into_any_element()
             })
@@ -776,7 +776,7 @@ impl Workspace {
                             .border_1()
                             .border_color(if title_focused { Theme::accent().opacity(0.55) } else { transparent_black() })
                             .hover(|s| s.bg(Theme::hover()))
-                            .text_size(px(17.))
+                            .text_size(text_px(17.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(writing.title.clone()),
                     )
@@ -813,11 +813,11 @@ impl Workspace {
                             .gap(px(8.))
                             .cursor_pointer()
                             .on_click(self.on(Cmd::WriteSection(section.id.clone()), cx))
-                            .child(div().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::text()).hover(|s| s.text_color(Theme::accent())).child(section.name.clone()))
-                            .when(section.kind != "other", |d| d.child(div().text_size(px(11.)).text_color(Theme::text_tertiary()).child(label(&SECTIONS, &section.kind).to_string()))),
+                            .child(div().text_size(text_px(17.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::text()).hover(|s| s.text_color(Theme::accent())).child(section.name.clone()))
+                            .when(section.kind != "other", |d| d.child(div().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(label(&SECTIONS, &section.kind).to_string()))),
                     )
-                    .when(written.is_empty(), |d| d.child(div().text_size(px(13.)).text_color(Theme::text_tertiary()).child(t("这一节还没有写。"))))
-                    .when(!written.is_empty(), |d| d.child(div().text_size(px(15.)).text_color(Theme::text()).child(crate::markdown::render(&format!("write-read-{n}"), &written, None, None))))
+                    .when(written.is_empty(), |d| d.child(div().text_size(text_px(13.)).text_color(Theme::text_tertiary()).child(t("这一节还没有写。"))))
+                    .when(!written.is_empty(), |d| d.child(div().text_size(text_px(15.)).text_color(Theme::text()).child(crate::markdown::render(&format!("write-read-{n}"), &written, None, None))))
                     .into_any_element()
             })
             .collect();
@@ -831,7 +831,7 @@ impl Workspace {
             .border_1()
             .border_color(Theme::line())
             .bg(Theme::bg_body())
-            .child(div().flex().justify_center().px(px(28.)).py(px(24.)).child(div().flex().flex_col().gap(px(26.)).w_full().max_w(px(720.)).child(div().text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).line_height(px(30.)).child(crate::i18n::manuscript_title(manuscript).to_string())).children(sections).children(self.render_references_read(cx))))
+            .child(div().flex().justify_center().px(px(28.)).py(px(24.)).child(div().flex().flex_col().gap(px(26.)).w_full().max_w(theme::manuscript_width()).child(div().text_size(text_px(22.)).font_weight(FontWeight::SEMIBOLD).line_height(text_px(30.)).child(crate::i18n::manuscript_title(manuscript).to_string())).children(sections).children(self.render_references_read(cx))))
             .into_any_element()
     }
 
@@ -843,7 +843,7 @@ impl Workspace {
             .enumerate()
             .map(|(n, (key, shown))| {
                 let on = kind == key;
-                div().id(("section-kind", n)).flex().flex_none().items_center().h(px(28.)).px(px(12.)).rounded(px(14.)).text_size(px(13.)).cursor_pointer().border_1().when(on, |d| d.bg(Theme::accent_soft()).text_color(Theme::accent()).border_color(Theme::accent().opacity(0.35))).when(!on, |d| d.border_color(Theme::line()).text_color(Theme::text_secondary()).hover(|s| s.bg(Theme::hover()))).on_click(self.on(Cmd::PickSectionKind(key.to_string()), cx)).child(t(shown).to_string()).into_any_element()
+                div().id(("section-kind", n)).flex().flex_none().items_center().h(text_px(28.)).px(px(12.)).rounded(px(14.)).text_size(text_px(13.)).cursor_pointer().border_1().when(on, |d| d.bg(Theme::accent_soft()).text_color(Theme::accent()).border_color(Theme::accent().opacity(0.35))).when(!on, |d| d.border_color(Theme::line()).text_color(Theme::text_secondary()).hover(|s| s.bg(Theme::hover()))).on_click(self.on(Cmd::PickSectionKind(key.to_string()), cx)).child(t(shown).to_string()).into_any_element()
             })
             .collect();
         let hint = if kind == "other" { t("候选句来自文献里不属于导言、方法、结果、讨论的段落。综述的各节、致谢、展望都可以选它。") } else { t("候选句来自文献库里的文献在这一部分的句子。") };
@@ -859,7 +859,7 @@ impl Workspace {
                         .py(px(8.))
                         .child(ui::form_row(t("名称"), ui::field(name, window, cx)))
                         .child(ui::form_row(t("类型"), div().flex().flex_wrap().gap(px(6.)).children(kinds)))
-                        .child(div().text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_tertiary()).child(hint))
+                        .child(div().text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text_tertiary()).child(hint))
                         .child(ui::error_line(&self.modal_error)),
                 )
                 .child(self.manuscript_footer(if editing.is_some() { t("保存") } else { t("添加") }, true, cx)),
@@ -909,8 +909,8 @@ impl Workspace {
                     .when(on, |d| d.bg(Theme::accent_soft()))
                     .when(!on, |d| d.hover(|s| s.bg(Theme::hover())))
                     .on_click(self.on(Cmd::HistoryPick(n), cx))
-                    .child(div().text_size(px(13.)).text_color(if on { Theme::accent() } else { Theme::text() }).child(wisp_core::time::short_time(&snapshot.taken_at)))
-                    .child(div().text_size(px(11.)).text_color(Theme::text_tertiary()).child(tf!("{} · {words} 词", "{} · {words} words", why(&snapshot.why))))
+                    .child(div().text_size(text_px(13.)).text_color(if on { Theme::accent() } else { Theme::text() }).child(wisp_core::time::short_time(&snapshot.taken_at)))
+                    .child(div().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(tf!("{} · {words} 词", "{} · {words} words", why(&snapshot.why))))
                     .into_any_element()
             })
             .collect();
@@ -939,8 +939,8 @@ impl Workspace {
                         .border_1()
                         .border_color(Theme::line())
                         .bg(Theme::bg_body())
-                        .when(snapshot.body.trim().is_empty(), |d| d.child(div().text_size(px(13.)).text_color(Theme::text_tertiary()).child(t("（这一版是空的）"))))
-                        .when(!snapshot.body.trim().is_empty(), |d| d.child(div().text_size(px(14.)).text_color(Theme::text()).child(crate::markdown::render("write-version", &manuscript::section_markdown(&snapshot.body, 2), None, None)))),
+                        .when(snapshot.body.trim().is_empty(), |d| d.child(div().text_size(text_px(13.)).text_color(Theme::text_tertiary()).child(t("（这一版是空的）"))))
+                        .when(!snapshot.body.trim().is_empty(), |d| d.child(div().text_size(text_px(14.)).text_color(Theme::text()).child(crate::markdown::render("write-version", &manuscript::section_markdown(&snapshot.body, 2), None, None)))),
                 ),
         };
         Some(
@@ -948,7 +948,7 @@ impl Workspace {
                 .child(ui::dialog_title(tf!("「{name}」的历史版本", "Version history of “{name}”")))
                 .child(body)
                 .child(div().px(px(20.)).child(ui::error_line(&self.modal_error)))
-                .child(div().px(px(20.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(t("恢复时，现在的文字会先留一个版本，所以恢复也可以撤回。")))
+                .child(div().px(px(20.)).text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(t("恢复时，现在的文字会先留一个版本，所以恢复也可以撤回。")))
                 .child(self.manuscript_footer(t("恢复这一版"), shown.is_some(), cx)),
         )
     }
