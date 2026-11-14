@@ -13,6 +13,7 @@ use wisp_core::time;
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.filters_drawn = false;
         let page = if self.settings_view.is_some() {
             self.render_settings(window, cx)
         } else if self.lib.is_some() {
@@ -20,6 +21,8 @@ impl Render for Workspace {
         } else {
             self.render_home(cx)
         };
+        // An element says only when the pointer comes or goes: once the folded filters are not drawn, nothing would say it went.
+        if !self.filters_drawn { self.filters_over = [false; 2] }
         div()
             .id("workspace")
             .key_context("Workspace")

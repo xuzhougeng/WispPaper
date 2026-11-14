@@ -475,11 +475,26 @@ impl Workspace {
     fn render_papers(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let lib = self.lib.as_ref().unwrap();
         let f = &lib.filters;
-        // Filter chips: the label alone when unset, "label: value" when set.
-        let chip = |id: ElementId, label: &str, value: String, key: FilterKey, this: &Self, cx: &mut Context<Self>| {
+        // The filters: each a name, and what it is set to.
+        let mut filters: Vec<(ElementId, String, String, FilterKey)> = vec![
+            ("f-year".into(), t("年份").into(), f.year.clone(), FilterKey::Year),
+            ("f-reading".into(), t("阅读").into(), label(&READINGS, &f.reading).to_string(), FilterKey::Reading),
+            ("f-screening".into(), t("收录").into(), label(&SCREENINGS, &f.screening).to_string(), FilterKey::Screening),
+            ("f-fulltext".into(), t("全文").into(), label(&FULLTEXTS, &f.fulltext).to_string(), FilterKey::Fulltext),
+            ("f-tag".into(), t("标签").into(), f.tag.clone(), FilterKey::Tag),
+        ];
+        for (i, field) in lib.fields.iter().enumerate() {
+            if field.kind == FieldKind::Text { continue }
+            filters.push((("f-field", i).into(), field.name.clone(), f.fields.get(&field.id).cloned().unwrap_or_default(), FilterKey::Field(field.id.clone())));
+        }
+        filters.push(("f-source".into(), t("来源").into(), f.source.clone(), FilterKey::Source));
+        filters.push(("f-preprint".into(), t("预印本").into(), match f.preprint.as_str() { "yes" => t("只看").into(), "no" => t("不含").into(), _ => String::new() }, FilterKey::Preprint));
+        // A chip says the name alone when unset, "name: value" when set.
+        let said = |name: &str, value: &str| if value.is_empty() { name.to_string() } else { format!("{name}：{value}") };
+        let chip = |(id, name, value, key): &(ElementId, String, String, FilterKey), this: &Self, cx: &mut Context<Self>| {
             let set = !value.is_empty();
             div()
-                .id(id)
+                .id(id.clone())
                 .flex()
                 .flex_none()
                 .items_center()
@@ -492,30 +507,81 @@ impl Workspace {
                 .text_size(text_px(12.))
                 .when(set, |d| d.bg(Theme::accent_soft()).border_color(Theme::accent_soft()).text_color(Theme::accent()))
                 .when(!set, |d| d.border_color(Theme::line_strong()).text_color(Theme::text_secondary()).hover(|s| s.bg(Theme::hover())))
-                .on_click(this.on_menu(MenuKind::Filter(key), cx))
-                .child(if set { format!("{label}：{value}") } else { label.to_string() })
+                .on_click(this.on_menu(MenuKind::Filter(key.clone()), cx))
+                .child(said(name, value))
                 .child(ui::icon("chevron-down", 12., if set { Theme::accent() } else { Theme::text_tertiary() }))
+                .into_any_element()
         };
-        let mut chips: Vec<AnyElement> = vec![
-            chip("f-year".into(), t("年份"), f.year.clone(), FilterKey::Year, self, cx).into_any_element(),
-            chip("f-reading".into(), t("阅读"), label(&READINGS, &f.reading).to_string(), FilterKey::Reading, self, cx).into_any_element(),
-            chip("f-screening".into(), t("收录"), label(&SCREENINGS, &f.screening).to_string(), FilterKey::Screening, self, cx).into_any_element(),
-            chip("f-fulltext".into(), t("全文"), label(&FULLTEXTS, &f.fulltext).to_string(), FilterKey::Fulltext, self, cx).into_any_element(),
-            chip("f-tag".into(), t("标签"), f.tag.clone(), FilterKey::Tag, self, cx).into_any_element(),
-        ];
-        for (i, field) in lib.fields.iter().enumerate() {
-            if field.kind == FieldKind::Text { continue }
-            let value = f.fields.get(&field.id).cloned().unwrap_or_default();
-            chips.push(chip(("f-field", i).into(), &field.name, value, FilterKey::Field(field.id.clone()), self, cx).into_any_element());
-        }
-        chips.push(chip("f-source".into(), t("来源"), f.source.clone(), FilterKey::Source, self, cx).into_any_element());
-        chips.push(chip("f-preprint".into(), t("预印本"), match f.preprint.as_str() { "yes" => t("只看").into(), "no" => t("不含").into(), _ => String::new() }, FilterKey::Preprint, self, cx).into_any_element());
         let filtered = f.active() > 0 || !f.search.trim().is_empty();
-        // A list too narrow for the buttons' words keeps their icons.
+        // A list too narrow for the buttons' words keeps their icons, and says the words on hover.
         let roomy = width >= f32::from(text_px(620.));
-        if filtered {
-            chips.push(ui::ghost_button("f-clear", Some("x"), Some(t("清空筛选").into())).h(text_px(26.)).on_click(self.on(Cmd::ClearFilters, cx)).into_any_element());
+        lib.search.update(cx, |input, _| input.set_placeholder(if width >= f32::from(text_px(440.)) { "搜索题目、作者、DOI、标签、词条、笔记…" } else { "搜索…" }));
+
+        // The filters stay one row. Where they do not all fit, the row is folded: those that are set come first,
+        // then as many as there is room for and how many more there are; under the pointer a card shows them all.
+        const GAP: f32 = 6.;
+        let face = font(theme::ui_font());
+        let wide = |text: &str| {
+            let run = TextRun { len: text.len(), font: face.clone(), color: Theme::text(), background_color: None, underline: None, strikethrough: None };
+            f32::from(window.text_system().shape_line(text.to_string().into(), text_px(12.), &[run], None).width)
+        };
+        // A chip: its words, the chevron after a gap, the padding and the border.
+        let chip_width = |(_, name, value, _): &(ElementId, String, String, FilterKey)| wide(&said(name, value)) + 4. + 12. + 18. + 2.;
+        let clear = |this: &Self, cx: &mut Context<Self>| ui::ghost_button("f-clear", Some("x"), Some(t("清空筛选").into())).h(text_px(26.)).on_click(this.on(Cmd::ClearFilters, cx)).into_any_element();
+        let room = width - 34.;
+        let all = filters.iter().map(chip_width).sum::<f32>() + GAP * (filters.len() - 1) as f32 + if filtered { GAP + wide(t("清空筛选")) + 37. } else { 0. };
+        let mut row: Vec<AnyElement> = vec![];
+        let mut hidden = 0;
+        if all <= room {
+            for filter in &filters { row.push(chip(filter, self, cx)) }
+            if filtered { row.push(clear(self, cx)) }
+        } else {
+            filters.sort_by_key(|(_, _, value, _)| value.is_empty());
+            // Room is kept for the count of the rest, and for the x that clears.
+            let mut used = wide("+9") + 16. + if filtered { GAP + 28. } else { 0. };
+            for (i, filter) in filters.iter().enumerate() {
+                used += GAP + chip_width(filter);
+                if i > 0 && used > room { break }
+                row.push(chip(filter, self, cx));
+            }
+            hidden = filters.len() - row.len();
+            if hidden > 0 {
+                let set = filters[row.len()..].iter().any(|(_, _, value, _)| !value.is_empty());
+                row.push(div().flex().flex_none().items_center().h(text_px(26.)).px(px(8.)).rounded(px(13.)).text_size(text_px(12.)).bg(if set { Theme::accent_soft() } else { Theme::bg_sunken() }).text_color(if set { Theme::accent() } else { Theme::text_secondary() }).child(format!("+{hidden}")).into_any_element());
+            }
+            if filtered { row.push(ui::ghost_button("f-clear", Some("x"), None).h(text_px(26.)).tooltip(ui::tip(t("清空筛选"))).on_click(self.on(Cmd::ClearFilters, cx)).into_any_element()) }
         }
+        self.filters_drawn = hidden > 0;
+        // The card lies over the row, its first chips where the row's are, so a press meant for one of those lands on it.
+        // It stays under a filter's choices, and comes after a moment: a pointer on its way across does not raise it.
+        let card = (hidden > 0 && (self.filters_over != [false; 2] || self.menu.as_ref().is_some_and(|menu| menu.filter))).then(|| {
+            let mut chips: Vec<AnyElement> = vec![];
+            for filter in &filters { chips.push(chip(filter, self, cx)) }
+            if filtered { chips.push(clear(self, cx)) }
+            div()
+                .id("filters-card")
+                .absolute()
+                .top(px(14. + 2.) + text_px(34.))
+                .left(px(8.))
+                .right(px(8.))
+                .occlude()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap(px(GAP))
+                .p(px(7.))
+                .rounded(px(10.))
+                .border_1()
+                .border_color(Theme::line())
+                .bg(Theme::bg_body())
+                .shadow(theme::shadow_panel())
+                .on_hover(cx.listener(|this, over: &bool, _, cx| {
+                    this.filters_over[1] = *over;
+                    cx.notify();
+                }))
+                .children(chips)
+                .with_animation("filters-card", Animation::new(std::time::Duration::from_millis(240)), |card, shown| card.opacity(((shown - 0.4) / 0.6).max(0.)))
+        });
 
         let columns = Self::columns(lib, width);
         let (sort_key, sort_desc) = filter::sort_parts(&f.sort);
@@ -568,11 +634,12 @@ impl Workspace {
             tf!("↑↓ 切换文献 · Shift / {} 点选多篇 · 右键更多操作 · {} 搜索", "↑↓ Switch paper · Shift / {} to select multiple · Right-click for more · {} Search", if cfg!(target_os = "macos") { "⌘" } else { "Ctrl" }, crate::shortcuts::pretty(&crate::shortcuts::key_of("search", &self.settings.shortcuts)))
         };
         div()
+            .relative()
             .flex()
             .flex_col()
             .size_full()
             // The search row and the filters keep one height however narrow the list is (`papers_head`): the buttons
-            // drop their words, the filters scroll sideways. The paper beside the list is laid out by that height.
+            // drop their words, the filters fold. The paper beside the list is laid out by that height.
             .child(
                 div()
                     .flex()
@@ -600,11 +667,24 @@ impl Workspace {
                             .child(ui::icon("search", 15., Theme::text_tertiary()))
                             .child(lib.search.clone()),
                     )
-                    .child(ui::secondary_button("sort", if roomy { t("排序") } else { "" }).when(!roomy, |d| d.px(px(9.))).child(ui::icon("sort-down", 14., Theme::text_secondary())).on_click(self.on_menu(MenuKind::Sort, cx)))
-                    .child(ui::secondary_button("list-translation", match (lib.show_translation, roomy) { (true, true) => t("显示原文"), (false, true) => t("显示译文"), (true, false) => t("原文"), (false, false) => t("译文") }).on_click(self.on(Cmd::ToggleTranslation, cx)))
-                    .child(ui::secondary_button("export", if roomy { t("导出") } else { "" }).when(!roomy, |d| d.px(px(9.))).child(ui::icon("export", 14., Theme::text_secondary())).on_click(self.on_menu(MenuKind::Export, cx))),
+                    .when(roomy, |d| {
+                        d.child(ui::secondary_button("sort", t("排序")).child(ui::icon("sort-down", 14., Theme::text_secondary())).on_click(self.on_menu(MenuKind::Sort, cx)))
+                            .child(ui::secondary_button("list-translation", if lib.show_translation { t("显示原文") } else { t("显示译文") }).on_click(self.on(Cmd::ToggleTranslation, cx)))
+                            .child(ui::secondary_button("export", t("导出")).child(ui::icon("export", 14., Theme::text_secondary())).on_click(self.on_menu(MenuKind::Export, cx)))
+                    })
+                    .when(!roomy, |d| {
+                        d.child(ui::tool_button("sort", "sort-down", t("排序")).on_click(self.on_menu(MenuKind::Sort, cx)))
+                            // Lit while the translations are on show.
+                            .child(ui::tool_button("list-translation", "languages", if lib.show_translation { t("显示原文") } else { t("显示译文") }).when(lib.show_translation, |d| d.bg(Theme::accent_soft()).border_color(Theme::accent_soft()).hover(|s| s.bg(Theme::accent_soft()))).on_click(self.on(Cmd::ToggleTranslation, cx)))
+                            .child(ui::tool_button("export", "export", t("导出")).on_click(self.on_menu(MenuKind::Export, cx)))
+                    }),
             )
-            .child(div().id("filters").flex().flex_none().items_center().gap(px(6.)).px(px(16.)).py(px(10.)).overflow_x_scroll().children(chips))
+            .child(div().id("filters").flex().flex_none().items_center().gap(px(GAP)).px(px(16.)).py(px(10.)).overflow_hidden().when(hidden > 0, |d| {
+                d.on_hover(cx.listener(|this, over: &bool, _, cx| {
+                    this.filters_over[0] = *over;
+                    cx.notify();
+                }))
+            }).children(row))
             .child(div().flex().flex_none().h(text_px(32.)).px(px(8.)).border_t_1().border_b_1().border_color(Theme::line()).bg(Theme::bg_sunken()).text_size(text_px(12.)).text_color(Theme::text_tertiary()).children(header))
             // The papers without a PDF: the open ones among them can be fetched in one go.
             .when(lib.filters.view == View::NoPdf && lookable > 0 && lib.fetching.as_ref().is_none_or(|run| !run.running()), |d| {
@@ -640,6 +720,8 @@ impl Workspace {
                     .child(div().flex_none().child(if filtered || shown != total { tf!("显示 {shown} / {total} 篇", "Showing {shown} / {total} papers") } else { tf!("共 {total} 篇", "{total} papers in total") }))
                     .child(div().min_w_0().truncate().child(status)),
             )
+            // Last, so it is drawn over the column names and the list.
+            .children(card)
             .into_any_element()
     }
 
@@ -787,6 +869,7 @@ impl Workspace {
         let lib = self.lib.as_ref().unwrap();
         let (shown, total) = (lib.shown.len(), filter::view_count(&lib.papers, View::All, 0));
         let filtered = lib.filters.active() > 0 || !lib.search.read(cx).text().trim().is_empty();
+        lib.search.update(cx, |input, _| input.set_placeholder("搜索…"));
         let body = if shown == 0 {
             div().flex_1().px(px(8.)).pt(px(8.)).text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text_placeholder()).child(t("没有匹配的文献。换个搜索词，或按 Esc 回到完整列表调整筛选。")).into_any_element()
         } else {
