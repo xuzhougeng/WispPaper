@@ -65,6 +65,7 @@ pub struct ReadingAppearance {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
+    pub notion: crate::notion::Settings,
     /// The folder holding every library; empty means the default.
     pub data_dir: String,
     /// The model services this person can reach, each with its models.
@@ -132,7 +133,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         let providers = provider::DEFAULT_PRESETS.iter().filter_map(|key| provider::preset(key)).map(Provider::from_preset).collect();
-        let mut settings = Settings { data_dir: String::new(), providers, legacy_profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translate_workers: 4, translation_prompt: String::new(), commands: vec![], connectors: vec![], skills_off: vec![], auto_update: true, appearance: String::new(), high_contrast: false, language: Language::default(), density: String::new(), font_family: String::new(), font_size: DEFAULT_FONT_SIZE, reading_appearance: ReadingAppearance::default(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., floating: Default::default(), keep_running: true, agent_writing: false, agent_manuscript_width: 0., author: String::new() };
+        let mut settings = Settings { notion: crate::notion::Settings::default(), data_dir: String::new(), providers, legacy_profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translate_workers: 4, translation_prompt: String::new(), commands: vec![], connectors: vec![], skills_off: vec![], auto_update: true, appearance: String::new(), high_contrast: false, language: Language::default(), density: String::new(), font_family: String::new(), font_size: DEFAULT_FONT_SIZE, reading_appearance: ReadingAppearance::default(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., floating: Default::default(), keep_running: true, agent_writing: false, agent_manuscript_width: 0., author: String::new() };
         settings.tidy();
         settings
     }
@@ -162,12 +163,14 @@ pub enum Task {
     Structure,
     /// 生图: pictures made from a description (`imagegen`). Done only by a model that draws, which does nothing else.
     Image,
+    /// Refine informal questions for export, with the original kept for comparison.
+    QuestionRefine,
 }
 
 impl Task {
-    pub const ALL: [Task; 5] = [Task::Chat, Task::Screen, Task::Translate, Task::Structure, Task::Image];
+    pub const ALL: [Task; 6] = [Task::Chat, Task::Screen, Task::Translate, Task::Structure, Task::Image, Task::QuestionRefine];
     /// The tasks a model that answers in words does.
-    pub const WORDS: [Task; 4] = [Task::Chat, Task::Screen, Task::Translate, Task::Structure];
+    pub const WORDS: [Task; 5] = [Task::Chat, Task::Screen, Task::Translate, Task::Structure, Task::QuestionRefine];
 
     /// Whether the task is done by a model that draws.
     pub fn draws(self) -> bool {
@@ -191,6 +194,7 @@ impl Task {
             Task::Translate => "翻译",
             Task::Structure => "整理全文",
             Task::Image => "生图",
+            Task::QuestionRefine => "科研问题提炼",
         }
     }
 }
@@ -207,6 +211,7 @@ pub struct Tasks {
     pub structure: String,
     /// The model that draws; empty is the first one that can.
     pub image: String,
+    pub question_refine: String,
 }
 
 impl Tasks {
@@ -217,6 +222,7 @@ impl Tasks {
             Task::Translate => &self.translate,
             Task::Structure => &self.structure,
             Task::Image => &self.image,
+            Task::QuestionRefine => &self.question_refine,
         }
     }
 
@@ -227,6 +233,7 @@ impl Tasks {
             Task::Translate => &mut self.translate,
             Task::Structure => &mut self.structure,
             Task::Image => &mut self.image,
+            Task::QuestionRefine => &mut self.question_refine,
         } = id.to_string();
     }
 }
@@ -331,6 +338,7 @@ impl Settings {
     /// own, a task bound to a model that is gone follows the default again,
     /// and the number of screening workers stays in range.
     fn tidy(&mut self) {
+        self.notion.tidy();
         self.font_size = font_size(self.font_size);
         self.font_family = self.font_family.trim().to_string();
         let mut seen = std::collections::HashSet::new();
@@ -641,9 +649,9 @@ mod tests {
         s.providers[1].api_key.clear();
         // Unbound, everything is the first; screening and translation follow the one for questions.
         s.tasks.set(Task::Chat, "m4");
-        assert_eq!(Task::WORDS.map(|task| uses(&s, task)), ["glm-5.3", "glm-5.3", "glm-5.3", "glm-5.3"]);
+        assert_eq!(Task::WORDS.map(|task| uses(&s, task)), ["glm-5.3"; 5]);
         s.tasks.set(Task::Translate, "m2");
-        assert_eq!(Task::WORDS.map(|task| uses(&s, task)), ["glm-5.3", "glm-5.3", "deepseek-v4-flash", "glm-5.3"]);
+        assert_eq!(Task::WORDS.map(|task| uses(&s, task)), ["glm-5.3", "glm-5.3", "deepseek-v4-flash", "glm-5.3", "glm-5.3"]);
         // A removed model or provider takes its bindings along; an id is not handed out twice while in use.
         s.remove_provider(2);
         assert_eq!((s.tasks.chat.as_str(), s.tasks.translate.as_str(), uses(&s, Task::Chat).as_str()), ("", "m2", "deepseek-v4-pro"));
@@ -674,6 +682,21 @@ mod tests {
         old.save(&path).unwrap();
         assert_eq!(Settings::load(&path).unwrap(), old);
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn question_refinement_has_an_independent_persistent_text_model_binding() {
+        let mut s = Settings::default();
+        s.tasks.set(Task::Chat, "m4");
+        assert_eq!(s.profile_for(Task::QuestionRefine).unwrap().id, "m4");
+        s.tasks.set(Task::QuestionRefine, "m2");
+        let restored: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(restored.profile_for(Task::QuestionRefine).unwrap().id, "m2");
+        assert_eq!(restored.profile_for(Task::Chat).unwrap().id, "m4");
+        assert_eq!(serde_json::from_str::<Tasks>("{\"chat\":\"m4\"}").unwrap().question_refine, "");
+        s.remove_model(0, 1);
+        assert!(s.tasks.question_refine.is_empty());
+        assert_eq!(s.profile_for(Task::QuestionRefine).unwrap().id, "m4");
     }
 
     #[test]
@@ -718,7 +741,7 @@ mod tests {
         s.providers[typesafe].api_key = "k".into();
         let jev = s.providers[typesafe].models[0].id.clone();
         // It is the only model with a key, and still no task falls to it by itself.
-        assert_eq!(Task::WORDS.map(|task| s.profile_for(task).unwrap().model), ["deepseek-v4-pro"; 4]);
+        assert_eq!(Task::WORDS.map(|task| s.profile_for(task).unwrap().model), ["deepseek-v4-pro"; 5]);
         assert!(s.profiles().iter().all(|p| !p.judges()) && s.profile_for(Task::Image).is_none());
         // Screening can be given to it; nothing else can, and what shares screening's model keeps to words.
         for task in Task::ALL { s.tasks.set(task, &jev) }

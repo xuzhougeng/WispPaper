@@ -53,6 +53,15 @@ enum Link {
 impl Drop for Link {
     fn drop(&mut self) {
         if let Link::Stdio { child, .. } = self {
+            clear_login(child.id());
+            #[cfg(windows)]
+            if child.try_wait().is_ok_and(|status| status.is_none()) {
+                // cmd -> npx -> node: killing only cmd leaves the OAuth callback
+                // listener alive and subsequent connections wait on that orphan.
+                use std::os::windows::process::CommandExt;
+                let _ = Command::new("taskkill.exe").args(["/T", "/F", "/PID", &child.id().to_string()])
+                    .creation_flags(0x0800_0000).stdout(Stdio::null()).stderr(Stdio::null()).status();
+            }
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -131,7 +140,11 @@ impl Client {
                 if send(message).is_err() { return Err(Failure::Failed(gone(errors))) }
                 let Some(id) = id else { return Ok(Value::Null) };
                 loop {
-                    let Ok(line) = lines.recv_timeout(PATIENCE) else { return Err(Failure::Failed(gone(errors))) };
+                    let line = match lines.recv_timeout(PATIENCE) {
+                        Ok(line) => line,
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return Err(Failure::Failed("连接器等待应答超时；如浏览器已打开，请完成授权后重新连接。".into())),
+                        Err(_) => return Err(Failure::Failed(gone(errors))),
+                    };
                     match connector::hear(&line, id) {
                         Heard::Reply(reply) => return Ok(reply?),
                         Heard::Answer(answer) => if send(&answer).is_err() { return Err(Failure::Failed(gone(errors))) },
@@ -163,7 +176,19 @@ fn spawn(line: &str) -> Result<Link, String> {
         use std::os::windows::process::CommandExt;
         let mut command = Command::new("cmd");
         // No console window flashes up behind the app.
-        command.args(["/C", line]).creation_flags(0x0800_0000);
+        // Some launchers pass a partial PATHEXT. Keep custom extensions but
+        // restore the standard ones needed by npm's npx.cmd and node.exe.
+        let mut extensions = std::env::var("PATHEXT").unwrap_or_default();
+        for ext in [".COM", ".EXE", ".BAT", ".CMD"] {
+            if !extensions.split(';').any(|e| e.eq_ignore_ascii_case(ext)) {
+                if !extensions.is_empty() { extensions.push(';') }
+                extensions.push_str(ext);
+            }
+        }
+        command.env("PATHEXT", extensions);
+        // /S strips the outer pair. Pass the command as shell syntax:
+        // Command::arg would escape it as one executable name, spaces included.
+        command.args(["/D", "/S", "/C"]).raw_arg(format!("\"{line}\"")).creation_flags(0x0800_0000);
         command
     };
     #[cfg(not(windows))]
@@ -183,8 +208,17 @@ fn spawn(line: &str) -> Result<Link, String> {
     // What it last said on its error stream is the reason when it stops answering.
     let errors = Arc::new(Mutex::new(String::new()));
     let kept = errors.clone();
+    let official = crate::notion::notion_bridge(line);
+    let pid = child.id();
     std::thread::spawn(move || {
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if official && let Ok(url) = url::Url::parse(line.trim())
+                && url.origin().ascii_serialization() == "https://mcp.notion.com"
+                && url.path() == "/authorize" && url.query_pairs().any(|(k, _)| k == "code_challenge")
+            {
+                if let Ok(mut login) = NOTION_LOGIN.lock() { *login = Some((pid, url.into())); }
+                continue;
+            }
             if !line.trim().is_empty() && let Ok(mut said) = kept.lock() { *said = line.chars().take(300).collect() }
         }
     });
@@ -215,6 +249,32 @@ pub fn disconnect(connector: &Connector) {
     if let Ok(mut clients) = CLIENTS.lock() && let Some(clients) = clients.as_mut() { clients.remove(&key(connector)); }
 }
 
+// Keep the PKCE URL in memory only while this exact bridge is authorizing.
+static NOTION_LOGIN: Mutex<Option<(u32, String)>> = Mutex::new(None);
+
+pub fn pending_notion_login(connector: &Connector) -> Option<String> {
+    if !crate::notion::notion_bridge(&connector.target) { return None }
+    NOTION_LOGIN.lock().ok()?.as_ref().map(|(_, url)| url.clone())
+}
+
+fn clear_login(pid: u32) {
+    if let Ok(mut login) = NOTION_LOGIN.lock() && login.as_ref().is_some_and(|(owner, _)| *owner == pid) { *login = None; }
+}
+
+/// Borrow an already authorized session. Manual writes must never start a second
+/// bridge or replay a request whose outcome is unknown.
+pub(crate) struct Session(Shared);
+
+impl Session {
+    pub(crate) fn existing(connector: &Connector) -> Result<Self, String> {
+        kept(connector).map(Self).ok_or_else(|| "请在「设置 → 自定义」连接 Notion，完成浏览器授权，等到显示已连接后再试。".into())
+    }
+
+    pub(crate) fn ask(&self, method: &str, params: Value) -> Result<Value, String> {
+        self.0.lock().map_err(|_| "Notion 连接不可用，请重新连接。".to_string())?.ask(method, params).map_err(|e| match e { Failure::SignIn => "请重新登录连接器。".into(), Failure::Failed(why) => why })
+    }
+}
+
 /// Close the connections of connectors that are not among `wanted` any more.
 pub fn keep_only(wanted: &[Connector]) {
     let keys: Vec<String> = wanted.iter().map(key).collect();
@@ -225,6 +285,7 @@ pub fn keep_only(wanted: &[Connector]) {
 pub fn tools(connector: &Connector) -> Result<Vec<Tool>, Failure> {
     let mut client = Client::connect(connector)?;
     let tools = client.tools(connector)?;
+    if let Link::Stdio { child, .. } = &client.link { clear_login(child.id()); }
     keep(connector, client);
     Ok(tools)
 }
@@ -249,6 +310,13 @@ pub fn call(connector: &Connector, tool: &str, args: &Value) -> Result<String, S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_command_preserves_arguments_and_quoted_paths() {
+        let Link::Stdio { ref lines, .. } = spawn(r#"echo connected "two words""#).unwrap() else { unreachable!() };
+        assert_eq!(lines.recv_timeout(Duration::from_secs(5)).unwrap(), r#"connected "two words""#);
+    }
 
     #[test]
     fn an_address_is_asked_over_http_with_its_token_and_session() {

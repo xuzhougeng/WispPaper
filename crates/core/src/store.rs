@@ -232,6 +232,10 @@ CREATE TABLE IF NOT EXISTS drafts (
     updated_at TEXT NOT NULL
 );
 -- 引用: the key a citation in a manuscript names a paper by, kept from its first citation (`cite`).
+CREATE TABLE IF NOT EXISTS notion_links (
+    destination TEXT NOT NULL, paper_id TEXT NOT NULL, url TEXT NOT NULL,
+    PRIMARY KEY(destination, paper_id)
+);
 CREATE TABLE IF NOT EXISTS cite_keys (
     key TEXT PRIMARY KEY NOT NULL COLLATE NOCASE,
     paper_id TEXT NOT NULL,
@@ -249,7 +253,7 @@ CREATE TABLE IF NOT EXISTS file_origins (
 "#;
 
 const PAPER_COLUMNS: &str = "id, title, abstract, authors_json, journal, year, publication_state, url, source, \
-    screening_status, screening_reason, reviewed_at, reading_status, starred, tags_json, notes, first_seen_at, updated_at";
+    screening_status, screening_reason, reviewed_at, reading_status, starred, tags_json, notes, first_seen_at, updated_at, publication_date";
 
 /// A record an import left out because the library already holds it.
 #[derive(Clone, Debug, PartialEq)]
@@ -432,6 +436,7 @@ pub struct Store {
 
 /// Table, column and type of each column added after its table was first made.
 const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
+    ("papers", "publication_date", "TEXT NOT NULL DEFAULT ''"),
     ("screening_suggestions", "criteria", "TEXT"),
     ("field_defs", "hint", "TEXT NOT NULL DEFAULT ''"),
     ("structures", "paragraphs", "INTEGER NOT NULL DEFAULT 0"),
@@ -1010,6 +1015,17 @@ impl Store {
 
     // ---- conversations
 
+    /// Confirmed Notion destinations; a changed root keeps the earlier link.
+    pub fn notion_links(&self, paper_id: &str) -> Result<Vec<String>> {
+        let mut stmt = self.db.prepare("SELECT DISTINCT url FROM notion_links WHERE paper_id=?1 ORDER BY rowid DESC")?;
+        Ok(stmt.query_map([paper_id], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn keep_notion_link(&self, destination: &str, paper_id: &str, url: &str) -> Result<()> {
+        self.db.execute("INSERT INTO notion_links(destination,paper_id,url) VALUES (?1,?2,?3) ON CONFLICT(destination,paper_id) DO UPDATE SET url=excluded.url", params![destination,paper_id,url])?;
+        Ok(())
+    }
+
     /// Keep a conversation: a new one gets its id here, a known one is
     /// replaced. `paper_id` is empty for a conversation with the library.
     pub fn save_conversation(&mut self, conversation: &mut Conversation) -> Result<()> {
@@ -1284,6 +1300,7 @@ fn row_to_paper(r: &rusqlite::Row) -> rusqlite::Result<Paper> {
         notes: r.get(15)?,
         added_at: r.get(16)?,
         updated_at: r.get(17)?,
+        publication_date: r.get(18)?,
         ..Default::default()
     })
 }
@@ -1311,17 +1328,17 @@ fn write_paper(tx: &Transaction, p: &Paper) -> Result<()> {
     let authors: Vec<String> = p.authors.split(';').map(|a| a.trim().to_string()).filter(|a| !a.is_empty()).collect();
     tx.execute(
         "INSERT INTO papers(id, title, title_key, abstract, authors_json, journal, year, publication_state, url, source, \
-            screening_status, screening_reason, reviewed_at, reading_status, starred, tags_json, notes, first_seen_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19) \
+            screening_status, screening_reason, reviewed_at, reading_status, starred, tags_json, notes, first_seen_at, updated_at, publication_date) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20) \
          ON CONFLICT(id) DO UPDATE SET title = excluded.title, title_key = excluded.title_key, abstract = excluded.abstract, \
             authors_json = excluded.authors_json, journal = excluded.journal, year = excluded.year, \
             publication_state = excluded.publication_state, url = excluded.url, source = excluded.source, \
             screening_status = excluded.screening_status, screening_reason = excluded.screening_reason, reviewed_at = excluded.reviewed_at, \
             reading_status = excluded.reading_status, starred = excluded.starred, tags_json = excluded.tags_json, notes = excluded.notes, \
-            first_seen_at = excluded.first_seen_at, updated_at = excluded.updated_at",
+            first_seen_at = excluded.first_seen_at, updated_at = excluded.updated_at, publication_date = excluded.publication_date",
         params![
             p.id, p.title, title_key(&p.title), p.abstract_text, to_json(&authors), p.journal, p.year, p.publication_status, p.url, p.source,
-            p.screening, p.screening_reason, p.reviewed_at, p.reading, p.starred as i32, to_json(&p.tags), p.notes, p.added_at, p.updated_at
+            p.screening, p.screening_reason, p.reviewed_at, p.reading, p.starred as i32, to_json(&p.tags), p.notes, p.added_at, p.updated_at, p.publication_date
         ],
     )
     .with_context(|| format!("保存文献失败：{}", p.title))?;
@@ -1378,6 +1395,22 @@ fn copy_hashed(source: &Path, target: &Path) -> Result<(u64, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn publication_dates_and_notion_links_survive_reopening() {
+        let dir = temp_dir("notion-record");
+        let mut store = Store::open(&dir).unwrap();
+        let p = store.add_paper(Paper { title: "A dated paper".into(), publication_date: "2020-02".into(), ..Default::default() }).unwrap();
+        store.keep_notion_link("root-one", &p.id, "https://www.notion.so/one").unwrap();
+        store.keep_notion_link("root-two", &p.id, "https://www.notion.so/two").unwrap();
+        store.keep_notion_link("root-one", &p.id, "https://www.notion.so/one").unwrap();
+        drop(store);
+        let store = Store::open(&dir).unwrap();
+        assert_eq!(store.get_paper(&p.id).unwrap().publication_date, "2020-02");
+        assert_eq!(store.notion_links(&p.id).unwrap().len(), 2);
+        assert!(store.notion_links("").unwrap().is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn schema_version_guard_rejects_newer_libraries() {
@@ -1675,10 +1708,10 @@ mod tests {
         let dir = temp_dir("conversations");
         let mut store = Store::in_memory(&dir).unwrap();
         let paper = store.add_paper(Paper { title: "Alpha".into(), ..Default::default() }).unwrap();
-        let transcript = Transcript { items: vec![Said::User { text: "WOX5 做什么？".into(), images: vec!["I-1".into()], prompt: String::new() }, Said::Answer { text: "见 [P1]。".into() }], sources: vec![Source { label: "P1".into(), paper_id: paper.id.clone(), title: "Alpha".into() }] };
+        let transcript = Transcript { items: vec![Said::User { asked_at: String::new(), text: "WOX5 做什么？".into(), images: vec!["I-1".into()], prompt: String::new() }, Said::Answer { text: "见 [P1]。".into() }], sources: vec![Source { label: "P1".into(), paper_id: paper.id.clone(), title: "Alpha".into() }] };
         let mut with_library = Conversation { transcript: transcript.clone(), ..Default::default() };
         store.save_conversation(&mut with_library).unwrap();
-        let mut with_paper = Conversation { paper_id: paper.id.clone(), transcript: Transcript { items: vec![Said::User { text: "总结一下".into(), images: vec![], prompt: String::new() }], sources: vec![] }, ..Default::default() };
+        let mut with_paper = Conversation { paper_id: paper.id.clone(), transcript: Transcript { items: vec![Said::User { asked_at: String::new(), text: "总结一下".into(), images: vec![], prompt: String::new() }], sources: vec![] }, ..Default::default() };
         store.save_conversation(&mut with_paper).unwrap();
         assert!(with_library.id.starts_with("C-") && with_library.id != with_paper.id);
         // Each side lists its own, with a title and the number of questions.
@@ -1688,7 +1721,7 @@ mod tests {
         assert_eq!(store.conversation(&with_library.id).unwrap().unwrap().transcript, transcript);
         // Saved again it is the same conversation, with what was added.
         let created = with_library.created_at.clone();
-        with_library.transcript.items.push(Said::User { text: "再说说 SCR".into(), images: vec![], prompt: String::new() });
+        with_library.transcript.items.push(Said::User { asked_at: String::new(), text: "再说说 SCR".into(), images: vec![], prompt: String::new() });
         store.save_conversation(&mut with_library).unwrap();
         let again = store.conversation(&with_library.id).unwrap().unwrap();
         assert_eq!((store.list_conversations("").unwrap().len(), again.transcript.questions(), again.created_at), (1, 2, created));

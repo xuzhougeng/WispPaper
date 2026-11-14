@@ -48,6 +48,7 @@ impl Workspace {
         let body = || div().id("modal-body").flex().flex_col().flex_1().min_h_0().overflow_y_scroll().gap(px(12.)).px(px(20.)).py(px(8.));
 
         let card = match modal {
+            Modal::Notion(form) => self.render_notion_form(form, window, cx),
             Modal::Section { .. } => self.render_section_dialog(window, cx)?,
             Modal::History { .. } => self.render_history_dialog(cx)?,
             Modal::ReviewEvidence(_) => self.render_review_evidence_dialog(window, cx)?,
@@ -447,6 +448,7 @@ impl Workspace {
                             .child(ui::form_row(t("题目"), ui::field(&form.title, window, cx)))
                             .child(ui::form_row(t("作者"), ui::field(&form.authors, window, cx)))
                             .child(pair(ui::form_row(t("期刊 / 会议"), ui::field(&form.journal, window, cx)).into_any_element(), ui::form_row(t("年份"), ui::field(&form.year, window, cx)).into_any_element()))
+                            .child(ui::form_row(t("出版日期"), ui::field(&form.publication_date, window, cx)))
                             .child(pair(ui::form_row("DOI", ui::field(&form.doi, window, cx)).into_any_element(), ui::form_row("PMID", ui::field(&form.pmid, window, cx)).into_any_element()))
                             .child(ui::form_row(t("网址"), ui::field(&form.url, window, cx)))
                             .child(ui::form_row(t("标签"), ui::field(&form.tags, window, cx)))

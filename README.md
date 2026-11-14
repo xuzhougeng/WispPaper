@@ -95,6 +95,8 @@ WISP_PAPER_HOME=/tmp/wisp-demo cargo run
 
 ## 文档
 
+提问和「我的笔记」的手动保存与设置说明：[保存到 Notion](docs/NOTION.md)。
+
 | | |
 |---|---|
 | [教程](docs/TUTORIAL.md) | 从零建一个「植物单细胞转录组」文献库的完整记录，带截图 |

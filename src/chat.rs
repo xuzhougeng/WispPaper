@@ -631,6 +631,8 @@ impl Workspace {
                             })),
                     )
                     .children(self.render_float_switch(talk, window, cx))
+                    .when(talk != Talk::Write && !chat.messages.is_empty() && !listing && !chat.busy, |d| d.child(ui::ghost_button(SharedString::from(format!("notion-all-{side}")), Some("file-text"), Some(t("保存对话到 Notion").into())).on_click(self.on(Cmd::PreviewNotion(talk == Talk::Paper, None), cx))))
+                    .when(talk == Talk::Library, |d| d.children(lib.store.notion_links("").unwrap_or_default().into_iter().enumerate().map(|(i, url)| ui::ghost_button(SharedString::from(format!("notion-library-link-{i}")), Some("link"), Some(t("Notion 笔记").into())).on_click(self.on(Cmd::OpenUrl(url), cx)))))
                     .when(listable, |d| d.child(ui::ghost_button("chat-materials", Some(if chat.materials_open { "chevron-up" } else { "list" }), Some(if chat.materials_open { t("收起").into() } else { t("文献").into() })).on_click(self.on(Cmd::ToggleMaterials, cx))))
                     .child(ui::ghost_button(SharedString::from(format!("chat-history-{side}")), Some(if listing { "arrow-left" } else { "history" }), Some(if listing { t("返回").into() } else { t("历史").into() })).on_click(self.on(Cmd::ToggleHistory(talk), cx)))
                     .when(!chat.messages.is_empty() && !listing, |d| d.child(ui::ghost_button(SharedString::from(format!("chat-new-{side}")), Some("plus"), Some(t("新对话").into())).on_click(self.on(Cmd::NewChat(talk), cx)))),
@@ -1079,6 +1081,7 @@ impl Workspace {
                                         _ => d.child(button("section", t("保存正文"), ReviewDo::Section)).when(!review.sections.is_empty(), |d| d.child(button("checks", t("记录检查"), ReviewDo::Checks))),
                                     }
                                 })
+                                .when(talk != Talk::Write, |d| d.child(ui::ghost_button(SharedString::from(format!("notion-turn-{side}-{i}")), Some("file-text"), Some(t("保存到 Notion").into())).h(text_px(24.)).text_size(text_px(12.)).opacity(0.7).on_click(self.on(Cmd::PreviewNotion(talk == Talk::Paper, Some(chat.messages[..=i].iter().filter(|item| matches!(item, ChatItem::User { .. })).count().saturating_sub(1))), cx))))
                                 // An answer about one paper can join that paper's notes; one about the library names many.
                                 .when(talk == Talk::Paper, |d| d.child(ui::ghost_button(SharedString::from(format!("note-{side}-{i}")), Some("pen-line"), Some(t("存为笔记").into())).h(text_px(24.)).text_size(text_px(12.)).opacity(0.7).on_click(self.on(Cmd::AnswerToNote(question, whole), cx)))),
                         )

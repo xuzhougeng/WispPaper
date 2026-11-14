@@ -14,6 +14,8 @@ use wisp_core::lookup::{self, Identifier};
 use wisp_core::model::Paper;
 use wisp_core::update::{self, Release};
 
+pub mod notion;
+
 const USER_AGENT: &str = concat!("WispPaper/", env!("CARGO_PKG_VERSION"));
 
 /// The proxy every request of this process goes through, from the settings.
@@ -387,6 +389,29 @@ mod tests {
 
     fn ask(base: String, protocol: Protocol) -> (Vec<ChatEvent>, HttpRequest) {
         step(base, protocol, &[user_message("你好")])
+    }
+
+    #[test]
+    fn question_refinement_round_trip_changes_only_the_exported_heading() {
+        use wisp_core::{ai::{Said, Transcript}, libraries::LibraryInfo, notion, question};
+        let (base, server) = serve("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"Q：该图展示了哪些主要组成部分及其相互关系？\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n");
+        let profile = Profile { base_url: base, api_key: "test-key".into(), model: "refine-model".into(), protocol: Protocol::OpenAI, ..Default::default() };
+        let transcript = Transcript { items: vec![Said::User { asked_at: String::new(), text: "这图啥意思？".into(), images: vec!["I1".into()], prompt: String::new() }, Said::Answer { text: "原回答需完整保留。".into() }], ..Default::default() };
+        let entry = notion::entries("C1", &transcript, None).remove(0);
+        let request = question::refine_request(&profile, &entry, None, &LibraryInfo::default()).unwrap();
+        let refined = question::clean(&complete(request, profile.protocol).unwrap()).unwrap();
+        let received = server.join().unwrap();
+        assert!(received.contains("refine-model") && received.contains("这图啥意思？"));
+        assert!(!received.contains("image_url") && !received.contains("data:image/"));
+        let draft = entry.draft();
+        let (body, _) = question::replace_heading(&draft, &entry.label, &refined).unwrap();
+        assert_eq!(body.split_once('\n').unwrap().1, draft.split_once('\n').unwrap().1);
+        assert!(body.starts_with("### Q：该图展示了哪些主要组成部分及其相互关系？\n"));
+        let exported = entry.edited(&body).unwrap();
+        assert_eq!(exported.source_key, entry.source_key);
+        assert_eq!(exported.images, entry.images);
+        assert_eq!(entry.original_question, "这图啥意思？");
+        assert!(matches!(&transcript.items[0], Said::User { text, .. } if text == "这图啥意思？"));
     }
 
     /// One question answered in two steps: the model calls a tool, gets the

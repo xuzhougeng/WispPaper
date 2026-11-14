@@ -42,6 +42,7 @@ pub enum SettingsPage {
     Ai,
     Customize,
     Network,
+    Notion,
     About,
 }
 
@@ -56,6 +57,7 @@ impl SettingsPage {
             SettingsPage::Ai => "AI",
             SettingsPage::Customize => t("自定义"),
             SettingsPage::Network => t("网络"),
+            SettingsPage::Notion => t("Notion 设置"),
             SettingsPage::About => t("关于"),
         }
     }
@@ -68,6 +70,7 @@ impl SettingsPage {
             SettingsPage::Ai => "sparkle",
             SettingsPage::Customize => "plug",
             SettingsPage::Network => "link",
+            SettingsPage::Notion => "plug",
             SettingsPage::About => "info",
         }
     }
@@ -93,6 +96,7 @@ pub struct SettingsView {
     fields: ProviderFields,
     /// The proxy for everything.
     proxy: Entity<TextInput>,
+    pub(crate) notion: crate::notion::Fields,
     /// Whose name the comments and tracked changes of a Word export carry.
     author: Entity<TextInput>,
     translation_prompt: Entity<TextInput>,
@@ -338,6 +342,7 @@ impl Workspace {
                 let index = self.settings.providers.iter().position(|p| p.models.iter().any(|m| m.id == chat)).unwrap_or(0);
                 let shown = self.settings.providers.get(index).cloned().unwrap_or_default();
                 let fields = ProviderFields::new(&shown, cx);
+                let notion = crate::notion::Fields::new(&self.settings.notion, cx);
                 let proxy = cx.new(|cx| TextInput::new("http://127.0.0.1:7890", cx).with_text(&self.settings.proxy));
                 let author = cx.new(|cx| TextInput::new(wisp_core::settings::Settings::default().author_name(), cx).with_text(&self.settings.author));
                 let translation_prompt = cx.new(|cx| TextInput::new("留空则使用默认要求：译成简体中文，保留术语、基因名、物种学名和数字原样，只输出译文。", cx).multiline(3).with_text(&self.settings.translation_prompt));
@@ -371,9 +376,10 @@ impl Workspace {
                         }
                     }),
                 ];
-                self.settings_view = Some(SettingsView { page, ai_tab: AiTab::default(), scroll: ScrollHandle::new(), provider: index, protocol: shown.protocol, fields, proxy, author, translation_prompt, font_search, font_names, font_picker: false, font_scroll: ScrollHandle::new(), command: None, connector: None, recording: None, shortcut_error: None, _subscriptions: subscriptions });
+                self.settings_view = Some(SettingsView { page, ai_tab: AiTab::default(), scroll: ScrollHandle::new(), provider: index, protocol: shown.protocol, fields, proxy, notion, author, translation_prompt, font_search, font_names, font_picker: false, font_scroll: ScrollHandle::new(), command: None, connector: None, recording: None, shortcut_error: None, _subscriptions: subscriptions });
             }
         }
+        if matches!(page, SettingsPage::Notion) { self.notion_status(cx); }
         window.focus(&self.focus);
         cx.notify();
     }
@@ -804,7 +810,7 @@ impl Workspace {
                 .child(ui::icon(icon, 16., if active { Theme::text() } else { Theme::text_secondary() }))
                 .child(label)
         };
-        let pages: Vec<AnyElement> = SettingsPage::ALL.into_iter().map(|p| nav(p.icon(), p.icon(), p.title(), p == page, Cmd::OpenSettings(p), self, cx).into_any_element()).collect();
+        let pages: Vec<AnyElement> = SettingsPage::ALL.into_iter().map(|p| nav(p.icon(), p.icon(), p.title(), p == page || (p == SettingsPage::Customize && matches!(page, SettingsPage::Notion)), Cmd::OpenSettings(p), self, cx).into_any_element()).collect();
         let sidebar = div()
             .flex()
             .flex_col()
@@ -828,6 +834,7 @@ impl Workspace {
             SettingsPage::Ai => self.ai_page(window, cx),
             SettingsPage::Customize => self.customize_page(window, cx),
             SettingsPage::Network => self.network_page(window, cx),
+            SettingsPage::Notion => self.render_notion_settings(window, cx),
             SettingsPage::About => self.about_page(cx),
         };
         let changed = page == SettingsPage::Shortcuts && !self.settings.shortcuts.is_empty();
@@ -861,7 +868,7 @@ impl Workspace {
 
     /// The width of the page's column in pixels. A wrapping text field needs
     /// to be told its width, since every width above it is a share of its parent's.
-    fn column_width(&self, window: &Window) -> f32 {
+    pub(crate) fn column_width(&self, window: &Window) -> f32 {
         let page = self.settings_view.as_ref().map(|view| view.page);
         (f32::from(window.viewport_size().width) - SIDEBAR_W - 65.).min(if page == Some(SettingsPage::Ai) { AI_COLUMN_W } else { COLUMN_W })
     }
@@ -1367,6 +1374,7 @@ impl Workspace {
             .child(card(vec![head(2, Task::Translate, "scan-text", "翻译题目、摘要和 PDF 里选中的文字；写作页把你写的话变成候选句的检索词也用它。翻译用不着思考：可以给它一个把「思考」设为关闭的小模型。", self, cx), sub(row(t("同时翻译的篇数"), Some(t("批量翻译标题或摘要时同时发出的请求数。服务限速时调小。").into()), segmented("translate-workers", translators, WORKERS.iter().position(|count| *count == settings.translate_workers).unwrap_or(usize::MAX), self, cx))), prompt]))
             .child(card(vec![head(3, Task::Structure, "file-text", "写作页的准备工作：把全文按导言、方法、结果、讨论分开，以及读出扫描件页面上的文字（需要能看图的模型）。", self, cx)]))
             .child(card(vec![head(4, Task::Image, "image", "按一段描述画图：图片库里的「生成图片」。只能用带「生图」标记的模型，比如 OpenAI 的 gpt-image、Gemini 的图像模型、火山方舟的 Seedream；在「模型」里给一个服务添加这样的模型。", self, cx)]))
+            .child(card(vec![head(5, Task::QuestionRefine, "scan-text", "保存提问到 Notion 前，将口语化问题提炼为清晰、具体的科研表述；结合原问题、对应回答和文献基本信息，不上传原图。原问与可编辑提炼稿对照，由你选择采用。留空时使用助手的模型。", self, cx)]))
             .child(note(t("没有单独指定模型的任务，使用助手的模型；助手没有指定时，用第一个填好了 API Key 的模型。生图除外：它只用生图模型。译过的文字保存在文献库里，不会再次请求。")))
             .into_any_element()
     }
