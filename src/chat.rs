@@ -11,7 +11,7 @@ use crate::i18n::t;
 use crate::app::{Chat, ChatImage, ChatItem, Cmd, Consent, MenuKind, ScopeDo, Workspace};
 use crate::input::TextInput;
 use crate::settings::SettingsPage;
-use crate::theme::{self, Theme};
+use crate::theme::{self, Theme, text_px};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
 use wisp_core::{ai, time};
@@ -41,15 +41,15 @@ impl Render for PaperDrag {
                 .items_center()
                 .gap(px(6.))
                 .w(px(280.))
-                .h(px(30.))
+                .h(text_px(30.))
                 .px(px(10.))
                 .rounded(px(8.))
                 .border_1()
                 .border_color(Theme::accent())
                 .bg(Theme::bg_body())
                 .shadow(theme::shadow_panel())
-                .font_family(theme::UI_FONT)
-                .text_size(px(12.))
+                .font_family(theme::ui_font())
+                .text_size(text_px(12.))
                 .text_color(Theme::text())
                 .child(ui::icon("file-text", 13., Theme::accent()))
                 .child(div().w(px(238.)).truncate().child(self.title.clone())),
@@ -149,7 +149,7 @@ fn section_of(text: &str, review: &wisp_core::review::Review) -> (String, String
 /// The shell of a chip under an answer: a source, or the one that shows the rest.
 fn source_chip(id: SharedString, max_width: f32) -> Stateful<Div> {
     // In a narrow column a chip gives way rather than run out of it.
-    div().id(id).flex().items_center().gap(px(4.)).min_w_0().max_w(px(max_width)).h(px(24.)).px(px(8.)).rounded(px(6.)).border_1().border_color(Theme::line()).text_size(px(12.)).cursor_pointer().hover(|s| s.bg(Theme::hover()).border_color(Theme::accent()))
+    div().id(id).flex().items_center().gap(px(4.)).min_w_0().max_w(px(max_width)).h(text_px(24.)).px(px(8.)).rounded(px(6.)).border_1().border_color(Theme::line()).text_size(text_px(12.)).cursor_pointer().hover(|s| s.bg(Theme::hover()).border_color(Theme::accent()))
 }
 
 /// A picture of a conversation, cropped to a square.
@@ -305,7 +305,7 @@ impl Workspace {
             .child(ui::dialog_title(title))
             .child(div().id("review-text-form").flex().flex_col().flex_1().min_h_0().overflow_y_scroll().gap(px(8.)).px(px(20.)).py(px(8.))
                 .child(ui::field(input, window, cx))
-                .child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(hint))
+                .child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(hint))
                 .child(ui::error_line(&self.modal_error)))
             .child(div().flex().justify_end().gap(px(8.)).px(px(20.)).py(px(14.))
                 .child(ui::secondary_button("review-text-cancel", t("取消")).on_click(self.on(Cmd::CloseModal, cx)))
@@ -360,7 +360,7 @@ impl Workspace {
         let Some(crate::app::Modal::ReviewEvidence(form)) = self.modal.as_ref() else { return None };
         let lib = self.lib.as_ref()?;
         let review = lib.library_chat.review.as_ref()?;
-        let pill = |id: ElementId, label: String, on: bool, cmd: Cmd, cx: &mut Context<Self>| div().id(id).flex().flex_none().items_center().h(px(26.)).px(px(10.)).rounded(px(13.)).text_size(px(12.)).cursor_pointer().border_1()
+        let pill = |id: ElementId, label: String, on: bool, cmd: Cmd, cx: &mut Context<Self>| div().id(id).flex().flex_none().items_center().h(text_px(26.)).px(px(10.)).rounded(px(13.)).text_size(text_px(12.)).cursor_pointer().border_1()
             .when(on, |d| d.bg(Theme::accent_soft()).text_color(Theme::accent()).border_color(Theme::accent().opacity(0.35)))
             .when(!on, |d| d.border_color(Theme::line()).text_color(Theme::text_secondary()).hover(|s| s.bg(Theme::hover())))
             .on_click(self.on(cmd, cx)).child(label);
@@ -380,12 +380,12 @@ impl Workspace {
         for (n, paper) in chosen.into_iter().chain(found).enumerate() {
             let active = form.paper_id == paper.id;
             let by = [paper.authors.split([';', ',']).next().unwrap_or_default().trim().to_string(), paper.year.map(|year| year.to_string()).unwrap_or_default()].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" ");
-            papers.push(div().id(("evidence-paper", n)).flex().flex_none().items_center().gap(px(8.)).px(px(8.)).py(px(5.)).rounded(px(6.)).cursor_pointer().text_size(px(13.))
+            papers.push(div().id(("evidence-paper", n)).flex().flex_none().items_center().gap(px(8.)).px(px(8.)).py(px(5.)).rounded(px(6.)).cursor_pointer().text_size(text_px(13.))
                 .when(active, |d| d.bg(Theme::accent_soft()).text_color(Theme::accent()))
                 .when(!active, |d| d.hover(|s| s.bg(Theme::hover())))
                 .on_click(self.on(Cmd::PickEvidencePaper(paper.id.clone()), cx))
                 .child(div().flex_1().min_w_0().truncate().child(paper.title.clone()))
-                .child(div().flex_none().text_size(px(12.)).text_color(Theme::text_tertiary()).child(by)));
+                .child(div().flex_none().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(by)));
         }
         let gone = !form.paper_id.is_empty() && chosen.is_none();
         Some(ui::dialog(620.).max_w(relative(0.92)).max_h(relative(0.9))
@@ -395,15 +395,15 @@ impl Workspace {
                 .when(!review.sections.is_empty(), |d| d.child(ui::form_row(t("所在章节"), div().flex().flex_wrap().gap(px(6.)).children(sections))))
                 .child(ui::form_row(t("来源文献"), div().flex().flex_col().gap(px(6.))
                     .child(ui::field(&form.paper_query, window, cx))
-                    .when(gone, |d| d.child(div().text_size(px(12.)).text_color(Theme::warning()).child(t("原来的来源已不在文献库里，请另选一篇。"))))
+                    .when(gone, |d| d.child(div().text_size(text_px(12.)).text_color(Theme::warning()).child(t("原来的来源已不在文献库里，请另选一篇。"))))
                     .child(div().id("evidence-paper-list").flex().flex_col().h(px(132.)).overflow_y_scroll().rounded(px(8.)).border_1().border_color(Theme::line()).p(px(4.))
-                        .when(papers.is_empty(), |d| d.child(div().p(px(8.)).text_size(px(13.)).text_color(Theme::text_tertiary()).child(t("没有匹配的文献。"))))
+                        .when(papers.is_empty(), |d| d.child(div().p(px(8.)).text_size(text_px(13.)).text_color(Theme::text_tertiary()).child(t("没有匹配的文献。"))))
                         .children(papers))))
                 .child(ui::form_row(t("页码"), ui::field(&form.page, window, cx)))
                 .child(ui::form_row(t("原文摘录"), ui::field(&form.quote, window, cx)))
                 .child(ui::form_row(t("依据"), div().flex().flex_wrap().gap(px(6.)).children(kinds)))
                 .child(ui::form_row(t("备注"), ui::field(&form.note, window, cx)))
-                .child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(t("页码是 PDF 里从 1 数起的第几页。摘录会和文献保存的文字比对，结果写在这条证据上；它是否支持论断，仍由你判断。改了论断、来源、页码或摘录，原来的判断就不算数了。")))
+                .child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(t("页码是 PDF 里从 1 数起的第几页。摘录会和文献保存的文字比对，结果写在这条证据上；它是否支持论断，仍由你判断。改了论断、来源、页码或摘录，原来的判断就不算数了。")))
                 .child(ui::error_line(&self.modal_error)))
             .child(div().flex().justify_end().gap(px(8.)).px(px(20.)).py(px(14.))
                 .child(ui::secondary_button("evidence-cancel", t("取消")).on_click(self.on(Cmd::CloseModal, cx)))
@@ -432,27 +432,27 @@ impl Workspace {
             else { None };
         let judgments = JUDGMENTS.iter().enumerate().map(|(n, (key, label))| {
             let on = stands && row.judgment == *key;
-            div().id(SharedString::from(format!("evidence-judge-{}-{n}", row.id))).flex().flex_none().items_center().h(px(24.)).px(px(9.)).rounded(px(12.)).text_size(px(12.)).cursor_pointer().border_1()
+            div().id(SharedString::from(format!("evidence-judge-{}-{n}", row.id))).flex().flex_none().items_center().h(text_px(24.)).px(px(9.)).rounded(px(12.)).text_size(text_px(12.)).cursor_pointer().border_1()
                 .when(on, |d| d.bg(Theme::accent_soft()).text_color(Theme::accent()).border_color(Theme::accent().opacity(0.35)))
                 .when(!on, |d| d.border_color(Theme::line()).text_color(Theme::text_secondary()).hover(|s| s.bg(Theme::hover())))
                 .on_click(self.on(Cmd::JudgeReviewEvidence(row.id.clone(), *key), cx)).child(t(label))
         }).collect::<Vec<_>>();
         div().flex().flex_col().gap(px(6.)).p(px(12.)).rounded(px(10.)).border_1().border_color(Theme::line()).bg(Theme::bg_body())
-            .child(self.selectable(format!("evidence-claim-{}", row.id), row.claim.clone(), cx).line_height(px(21.)))
-            .child(div().flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(Theme::text_secondary())
+            .child(self.selectable(format!("evidence-claim-{}", row.id), row.claim.clone(), cx).line_height(theme::body_line(21.)))
+            .child(div().flex().items_center().gap(px(6.)).text_size(text_px(12.)).text_color(Theme::text_secondary())
                 .child(ui::icon("file-text", 12., Theme::text_tertiary()))
                 .child(div().min_w_0().truncate().child(source)))
             .when(!row.quote.is_empty(), |d| d.child(div().flex().flex_col().gap(px(3.)).pl(px(10.)).border_l_2().border_color(Theme::line_strong())
-                .child(self.selectable(format!("evidence-quote-{}", row.id), row.quote.clone(), cx).text_size(px(12.)).line_height(px(19.)).text_color(Theme::text_secondary()))
-                .when_some(quote_verdict(check), |d, (mark, verdict, color)| d.child(div().flex().items_center().gap(px(4.)).text_size(px(12.)).text_color(color).child(ui::icon(mark, 12., color)).child(verdict)))))
-            .when(!row.note.is_empty(), |d| d.child(div().text_size(px(12.)).line_height(px(19.)).text_color(Theme::text_secondary()).child(tf!("备注：{}", "Note: {}", row.note))))
-            .when_some(warning, |d, warning| d.child(div().text_size(px(12.)).line_height(px(19.)).text_color(Theme::warning()).child(warning)))
+                .child(self.selectable(format!("evidence-quote-{}", row.id), row.quote.clone(), cx).text_size(text_px(12.)).line_height(text_px(19.)).text_color(Theme::text_secondary()))
+                .when_some(quote_verdict(check), |d, (mark, verdict, color)| d.child(div().flex().items_center().gap(px(4.)).text_size(text_px(12.)).text_color(color).child(ui::icon(mark, 12., color)).child(verdict)))))
+            .when(!row.note.is_empty(), |d| d.child(div().text_size(text_px(12.)).line_height(text_px(19.)).text_color(Theme::text_secondary()).child(tf!("备注：{}", "Note: {}", row.note))))
+            .when_some(warning, |d, warning| d.child(div().text_size(text_px(12.)).line_height(text_px(19.)).text_color(Theme::warning()).child(warning)))
             .child(div().flex().flex_wrap().items_center().gap(px(5.))
                 .when(row.source_available && linked, |d| d.children(judgments))
                 .child(div().flex_1())
-                .when(row.source_available, |d| d.child(ui::ghost_button(SharedString::from(format!("evidence-goto-{}", row.id)), None, Some(if has_pdf { t("看原文").into() } else { t("看文献").into() })).h(px(24.)).text_size(px(12.)).on_click(self.on(Cmd::GotoSource(row.paper_id.clone(), page.filter(|_| has_pdf), row.quote.clone()), cx))))
-                .child(ui::ghost_button(SharedString::from(format!("evidence-edit-{}", row.id)), None, Some(t("编辑").into())).h(px(24.)).text_size(px(12.)).on_click(self.on(Cmd::EditReviewEvidence(Some(row.id.clone()), String::new()), cx)))
-                .child(ui::ghost_button(SharedString::from(format!("evidence-delete-{}", row.id)), None, Some(t("删除").into())).h(px(24.)).text_size(px(12.)).on_click(self.on(Cmd::AskRemoveReviewEvidence(row.id.clone()), cx))))
+                .when(row.source_available, |d| d.child(ui::ghost_button(SharedString::from(format!("evidence-goto-{}", row.id)), None, Some(if has_pdf { t("看原文").into() } else { t("看文献").into() })).h(text_px(24.)).text_size(text_px(12.)).on_click(self.on(Cmd::GotoSource(row.paper_id.clone(), page.filter(|_| has_pdf), row.quote.clone()), cx))))
+                .child(ui::ghost_button(SharedString::from(format!("evidence-edit-{}", row.id)), None, Some(t("编辑").into())).h(text_px(24.)).text_size(text_px(12.)).on_click(self.on(Cmd::EditReviewEvidence(Some(row.id.clone()), String::new()), cx)))
+                .child(ui::ghost_button(SharedString::from(format!("evidence-delete-{}", row.id)), None, Some(t("删除").into())).h(text_px(24.)).text_size(text_px(12.)).on_click(self.on(Cmd::AskRemoveReviewEvidence(row.id.clone()), cx))))
             .into_any_element()
     }
 
@@ -460,11 +460,11 @@ impl Workspace {
     fn render_review_record(&self, chat: &Chat, review: &wisp_core::review::Review, cx: &mut Context<Self>) -> AnyElement {
         use crate::app::ReviewText;
         let heading = |title: String, state: Option<(&'static str, Hsla)>, what: ReviewText, has: bool, cx: &mut Context<Self>| div().flex().items_center().gap(px(8.))
-            .child(div().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child(title.clone()))
-            .when_some(state, |d, (label, color)| d.child(div().text_size(px(12.)).text_color(color).child(label)))
+            .child(div().text_size(text_px(14.)).font_weight(FontWeight::SEMIBOLD).child(title.clone()))
+            .when_some(state, |d, (label, color)| d.child(div().text_size(text_px(12.)).text_color(color).child(label)))
             .child(div().flex_1())
-            .child(ui::ghost_button(SharedString::from(format!("review-edit-{title}")), Some("pen-line"), Some(if has { t("编辑").into() } else { t("填写").into() })).h(px(24.)).text_size(px(12.)).on_click(self.on(Cmd::EditReviewText(what), cx)));
-        let text = |id: &str, text: &str, empty: &'static str| if text.is_empty() { div().text_size(px(13.)).text_color(Theme::text_tertiary()).child(empty) } else { crate::markdown::render(id, text, None, None) };
+            .child(ui::ghost_button(SharedString::from(format!("review-edit-{title}")), Some("pen-line"), Some(if has { t("编辑").into() } else { t("填写").into() })).h(text_px(24.)).text_size(text_px(12.)).on_click(self.on(Cmd::EditReviewText(what), cx)));
+        let text = |id: &str, text: &str, empty: &'static str| if text.is_empty() { div().text_size(text_px(13.)).text_color(Theme::text_tertiary()).child(empty) } else { crate::markdown::render(id, text, None, None) };
         let confirmed = |on: bool, has: bool| if !has { None } else if on { Some((t("已确认"), Theme::success())) } else { Some((t("待确认"), Theme::warning())) };
         let judged = review.evidence_rows.iter().filter(|row| row.judgment != wisp_core::review::EvidenceJudgment::Unreviewed && row.source_current && review.linked(row)).count();
         let block = || div().flex().flex_col().gap(px(8.));
@@ -477,31 +477,31 @@ impl Workspace {
             // The framework is shown once it is its turn, and stays out of the way where the review went on without one.
             .when(review.requirements_confirmed && (!review.framework.is_empty() || review.step() == 2), |d| d.child(block()
                 .child(heading(t("初步框架").into(), confirmed(review.framework_confirmed, !review.framework.is_empty()), ReviewText::Framework, !review.framework.is_empty(), cx))
-                .child(div().text_size(px(12.)).line_height(px(19.)).text_color(Theme::text_tertiary()).child(t("从已有综述得来：它们各问什么、怎么组织、哪里没讲到。它只是起点，大纲要对照它、按文献库里的研究重建。")))
+                .child(div().text_size(text_px(12.)).line_height(text_px(19.)).text_color(Theme::text_tertiary()).child(t("从已有综述得来：它们各问什么、怎么组织、哪里没讲到。它只是起点，大纲要对照它、按文献库里的研究重建。")))
                 .child(text("review-framework", &review.framework, t("还没有记下。让助手读已有综述、提出初步框架后，点回答下面的「记为初步框架」；没有可参照的综述，就点上方的「跳过」。")))))
             .when(review.requirements_confirmed && review.framework_settled(), |d| d.child(block()
                 .child(heading(t("大纲").into(), confirmed(review.outline_confirmed, !review.outline.is_empty()), ReviewText::Outline, !review.outline.is_empty(), cx))
-                .when(review.framework.is_empty(), |d| d.child(div().flex().items_center().gap(px(4.)).text_size(px(12.)).text_color(Theme::text_tertiary())
+                .when(review.framework.is_empty(), |d| d.child(div().flex().items_center().gap(px(4.)).text_size(text_px(12.)).text_color(Theme::text_tertiary())
                     .child(t("没有参照已有综述。"))
-                    .child(ui::ghost_button("review-add-framework", None, Some(t("补上初步框架").into())).h(px(22.)).text_size(px(12.)).on_click(self.on(Cmd::EditReviewText(ReviewText::Framework), cx)))))
+                    .child(ui::ghost_button("review-add-framework", None, Some(t("补上初步框架").into())).h(text_px(22.)).text_size(text_px(12.)).on_click(self.on(Cmd::EditReviewText(ReviewText::Framework), cx)))))
                 .child(text("review-outline", &review.outline, if review.framework.is_empty() { t("还没有记下。让助手提出大纲后，点回答下面的「记为大纲」。") } else { t("还没有记下。让助手对照初步框架重建大纲后，点回答下面的「记为大纲」。") }))))
             .when(review.outline_confirmed, |d| d
                 .child(block()
                     .child(div().flex().items_center().gap(px(8.))
-                        .child(div().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child(t("正文与证据")))
-                        .child(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(tf!("{} 节 · {} 条证据，已判断 {judged}", "{} sections · {} evidence records, {judged} judged", review.sections.len(), review.evidence_rows.len())))
+                        .child(div().text_size(text_px(14.)).font_weight(FontWeight::SEMIBOLD).child(t("正文与证据")))
+                        .child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(tf!("{} 节 · {} 条证据，已判断 {judged}", "{} sections · {} evidence records, {judged} judged", review.sections.len(), review.evidence_rows.len())))
                         .child(div().flex_1())
-                        .child(ui::ghost_button("evidence-add", Some("plus"), Some(t("添加证据").into())).h(px(24.)).text_size(px(12.)).on_click(self.on(Cmd::EditReviewEvidence(None, String::new()), cx))))
-                    .child(div().text_size(px(12.)).line_height(px(19.)).text_color(Theme::text_tertiary()).child(t("保存一节正文时，它的每处引用成为一条证据：论断是引用所在的那句话，摘录已和文献的文字比对。来源是否支持论断，由你对照原文判断。")))
-                    .when(review.sections.is_empty(), |d| d.child(div().text_size(px(13.)).text_color(Theme::text_tertiary()).child(t("还没有保存正文。让助手按大纲写一节，点回答下面的「保存正文」。")))))
+                        .child(ui::ghost_button("evidence-add", Some("plus"), Some(t("添加证据").into())).h(text_px(24.)).text_size(text_px(12.)).on_click(self.on(Cmd::EditReviewEvidence(None, String::new()), cx))))
+                    .child(div().text_size(text_px(12.)).line_height(text_px(19.)).text_color(Theme::text_tertiary()).child(t("保存一节正文时，它的每处引用成为一条证据：论断是引用所在的那句话，摘录已和文献的文字比对。来源是否支持论断，由你对照原文判断。")))
+                    .when(review.sections.is_empty(), |d| d.child(div().text_size(text_px(13.)).text_color(Theme::text_tertiary()).child(t("还没有保存正文。让助手按大纲写一节，点回答下面的「保存正文」。")))))
                 .children(review.sections.iter().enumerate().map(|(n, section)| {
                     let rows: Vec<_> = review.evidence_rows.iter().filter(|row| !row.section_detached && row.section == section.name).collect();
                     block()
                         .child(div().flex().items_center().gap(px(8.))
                             .child(div().font_weight(FontWeight::MEDIUM).child(format!("{} · {}", n + 1, section.name)))
                             .child(div().flex_1())
-                            .child(ui::ghost_button(SharedString::from(format!("review-edit-section-{n}")), Some("pen-line"), Some(t("编辑").into())).h(px(24.)).text_size(px(12.)).on_click(self.on(Cmd::EditReviewText(ReviewText::Section(section.name.clone())), cx)))
-                            .child(ui::ghost_button(SharedString::from(format!("review-remove-section-{n}")), Some("bin"), Some(t("删除").into())).h(px(24.)).text_size(px(12.)).on_click(self.on(Cmd::AskRemoveReviewSection(section.name.clone()), cx))))
+                            .child(ui::ghost_button(SharedString::from(format!("review-edit-section-{n}")), Some("pen-line"), Some(t("编辑").into())).h(text_px(24.)).text_size(text_px(12.)).on_click(self.on(Cmd::EditReviewText(ReviewText::Section(section.name.clone())), cx)))
+                            .child(ui::ghost_button(SharedString::from(format!("review-remove-section-{n}")), Some("bin"), Some(t("删除").into())).h(text_px(24.)).text_size(text_px(12.)).on_click(self.on(Cmd::AskRemoveReviewSection(section.name.clone()), cx))))
                         .child(crate::markdown::render(&format!("review-section-{n}"), &section.body, None, None))
                         .children(rows.into_iter().map(|row| self.render_evidence(review, row, &chat.review_checks, cx)))
                 }))
@@ -611,10 +611,10 @@ impl Workspace {
                             .flex_col()
                             .flex_1()
                             .min_w(px(200.))
-                            .when(!about_paper, |d| d.child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(if listing { t("助手的历史对话") } else { t("助手") })))
+                            .when(!about_paper, |d| d.child(div().text_size(text_px(15.)).font_weight(FontWeight::SEMIBOLD).child(if listing { t("助手的历史对话") } else { t("助手") })))
                             // The paper's panel has its title above; its history says whose it is.
                             .when(about_paper && listing, |d| d.child(div().font_weight(FontWeight::MEDIUM).child(t("这篇文献的历史对话"))))
-                            .child(div().text_size(px(12.)).line_height(px(17.)).text_color(Theme::text_tertiary()).child(match (listing, about_paper) {
+                            .child(div().text_size(text_px(12.)).line_height(text_px(17.)).text_color(Theme::text_tertiary()).child(match (listing, about_paper) {
                                 (true, false) => t("和助手就整个文献库有过的对话；点开一次可以接着说。单篇文献的对话在各自的「提问」里").to_string(),
                                 (true, true) => t("就这篇文献提过的问题和回答；点开一次对话可以接着问").to_string(),
                                 (false, _) => scope,
@@ -640,15 +640,15 @@ impl Workspace {
                 let sections = if review.sections.is_empty() { String::new() } else { tf!(" · 正文 {} 节", " · {} sections", review.sections.len()) };
                 let open = review.evidence_rows.iter().filter(|row| row.judgment == wisp_core::review::EvidenceJudgment::Unreviewed || !row.source_current || !review.linked(row)).count();
                 let evidence = if open > 0 { tf!(" · {open} 条证据待判断", " · {open} evidence records awaiting judgment") } else { String::new() };
-                let step = |id: &'static str, label: &'static str, what: ReviewDo, cx: &mut Context<Self>| ui::primary_button(id, label).h(px(26.)).on_click(self.on(Cmd::Review(what, String::new()), cx));
-                let ask = |id: &'static str, label: &'static str, request: &'static str, cx: &mut Context<Self>| ui::secondary_button(id, label).h(px(26.)).on_click(self.on(Cmd::Suggest(false, request.to_string()), cx));
-                d.child(div().flex().flex_none().flex_wrap().items_center().gap(px(6.)).px(px(16.)).py(px(6.)).border_b_1().border_color(Theme::line()).bg(Theme::bg_sunken()).text_size(px(12.))
+                let step = |id: &'static str, label: &'static str, what: ReviewDo, cx: &mut Context<Self>| ui::primary_button(id, label).h(text_px(26.)).on_click(self.on(Cmd::Review(what, String::new()), cx));
+                let ask = |id: &'static str, label: &'static str, request: &'static str, cx: &mut Context<Self>| ui::secondary_button(id, label).h(text_px(26.)).on_click(self.on(Cmd::Suggest(false, request.to_string()), cx));
+                d.child(div().flex().flex_none().flex_wrap().items_center().gap(px(6.)).px(px(16.)).py(px(6.)).border_b_1().border_color(Theme::line()).bg(Theme::bg_sunken()).text_size(text_px(12.))
                     .child(div().flex_1().min_w_0().text_color(Theme::text_secondary()).child(format!("{}{sections}{evidence}", review_step(review))))
                     .when(review.step() == 1 && !review.requirements.is_empty(), |d| d.child(step("review-confirm-requirements", t("确认要求"), ReviewDo::ConfirmRequirements, cx)))
                     // Where the step's text is still to come, the request that asks for it is one click; keeping the answer is the person's.
                     .when(review.step() == 2 && review.framework.is_empty(), |d| d
                         .when(!chat.busy && !chat.review_open, |d| d.child(ask("review-ask-framework", t("提出初步框架"), t("请找出这个主题已发表的综述，逐篇比较，再提出初步框架。"), cx)))
-                        .child(ui::secondary_button("review-skip-framework", t("跳过")).h(px(26.)).tooltip(|_, cx| cx.new(|_| crate::write_assist::Tip(t("没有可参照的综述时，直接按文献库拟大纲").to_string())).into()).on_click(self.on(Cmd::Review(ReviewDo::SkipFramework, String::new()), cx))))
+                        .child(ui::secondary_button("review-skip-framework", t("跳过")).h(text_px(26.)).tooltip(|_, cx| cx.new(|_| crate::write_assist::Tip(t("没有可参照的综述时，直接按文献库拟大纲").to_string())).into()).on_click(self.on(Cmd::Review(ReviewDo::SkipFramework, String::new()), cx))))
                     .when(review.step() == 2 && !review.framework.is_empty(), |d| d.child(step("review-confirm-framework", t("确认框架"), ReviewDo::ConfirmFramework, cx)))
                     .when(review.step() == 3 && review.outline.is_empty() && !chat.busy && !chat.review_open, |d| d.child(if review.framework.is_empty() {
                         ask("review-ask-outline", t("提出大纲"), t("请按文献库里的文献提出大纲。"), cx)
@@ -656,9 +656,9 @@ impl Workspace {
                         ask("review-ask-outline", t("重建大纲"), t("请对照初步框架，按文献库里的研究重建大纲。"), cx)
                     }))
                     .when(review.step() == 3 && !review.outline.is_empty(), |d| d.child(step("review-confirm-outline", t("确认大纲"), ReviewDo::ConfirmOutline, cx)))
-                    .when(review.step() == 4 && !review.sections.is_empty() && review.checks_current && !review.completed, |d| d.child(ui::secondary_button("review-complete", t("标为完成")).h(px(26.)).on_click(self.on(Cmd::Review(ReviewDo::Complete, String::new()), cx))))
-                    .when(review.step() == 4 && !review.sections.is_empty(), |d| d.child(ui::secondary_button("review-manuscript", t("存为新稿件")).h(px(26.)).on_click(self.on(Cmd::ReviewToManuscript, cx))))
-                    .child(ui::secondary_button("review-toggle", if chat.review_open { t("返回对话") } else { t("查看记录") }).h(px(26.)).on_click(self.on(Cmd::ToggleReview, cx))))
+                    .when(review.step() == 4 && !review.sections.is_empty() && review.checks_current && !review.completed, |d| d.child(ui::secondary_button("review-complete", t("标为完成")).h(text_px(26.)).on_click(self.on(Cmd::Review(ReviewDo::Complete, String::new()), cx))))
+                    .when(review.step() == 4 && !review.sections.is_empty(), |d| d.child(ui::secondary_button("review-manuscript", t("存为新稿件")).h(text_px(26.)).on_click(self.on(Cmd::ReviewToManuscript, cx))))
+                    .child(ui::secondary_button("review-toggle", if chat.review_open { t("返回对话") } else { t("查看记录") }).h(text_px(26.)).on_click(self.on(Cmd::ToggleReview, cx))))
             })
             .child(body)
             .when(configured, |d| d.child(self.render_composer(about_paper, chat, &model, window, cx)))
@@ -674,10 +674,10 @@ impl Workspace {
                         .py(px(10.))
                         .border_t_1()
                         .border_color(Theme::line())
-                        .text_size(px(12.))
+                        .text_size(text_px(12.))
                         .text_color(Theme::text_tertiary())
                         .child(div().flex_1().min_w_0().child(t("接着问需要一个模型服务。")))
-                        .child(ui::secondary_button(SharedString::from(format!("chat-settings-{side}")), t("打开设置")).h(px(28.)).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx))),
+                        .child(ui::secondary_button(SharedString::from(format!("chat-settings-{side}")), t("打开设置")).h(text_px(28.)).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx))),
                 )
             })
             .children(materials))
@@ -706,7 +706,7 @@ impl Workspace {
         ];
         let cards = groups.into_iter().map(|(icon, title, starts)| {
             let lines = starts.iter().enumerate().map(|(n, start)| {
-                let line = div().id(SharedString::from(format!("start-{icon}-{n}"))).flex().gap(px(8.)).w_full().px(px(8.)).py(px(6.)).rounded(px(6.)).text_size(px(13.)).line_height(px(19.)).cursor_pointer().hover(|s| s.bg(Theme::hover()));
+                let line = div().id(SharedString::from(format!("start-{icon}-{n}"))).flex().gap(px(8.)).w_full().px(px(8.)).py(px(6.)).rounded(px(6.)).text_size(text_px(13.)).line_height(text_px(19.)).cursor_pointer().hover(|s| s.bg(Theme::hover()));
                 match start {
                     Say(text) => line.child(div().flex_1().min_w_0().child(t(text))).on_click(self.on(Cmd::Suggest(false, t(text).to_string()), cx)),
                     Command(name) => {
@@ -727,7 +727,7 @@ impl Workspace {
                 .rounded(px(10.))
                 .border_1()
                 .border_color(Theme::line())
-                .child(div().flex().items_center().gap(px(7.)).px(px(8.)).pt(px(4.)).pb(px(6.)).child(ui::icon(icon, 14., Theme::text_tertiary())).child(div().text_size(px(12.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text_tertiary()).child(t(title))))
+                .child(div().flex().items_center().gap(px(7.)).px(px(8.)).pt(px(4.)).pb(px(6.)).child(ui::icon(icon, 14., Theme::text_tertiary())).child(div().text_size(text_px(12.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text_tertiary()).child(t(title))))
                 .children(lines)
         });
         div()
@@ -744,8 +744,8 @@ impl Workspace {
             .pt(px(40.))
             .pb(px(24.))
             .child(ui::icon("sparkle", 30., Theme::text_placeholder()))
-            .child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("交给助手")))
-            .child(div().max_w(px(600.)).text_size(px(12.)).line_height(px(18.)).text_center().text_color(Theme::text_tertiary()).child(t("交代一件事，或者提一个问题。助手会自己检索和翻阅文献库，回答标出出处；要改动文献库时先问你。")))
+            .child(div().text_size(text_px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("交给助手")))
+            .child(div().max_w(px(600.)).text_size(text_px(12.)).line_height(text_px(18.)).text_center().text_color(Theme::text_tertiary()).child(t("交代一件事，或者提一个问题。助手会自己检索和翻阅文献库，回答标出出处；要改动文献库时先问你。")))
             // Two cards to a row, one where the page is narrow.
             .child(div().flex().flex_wrap().justify_center().items_start().gap(px(12.)).w_full().max_w(px(720.)).pt(px(20.)).children(cards))
             .into_any_element()
@@ -807,7 +807,7 @@ impl Workspace {
                 .flex_none()
                 .items_center()
                 .gap(px(8.))
-                .h(px(30.))
+                .h(text_px(30.))
                 .px(px(8.))
                 .rounded(px(6.))
                 .cursor_pointer()
@@ -824,11 +824,11 @@ impl Workspace {
                         cx.new(|_| PaperDrag { held, ..drag.clone() })
                     })
                 })
-                .when(!label.is_empty(), |d| d.child(div().flex_none().w(px(34.)).text_size(px(12.)).font_weight(FontWeight::MEDIUM).text_color(Theme::accent()).child(label)))
+                .when(!label.is_empty(), |d| d.child(div().flex_none().w(px(34.)).text_size(text_px(12.)).font_weight(FontWeight::MEDIUM).text_color(Theme::accent()).child(label)))
                 .child(div().flex_1().min_w_0().truncate().child(paper.title.clone()))
-                .when(!by.is_empty(), |d| d.child(div().flex_none().max_w(px(150.)).truncate().text_size(px(12.)).text_color(Theme::text_tertiary()).child(by)))
-                .when(!state.is_empty(), |d| d.child(div().flex_none().text_size(px(12.)).text_color(if record == "full" { Theme::text_secondary() } else { Theme::warning() }).child(state.join(" · "))))
-                .child(div().flex_none().w(px(68.)).text_right().text_size(px(12.)).text_color(color).child(text))
+                .when(!by.is_empty(), |d| d.child(div().flex_none().max_w(px(150.)).truncate().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(by)))
+                .when(!state.is_empty(), |d| d.child(div().flex_none().text_size(text_px(12.)).text_color(if record == "full" { Theme::text_secondary() } else { Theme::warning() }).child(state.join(" · "))))
+                .child(div().flex_none().w(px(68.)).text_right().text_size(text_px(12.)).text_color(color).child(text))
                 // The same as dragging the row into the conversation, for a hand that would rather click.
                 .when(pinnable, |d| {
                     let (id, tip) = (paper.id.clone(), if pinned { t("不再限定这一篇") } else { t("只读这一篇（也可以把这一行拖进对话）") });
@@ -875,7 +875,7 @@ impl Workspace {
                     .flex_none()
                     .items_center()
                     .gap(px(8.))
-                    .h(px(34.))
+                    .h(text_px(34.))
                     .mx(px(8.))
                     .mt(px(8.))
                     .px(px(10.))
@@ -885,9 +885,9 @@ impl Workspace {
                     .border_color(if lib.scope_find.focus_handle(cx).is_focused(window) { Theme::accent() } else { Theme::bg_sunken() })
                     .child(ui::icon("search", 15., Theme::text_tertiary()))
                     .child(div().flex().flex_1().min_w_0().child(lib.scope_find.clone()))
-                    .when(searching, |d| d.child(div().flex_none().text_size(px(12.)).text_color(Theme::text_tertiary()).child(format!("{total} / {all}"))).child(ui::ghost_button("materials-find-clear", Some("x"), None).h(px(22.)).min_w(px(22.)).on_click(self.on(Cmd::Scope(ScopeDo::ClearFind), cx)))),
+                    .when(searching, |d| d.child(div().flex_none().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(format!("{total} / {all}"))).child(ui::ghost_button("materials-find-clear", Some("x"), None).h(text_px(22.)).min_w(px(22.)).on_click(self.on(Cmd::Scope(ScopeDo::ClearFind), cx)))),
             )
-            .child(div().flex_none().px(px(16.)).pt(px(8.)).pb(px(4.)).text_size(px(12.)).line_height(px(17.)).text_color(Theme::text_tertiary()).child(note))
+            .child(div().flex_none().px(px(16.)).pt(px(8.)).pb(px(4.)).text_size(text_px(12.)).line_height(text_px(17.)).text_color(Theme::text_tertiary()).child(note))
             .child(
                 div()
                     .id("materials")
@@ -900,7 +900,7 @@ impl Workspace {
                     .pb(px(8.))
                     .children(listed)
                     .when(total == 0, |d| d.child(div().px(px(8.)).py(px(10.)).text_color(Theme::text_tertiary()).child(if searching { t("没有符合的文献。换个词，或清空搜索。") } else { t("当前列表里没有文献。") })))
-                    .when(total > LISTED, |d| d.child(div().px(px(8.)).py(px(6.)).text_size(px(12.)).text_color(Theme::text_tertiary()).child(tf!("另有 {} 篇没有列出；再输入几个词可以找到。", "{} more papers not listed here; type a few more words to find them.", total - LISTED)))),
+                    .when(total > LISTED, |d| d.child(div().px(px(8.)).py(px(6.)).text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(tf!("另有 {} 篇没有列出；再输入几个词可以找到。", "{} more papers not listed here; type a few more words to find them.", total - LISTED)))),
             );
         ui::fade_in("materials-in", panel).into_any_element()
     }
@@ -929,7 +929,7 @@ impl Workspace {
                             .items_end()
                             .gap(px(6.))
                             .when(!images.is_empty(), |d| d.child(div().flex().flex_wrap().justify_end().gap(px(6.)).max_w(relative(0.85)).children(images.iter().map(|picture| thumbnail(picture, 96.)))))
-                            .when(!text.is_empty(), |d| d.child(self.selectable(format!("asked-{side}-{i}"), text.clone(), cx).max_w(relative(0.85)).px(px(14.)).py(px(9.)).rounded(px(16.)).bg(Theme::groove()).line_height(px(21.))))
+                            .when(!text.is_empty(), |d| d.child(self.selectable(format!("asked-{side}-{i}"), text.clone(), cx).max_w(relative(0.85)).px(px(14.)).py(px(9.)).rounded(px(16.)).bg(Theme::groove()).line_height(theme::body_line(21.))))
                             .into_any_element(),
                     );
                     i += 1;
@@ -955,11 +955,11 @@ impl Workspace {
                         .flex()
                         .items_center()
                         .gap(px(8.))
-                        .h(px(22.))
+                        .h(text_px(22.))
                         .text_color(Theme::text_tertiary())
                         .child(ui::spinner(SharedString::from(format!("thinking-{side}")), 14., Theme::accent()))
                         .child(if chat.steps > 1 { t("正在整理查到的内容…") } else { t("正在阅读文献并思考…") })
-                        .child(div().text_size(px(12.)).text_color(Theme::text_placeholder()).child(elapsed(chat)))
+                        .child(div().text_size(text_px(12.)).text_color(Theme::text_placeholder()).child(elapsed(chat)))
                         .into_any_element(),
                 );
                 i += 1;
@@ -1039,15 +1039,15 @@ impl Workspace {
                                 .flex()
                                 .items_center()
                                 .gap(px(2.))
-                                .child(ui::ghost_button(SharedString::from(format!("picked-copy-{side}-{i}")), Some("copy"), Some(t("复制所选").into())).h(px(24.)).text_size(px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::CopyPicked(about_paper), cx)))
-                                .child(ui::ghost_button(SharedString::from(format!("picked-quote-{side}-{i}")), Some("pen-line"), Some(t("引用到输入框").into())).h(px(24.)).text_size(px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::QuotePicked(about_paper), cx)))
-                                .when(!about_paper && review.is_none() && has_manuscript, |d| d.child(ui::ghost_button(SharedString::from(format!("picked-insert-{side}-{i}")), Some("plus"), Some(t("所选插入稿件").into())).h(px(24.)).text_size(px(12.)).text_color(Theme::accent()).on_click(self.on_menu(MenuKind::InsertInto(None), cx))))
+                                .child(ui::ghost_button(SharedString::from(format!("picked-copy-{side}-{i}")), Some("copy"), Some(t("复制所选").into())).h(text_px(24.)).text_size(text_px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::CopyPicked(about_paper), cx)))
+                                .child(ui::ghost_button(SharedString::from(format!("picked-quote-{side}-{i}")), Some("pen-line"), Some(t("引用到输入框").into())).h(text_px(24.)).text_size(text_px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::QuotePicked(about_paper), cx)))
+                                .when(!about_paper && review.is_none() && has_manuscript, |d| d.child(ui::ghost_button(SharedString::from(format!("picked-insert-{side}-{i}")), Some("plus"), Some(t("所选插入稿件").into())).h(text_px(24.)).text_size(text_px(12.)).text_color(Theme::accent()).on_click(self.on_menu(MenuKind::InsertInto(None), cx))))
                                 // In a review's conversation, the part selected can be kept in place of the whole answer.
                                 .when_some(review, |d, review| {
                                     let text = chat.picked_text().unwrap_or_default();
                                     let (label, what) = match review.step() { 1 => (t("所选记为要求"), crate::app::ReviewDo::Requirements), 2 => (t("所选记为初步框架"), crate::app::ReviewDo::Framework), 3 => (t("所选记为大纲"), crate::app::ReviewDo::Outline), _ => (t("所选存为正文"), crate::app::ReviewDo::Section) };
-                                    d.child(ui::ghost_button(SharedString::from(format!("picked-review-{side}-{i}")), Some("check"), Some(label.into())).h(px(24.)).text_size(px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::Review(what, text.clone()), cx)))
-                                        .when(review.step() == 4, |d| d.child(ui::ghost_button(SharedString::from(format!("picked-evidence-{side}-{i}")), Some("plus"), Some(t("记为论断").into())).h(px(24.)).text_size(px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::EditReviewEvidence(None, text), cx))))
+                                    d.child(ui::ghost_button(SharedString::from(format!("picked-review-{side}-{i}")), Some("check"), Some(label.into())).h(text_px(24.)).text_size(text_px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::Review(what, text.clone()), cx)))
+                                        .when(review.step() == 4, |d| d.child(ui::ghost_button(SharedString::from(format!("picked-evidence-{side}-{i}")), Some("plus"), Some(t("记为论断").into())).h(text_px(24.)).text_size(text_px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::EditReviewEvidence(None, text), cx))))
                                 }),
                         )
                     })
@@ -1059,13 +1059,13 @@ impl Workspace {
                                 .items_center()
                                 .flex_wrap()
                                 .gap(px(2.))
-                                .child(ui::ghost_button(SharedString::from(format!("copy-{side}-{i}")), Some("copy"), None).h(px(24.)).min_w(px(24.)).opacity(0.7).on_click(self.on(Cmd::CopyText(whole.clone()), cx)))
+                                .child(ui::ghost_button(SharedString::from(format!("copy-{side}-{i}")), Some("copy"), None).h(text_px(24.)).min_w(px(24.)).opacity(0.7).on_click(self.on(Cmd::CopyText(whole.clone()), cx)))
                                 // A review's answers go to its record, step by step; any other answer about the library can become a manuscript as it is.
-                                .when(!about_paper && review.is_none() && !whole.trim().is_empty(), |d| d.child(ui::ghost_button(SharedString::from(format!("manuscript-{side}-{i}")), Some("pen-line"), Some(t("保存为新稿件").into())).h(px(24.)).text_size(px(12.)).opacity(0.7).on_click(self.on(Cmd::AnswerToManuscript(question.clone(), whole.clone()), cx))))
-                                .when(!about_paper && review.is_none() && has_manuscript && !whole.trim().is_empty(), |d| d.child(ui::ghost_button(SharedString::from(format!("insert-{side}-{i}")), Some("plus"), Some(t("插入到稿件").into())).h(px(24.)).text_size(px(12.)).opacity(0.7).on_click(self.on_menu(MenuKind::InsertInto(Some(whole.clone())), cx))))
+                                .when(!about_paper && review.is_none() && !whole.trim().is_empty(), |d| d.child(ui::ghost_button(SharedString::from(format!("manuscript-{side}-{i}")), Some("pen-line"), Some(t("保存为新稿件").into())).h(text_px(24.)).text_size(text_px(12.)).opacity(0.7).on_click(self.on(Cmd::AnswerToManuscript(question.clone(), whole.clone()), cx))))
+                                .when(!about_paper && review.is_none() && has_manuscript && !whole.trim().is_empty(), |d| d.child(ui::ghost_button(SharedString::from(format!("insert-{side}-{i}")), Some("plus"), Some(t("插入到稿件").into())).h(text_px(24.)).text_size(text_px(12.)).opacity(0.7).on_click(self.on_menu(MenuKind::InsertInto(Some(whole.clone())), cx))))
                                 .when_some(review, |d, review| {
                                     use crate::app::ReviewDo;
-                                    let mut button = |key: &'static str, label: &'static str, what: ReviewDo| ui::ghost_button(SharedString::from(format!("review-{key}-{side}-{i}")), Some("check"), Some(label.into())).h(px(24.)).text_size(px(12.)).opacity(0.7).on_click(self.on(Cmd::Review(what, whole.clone()), cx));
+                                    let mut button = |key: &'static str, label: &'static str, what: ReviewDo| ui::ghost_button(SharedString::from(format!("review-{key}-{side}-{i}")), Some("check"), Some(label.into())).h(text_px(24.)).text_size(text_px(12.)).opacity(0.7).on_click(self.on(Cmd::Review(what, whole.clone()), cx));
                                     // Only what the step in hand takes: the rest is changed in the record.
                                     match review.step() {
                                         1 => d.child(button("requirements", t("记为要求"), ReviewDo::Requirements)),
@@ -1075,7 +1075,7 @@ impl Workspace {
                                     }
                                 })
                                 // An answer about one paper can join that paper's notes; one about the library names many.
-                                .when(about_paper, |d| d.child(ui::ghost_button(SharedString::from(format!("note-{side}-{i}")), Some("pen-line"), Some(t("存为笔记").into())).h(px(24.)).text_size(px(12.)).opacity(0.7).on_click(self.on(Cmd::AnswerToNote(question, whole), cx)))),
+                                .when(about_paper, |d| d.child(ui::ghost_button(SharedString::from(format!("note-{side}-{i}")), Some("pen-line"), Some(t("存为笔记").into())).h(text_px(24.)).text_size(text_px(12.)).opacity(0.7).on_click(self.on(Cmd::AnswerToNote(question, whole), cx)))),
                         )
                     })
                     .into_any_element(),
@@ -1084,13 +1084,13 @@ impl Workspace {
         }
         // Text has arrived and more is on its way (a tool call being written, the next piece): the mark keeps turning under it.
         if chat.busy && chat.pending.is_none() && matches!(chat.messages.last(), Some(ChatItem::Answer(text)) if !text.is_empty()) {
-            items.push(div().flex().items_center().gap(px(8.)).h(px(18.)).child(ui::spinner(SharedString::from(format!("working-{side}")), 13., Theme::accent())).child(div().text_size(px(12.)).text_color(Theme::text_placeholder()).child(elapsed(chat))).into_any_element());
+            items.push(div().flex().items_center().gap(px(8.)).h(text_px(18.)).child(ui::spinner(SharedString::from(format!("working-{side}")), 13., Theme::accent())).child(div().text_size(text_px(12.)).text_color(Theme::text_placeholder()).child(elapsed(chat))).into_any_element());
         }
         if let Some(pending) = &chat.pending {
             let button = |name: &str, label: &'static str, consent: Consent, this: &Self, cx: &mut Context<Self>| {
                 let id = SharedString::from(format!("consent-{name}-{side}"));
                 let shell = if consent == Consent::Once { ui::primary_button(id, label) } else { ui::secondary_button(id, label) };
-                shell.h(px(28.)).on_click(this.on(Cmd::AnswerTools(about_paper, consent), cx))
+                shell.h(text_px(28.)).on_click(this.on(Cmd::AnswerTools(about_paper, consent), cx))
             };
             items.push(
                 div()
@@ -1104,12 +1104,12 @@ impl Workspace {
                     .bg(Theme::bg_sunken())
                     .child(div().flex().items_center().gap(px(6.)).font_weight(FontWeight::MEDIUM).child(ui::icon("info", 14., Theme::accent())).child(t("助手想改动文献库，等你同意")))
                     .children(pending.calls.iter().enumerate().filter(|(_, call)| call.confirm).map(|(n, call)| {
-                        let line = div().text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_secondary()).child(call.line.clone());
+                        let line = div().text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text_secondary()).child(call.line.clone());
                         if call.details.is_empty() { return div().pl(px(20.)).child(line) }
                         // What it would change, paper by paper: all of it, in a box that scrolls when it is long.
                         let rows = call.details.iter().map(|detail| {
                             let (title, change) = detail.split_once('：').unwrap_or((detail.as_str(), ""));
-                            div().flex().flex_col().py(px(3.)).text_size(px(12.)).line_height(px(18.)).child(div().truncate().text_color(Theme::text_tertiary()).child(title.to_string())).child(div().text_color(Theme::text()).child(change.to_string()))
+                            div().flex().flex_col().py(px(3.)).text_size(text_px(12.)).line_height(text_px(18.)).child(div().truncate().text_color(Theme::text_tertiary()).child(title.to_string())).child(div().text_color(Theme::text()).child(change.to_string()))
                         });
                         div().pl(px(20.)).flex().flex_col().gap(px(4.)).child(line).child(div().id(SharedString::from(format!("consent-details-{side}-{n}"))).flex().flex_col().max_h(px(240.)).overflow_y_scroll().px(px(10.)).py(px(4.)).rounded(px(8.)).bg(Theme::bg_body()).border_1().border_color(Theme::line()).children(rows))
                     }))
@@ -1127,7 +1127,7 @@ impl Workspace {
             );
         }
         if !chat.note.is_empty() {
-            items.push(div().text_size(px(12.)).text_color(Theme::text_tertiary()).child(chat.note.clone()).into_any_element());
+            items.push(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(chat.note.clone()).into_any_element());
         }
         if !chat.error.is_empty() {
             items.push(ui::error_line(&chat.error).into_any_element());
@@ -1147,7 +1147,7 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap(px(4.))
-            .text_size(px(12.))
+            .text_size(text_px(12.))
             .when(!done.is_empty(), |d| {
                 d.child(
                     div()
@@ -1155,7 +1155,7 @@ impl Workspace {
                         .flex()
                         .items_center()
                         .gap(px(4.))
-                        .h(px(22.))
+                        .h(text_px(22.))
                         .cursor_pointer()
                         .text_color(Theme::text_tertiary())
                         .hover(|s| s.text_color(Theme::text_secondary()))
@@ -1170,7 +1170,7 @@ impl Workspace {
                             .flex()
                             .items_center()
                             .gap(px(8.))
-                            .h(px(20.))
+                            .h(text_px(20.))
                             .child(div().flex_none().max_w(relative(0.62)).truncate().text_color(Theme::text_secondary()).child(call.to_string()))
                             .child(div().min_w_0().truncate().text_color(if *failed { Theme::danger() } else { Theme::text_tertiary() }).child(outcome.clone()))
                     })))
@@ -1182,7 +1182,7 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap(px(8.))
-                    .h(px(22.))
+                    .h(text_px(22.))
                     .text_color(Theme::text_secondary())
                     .child(ui::spinner(SharedString::from(format!("tool-{side}-{}", first + n)), 13., Theme::accent()))
                     .child(div().min_w_0().truncate().child(call.to_string()))
@@ -1237,7 +1237,7 @@ impl Workspace {
                                     .flex()
                                     .items_center()
                                     .gap(px(6.))
-                                    .text_size(px(12.))
+                                    .text_size(text_px(12.))
                                     .text_color(Theme::text_tertiary())
                                     .child(tf!("{} · {} 个问题", "{} · {} questions", time::short_time(&conversation.updated_at), conversation.questions))
                                     .when(current, |d| d.child(div().text_color(Theme::accent()).child(t("正在进行")))),
@@ -1287,7 +1287,7 @@ impl Workspace {
                                 .flex()
                                 .items_center()
                                 .gap(px(10.))
-                                .h(px(32.))
+                                .h(text_px(32.))
                                 .px(px(8.))
                                 .rounded(px(6.))
                                 .cursor_pointer()
@@ -1298,9 +1298,9 @@ impl Workspace {
                                 .when(!command.hint.is_empty(), |d| d.child(div().flex_none().text_color(Theme::text_placeholder()).child(t(&command.hint).to_string())))
                                 .child(div().flex_1().min_w_0().truncate().text_right().text_color(Theme::text_secondary()).child(if command.custom { command.about.clone() } else { t(&command.about).to_string() }))
                                 // One the person wrote says so: what it asks is theirs, not the app's.
-                                .when(command.custom, |d| d.child(div().flex_none().px(px(6.)).rounded(px(5.)).bg(Theme::groove()).text_size(px(11.)).text_color(Theme::text_tertiary()).child(t("自定义"))))
+                                .when(command.custom, |d| d.child(div().flex_none().px(px(6.)).rounded(px(5.)).bg(Theme::groove()).text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(t("自定义"))))
                         }))
-                        .child(div().px(px(8.)).pt(px(5.)).pb(px(2.)).mt(px(3.)).border_t_1().border_color(Theme::line()).text_size(px(11.)).text_color(Theme::text_placeholder()).child(t("↑↓ 选择 · Enter 或 Tab 确认 · Esc 关闭"))),
+                        .child(div().px(px(8.)).pt(px(5.)).pb(px(2.)).mt(px(3.)).border_t_1().border_color(Theme::line()).text_size(text_px(11.)).text_color(Theme::text_placeholder()).child(t("↑↓ 选择 · Enter 或 Tab 确认 · Esc 关闭"))),
                 )
             })
             .child(
@@ -1315,7 +1315,7 @@ impl Workspace {
                     .bg(if dropping { Theme::accent_soft() } else { Theme::bg_body() })
                     .shadow(theme::shadow_card())
                     // A paper held over the conversation: what letting go of it does.
-                    .when(dropping, |d| d.child(div().flex().items_center().gap(px(6.)).px(px(4.)).pt(px(2.)).text_size(px(12.)).text_color(Theme::accent()).child(ui::icon("plus", 13., Theme::accent())).child(t("松开，第一个问题只读拖进来的文献"))))
+                    .when(dropping, |d| d.child(div().flex().items_center().gap(px(6.)).px(px(4.)).pt(px(2.)).text_size(text_px(12.)).text_color(Theme::accent()).child(ui::icon("plus", 13., Theme::accent())).child(t("松开，第一个问题只读拖进来的文献"))))
                     // The papers the first question is kept to: each can be let go again, and without any the list on show is back.
                     .when(!kept.is_empty(), |d| {
                         let more = lib.asked.len().saturating_sub(kept.len());
@@ -1327,24 +1327,24 @@ impl Workspace {
                                 .gap(px(6.))
                                 .px(px(2.))
                                 .pt(px(2.))
-                                .child(div().flex_none().text_size(px(12.)).text_color(Theme::text_tertiary()).child(tf!("只读这 {} 篇", "Only these {}", lib.asked.len())))
+                                .child(div().flex_none().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(tf!("只读这 {} 篇", "Only these {}", lib.asked.len())))
                                 .children(kept.iter().map(|paper| {
                                     div()
                                         .flex()
                                         .flex_none()
                                         .items_center()
                                         .gap(px(2.))
-                                        .h(px(24.))
+                                        .h(text_px(24.))
                                         .pl(px(8.))
                                         .pr(px(2.))
                                         .rounded(px(6.))
                                         .bg(Theme::accent_soft())
-                                        .text_size(px(12.))
+                                        .text_size(text_px(12.))
                                         .child(div().max_w(px(226.)).truncate().child(paper.title.clone()))
-                                        .child(ui::ghost_button(SharedString::from(format!("scope-unpin-{}", paper.id)), Some("x"), None).h(px(20.)).min_w(px(20.)).on_click(self.on(Cmd::Scope(ScopeDo::Unpin(paper.id.clone())), cx)))
+                                        .child(ui::ghost_button(SharedString::from(format!("scope-unpin-{}", paper.id)), Some("x"), None).h(text_px(20.)).min_w(px(20.)).on_click(self.on(Cmd::Scope(ScopeDo::Unpin(paper.id.clone())), cx)))
                                 }))
-                                .when(more > 0, |d| d.child(div().flex_none().text_size(px(12.)).text_color(Theme::text_tertiary()).child(tf!("另外 {more} 篇", "{more} more"))))
-                                .child(ui::ghost_button("scope-unpin-all", None, Some(t("清除").into())).h(px(22.)).text_size(px(12.)).on_click(self.on(Cmd::Scope(ScopeDo::UnpinAll), cx))),
+                                .when(more > 0, |d| d.child(div().flex_none().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(tf!("另外 {more} 篇", "{more} more"))))
+                                .child(ui::ghost_button("scope-unpin-all", None, Some(t("清除").into())).h(text_px(22.)).text_size(text_px(12.)).on_click(self.on(Cmd::Scope(ScopeDo::UnpinAll), cx))),
                         )
                     })
                     // The passages selected in a PDF that go with the question: where each is from, its opening, and a way to take it back.
@@ -1369,10 +1369,10 @@ impl Workspace {
                                         .flex_1()
                                         .min_w_0()
                                         .gap(px(1.))
-                                        .child(div().line_clamp(2).text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_secondary()).child(quote.text.clone()))
-                                        .child(div().truncate().text_size(px(11.)).text_color(Theme::text_tertiary()).child(tf!("原文 · 第 {} 页 · {title}", "Original · Page {} · {title}", quote.page))),
+                                        .child(div().line_clamp(2).text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text_secondary()).child(quote.text.clone()))
+                                        .child(div().truncate().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(tf!("原文 · 第 {} 页 · {title}", "Original · Page {} · {title}", quote.page))),
                                 )
-                                .child(ui::ghost_button(SharedString::from(format!("quote-remove-{side}-{n}")), Some("x"), None).h(px(20.)).min_w(px(20.)).on_click(self.on(Cmd::RemoveQuote(about_paper, n), cx)))
+                                .child(ui::ghost_button(SharedString::from(format!("quote-remove-{side}-{n}")), Some("x"), None).h(text_px(20.)).min_w(px(20.)).on_click(self.on(Cmd::RemoveQuote(about_paper, n), cx)))
                         })))
                     })
                     .when(!chat.attachments.is_empty() || chat.attaching > 0, |d| {
@@ -1410,12 +1410,12 @@ impl Workspace {
                             .flex()
                             .items_end()
                             .gap(px(6.))
-                            .child(ui::ghost_button(SharedString::from(format!("chat-attach-{side}")), Some("plus"), None).h(px(30.)).min_w(px(30.)).rounded(px(15.)).on_click(self.on(Cmd::AttachImages(about_paper), cx)))
-                            .child(div().flex().flex_1().min_w_0().py(px(5.)).max_h(px(170.)).overflow_hidden().text_size(px(13.)).line_height(px(20.)).text_color(Theme::text()).child(chat.input.clone()))
+                            .child(ui::ghost_button(SharedString::from(format!("chat-attach-{side}")), Some("plus"), None).h(text_px(30.)).min_w(px(30.)).rounded(px(15.)).on_click(self.on(Cmd::AttachImages(about_paper), cx)))
+                            .child(div().flex().flex_1().min_w_0().py(px(5.)).max_h(px(170.)).overflow_hidden().text_size(text_px(13.)).line_height(text_px(20.)).text_color(Theme::text()).child(chat.input.clone()))
                             .child(if chat.busy { round(format!("chat-stop-{side}"), "square", true).on_click(self.on(Cmd::StopChat(about_paper), cx)) } else { round(format!("chat-send-{side}"), "send", ready).on_click(self.on(Cmd::Ask(about_paper), cx)) }),
                     ),
             )
-            .child(div().flex().gap(px(8.)).px(px(4.)).text_size(px(11.)).text_color(Theme::text_placeholder()).child(div().flex_1().min_w_0().truncate().child(if about_paper { t("Enter 发送 · 回答可能有误，请对照原文") } else { t("Enter 发送，Shift+Enter 换行 · 回答可能有误，请对照原文") })).child(div().flex_none().max_w(relative(0.4)).truncate().child(model.to_string())))
+            .child(div().flex().gap(px(8.)).px(px(4.)).text_size(text_px(11.)).text_color(Theme::text_placeholder()).child(div().flex_1().min_w_0().truncate().child(if about_paper { t("Enter 发送 · 回答可能有误，请对照原文") } else { t("Enter 发送，Shift+Enter 换行 · 回答可能有误，请对照原文") })).child(div().flex_none().max_w(relative(0.4)).truncate().child(model.to_string())))
             .into_any_element()
     }
 }

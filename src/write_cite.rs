@@ -14,7 +14,7 @@
 
 use crate::app::{Cmd, Workspace};
 use crate::i18n::{label, t};
-use crate::theme::Theme;
+use crate::theme::{Theme, text_px};
 use crate::ui;
 use crate::write_assist::{Card, Tip};
 use gpui::{prelude::FluentBuilder, *};
@@ -369,7 +369,7 @@ impl Workspace {
             Stage::Judge => t("正在核对找到的文献是否真的支持这些句子…"),
             Stage::Done => "",
         };
-        let waiting = card.busy.then(|| div().flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(Theme::text_tertiary()).child(ui::spinner("write-cite-wait", 12., Theme::accent())).child(stage));
+        let waiting = card.busy.then(|| div().flex().items_center().gap(px(6.)).text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(ui::spinner("write-cite-wait", 12., Theme::accent())).child(stage));
         // A sentence leads when a paper is ticked for it, or, before a model has chosen, when any was found.
         let leads = |row: &Row| if found.judged { row.offers.iter().any(|offer| offer.chosen || offer.ticked) } else { !row.offers.is_empty() };
         let (first, rest): (Vec<usize>, Vec<usize>) = (0..found.rows.len()).partition(|n| leads(&found.rows[*n]));
@@ -383,7 +383,7 @@ impl Workspace {
         } else {
             None
         };
-        let mut body = div().id("write-cite-body").flex().flex_col().gap(px(10.)).max_h(px(480.)).overflow_y_scroll().children(waiting).children(about.map(|text| div().text_size(px(11.)).line_height(px(16.)).text_color(Theme::text_tertiary()).child(text)));
+        let mut body = div().id("write-cite-body").flex().flex_col().gap(px(10.)).max_h(px(480.)).overflow_y_scroll().children(waiting).children(about.map(|text| div().text_size(text_px(11.)).line_height(text_px(16.)).text_color(Theme::text_tertiary()).child(text)));
         for n in &first {
             body = body.child(self.render_cite_row(*n, &found.rows[*n], found, cx));
         }
@@ -397,8 +397,8 @@ impl Workspace {
             };
             if !line.is_empty() {
                 body = body.child(
-                    div().flex().items_center().gap(px(4.)).text_size(px(11.)).text_color(Theme::text_tertiary()).child(line).when(with_offers > 0, |d| {
-                        d.child(ui::ghost_button("write-cite-rest", None, Some(if found.rest { t("收起").into() } else { t("看相近的").into() })).h(px(20.)).px(px(5.)).text_size(px(11.)).on_click(self.on(Cmd::WriteCited(Do::Rest), cx)))
+                    div().flex().items_center().gap(px(4.)).text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(line).when(with_offers > 0, |d| {
+                        d.child(ui::ghost_button("write-cite-rest", None, Some(if found.rest { t("收起").into() } else { t("看相近的").into() })).h(text_px(20.)).px(px(5.)).text_size(text_px(11.)).on_click(self.on(Cmd::WriteCited(Do::Rest), cx)))
                     }),
                 );
             }
@@ -427,13 +427,13 @@ impl Workspace {
                     .flex()
                     .items_start()
                     .gap(px(6.))
-                    .child(div().flex().flex_none().items_center().justify_center().min_w(px(16.)).h(px(16.)).mt(px(1.)).px(px(3.)).rounded(px(8.)).bg(Theme::bg_sunken()).text_size(px(10.)).text_color(Theme::text_secondary()).child((n + 1).to_string()))
-                    .child(div().flex_1().min_w_0().text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_secondary()).line_clamp(2).text_ellipsis().child(row.sentence.clone())),
+                    .child(div().flex().flex_none().items_center().justify_center().min_w(px(16.)).h(px(16.)).mt(px(1.)).px(px(3.)).rounded(px(8.)).bg(Theme::bg_sunken()).text_size(text_px(10.)).text_color(Theme::text_secondary()).child((n + 1).to_string()))
+                    .child(div().flex_1().min_w_0().text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text_secondary()).line_clamp(2).text_ellipsis().child(row.sentence.clone())),
             )
             .children(offers)
             .when(found.judged && others > 0 && (hidden > 0 || found.unfolded.contains(&n)), |d| {
                 let name = if hidden > 0 { tf!("还有 {hidden} 篇相近的", "{hidden} more similar papers") } else { t("收起").to_string() };
-                d.child(div().flex().child(ui::ghost_button(("write-cite-more", n), None, Some(name.into())).h(px(20.)).px(px(5.)).text_size(px(11.)).text_color(Theme::text_tertiary()).on_click(self.on(Cmd::WriteCited(Do::Unfold(n)), cx))))
+                d.child(div().flex().child(ui::ghost_button(("write-cite-more", n), None, Some(name.into())).h(text_px(20.)).px(px(5.)).text_size(text_px(11.)).text_color(Theme::text_tertiary()).on_click(self.on(Cmd::WriteCited(Do::Unfold(n)), cx))))
             })
     }
 
@@ -472,9 +472,9 @@ impl Workspace {
                             .flex_1()
                             .min_w_0()
                             .gap(px(3.))
-                            .child(div().flex().items_baseline().gap(px(6.)).pr(px(22.)).child(div().flex_none().text_size(px(12.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text()).child(offer.cite.clone())).child(div().flex_1().min_w_0().truncate().text_size(px(11.)).text_color(Theme::text_tertiary()).child(format!("@{}", offer.key))))
-                            .child(div().text_size(px(12.)).line_height(px(17.)).text_color(Theme::text()).line_clamp(2).text_ellipsis().child(offer.title.clone()))
-                            .when(!offer.why.is_empty(), |d| d.child(div().text_size(px(11.)).line_height(px(16.)).text_color(Theme::accent()).child(offer.why.clone())))
+                            .child(div().flex().items_baseline().gap(px(6.)).pr(px(22.)).child(div().flex_none().text_size(text_px(12.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text()).child(offer.cite.clone())).child(div().flex_1().min_w_0().truncate().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(format!("@{}", offer.key))))
+                            .child(div().text_size(text_px(12.)).line_height(text_px(17.)).text_color(Theme::text()).line_clamp(2).text_ellipsis().child(offer.title.clone()))
+                            .when(!offer.why.is_empty(), |d| d.child(div().text_size(text_px(11.)).line_height(text_px(16.)).text_color(Theme::accent()).child(offer.why.clone())))
                             .when(!offer.evidence.is_empty(), |d| {
                                 d.child(
                                     div()
@@ -484,8 +484,8 @@ impl Workspace {
                                         .pl(px(7.))
                                         .border_l_2()
                                         .border_color(Theme::line())
-                                        .child(div().text_size(px(11.)).line_height(px(16.)).text_color(Theme::text_secondary()).line_clamp(3).text_ellipsis().child(offer.evidence.clone()))
-                                        .when(!from.is_empty(), |d| d.child(div().text_size(px(10.)).text_color(Theme::text_tertiary()).child(from.clone()))),
+                                        .child(div().text_size(text_px(11.)).line_height(text_px(16.)).text_color(Theme::text_secondary()).line_clamp(3).text_ellipsis().child(offer.evidence.clone()))
+                                        .when(!from.is_empty(), |d| d.child(div().text_size(text_px(10.)).text_color(Theme::text_tertiary()).child(from.clone()))),
                                 )
                             }),
                     ),
@@ -497,7 +497,7 @@ impl Workspace {
     /// Under the list: write the ticked citations, or let it be.
     pub(crate) fn render_cite_actions(&self, found: &Found, cx: &mut Context<Self>) -> Div {
         let ticked = found.ticked();
-        let small = |id: &'static str, name: &'static str| ui::ghost_button(id, None, Some(name.into())).h(px(24.)).px(px(7.)).text_size(px(12.));
+        let small = |id: &'static str, name: &'static str| ui::ghost_button(id, None, Some(name.into())).h(text_px(24.)).px(px(7.)).text_size(text_px(12.));
         div()
             .flex()
             .items_center()
@@ -505,15 +505,15 @@ impl Workspace {
             .gap(px(4.))
             .child(
                 ui::primary_button("write-cite-insert", if ticked == 0 { t("插入引用").to_string() } else { tf!("插入 {ticked} 条引用", "Insert {ticked} citations") })
-                    .h(px(26.))
+                    .h(text_px(26.))
                     .px(px(10.))
-                    .text_size(px(12.))
+                    .text_size(text_px(12.))
                     .when(ticked == 0, |d| d.opacity(0.45).cursor_default())
                     .when(ticked > 0, |d| d.on_click(self.on(Cmd::WriteCited(Do::Insert), cx))),
             )
             .child(small("write-cite-drop", t("放弃")).on_click(self.on(Cmd::WriteAssistUse(crate::write_assist::Use::Drop), cx)))
             .child(div().flex_1())
-            .child(div().id("write-cite-about").flex_none().text_size(px(11.)).text_color(Theme::text_tertiary()).child(t("只在句末加引用，不改文字")).tooltip(|_, cx| cx.new(|_| Tip(t("引用写作 [@Key]，加在各句句末的标点之前；可以撤销。").into())).into()))
+            .child(div().id("write-cite-about").flex_none().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(t("只在句末加引用，不改文字")).tooltip(|_, cx| cx.new(|_| Tip(t("引用写作 [@Key]，加在各句句末的标点之前；可以撤销。").into())).into()))
     }
 }
 

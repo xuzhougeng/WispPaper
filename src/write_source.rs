@@ -19,7 +19,7 @@
 
 use crate::app::{Cmd, Workspace};
 use crate::i18n::{label, t};
-use crate::theme::Theme;
+use crate::theme::{Theme, text_px};
 use crate::ui;
 use crate::write_assist::Tip;
 use gpui::{prelude::FluentBuilder, *};
@@ -414,11 +414,11 @@ impl Workspace {
                     .flex_none()
                     .items_center()
                     .gap(px(5.))
-                    .text_size(px(11.))
+                    .text_size(text_px(11.))
                     .text_color(Theme::text_tertiary())
                     .child(ui::spinner("cite-source-busy", 11., Theme::accent()))
                     .child(stage)
-                    .child(ui::ghost_button("cite-source-stop", None, Some(t("停止").into())).h(px(22.)).px(px(6.)).text_size(px(12.)).on_click(self.on(Cmd::Source(Do::Stop), cx)))
+                    .child(ui::ghost_button("cite-source-stop", None, Some(t("停止").into())).h(text_px(22.)).px(px(6.)).text_size(text_px(12.)).on_click(self.on(Cmd::Source(Do::Stop), cx)))
                     .into_any_element(),
             );
         }
@@ -427,10 +427,10 @@ impl Workspace {
         let tip = tf!("{lacking} 处引用还没有出处：在各自所引的文献里，找出引用它的那句话依据的原文。不改稿件的文字。", "{lacking} citations have no source passage yet: look in each cited paper for the sentence the citing sentence rests on. The manuscript is not changed.");
         Some(
             ui::ghost_button("cite-source-find", None, Some(lacking.to_string().into()))
-                .h(px(22.))
+                .h(text_px(22.))
                 .px(px(6.))
                 .gap(px(4.))
-                .text_size(px(12.))
+                .text_size(text_px(12.))
                 .text_color(Theme::accent())
                 .flex_row_reverse()
                 .child(ui::icon("sparkle", 13., Theme::accent()))
@@ -475,7 +475,7 @@ impl Workspace {
             .flex()
             .items_center()
             .gap(px(6.))
-            .child(div().id("source-strip-paper").flex().flex_1().min_w_0().items_center().gap(px(6.)).rounded(px(4.)).cursor_pointer().hover(|s| s.bg(Theme::hover())).text_size(px(11.)).child(div().flex_none().text_color(Theme::accent()).child(format!("@{}", entry.reference.key))).child(div().flex_1().min_w_0().truncate().text_color(Theme::text_secondary()).child(named)).on_click(self.on(Cmd::GotoSource(id.clone(), None, String::new()), cx)))
+            .child(div().id("source-strip-paper").flex().flex_1().min_w_0().items_center().gap(px(6.)).rounded(px(4.)).cursor_pointer().hover(|s| s.bg(Theme::hover())).text_size(text_px(11.)).child(div().flex_none().text_color(Theme::accent()).child(format!("@{}", entry.reference.key))).child(div().flex_1().min_w_0().truncate().text_color(Theme::text_secondary()).child(named)).on_click(self.on(Cmd::GotoSource(id.clone(), None, String::new()), cx)))
             .when(passages.is_empty() && busy, |d| d.child(ui::spinner("source-strip-busy", 11., Theme::accent())))
             .when(passages.is_empty() && !busy && at.askable() && paper.is_some(), |d| d.child(ui::icon_action("source-strip-find", "sparkle", Theme::accent(), t("在这篇文献里找出这句话依据的原文。不改稿件的文字。")).size(px(20.)).on_click(self.on(Cmd::Source(Do::Find(Some(id.clone()))), cx))));
         Some(
@@ -493,7 +493,7 @@ impl Workspace {
                 .border_color(Theme::line())
                 .bg(Theme::bg_body())
                 .child(head)
-                .when(passages.is_empty(), |d| d.child(div().text_size(px(11.)).text_color(Theme::text_tertiary()).child(t("这处引用还没有记下出处。"))))
+                .when(passages.is_empty(), |d| d.child(div().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(t("这处引用还没有记下出处。"))))
                 .children(passages)
                 .into_any_element(),
         )
@@ -539,13 +539,13 @@ impl Workspace {
                     line.border_color(if lit { Theme::accent() } else { Theme::line() })
                         .cursor_pointer()
                         .hover(|s| s.bg(Theme::hover()))
-                        .child(div().text_size(px(11.)).line_height(px(17.)).text_color(if loose { Theme::text_tertiary() } else { Theme::text_secondary() }).child(passage.passage.clone()))
+                        .child(div().text_size(text_px(11.)).line_height(text_px(17.)).text_color(if loose { Theme::text_tertiary() } else { Theme::text_secondary() }).child(passage.passage.clone()))
                         .child(
                             div()
                                 .flex()
                                 .items_center()
                                 .gap(px(4.))
-                                .text_size(px(10.))
+                                .text_size(text_px(10.))
                                 .text_color(Theme::text_tertiary())
                                 .when(passage.origin != passage::CITED, |d| d.child(ui::icon("sparkle", 10., if passage.origin == passage::MODEL { Theme::accent() } else { Theme::text_tertiary() })))
                                 .child(from.join(" · "))
@@ -554,7 +554,7 @@ impl Workspace {
                         // With a page, the sentence is shown where it stands in the PDF; an abstract's opens the record.
                         .on_click(self.on(Cmd::GotoSource(passage.paper_id.clone(), page, if page.is_some() { passage.passage.clone() } else { String::new() }), cx))
                 } else {
-                    line.border_color(Theme::warning()).child(div().text_size(px(11.)).line_height(px(17.)).text_color(Theme::warning()).child(if passage.claim.is_empty() { t("这篇文献里没有找到这处引用的依据").to_string() } else { tf!("这篇文献里没有找到这句话的依据：{}", "No support found in this paper for: {}", passage.claim) }))
+                    line.border_color(Theme::warning()).child(div().text_size(text_px(11.)).line_height(text_px(17.)).text_color(Theme::warning()).child(if passage.claim.is_empty() { t("这篇文献里没有找到这处引用的依据").to_string() } else { tf!("这篇文献里没有找到这句话的依据：{}", "No support found in this paper for: {}", passage.claim) }))
                 };
                 // Letting go of it stands over the end of its line and takes the click for itself.
                 let drop = div().absolute().top(px(0.)).right(px(0.)).occlude().rounded(px(6.)).bg(Theme::bg_body()).opacity(0.).group_hover(group.clone(), |s| s.opacity(1.)).child(

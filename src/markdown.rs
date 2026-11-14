@@ -3,7 +3,7 @@
 //! grid of equal columns, links open in the browser. Where the answer
 //! cites (`[P3 p.5 "…"]`), a click is handed to whoever asked for it.
 
-use crate::theme::{self, Theme};
+use crate::theme::{self, Theme, text_px};
 use gpui::{prelude::FluentBuilder, *};
 use std::rc::Rc;
 use wisp_core::ai::{self, Citation};
@@ -46,7 +46,7 @@ struct Draw<'a> {
 /// `text` as elements.
 pub fn render(id: &str, text: &str, cite: Option<OnCite>, selecting: Option<Selecting>) -> Div {
     let mut draw = Draw { id, links: 0, cite, selected: selecting.as_ref().and_then(|selecting| selecting.selected), layouts: vec![] };
-    let drawn = div().flex().flex_col().gap(px(10.)).children(blocks(&parse(text), &mut draw));
+    let drawn = div().flex().flex_col().gap(theme::paragraph_gap(10.)).children(blocks(&parse(text), &mut draw));
     let Some(selecting) = selecting else { return drawn };
     // Where the pointer is among the pieces: in the one it is over, else at the near end of the one nearest above or below.
     let layouts = Rc::new(draw.layouts);
@@ -166,7 +166,7 @@ fn blocks(blocks: &[Block], links: &mut Draw) -> Vec<AnyElement> {
 
 fn block(block: &Block, links: &mut Draw) -> AnyElement {
     match block {
-        Block::Paragraph(text) => div().line_height(px(22.)).child(rich(text, links)).into_any_element(),
+        Block::Paragraph(text) => div().line_height(theme::body_line(22.)).child(rich(text, links)).into_any_element(),
         Block::Heading(level, text) => {
             let (size, line) = match level {
                 1 => (19., 28.),
@@ -174,7 +174,7 @@ fn block(block: &Block, links: &mut Draw) -> AnyElement {
                 3 => (15., 24.),
                 _ => (14., 22.),
             };
-            div().pt(px(4.)).text_size(px(size)).line_height(px(line)).font_weight(FontWeight::SEMIBOLD).child(rich(text, links)).into_any_element()
+            div().pt(px(4.)).text_size(text_px(size)).line_height(theme::body_line(line)).font_weight(FontWeight::SEMIBOLD).child(rich(text, links)).into_any_element()
         }
         Block::Item { marker, text, children } => {
             let mark = match marker {
@@ -187,7 +187,7 @@ fn block(block: &Block, links: &mut Draw) -> AnyElement {
                 .flex()
                 .items_start()
                 .gap(px(6.))
-                .line_height(px(22.))
+                .line_height(theme::body_line(22.))
                 .child(div().flex_none().min_w(px(16.)).text_right().text_color(Theme::text_secondary()).child(mark))
                 .child(div().flex().flex_col().flex_1().min_w_0().gap(px(4.)).child(rich(text, links)).children(blocks(children, links)))
                 .into_any_element()
@@ -195,9 +195,9 @@ fn block(block: &Block, links: &mut Draw) -> AnyElement {
         Block::Code { text, .. } => {
             let code = StyledText::new(text.clone()).with_highlights(with_selection(vec![], selected_in(links, text)));
             links.layouts.push(code.layout().clone());
-            div().px(px(12.)).py(px(10.)).rounded(px(6.)).border_1().border_color(Theme::line()).bg(Theme::bg_sunken()).font_family(theme::MONO_FONT).text_size(px(12.5)).line_height(px(19.)).child(code).into_any_element()
+            div().px(px(12.)).py(px(10.)).rounded(px(6.)).border_1().border_color(Theme::line()).bg(Theme::bg_sunken()).font_family(theme::MONO_FONT).text_size(text_px(12.5)).line_height(theme::body_line(19.)).child(code).into_any_element()
         }
-        Block::Quote(inner) => div().flex().flex_col().gap(px(8.)).pl(px(12.)).border_l_2().border_color(Theme::line_strong()).text_color(Theme::text_secondary()).children(blocks(inner, links)).into_any_element(),
+        Block::Quote(inner) => div().flex().flex_col().gap(theme::paragraph_gap(8.)).pl(px(12.)).border_l_2().border_color(Theme::line_strong()).text_color(Theme::text_secondary()).children(blocks(inner, links)).into_any_element(),
         Block::Rule => div().h(px(1.)).bg(Theme::line()).into_any_element(),
         Block::Table { aligns, rows } => {
             let cells = rows.iter().enumerate().flat_map(|(r, row)| row.iter().enumerate().map(move |(c, cell)| (r, c, cell))).map(|(r, c, cell)| {
@@ -205,8 +205,8 @@ fn block(block: &Block, links: &mut Draw) -> AnyElement {
                     .min_w_0()
                     .px(px(10.))
                     .py(px(6.))
-                    .text_size(px(13.))
-                    .line_height(px(20.))
+                    .text_size(text_px(13.))
+                    .line_height(theme::body_line(20.))
                     .border_color(Theme::line())
                     .when(c > 0, |d| d.border_l_1())
                     .when(r > 0, |d| d.border_t_1())

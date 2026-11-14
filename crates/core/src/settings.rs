@@ -19,6 +19,48 @@ pub enum Language {
     Zh,
 }
 
+/// Reading presets are independent of interface size and never change exported text.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Spacing {
+    Compact,
+    Relaxed,
+    #[default]
+    #[serde(other)]
+    Standard,
+}
+
+impl Spacing {
+    pub const ALL: [Self; 3] = [Self::Compact, Self::Standard, Self::Relaxed];
+    pub fn label(self) -> &'static str { match self { Self::Compact => "紧凑", Self::Standard => "标准", Self::Relaxed => "宽松" } }
+    pub fn line_factor(self) -> f32 { match self { Self::Compact => 0.9, Self::Standard => 1., Self::Relaxed => 1.25 } }
+    pub fn paragraph_factor(self) -> f32 { match self { Self::Compact => 0.5, Self::Standard => 1., Self::Relaxed => 1.5 } }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextWidth {
+    Narrow,
+    Wide,
+    #[default]
+    #[serde(other)]
+    Standard,
+}
+
+impl TextWidth {
+    pub const ALL: [Self; 3] = [Self::Narrow, Self::Standard, Self::Wide];
+    pub fn label(self) -> &'static str { match self { Self::Narrow => "窄", Self::Standard => "标准", Self::Wide => "宽" } }
+    pub fn pixels(self) -> f32 { match self { Self::Narrow => 560., Self::Standard => 720., Self::Wide => 960. } }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ReadingAppearance {
+    pub line_spacing: Spacing,
+    pub paragraph_spacing: Spacing,
+    pub width: TextWidth,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
@@ -44,10 +86,17 @@ pub struct Settings {
     pub auto_update: bool,
     /// "light" or "dark"; empty follows the system.
     pub appearance: String,
+    /// Stronger text and separators in both light and dark themes.
+    pub high_contrast: bool,
     /// The interface language; independent of manuscript and translation languages.
     pub language: Language,
-    /// "compact" tightens the paper table; empty is the standard rows.
+    /// "compact" or "comfortable" changes the paper rows; empty is standard.
     pub density: String,
+    /// Interface font family; empty uses the platform default.
+    pub font_family: String,
+    /// Base interface size in logical pixels; other text sizes follow its ratio.
+    pub font_size: f32,
+    pub reading_appearance: ReadingAppearance,
     /// The proxy every request goes through, as a URL (`http://127.0.0.1:7890`,
     /// `socks5://…`); empty leaves it to the environment (`HTTPS_PROXY` and the like).
     pub proxy: String,
@@ -74,13 +123,21 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         let providers = provider::DEFAULT_PRESETS.iter().filter_map(|key| provider::preset(key)).map(Provider::from_preset).collect();
-        let mut settings = Settings { data_dir: String::new(), providers, legacy_profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translate_workers: 4, translation_prompt: String::new(), commands: vec![], auto_update: true, appearance: String::new(), language: Language::default(), density: String::new(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., floating: Default::default(), keep_running: true, author: String::new() };
+        let mut settings = Settings { data_dir: String::new(), providers, legacy_profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translate_workers: 4, translation_prompt: String::new(), commands: vec![], auto_update: true, appearance: String::new(), high_contrast: false, language: Language::default(), density: String::new(), font_family: String::new(), font_size: DEFAULT_FONT_SIZE, reading_appearance: ReadingAppearance::default(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., floating: Default::default(), keep_running: true, author: String::new() };
         settings.tidy();
         settings
     }
 }
 
 pub const MAX_SCREEN_WORKERS: usize = 8;
+pub const DEFAULT_FONT_SIZE: f32 = 13.;
+pub const MIN_FONT_SIZE: f32 = 11.;
+pub const MAX_FONT_SIZE: f32 = 20.;
+
+/// Keep a hand-edited settings file from making the interface unusable.
+pub fn font_size(value: f32) -> f32 {
+    if value.is_finite() { value.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE) } else { DEFAULT_FONT_SIZE }
+}
 
 /// What a model is used for. Each task can have a model of its own, so a
 /// cheap one that does not think can translate while a stronger one answers
@@ -251,10 +308,22 @@ impl Settings {
         Ok(())
     }
 
+    /// Restore visual preferences without touching layout widths, library colours or model settings.
+    pub fn reset_appearance(&mut self) {
+        self.appearance.clear();
+        self.high_contrast = false;
+        self.density.clear();
+        self.font_family.clear();
+        self.font_size = DEFAULT_FONT_SIZE;
+        self.reading_appearance = ReadingAppearance::default();
+    }
+
     /// Make what was read usable: every provider and model gets an id of its
     /// own, a task bound to a model that is gone follows the default again,
     /// and the number of screening workers stays in range.
     fn tidy(&mut self) {
+        self.font_size = font_size(self.font_size);
+        self.font_family = self.font_family.trim().to_string();
         let mut seen = std::collections::HashSet::new();
         for p in 0..self.providers.len() {
             let id = self.providers[p].id.trim().to_string();
@@ -424,6 +493,67 @@ fn migrate(legacy: Vec<Profile>, defaults: Vec<Provider>) -> Vec<Provider> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reading_preferences_persist_and_visual_reset_keeps_other_settings() {
+        let dir = std::env::temp_dir().join(format!("wisp-appearance-{}", crate::model::new_id("T")));
+        let path = dir.join("settings.json");
+        let mut settings: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings.reading_appearance, ReadingAppearance::default());
+        assert!(!settings.high_contrast);
+        settings.reading_appearance = ReadingAppearance { line_spacing: Spacing::Relaxed, paragraph_spacing: Spacing::Compact, width: TextWidth::Wide };
+        settings.high_contrast = true;
+        settings.appearance = "dark".into();
+        settings.density = "comfortable".into();
+        settings.font_family = "Example Sans".into();
+        settings.font_size = 18.;
+        settings.language = Language::En;
+        settings.sidebar_width = 280.;
+        settings.author = "A Reader".into();
+        settings.save(&path).unwrap();
+        assert_eq!(Settings::load(&path).unwrap(), settings);
+        let mut reset = settings.clone();
+        reset.reset_appearance();
+        assert_eq!(reset.reading_appearance, ReadingAppearance::default());
+        assert!(!reset.high_contrast);
+        assert!(reset.appearance.is_empty() && reset.density.is_empty() && reset.font_family.is_empty());
+        assert_eq!(reset.font_size, DEFAULT_FONT_SIZE);
+        assert_eq!(reset.providers, settings.providers);
+        assert_eq!(reset.tasks, settings.tasks);
+        assert_eq!(reset.language, Language::En);
+        assert_eq!(reset.sidebar_width, 280.);
+        assert_eq!(reset.author, "A Reader");
+        // Partial files and future presets do not prevent the rest of a library's settings from loading.
+        std::fs::write(&path, r#"{"readingAppearance":{"lineSpacing":"relaxed","paragraphSpacing":"future","width":"future"}}"#).unwrap();
+        assert_eq!(Settings::load(&path).unwrap().reading_appearance, ReadingAppearance { line_spacing: Spacing::Relaxed, ..Default::default() });
+        std::fs::write(&path, r#"{"readingAppearance":{"width":"narrow"}}"#).unwrap();
+        assert_eq!(Settings::load(&path).unwrap().reading_appearance, ReadingAppearance { width: TextWidth::Narrow, ..Default::default() });
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn typography_survives_restart_and_old_settings_keep_the_default() {
+        let dir = std::env::temp_dir().join(format!("wisp-fonts-{}", crate::model::new_id("T")));
+        let path = dir.join("settings.json");
+        let mut settings: Settings = serde_json::from_str("{}").unwrap();
+        assert!(settings.font_family.is_empty());
+        assert_eq!(settings.font_size, DEFAULT_FONT_SIZE);
+        settings.font_family = "Example Sans".into();
+        settings.font_size = 17.;
+        settings.save(&path).unwrap();
+        let loaded = Settings::load(&path).unwrap();
+        assert_eq!(loaded.font_family, "Example Sans");
+        assert_eq!(loaded.font_size, 17.);
+        for (size, expected) in [(-10., MIN_FONT_SIZE), (1000., MAX_FONT_SIZE), (14.5, 14.5)] {
+            std::fs::write(&path, format!(r#"{{"fontSize":{size},"fontFamily":"  Example Sans  "}}"#)).unwrap();
+            let loaded = Settings::load(&path).unwrap();
+            assert_eq!(loaded.font_size, expected);
+            assert_eq!(loaded.font_family, "Example Sans");
+        }
+        assert_eq!(font_size(f32::NAN), DEFAULT_FONT_SIZE);
+        assert_eq!(font_size(f32::INFINITY), DEFAULT_FONT_SIZE);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn interface_language_is_backward_compatible_and_persisted() {

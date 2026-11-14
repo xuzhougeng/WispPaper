@@ -1,5 +1,6 @@
 //! Single-paper and batch translations share requests and the library cache.
 
+use crate::theme::text_px;
 use crate::i18n::t;
 use crate::app::{Cmd, Translated, Workspace};
 use crate::{theme::Theme, ui};
@@ -167,12 +168,12 @@ impl Workspace {
         Some(div().flex().flex_col().flex_none().gap(px(6.)).mx(px(16.)).my(px(8.)).p(px(10.)).rounded(px(8.)).bg(Theme::bg_sunken()).border_1().border_color(Theme::line())
             .child(div().flex().items_center().gap(px(8.))
                 .when(running, |d| d.child(ui::spinner("batch-translating", 13., Theme::accent())))
-                .child(div().flex_none().text_size(px(12.)).child(heading))
-                .child(div().flex_1().min_w_0().truncate().text_right().text_size(px(11.)).text_color(Theme::text_tertiary()).child(tf!("{} · 同时 {} 篇", "{} · {} papers at a time", run.model, run.workers)))
+                .child(div().flex_none().text_size(text_px(12.)).child(heading))
+                .child(div().flex_1().min_w_0().truncate().text_right().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(tf!("{} · 同时 {} 篇", "{} · {} papers at a time", run.model, run.workers)))
                 .when(running && !batch.stopped, |d| d.child(ui::ghost_button("translation-stop", None, Some(t("停止").into())).on_click(self.on(Cmd::StopBatchTranslation, cx))))
                 .when(!running, |d| d.child(ui::ghost_button("translation-dismiss", Some("x"), None).on_click(self.on(Cmd::DismissBatchTranslation, cx)))))
             .child(crate::screen::progress_bar(batch.done(), batch.total))
-            .child(div().text_size(px(12.)).text_color(Theme::text_secondary()).child(summary))
+            .child(div().text_size(text_px(12.)).text_color(Theme::text_secondary()).child(summary))
             .when(!batch.error.is_empty(), |d| d.child(ui::error_line(&tf!("最近一次失败：{}；可再次选择文献执行批量翻译。", "Latest failure: {}. Select papers again to retry batch translation.", batch.error))))
             .into_any_element())
     }

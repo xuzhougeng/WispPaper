@@ -2,12 +2,64 @@
 //! come in a light and a dark set; the accent follows the open library, so
 //! each library looks like itself.
 
-use gpui::{BoxShadow, Hsla, hsla, point, px, rgb};
+use gpui::{BoxShadow, Hsla, Pixels, SharedString, hsla, point, px, rgb};
+use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use wisp_core::settings::{self, DEFAULT_FONT_SIZE, ReadingAppearance};
 
 pub const UI_FONT: &str = if cfg!(target_os = "linux") { "Noto Sans" } else { ".SystemUIFont" };
 /// For code in an answer.
 pub const MONO_FONT: &str = if cfg!(target_os = "macos") { "Menlo" } else if cfg!(target_os = "windows") { "Consolas" } else { "DejaVu Sans Mono" };
+
+thread_local! {
+    static READING: Cell<ReadingAppearance> = Cell::new(ReadingAppearance::default());
+    static TYPOGRAPHY: RefCell<(SharedString, f32)> = RefCell::new((UI_FONT.into(), 1.));
+}
+
+/// Applied on the UI thread before refreshing the whole window, including cached child views.
+pub fn set_typography(family: &str, size: f32) {
+    TYPOGRAPHY.with(|value| *value.borrow_mut() = (if family.is_empty() { UI_FONT.into() } else { family.to_string().into() }, settings::font_size(size) / DEFAULT_FONT_SIZE));
+}
+
+pub fn ui_font() -> SharedString {
+    TYPOGRAPHY.with(|value| value.borrow().0.clone())
+}
+
+/// Text sizes, line heights and text controls share a scale. PDF page geometry stays in pixels.
+pub fn text_px(value: f32) -> Pixels {
+    TYPOGRAPHY.with(|typography| px(value * typography.borrow().1))
+}
+
+pub fn set_reading(appearance: ReadingAppearance) {
+    READING.with(|value| value.set(appearance));
+}
+
+/// Long-form text only: controls retain their line heights and hit areas.
+pub fn body_line(value: f32) -> Pixels {
+    READING.with(|appearance| text_px(value) * appearance.get().line_spacing.line_factor())
+}
+
+pub fn paragraph_factor() -> f32 {
+    READING.with(|appearance| appearance.get().paragraph_spacing.paragraph_factor())
+}
+
+pub fn paragraph_gap(value: f32) -> Pixels {
+    text_px(value) * paragraph_factor()
+}
+
+pub fn manuscript_width() -> Pixels {
+    READING.with(|appearance| px(appearance.get().width.pixels()))
+}
+
+static HIGH_CONTRAST: AtomicBool = AtomicBool::new(false);
+
+pub fn set_high_contrast(enabled: bool) {
+    HIGH_CONTRAST.store(enabled, Ordering::Relaxed);
+}
+
+fn contrast() -> bool {
+    HIGH_CONTRAST.load(Ordering::Relaxed)
+}
 
 pub fn c(hex: u32) -> Hsla {
     rgb(hex).into()
@@ -83,11 +135,11 @@ impl Theme {
     pub fn hover() -> Hsla { if dark() { hsla(0., 0., 1., 0.06) } else { hsla(0., 0., 0., 0.045) } }
     pub fn pressed() -> Hsla { if dark() { hsla(0., 0., 1., 0.11) } else { hsla(0., 0., 0., 0.08) } }
     pub fn text() -> Hsla { pick(0x1F2329, 0xE6E7EA) }
-    pub fn text_secondary() -> Hsla { pick(0x5C636E, 0xABAFB7) }
-    pub fn text_tertiary() -> Hsla { pick(0x8F959E, 0x80858E) }
-    pub fn text_placeholder() -> Hsla { pick(0xB0B5BD, 0x5E636C) }
-    pub fn line() -> Hsla { pick(0xE7E7E3, 0x333539) }
-    pub fn line_strong() -> Hsla { pick(0xD5D6D2, 0x47494F) }
+    pub fn text_secondary() -> Hsla { if contrast() { pick(0x333942, 0xD8DBE0) } else { pick(0x5C636E, 0xABAFB7) } }
+    pub fn text_tertiary() -> Hsla { if contrast() { pick(0x535B66, 0xBBC0C8) } else { pick(0x8F959E, 0x80858E) } }
+    pub fn text_placeholder() -> Hsla { if contrast() { pick(0x626B77, 0xA3ABB7) } else { pick(0xB0B5BD, 0x5E636C) } }
+    pub fn line() -> Hsla { if contrast() { pick(0x969C95, 0x747A83) } else { pick(0xE7E7E3, 0x333539) } }
+    pub fn line_strong() -> Hsla { if contrast() { pick(0x737B74, 0x979EA8) } else { pick(0xD5D6D2, 0x47494F) } }
     pub fn scrim() -> Hsla { hsla(0., 0., 0., if dark() { 0.5 } else { 0.28 }) }
     pub fn danger() -> Hsla { pick(0xD4483B, 0xEB7468) }
     pub fn danger_soft() -> Hsla { pick(0xFDECEA, 0x3B2523) }
