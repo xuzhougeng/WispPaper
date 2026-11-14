@@ -187,6 +187,8 @@ enum CitationStatus {
     PageOnly,
     Searching,
     Found,
+    /// Only the beginning of the quotation is on the page.
+    Partial,
     Missing,
 }
 
@@ -216,13 +218,13 @@ impl CitationFocus {
     }
 
     /// A late search must never replace a newer citation or move back to it.
-    fn finish(&mut self, request: u64, found: Option<(usize, Vec<[f32; 4]>)>) -> bool {
+    fn finish(&mut self, request: u64, found: Option<(usize, Vec<[f32; 4]>, bool)>) -> bool {
         if request != self.request || self.status != CitationStatus::Searching { return false }
-        match found.filter(|(_, boxes)| !boxes.is_empty()) {
-            Some((page, boxes)) => {
+        match found.filter(|(_, boxes, _)| !boxes.is_empty()) {
+            Some((page, boxes, whole)) => {
                 self.page = Some(page);
                 self.boxes = boxes;
-                self.status = CitationStatus::Found;
+                self.status = if whole { CitationStatus::Found } else { CitationStatus::Partial };
             }
             None => self.status = CitationStatus::Missing,
         }
@@ -247,8 +249,8 @@ enum Reply {
     Page(usize, f32, u32, u32, Vec<u8>),
     /// A page whose render was dropped for newer ones: ask again when it is in view.
     Skipped(usize),
-    /// Where the quotation is: the page, and one box per line in page points.
-    Found(u64, usize, Vec<[f32; 4]>),
+    /// Where the quotation is: the page, one box per line in page points, and whether that is all of it.
+    Found(u64, usize, Vec<[f32; 4]>, bool),
     NotFound(u64),
     Marks(usize, Vec<Mark>),
 }
@@ -381,9 +383,10 @@ fn worker(path: PathBuf, requests: mpsc::Receiver<Request>, replies: async_chann
                     glyphs
                 }));
                 let Ok(glyphs) = read else { continue };
-                if let Some(range) = wisp_core::fulltext::find_quote(&glyphs.texts, &quote) {
-                    reply = Reply::Found(request, index, wisp_core::fulltext::line_boxes(&glyphs.boxes[range]));
-                    break;
+                // The whole quotation on a later page is better than its beginning on this one.
+                if let Some((range, whole)) = wisp_core::fulltext::find_quote(&glyphs.texts, &glyphs.boxes, &quote) {
+                    if whole || matches!(reply, Reply::NotFound(_)) { reply = Reply::Found(request, index, wisp_core::fulltext::line_boxes(&glyphs.boxes[range]), whole) }
+                    if whole { break }
                 }
             }
             if replies.send_blocking(reply).is_err() { return }
@@ -683,8 +686,8 @@ impl PdfView {
             Reply::Skipped(index) => {
                 self.pending.remove(&index);
             }
-            Reply::Found(request, index, boxes) => {
-                if !self.citation.finish(request, Some((index, boxes))) { return }
+            Reply::Found(request, index, boxes, whole) => {
+                if !self.citation.finish(request, Some((index, boxes, whole))) { return }
                 // Bring the first line of the quotation a little below the top of the view, and into it sideways.
                 if let Some(first) = self.citation.boxes.first() {
                     let scale = self.scale_of(index);
@@ -1226,6 +1229,7 @@ impl Render for PdfView {
             CitationStatus::PageOnly => Some(t("此引用仅提供页码，已标出引用页。")),
             CitationStatus::Searching => Some(t("正在定位引用原文…")),
             CitationStatus::Missing => Some(t("已跳到引用的页，但没有在 PDF 里找到这句原文。")),
+            CitationStatus::Partial => Some(t("只在 PDF 里找到这句引文的开头，已标出；其余部分与原文对不上，请自行核对。")),
             CitationStatus::None | CitationStatus::Found => None,
         };
         div()
@@ -1292,16 +1296,16 @@ mod tests {
         let old = focus.begin(4, "A quoted sentence.");
         let boxes = vec![[10., 20., 90., 30.]];
         focus.begin(8, "");
-        assert!(!focus.finish(old, Some((3, boxes.clone()))));
+        assert!(!focus.finish(old, Some((3, boxes.clone(), true))));
         assert!(!focus.finish(old, None));
         assert_eq!((&focus.status, focus.index(12)), (&CitationStatus::PageOnly, Some(7)));
 
         let old = focus.begin(4, "An earlier quotation.");
         let latest = focus.begin(6, "Another quotation.");
         assert!(!focus.finish(old, None));
-        assert!(focus.finish(latest, Some((6, boxes.clone()))));
+        assert!(focus.finish(latest, Some((6, boxes.clone(), true))));
         assert_eq!((&focus.status, focus.index(12), &focus.boxes), (&CitationStatus::Found, Some(6), &boxes));
-        assert!(!focus.finish(old, Some((3, boxes))));
+        assert!(!focus.finish(old, Some((3, boxes, true))));
 
         let pending = focus.begin(4, "Still searching.");
         focus.clear();
@@ -1318,8 +1322,12 @@ mod tests {
         focus.begin(8, "");
         assert_eq!((&focus.status, focus.index(12)), (&CitationStatus::PageOnly, Some(7)));
         let request = focus.begin(4, "Text without drawable boxes.");
-        assert!(focus.finish(request, Some((3, vec![]))));
+        assert!(focus.finish(request, Some((3, vec![], true))));
         assert_eq!(focus.status, CitationStatus::Missing);
+        // Only the beginning found: marked, and said to be a part.
+        let request = focus.begin(4, "A quotation that drifts from the page.");
+        assert!(focus.finish(request, Some((3, vec![[10., 20., 90., 30.]], false))));
+        assert_eq!((&focus.status, focus.boxes.len()), (&CitationStatus::Partial, 1));
     }
 
     #[test]
