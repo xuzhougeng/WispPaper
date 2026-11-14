@@ -2,7 +2,7 @@
 //! a PMID or as a second opinion) and how to read the answers. The HTTP
 //! requests themselves are made by the app.
 
-use crate::model::{Paper, normalize_doi, normalize_pmid, strip_markup, valid_doi};
+use crate::model::{Paper, normalize_doi, normalize_pmid, strip_markup, valid_doi, valid_publication_date};
 use serde_json::Value;
 
 /// What a person typed into 通过 DOI / PMID 添加.
@@ -89,6 +89,19 @@ pub fn crossref_work(work: &Value) -> Option<Paper> {
         authors: authors.join("; "),
         journal,
         year,
+        publication_date: ["published-print", "published-online", "published", "issued", "posted"].iter().find_map(|key| {
+            let parts = work[key]["date-parts"][0].as_array()?;
+            let year = parts.first()?.as_u64().filter(|y| (1800..=2200).contains(y))?;
+            let mut date = year.to_string();
+            if let Some(month) = parts.get(1).and_then(Value::as_u64).filter(|m| (1..=12).contains(m)) {
+                date.push_str(&format!("-{month:02}"));
+                if let Some(day) = parts.get(2).and_then(Value::as_u64).filter(|d| (1..=31).contains(d)) {
+                    let complete = format!("{date}-{day:02}");
+                    if valid_publication_date(&complete) { date = complete; }
+                }
+            }
+            Some(date)
+        }).unwrap_or_default(),
         doi: normalize_doi(&text(&work["DOI"])),
         url: text(&work["URL"]),
         abstract_text: strip_markup(&text(&work["abstract"])).trim_start_matches("Abstract ").to_string(),
@@ -127,6 +140,10 @@ pub fn europepmc_hit(hit: &Value) -> Option<Paper> {
         title,
         authors: authors.join("; "),
         journal,
+        publication_date: {
+            let date = text(&hit["firstPublicationDate"]).trim().to_string();
+            if valid_publication_date(&date) { date } else { String::new() }
+        },
         year: text(&hit["pubYear"]).parse().ok().filter(|y| (1800..=2200).contains(y)),
         doi: normalize_doi(&text(&hit["doi"])),
         pmid: text(&hit["pmid"]),
@@ -145,6 +162,7 @@ pub fn merge_lookup(mut paper: Paper, extra: Paper) -> Paper {
     fill(&mut paper.title, extra.title);
     fill(&mut paper.authors, extra.authors);
     fill(&mut paper.journal, extra.journal);
+    fill(&mut paper.publication_date, extra.publication_date);
     fill(&mut paper.doi, extra.doi);
     fill(&mut paper.pmid, extra.pmid);
     fill(&mut paper.url, extra.url);
@@ -216,6 +234,21 @@ mod tests {
         assert_eq!(p.abstract_text, "Arrays are & will be.");
         assert_eq!(p.publication_status, "published");
         assert!(crossref_paper(&json!({"message": {}})).is_none());
+    }
+
+    #[test]
+    fn publication_dates_keep_only_valid_source_precision() {
+        for (parts, expected) in [(json!([2020]), "2020"), (json!([2020, 2]), "2020-02"), (json!([2020, 2, 29]), "2020-02-29"), (json!([2021, 2, 29]), "2021-02"), (json!([2020, 13, 10]), "2020")] {
+            let paper = crossref_work(&json!({"title":["T"],"issued":{"date-parts":[parts]}})).unwrap();
+            assert_eq!(paper.publication_date, expected);
+        }
+        assert!(crossref_work(&json!({"title":["T"],"created":{"date-parts":[[2020, 1, 2]]}})).unwrap().publication_date.is_empty());
+        for (date, expected) in [("2020-02-29", "2020-02-29"), ("2021-02-29", ""), ("", "")] {
+            let paper = europepmc_hit(&json!({"title":"T","firstPublicationDate":date})).unwrap();
+            assert_eq!(paper.publication_date, expected);
+        }
+        let original = Paper { publication_date: "2020".into(), ..Default::default() };
+        assert_eq!(merge_lookup(original, Paper { publication_date: "2021-01-02".into(), ..Default::default() }).publication_date, "2020");
     }
 
     #[test]

@@ -249,7 +249,7 @@ CREATE TABLE IF NOT EXISTS file_origins (
 "#;
 
 const PAPER_COLUMNS: &str = "id, title, abstract, authors_json, journal, year, publication_state, url, source, \
-    screening_status, screening_reason, reviewed_at, reading_status, starred, tags_json, notes, first_seen_at, updated_at";
+    screening_status, screening_reason, reviewed_at, reading_status, starred, tags_json, notes, first_seen_at, updated_at, publication_date";
 
 /// A record an import left out because the library already holds it.
 #[derive(Clone, Debug, PartialEq)]
@@ -432,6 +432,7 @@ pub struct Store {
 
 /// Table, column and type of each column added after its table was first made.
 const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
+    ("papers", "publication_date", "TEXT NOT NULL DEFAULT ''"),
     ("screening_suggestions", "criteria", "TEXT"),
     ("field_defs", "hint", "TEXT NOT NULL DEFAULT ''"),
     ("structures", "paragraphs", "INTEGER NOT NULL DEFAULT 0"),
@@ -1284,6 +1285,7 @@ fn row_to_paper(r: &rusqlite::Row) -> rusqlite::Result<Paper> {
         notes: r.get(15)?,
         added_at: r.get(16)?,
         updated_at: r.get(17)?,
+        publication_date: r.get(18)?,
         ..Default::default()
     })
 }
@@ -1311,17 +1313,17 @@ fn write_paper(tx: &Transaction, p: &Paper) -> Result<()> {
     let authors: Vec<String> = p.authors.split(';').map(|a| a.trim().to_string()).filter(|a| !a.is_empty()).collect();
     tx.execute(
         "INSERT INTO papers(id, title, title_key, abstract, authors_json, journal, year, publication_state, url, source, \
-            screening_status, screening_reason, reviewed_at, reading_status, starred, tags_json, notes, first_seen_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19) \
+            screening_status, screening_reason, reviewed_at, reading_status, starred, tags_json, notes, first_seen_at, updated_at, publication_date) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20) \
          ON CONFLICT(id) DO UPDATE SET title = excluded.title, title_key = excluded.title_key, abstract = excluded.abstract, \
             authors_json = excluded.authors_json, journal = excluded.journal, year = excluded.year, \
             publication_state = excluded.publication_state, url = excluded.url, source = excluded.source, \
             screening_status = excluded.screening_status, screening_reason = excluded.screening_reason, reviewed_at = excluded.reviewed_at, \
             reading_status = excluded.reading_status, starred = excluded.starred, tags_json = excluded.tags_json, notes = excluded.notes, \
-            first_seen_at = excluded.first_seen_at, updated_at = excluded.updated_at",
+            first_seen_at = excluded.first_seen_at, updated_at = excluded.updated_at, publication_date = excluded.publication_date",
         params![
             p.id, p.title, title_key(&p.title), p.abstract_text, to_json(&authors), p.journal, p.year, p.publication_status, p.url, p.source,
-            p.screening, p.screening_reason, p.reviewed_at, p.reading, p.starred as i32, to_json(&p.tags), p.notes, p.added_at, p.updated_at
+            p.screening, p.screening_reason, p.reviewed_at, p.reading, p.starred as i32, to_json(&p.tags), p.notes, p.added_at, p.updated_at, p.publication_date
         ],
     )
     .with_context(|| format!("保存文献失败：{}", p.title))?;

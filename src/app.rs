@@ -1137,6 +1137,7 @@ pub struct PaperForm {
     pub authors: Entity<TextInput>,
     pub year: Entity<TextInput>,
     pub journal: Entity<TextInput>,
+    pub publication_date: Entity<TextInput>,
     pub doi: Entity<TextInput>,
     pub pmid: Entity<TextInput>,
     pub url: Entity<TextInput>,
@@ -4420,6 +4421,7 @@ impl Workspace {
             authors: self.modal_input("作者，用分号分隔：Zhang, Wei; Li, Na", &paper.authors, false, window, cx),
             year: self.modal_input("例如 2024", &paper.year.map(|y| y.to_string()).unwrap_or_default(), false, window, cx),
             journal: self.modal_input("期刊或会议", &paper.journal, false, window, cx),
+            publication_date: self.modal_input("YYYY、YYYY-MM 或 YYYY-MM-DD", &paper.publication_date, false, window, cx),
             doi: self.modal_input("10.xxxx/…", &paper.doi, false, window, cx),
             pmid: self.modal_input("PubMed 编号", &paper.pmid, false, window, cx),
             url: self.modal_input("https://…", &paper.url, false, window, cx),
@@ -5017,6 +5019,8 @@ impl Workspace {
                 paper.title = text(&form.title, cx);
                 paper.authors = text(&form.authors, cx);
                 paper.journal = text(&form.journal, cx);
+                paper.publication_date = text(&form.publication_date, cx);
+                if !wisp_core::model::valid_publication_date(&paper.publication_date) { self.modal_error = t("出版日期格式应为 YYYY、YYYY-MM 或 YYYY-MM-DD。").into(); return }
                 paper.doi = text(&form.doi, cx);
                 paper.pmid = text(&form.pmid, cx);
                 paper.url = text(&form.url, cx);
