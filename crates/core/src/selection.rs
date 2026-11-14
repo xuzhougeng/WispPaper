@@ -84,11 +84,11 @@ fn han(c: char) -> bool {
     matches!(c, '\u{4E00}'..='\u{9FFF}' | '\u{3400}'..='\u{4DBF}' | '\u{F900}'..='\u{FAFF}' | '\u{20000}'..='\u{2FA1F}')
 }
 
-/// The Pandoc citation `[@…]` that byte `at` stands in, if any.
+/// The Pandoc citation `[@…]` (or `[-@…]`, the year alone) that byte `at` stands in, if any.
 fn citation(text: &str, line: &Range<usize>, at: usize) -> Option<Range<usize>> {
     let words = &text[line.clone()];
     let rel = at - line.start;
-    let open = words.match_indices("[@").map(|(i, _)| i).take_while(|i| *i <= rel).last()?;
+    let open = words.match_indices('[').map(|(i, _)| i).filter(|i| words[i + 1..].starts_with('@') || words[i + 1..].starts_with("-@")).take_while(|i| *i <= rel).last()?;
     let close = open + words[open..].find(']')?;
     (close >= rel && !words[open + 1..close].contains('[')).then(|| line.start + open..line.start + close + 1)
 }
@@ -165,6 +165,7 @@ mod tests {
         assert_eq!(pick(text, "  hairs", Unit::Word), "   ");
         assert_eq!(pick(text, "Li2020", Unit::Word), "[@Zhang2024; @Li2020]");
         assert_eq!(pick(text, "[@", Unit::Word), "[@Zhang2024; @Li2020]");
+        assert_eq!(pick("as shown before [-@Zhang2024, p. 3].", "Zhang2024", Unit::Word), "[-@Zhang2024, p. 3]");
         assert_eq!(pick("", "", Unit::Word), "");
         assert_eq!(word("a\n\nb", 2), 2..2);
     }

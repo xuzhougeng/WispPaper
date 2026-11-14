@@ -155,7 +155,8 @@ impl Workspace {
                 };
                 let made = reply.and_then(|reply| usable(retrieval::parse_groups(&reply)).ok_or_else(|| t("回答里没有检索词").to_string()));
                 let search = &mut lib.writing.search;
-                search.made.insert(key, made.clone());
+                // Only what worked is kept: a request that failed is made again the next time the paragraph is searched for.
+                if made.is_ok() { search.made.insert(key, made.clone()); }
                 if search.round != round { return }
                 match made {
                     Ok(groups) => this.write_rank(round, groups, cx),

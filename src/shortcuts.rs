@@ -10,7 +10,7 @@ actions!(workspace, [Dismiss, FocusSearch, AddPaper, ImportPdf, AskLibrary, Togg
 
 /// The keys of 筛选, fixed like the arrow keys: what each does is in `Workspace::screen_key`. Bare letters
 /// and digits, so they are heard only while no text field has the keyboard.
-pub const SCREEN_KEYS: [(&str, &str); 9] = [("Y / 1", "已纳入"), ("R / 2", "相关"), ("U / 3", "证据不足"), ("N / 4", "不相关"), ("P / 0", "留待判断"), ("A", "采纳助手的建议"), ("Z", "逐篇：撤销上一个判断"), ("G", "让助手判断这一篇"), ("Space", "确认建议：勾选 / 不勾选")];
+pub const SCREEN_KEYS: [(&str, &str); 11] = [("Y / 1", "已纳入"), ("R / 2", "相关"), ("U / 3", "证据不足"), ("N / 4", "不相关"), ("P / 0", "留待判断"), ("A", "采纳助手的建议"), ("Z", "逐篇：撤销上一个判断"), ("G", "让助手判断这一篇"), ("S", "加星标 / 取消星标"), ("T", "显示译文 / 显示原文"), ("Space / X", "确认建议：勾选 / 不勾选")];
 
 pub struct Shortcut {
     pub id: &'static str,
@@ -43,7 +43,7 @@ pub const SHORTCUTS: [Shortcut; 14] = [
 
 /// The text field's own keys (input.rs): a shortcut on one of them would
 /// never fire while typing, and would surprise when it did.
-const EDITING: [&str; 4] = ["secondary-a", "secondary-c", "secondary-x", "secondary-v"];
+const EDITING: [&str; 6] = ["secondary-a", "secondary-c", "secondary-x", "secondary-v", "secondary-z", "secondary-shift-z"];
 /// Moving a paper to the trash from the list.
 const TRASH: &str = "secondary-backspace";
 
@@ -75,7 +75,7 @@ pub fn refusal(id: &str, key: &str, custom: &BTreeMap<String, String>) -> Option
     if !(m.control || m.alt || m.platform || function_key) {
         return Some(if cfg!(target_os = "macos") { t("快捷键需要带上 ⌘、⌃ 或 ⌥，或者使用 F1–F12。").into() } else { t("快捷键需要带上 Ctrl 或 Alt，或者使用 F1–F12。").into() });
     }
-    if EDITING.iter().any(|e| same(e, key)) { return Some(tf!("{} 用于文本编辑（全选、复制、剪切、粘贴），不能改作他用。", "{} is reserved for text editing (select all, copy, cut and paste).", pretty(key))) }
+    if EDITING.iter().any(|e| same(e, key)) { return Some(tf!("{} 用于文本编辑（全选、复制、剪切、粘贴、撤销、重做），不能改作他用。", "{} is reserved for text editing (select all, copy, cut, paste, undo and redo).", pretty(key))) }
     if same(TRASH, key) { return Some(tf!("{} 用于把选中的文献移到回收站，不能改作他用。", "{} is reserved for moving selected papers to trash.", pretty(key))) }
     SHORTCUTS.iter().find(|s| s.id != id && same(&key_of(s.id, custom), key)).map(|other| tf!("{} 已用于「{}」。先修改或移除那个快捷键。", "{} is already used for “{}”. Change or remove that shortcut first.", pretty(key), t(other.label)))
 }

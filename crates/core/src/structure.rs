@@ -367,7 +367,7 @@ pub fn canonical(heading: &str) -> Option<&'static str> {
             "palabras clave", "palavras chave", "schlüsselwörter", "mots clés", "parole chiave", "danksagung", "literatur", "literaturverzeichnis", "remerciements", "références", "bibliographie", "agradecimientos", "referencias", "bibliografía", "agradecimentos",
             "referências", "bibliografia", "ringraziamenti", "interessenkonflikt", "conflicto de intereses", "conflito de interesses", "financiamiento", "financiamento", "förderung",
             "参考文献", "參考文獻", "致谢", "致謝", "关键词", "關鍵詞", "关键字", "基金项目", "作者简介", "作者贡献", "利益冲突", "附录", "中图分类号", "文献标志码", "文献标识码", "引用文献", "文献", "谢辞", "謝辞", "キーワード",
-            "참고문헌", "감사의 글", "사사", "주요 검색어", "중심 단어", "이해관계", "key words",
+            "참고문헌", "감사의 글", "사사", "주요 검색어", "중심 단어", "이해관계",
         ]),
     ];
     NAMES.iter().find(|(_, names)| names.contains(&name.as_str())).map(|(key, _)| *key)
@@ -480,7 +480,8 @@ pub fn worth_asking(open: usize, paragraphs: usize) -> bool {
 
 /// The rules' labels where they are sure, the model's elsewhere.
 pub fn merge(rules: &[&'static str], sure: &[bool], model: &[&'static str]) -> Vec<&'static str> {
-    rules.iter().zip(sure).zip(model).map(|((rule, sure), model)| if *sure { *rule } else { *model }).collect()
+    // A block past the outline was never shown to the model: what stands for it there is no answer, and the rules' guess stays.
+    rules.iter().zip(sure).zip(model).enumerate().map(|(index, ((rule, sure), model))| if *sure || index >= OUTLINE_BLOCKS { *rule } else { *model }).collect()
 }
 
 /// What a model is told when it is asked to sort a paper's blocks into parts.
@@ -720,34 +721,6 @@ pub fn language(pages: &[String]) -> &'static str {
     COMMON_WORDS[best].0
 }
 
-/// What a person is writing right now, for finding sentences like it:
-/// the paragraph the caret is in, up to the caret; when the caret stands
-/// at the paragraph's start, the paragraph's beginning.
-pub fn writing_at(text: &str, caret: usize) -> String {
-    let caret = text.floor_char_boundary(caret.min(text.len()));
-    let start = text[..caret].rfind('\n').map_or(0, |at| at + 1);
-    let end = text[caret..].find('\n').map_or(text.len(), |at| caret + at);
-    let written = text[start..caret].trim();
-    if written.is_empty() {
-        text[start..end].trim().chars().take(WRITING_CHARS).collect()
-    } else {
-        // The last sentences count: the start of a long paragraph was written a while ago.
-        let skip = written.chars().count().saturating_sub(WRITING_CHARS);
-        written.chars().skip(skip).collect()
-    }
-}
-
-const WRITING_CHARS: usize = 320;
-
-/// Whether a text is (partly) in Chinese: the library's sentences are not,
-/// so it is put into English search words before it is looked for.
-pub fn in_chinese(text: &str) -> bool {
-    text.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
-}
-
-/// What a model is told to turn something written in Chinese into search words.
-pub const KEYWORDS_SYSTEM: &str = "用户正在写英文学术论文，下面是他想表达的意思（中文或中英混杂）。把它改写成用来检索相似英文句子的关键词：给出 6 到 12 个英文单词或短语，覆盖其中的概念、对象和论述方式（例如 remains unclear、in contrast、we hypothesized）。术语用该领域论文里通行的写法。只输出关键词，用空格分隔，不要解释。";
-
 const STOP_WORDS: [&str; 70] = [
     "the", "and", "for", "are", "was", "were", "with", "that", "this", "from", "have", "has", "had", "which", "what", "how", "why", "who", "does", "did", "can", "could", "about", "into", "their", "there", "these", "those", "any", "all", "not", "but", "its", "our", "you",
     "your", "they", "them", "than", "then", "been", "being", "of", "in", "on", "to", "is", "as", "by", "be", "we", "it", "an", "at", "or", "also", "such", "may", "more", "most", "between", "both", "however", "here", "using", "used", "use", "study", "show", "shown",
@@ -912,6 +885,9 @@ mod tests {
         assert_eq!(sure, [true, true, false, false, true, false, true, true, true, true]);
         assert_eq!(open_paragraphs(&nature, &sure), 3);
         assert_eq!(merge(&labels, &sure, &["other"; 10]), [SKIP, "abstract", "other", "other", SKIP, "other", SKIP, "discussion", SKIP, "methods"]);
+        // A block the model was never shown (past the outline) keeps the rules' guess.
+        let long = merge(&vec!["results"; OUTLINE_BLOCKS + 2], &vec![false; OUTLINE_BLOCKS + 2], &vec![SKIP; OUTLINE_BLOCKS + 2]);
+        assert_eq!((long[OUTLINE_BLOCKS - 1], long[OUTLINE_BLOCKS], long[OUTLINE_BLOCKS + 1]), (SKIP, "results", "results"));
         assert_eq!(open_paragraphs(&named, &assign_sure(&named, "").1), 1);
         let made = sentences(&nature, &assign(&nature, summary));
         assert_eq!(made.iter().filter(|s| s.section == "introduction").count(), 6);
@@ -1085,17 +1061,6 @@ mod tests {
         let texts = ["钙离子信号通路调控细胞增殖。", "手术联合化疗仍是主要方案。", "Calcium signalling regulates proliferation."];
         let found = rank(&texts, &["a", "b", "c"], "钙离子信号", 10);
         assert_eq!(found.iter().map(|(index, _)| *index).collect::<Vec<_>>(), [0]);
-    }
-
-    #[test]
-    fn what_is_being_written() {
-        let text = "First paragraph, done.\nRoots adapt to soil. However, how they\n\nThird.";
-        assert_eq!(writing_at(text, text.find("\n\n").unwrap()), "Roots adapt to soil. However, how they");
-        assert_eq!(writing_at(text, 23), "Roots adapt to soil. However, how they");
-        assert_eq!(writing_at(text, 5), "First");
-        assert_eq!(writing_at("根系如何", 100), "根系如何");
-        assert_eq!(writing_at("", 0), "");
-        assert!(in_chinese("root 适应 soil") && !in_chinese("root–soil"));
     }
 
     #[test]

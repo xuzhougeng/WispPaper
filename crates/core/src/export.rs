@@ -15,7 +15,8 @@ pub fn bibtex(papers: &[&Paper]) -> String {
             let base = bib_key(p);
             let n = used.entry(base.clone()).or_default();
             *n += 1;
-            if *n > 1 { format!("{base}{}", (b'a' + (*n as u8 - 2).min(25)) as char) } else { base }
+            // a … z for the second to the 27th paper of a key, then numbers: no two share a key, however many there are.
+            match *n { 1 => base, 2..=27 => format!("{base}{}", (b'a' + (*n - 2) as u8) as char), n => format!("{base}{n}") }
         })
         .collect();
     bibtex_keyed(&keys.iter().map(String::as_str).zip(papers.iter().copied()).collect::<Vec<_>>())
@@ -170,6 +171,9 @@ mod tests {
         let text = bibtex(&[&p, &p]);
         assert!(text.starts_with("@article{zhang2024singlecell,\n  title = {{Single-cell atlas of Arabidopsis \\& rice roots}},\n  author = {Zhang, Wei and O'Brien, Ann},\n  journal = {Nature Plants},\n  year = {2024},\n  doi = {10.1000/abc\\_1},\n  url = {https://doi.org/10.1000/abc\\_1},\n  keywords = {root, Arabidopsis thaliana},\n}\n"), "{text}");
         assert!(text.contains("@article{zhang2024singlecella,"));
+        // However many papers share a key, no two entries do.
+        let many = bibtex(&vec![&p; 300]);
+        assert!(many.contains("@article{zhang2024singlecellz,") && many.contains("@article{zhang2024singlecell28,") && many.matches("@article{zhang2024singlecell300,").count() == 1);
     }
 
     #[test]

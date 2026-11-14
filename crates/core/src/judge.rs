@@ -70,10 +70,11 @@ pub fn screen_request(profile: &Profile, topic: &str, criteria: &str, paper: &Pa
         // No abstract: the paper's first pages, as far as the budget goes.
         let mut text = String::new();
         for page in pages.unwrap_or(&[]).iter().map(|page| page.trim()).filter(|page| !page.is_empty()) {
-            let room = BUDGET.saturating_sub(text.len());
-            if room == 0 { break }
+            // The room left counts the break between two pages; a page that no whole letter of fits ends it.
+            let room = BUDGET.saturating_sub(text.len() + if text.is_empty() { 0 } else { 2 });
             let mut end = page.len().min(room);
             while !page.is_char_boundary(end) { end -= 1 }
+            if end == 0 { break }
             if !text.is_empty() { text.push_str("\n\n") }
             text.push_str(&page[..end]);
         }

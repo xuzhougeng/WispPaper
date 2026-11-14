@@ -465,12 +465,6 @@ pub fn reference_list(references: &[Reference]) -> String {
     references.iter().map(|reference| reference.text.as_str()).collect::<Vec<_>>().join("\n")
 }
 
-/// The list as the end of a Markdown manuscript: a heading and one paragraph per entry.
-pub fn reference_markdown(references: &[Reference]) -> String {
-    if references.is_empty() { return String::new() }
-    format!("## 参考文献\n\n{}\n", references.iter().map(|reference| reference.text.as_str()).collect::<Vec<_>>().join("\n\n"))
-}
-
 /// The BibTeX of the cited papers, under the keys they are cited by.
 pub fn bibtex(references: &[Reference], index: &Index) -> String {
     let entries: Vec<(&str, &Paper)> = references.iter().filter_map(|reference| Some((reference.key.as_str(), index.paper(&reference.paper_id)?))).collect();
@@ -757,7 +751,6 @@ mod tests {
         assert_eq!(refs[1].text, "Müller, J. (n.d.). Auxin.");
         assert_eq!(refs[2].text, "Smith, A., & Jones, B. (2019). Two authors. PMID: 123");
         assert_eq!(refs[3].text, "Zhang, W., Li, Q., & Wang, F. (2024). Single-cell atlas of roots. Nature Plants. https://doi.org/10.1000/x");
-        assert!(reference_markdown(&refs).starts_with("## 参考文献\n\nDe Novo"));
         let bib = bibtex(&refs, &index);
         assert!(bib.starts_with("@article{DeNovo2020,\n") && bib.contains("@article{Zhang2024,\n") && bib.matches("@article").count() == 4, "{bib}");
         assert_eq!(authors_shown("Tian-Qi Zhang; 张伟"), ["Zhang, T.-Q.", "张伟"]);

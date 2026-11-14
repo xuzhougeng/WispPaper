@@ -667,7 +667,7 @@ impl Workspace {
                             ColumnKind::Title => {
                                 let title = self.listed_title(lib, p);
                                 let mut meta = vec![];
-                                let authors = p.short_authors();
+                                let authors = crate::i18n::short_authors(p);
                                 if !authors.is_empty() { meta.push(authors) }
                                 if let Some(year) = p.year { meta.push(year.to_string()) }
                                 if !p.journal.is_empty() { meta.push(p.journal.clone()) }
@@ -826,7 +826,7 @@ impl Workspace {
                 let pointed = self.menu.as_ref().is_some_and(|menu| menu.paper.as_deref() == Some(p.id.as_str()));
                 let unread = p.reading == "unread";
                 let mut meta = vec![];
-                let authors = p.short_authors();
+                let authors = crate::i18n::short_authors(p);
                 if !authors.is_empty() { meta.push(authors) }
                 if let Some(year) = p.year { meta.push(year.to_string()) }
                 if meta.is_empty() && !p.journal.is_empty() { meta.push(p.journal.clone()) }
@@ -892,7 +892,7 @@ impl Workspace {
                     .border_b_1()
                     .border_color(Theme::line())
                     .on_mouse_down(MouseButton::Right, self.on_context(MenuKind::Trashed(p.id.clone()), cx))
-                    .child(div().flex().flex_col().flex_1().min_w_0().child(div().truncate().child(p.title.clone())).child(div().truncate().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(tf!("{} · 删除于 {}", "{} · Deleted {}", if p.authors.is_empty() { t("作者待补").to_string() } else { p.short_authors() }, time::date_text(&entry.deleted_at)))))
+                    .child(div().flex().flex_col().flex_1().min_w_0().child(div().truncate().child(p.title.clone())).child(div().truncate().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(tf!("{} · 删除于 {}", "{} · Deleted {}", if p.authors.is_empty() { t("作者待补").to_string() } else { crate::i18n::short_authors(p) }, time::date_text(&entry.deleted_at)))))
                     .child(ui::secondary_button(("restore", i), t("恢复")).on_click(self.on(Cmd::RestorePaper(p.id.clone()), cx)))
                     .child(ui::ghost_button(("delete", i), Some("bin"), Some(t("彻底删除").into())).text_color(Theme::danger()).on_click(self.on(Cmd::AskDeletePaper(p.id.clone()), cx)))
                     .into_any_element()

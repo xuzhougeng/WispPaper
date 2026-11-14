@@ -1,4 +1,4 @@
-//! 文献库提问: what the model is given, the request for either protocol, and
+//! 文献库提问: what the model is given, the request for each protocol, and
 //! reading the streamed answer. No HTTP here; the app sends the request.
 //!
 //! The library is put in front of the model first: every paper's record
@@ -352,8 +352,8 @@ pub fn build_context(library_name: &str, topic: &str, papers: &[&Paper], fields:
 - search_online 可以在 PubMed、Europe PMC、Crossref、arXiv 里试检索，不写入文献库。保存或删除检索式、运行导入、撤销导入会改动文献库：只在用户明确要求时使用，并说明做了什么。收录判断由用户本人做出：你可以用 suggest_screening 提出建议，它会出现在筛选页等用户确认。自定义词条也一样由用户写入：你可以用 suggest_field 为一篇文献的一个词条提出取值和原文依据，它会出现在提取页等用户确认。\n\
 - 用户要求整理文献（打标签、加星标、改阅读状态、记一段笔记）时用 organise_papers，一次调用写全所有要改的文献；用户会先看到每一篇要改什么再决定是否允许。标签优先用文献库已有的。没有被要求时不要整理。\n\
 - list_pdf_annotations 读取用户在 PDF 上的下划线、高亮和笔记；用户提到划线、标注、阅读重点时主动读取。quote 是用户选中的原文，note 是用户自己的理解，不能把笔记当作论文结论。用 resourceId 区分同一文献的不同附件，页码属于该附件；引用前核对原文上下文。\n\
-- list_manuscripts 和 read_manuscript 读用户在写作页的稿件，只读：稿件由用户自己修改，你给出建议或可以直接采用的段落即可。
-\n- 工具结果里每篇文献带有 label，就是引用它时用的标签；工具的 paperId 和 id 参数可以直接填标签（如 P3）。没有保存全文的文献只有记录和摘要，回答依据的只是摘要时要说明。\n\
+- list_manuscripts 和 read_manuscript 读用户在写作页的稿件，只读：稿件由用户自己修改，你给出建议或可以直接采用的段落即可。\n\
+- 工具结果里每篇文献带有 label，就是引用它时用的标签；工具的 paperId、id 和 paper 参数可以直接填标签（如 P3）。没有保存全文的文献只有记录和摘要，回答依据的只是摘要时要说明。\n\
 - 用用户提问的语言回答，直接回答问题，不必复述材料。"
     );
     ctx.documents = documents;
@@ -611,7 +611,7 @@ fn apply_effort(profile: &Profile, base: &str, body: &mut Value) {
     }
 }
 
-/// A question as it goes on the wire; the same for both protocols.
+/// A question as it goes on the wire; the same for every protocol.
 pub fn user_message(text: &str) -> Value {
     json!({"role": "user", "content": text})
 }
@@ -793,7 +793,7 @@ fn push_text(value: &mut Value, more: &str) {
     }
 }
 
-/// Reads the server-sent events of one turn. Both protocols put a complete
+/// Reads the server-sent events of one turn. Every protocol puts a complete
 /// JSON object on every `data:` line.
 pub struct TurnReader {
     protocol: Protocol,
@@ -978,9 +978,10 @@ pub fn tool_results(protocol: Protocol, results: &[(String, String, bool)]) -> V
 /// without a turn of its own: for Claude a text block after the results in
 /// the same message, for the other two a message after them.
 pub fn with_note(protocol: Protocol, mut messages: Vec<Value>, note: &str) -> Vec<Value> {
-    match (protocol, messages.last_mut().and_then(|last| last["content"].as_array_mut())) {
-        (Protocol::Anthropic, Some(blocks)) => blocks.push(json!({"type": "text", "text": note})),
-        _ => messages.push(user_message(note)),
+    // `get_mut`, not an index: indexing would give a message without content (a Responses tool result) an empty one.
+    match messages.last_mut().and_then(|last| last.get_mut("content")).and_then(Value::as_array_mut).filter(|_| protocol == Protocol::Anthropic) {
+        Some(blocks) => blocks.push(json!({"type": "text", "text": note})),
+        None => messages.push(user_message(note)),
     }
     messages
 }
@@ -995,10 +996,10 @@ fn source_of<'a>(sources: &'a [Source], value: &str) -> Option<&'a Source> {
     sources.iter().find(|s| s.paper_id == value || s.label.eq_ignore_ascii_case(value.trim()))
 }
 
-/// Let the model name a paper by its label: `paperId` and `id` arguments
-/// holding one are replaced by the paper's id.
+/// Let the model name a paper by its label: `paperId`, `id` and `paper`
+/// (`list_figures`) arguments holding one are replaced by the paper's id.
 pub fn resolve_labels(args: &mut Value, sources: &[Source]) {
-    for key in ["paperId", "id"] {
+    for key in ["paperId", "id", "paper"] {
         if let Some(found) = args[key].as_str().and_then(|value| source_of(sources, value)) { args[key] = json!(found.paper_id) }
     }
     // A list of things about papers (`organise_papers`' changes) names each of them the same way.
@@ -2318,7 +2319,9 @@ mod tests {
         assert_eq!(claude, [json!({"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "{}", "is_error": false}, {"type": "text", "text": "快到头了"}]})]);
         let openai = with_note(Protocol::OpenAI, tool_results(Protocol::OpenAI, &results), "快到头了");
         assert_eq!(openai[1], json!({"role": "user", "content": "快到头了"}));
-        assert_eq!(with_note(Protocol::Responses, tool_results(Protocol::Responses, &results), "快到头了").len(), 2);
+        // A Responses tool result has no content, and gets none.
+        let responses = with_note(Protocol::Responses, tool_results(Protocol::Responses, &results), "快到头了");
+        assert_eq!((responses.len(), &responses[0]), (2, &json!({"type": "function_call_output", "call_id": "toolu_1", "output": "{}"})));
     }
 
     #[test]

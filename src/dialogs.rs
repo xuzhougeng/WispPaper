@@ -295,7 +295,7 @@ impl Workspace {
                 // What a record is, in two lines.
                 let summary = |record: &wisp_core::model::Paper| {
                     let mut line = vec![];
-                    if !record.authors.is_empty() { line.push(record.short_authors()) }
+                    if !record.authors.is_empty() { line.push(crate::i18n::short_authors(record)) }
                     if let Some(year) = record.year { line.push(year.to_string()) }
                     if !record.journal.is_empty() { line.push(record.journal.clone()) }
                     if record.publication_status != "unknown" { line.push(label(&PUBLICATION_STATUSES, &record.publication_status).to_string()) }

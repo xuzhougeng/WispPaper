@@ -152,12 +152,6 @@ pub fn locate(text: &str, quote: &str, near: Option<usize>) -> Option<Range<usiz
     Some(offsets[first]..end)
 }
 
-/// The paragraph (line) of `text` a place is in.
-pub fn line_at(text: &str, at: usize) -> Range<usize> {
-    let at = text.floor_char_boundary(at.min(text.len()));
-    text[..at].rfind('\n').map_or(0, |i| i + 1)..text[at..].find('\n').map_or(text.len(), |i| at + i)
-}
-
 /// What the assistant is told and asked for a review of `text` (a section, or what is selected of it).
 /// `wish` is what the person wants looked at, `theirs` the comments of others on this text (the words, who, what was said), `reply_in` the language to remark in.
 pub fn review_prompt(language: &str, section: &str, text: &str, wish: &str, theirs: &[(String, String, String)], reply_in: &str) -> Result<(String, String), String> {
@@ -206,8 +200,10 @@ pub fn parse_review(reply: &str, text: &str) -> Result<(Vec<Remark>, usize), Str
         };
         if taken.iter().any(|other| other.start < found.end && found.start < other.end) { continue }
         let quote = text[found.clone()].to_string();
-        taken.push(found);
         let suggestion = if suggestion == quote { String::new() } else { suggestion.lines().map(str::trim).filter(|line| !line.is_empty()).collect::<Vec<_>>().join("\n\n") };
+        // A proposal to leave the words as they are, with nothing said about them, is no remark.
+        if body.is_empty() && suggestion.is_empty() { continue }
+        taken.push(found);
         remarks.push(Remark { quote, body, suggestion });
         if remarks.len() == MAX_REMARKS { break }
     }
@@ -285,7 +281,6 @@ mod tests {
         assert_eq!(locate(text, "leaves", None), None);
         assert_eq!(locate(text, "  ", None), None);
         assert_eq!(locate("单细胞 时空组学的方法", "单细胞时空组学", None).map(|found| &"单细胞 时空组学的方法"[found]), Some("单细胞 时空组学"));
-        assert_eq!(line_at("one\ntwo three\nfour", 6), 4..13);
     }
 
     #[test]

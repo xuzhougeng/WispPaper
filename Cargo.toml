@@ -17,7 +17,6 @@ wisp_net = { path = "crates/net" }
 anyhow = "1"
 dirs = "7"
 gpui = "0.2.2"
-serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 unicode-segmentation = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }

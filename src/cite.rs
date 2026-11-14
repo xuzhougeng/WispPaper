@@ -188,7 +188,7 @@ fn listed(lib: &Library, cx: &App) -> Listed {
     let offered = index
         .matching(lib.citing.find.read(cx).text().trim(), OFFERED)
         .into_iter()
-        .map(|paper| Offer { paper_id: paper.id.clone(), key: key_of(&paper.id), title: paper.title.clone(), about: [paper.short_authors(), paper.year.map(|y| y.to_string()).unwrap_or_default()].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" · ") })
+        .map(|paper| Offer { paper_id: paper.id.clone(), key: key_of(&paper.id), title: paper.title.clone(), about: [crate::i18n::short_authors(paper), paper.year.map(|y| y.to_string()).unwrap_or_default()].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" · ") })
         .collect();
     let standing = crate::write_source::standing(found.iter().map(|(id, _, text, cited)| (*id, *text, cited.as_slice())), &lib.citing.sources.kept);
     Listed { here: entries(&cited_here), whole: entries(&all), unresolved, upgrades, offered, standing }

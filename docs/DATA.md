@@ -4,7 +4,7 @@
 
 | 内容 | 位置 |
 |---|---|
-| 文献库 | `文档/WispPaper/<文献库 ID>/`，内含 `library.json`、`wisp-paper.sqlite`、`papers/` |
+| 文献库 | `文档/WispPaper/<文献库 ID>/`，内含 `library.json`、`wisp-paper.sqlite`、`papers/`，用到时还有 `figures/`（图片库）和 `manuscripts/`（导入的 Word 稿件） |
 | 历史对话（问题、回答、随问题发出的图片） | 各文献库的 `wisp-paper.sqlite` 里，随文献库文件夹一起走；在「历史」里删除一条对话是真的删除 |
 | PDF 标注（下划线、高亮、原文、页码、坐标、笔记） | 文献库的 `wisp-paper.sqlite` 中 `pdf_annotations` 表；原 PDF 不改写，备份时需连同数据库一起保存；删除标注或移除其附件会删除对应标注记录 |
 | 被移除的文献库、附件 | 同目录下的 `removed/`（只移动，不删除） |
@@ -32,4 +32,4 @@
 
 ## API Key
 
-API Key 以明文保存在 `settings.json`。留空则读取环境变量 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`。
+API Key 以明文保存在 `settings.json`。留空则读取环境变量：预设的服务读它自己的那个（`DEEPSEEK_API_KEY`、`MOONSHOT_API_KEY`、`ZHIPUAI_API_KEY`、`ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`ARK_API_KEY`、`TYPESAFE_API_KEY`），自己填地址的服务按接口读 `ANTHROPIC_API_KEY` 或 `OPENAI_API_KEY`。

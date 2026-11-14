@@ -31,7 +31,7 @@ pub use crate::manuscripts::ManuscriptExport;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
     Papers,
-    /// 文献库提问: questions over the current list.
+    /// 助手: the conversation with the library, over the current list.
     Ask,
     Trash,
     /// 筛选: the papers waiting for a decision, with what the assistant suggests for each.
@@ -1251,7 +1251,7 @@ pub struct Workspace {
     pub menu: Option<Menu>,
     pub toast: Option<Toast>,
     pub home_scroll: ScrollHandle,
-    /// The edge being dragged: the sidebar's, or the detail panel's.
+    /// The edge being dragged: the sidebar's, the detail panel's, or the one between a paper's conversation and its PDF.
     pub resizing: Option<Edge>,
     /// What is selected in a text of the window that is not an answer or a text field.
     pub picked: Option<crate::select::Picked>,
@@ -2110,6 +2110,8 @@ impl Workspace {
                 if self.lib.as_ref().is_some_and(|l| l.page == Page::Write && page != Page::Write) { self.write_snapshot("leave") }
                 // What 提取 last wrote is on show, with the way back, until the page is left.
                 if let Some(lib) = self.lib.as_mut().filter(|l| l.page == Page::Extract && page != Page::Extract) { lib.extract.last = None }
+                // The same for what 确认 last wrote: taken back later, it would undo decisions made since.
+                if let Some(lib) = self.lib.as_mut().filter(|l| l.page == Page::Screen && page != Page::Screen) { lib.screen.confirmed = None }
                 if page == Page::Write { self.write_ensure(cx) }
                 if let Some(lib) = self.lib.as_mut() {
                     lib.page = page;
@@ -2261,6 +2263,8 @@ impl Workspace {
             Cmd::RemoveFile(id) => {
                 if self.change(cx, |lib| lib.store.remove_file(&id)) {
                     if let Some(lib) = self.lib.as_mut() { lib.pdf = None }
+                    // Another PDF of the paper, if it has one, takes the viewer.
+                    self.ensure_pdf(cx);
                     self.say(t("附件已移除（文件移到了 removed 文件夹）。"), cx);
                 }
             }
@@ -2415,9 +2419,12 @@ impl Workspace {
                 if let Some(lib) = self.lib.as_mut() {
                     let about = if paper { lib.selected.clone().unwrap_or_default() } else { String::new() };
                     let result = lib.store.remove_conversation(&id).and_then(|()| lib.store.list_conversations(&about));
+                    // The conversation in hand, once removed, would only be saved again with the next answer;
+                    // the papers it was kept to go with it, as for any new conversation.
+                    let in_hand = lib.chat(paper).id == id;
+                    if in_hand && !paper { lib.scope_reset(cx) }
                     let chat = lib.chat_mut(paper);
-                    // The conversation in hand, once removed, would only be saved again with the next answer.
-                    if chat.id == id {
+                    if in_hand {
                         let listed = chat.history.take();
                         chat.reset(cx);
                         chat.history = listed;
@@ -3177,7 +3184,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Change one paper and save it.
     /// A tag under another name on every paper that has it (one that has both keeps one), or taken off
     /// them. The list stays on the same papers when it is narrowed to that tag.
     fn retag(&mut self, tag: &str, name: Option<&str>, cx: &mut Context<Self>) -> bool {
@@ -3198,6 +3204,7 @@ impl Workspace {
         })
     }
 
+    /// Change one paper and save it.
     pub(crate) fn edit_paper(&mut self, id: &str, cx: &mut Context<Self>, edit: impl FnOnce(&mut Paper)) -> bool {
         self.change(cx, |lib| {
             let mut paper = lib.store.get_paper(id)?;
@@ -3317,11 +3324,12 @@ impl Workspace {
                 this.update(cx, |this, cx| {
                     let mut added = 0;
                     this.change(cx, |lib| {
-                        let has_fulltext = lib.files.iter().any(|f| f.paper_id == paper_id && f.kind == "fulltext");
-                        for (i, path) in paths.iter().enumerate() {
+                        let mut has_fulltext = lib.files.iter().any(|f| f.paper_id == paper_id && f.kind == "fulltext");
+                        for path in &paths {
                             let is_pdf = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
                             // The first PDF of a paper is its full text; the rest are supplements.
-                            let kind = if is_pdf && !has_fulltext && i == 0 { "fulltext" } else { "supplement" };
+                            let kind = if is_pdf && !has_fulltext { "fulltext" } else { "supplement" };
+                            has_fulltext |= is_pdf;
                             lib.store.import_file(&paper_id, path, kind)?;
                             added += 1;
                         }
@@ -3495,7 +3503,7 @@ impl Workspace {
             Imported::InTrash => tf!("「{stem}」对应的文献在回收站中，未导入。", "“{stem}” is in trash and was not imported."),
             Imported::Failed(err) => tf!("「{stem}」没有导入：{err}", "“{stem}” not imported: {err}"),
         };
-        let said = if row.textless.is_empty() { said } else { tf!("{said} 但没有读出文字（{}），全文暂时不能用于提问。", "{said} But no text was extracted ({}); full text is unavailable for chat.", fulltext::failure_brief(&row.textless)) };
+        let said = if row.textless.is_empty() { said } else { tf!("{said} 但没有读出文字（{}），全文暂时不能用于提问。", "{said} But no text was extracted ({}); full text is unavailable for chat.", t(fulltext::failure_brief(&row.textless))) };
         let failed = matches!(row.outcome, Imported::Failed(_));
         let Some(run) = lib.import.as_mut() else { return };
         if let Some(at) = run.working.iter().position(|name| name == &row.name) { run.working.remove(at); }
@@ -4466,7 +4474,11 @@ impl Workspace {
         let profile = self.settings.profile_for_or_default(Task::Screen);
         let Some(lib) = self.lib.as_mut().filter(|l| l.screen.run == run) else { return };
         let Some(id) = lib.screen.todo.pop() else { return };
-        let Some(paper) = lib.paper(&id).cloned() else { return self.screen_next(run, cx) };
+        // A paper that left the library meanwhile is done with, so the run still ends at its total.
+        let Some(paper) = lib.paper(&id).cloned() else {
+            lib.screen.done += 1;
+            return self.screen_next(run, cx);
+        };
         let pages = lib.store.paper_pages(&id).ok().flatten();
         let (system, prompt, basis) = ai::screen_prompt(&lib.info.topic, &lib.info.criteria, &paper, pages.as_deref());
         let author = profile.labelled();
@@ -4559,7 +4571,7 @@ impl Workspace {
         sorting.run += 1;
         (sorting.reading, sorting.total, sorting.done, sorting.failed, sorting.streak, sorting.todo) = (reading, todo.len(), 0, 0, 0, todo);
         sorting.cut.clear();
-        sorting.model = format!("{} · {}", profile.title(), profile.model);
+        sorting.model = profile.labelled();
         let run = sorting.run;
         // A file's pages are read one after another; two files at a time is as much as a service takes kindly.
         for _ in 0..if reading { workers.min(2) } else { workers } {
@@ -4580,7 +4592,7 @@ impl Workspace {
         let Some(file_id) = lib.writing.sorting.todo.pop() else { return };
         let Some(file) = lib.files.iter().find(|f| f.id == file_id).cloned() else { return self.write_run_next(run, cx) };
         let (title, summary) = lib.paper(&file.paper_id).map(|p| (p.title.clone(), p.abstract_text.clone())).unwrap_or_default();
-        let author = format!("{} · {}", profile.title(), profile.model);
+        let author = profile.labelled();
         let (library, protocol, reading) = (lib.info.id.clone(), profile.protocol, lib.writing.sorting.reading);
         let path = lib.store.file_path(&file);
         let pages = lib.store.fulltext_pages(&file.id).ok().flatten().and_then(Result::ok).unwrap_or_default();
@@ -4778,7 +4790,8 @@ impl Workspace {
                 let result = match editing.clone() {
                     None => libraries::create(&self.root, &name, &topic, &color).map(|info| created = Some(info.id)),
                     Some(id) => {
-                        let Some(mut info) = self.libraries.iter().find(|l| l.id == id).cloned() else { return };
+                        // The open library's own record is the newer one: its screening goal is typed on 筛选 and kept there, not in the home page's list.
+                        let Some(mut info) = self.lib.as_ref().filter(|l| l.info.id == id).map(|l| l.info.clone()).or_else(|| self.libraries.iter().find(|l| l.id == id).cloned()) else { return };
                         (info.name, info.topic, info.color) = (name, topic, color);
                         libraries::save(&info).map(|_| {
                             if let Some(lib) = self.lib.as_mut().filter(|l| l.info.id == info.id) {
@@ -5078,7 +5091,7 @@ impl Workspace {
                 // `references` shows the reference list beside the manuscript (`references:off` the candidates), `references:whole` the whole manuscript's, as the outline's row does.
                 "references" => Some(match arg { "off" => Cmd::WriteSide(Side::Candidates), "whole" => Cmd::WriteReferences, _ => Cmd::WriteSide(Side::References) }),
                 "wish" | "commenttext" => {
-                    if let Some(comments) = self.lib.as_ref().map(|lib| &lib.writing.comments) { (if step == "wish" { &comments.wish } else { &comments.draft }).update(cx, |input, cx| input.set_text(arg, cx)) }
+                    if let Some(comments) = self.lib.as_ref().map(|lib| &lib.writing.comments) { (if name == "wish" { &comments.wish } else { &comments.draft }).update(cx, |input, cx| input.set_text(arg, cx)) }
                     None
                 }
                 "exportdoc" => {
@@ -5177,7 +5190,6 @@ impl Workspace {
                     });
                     return;
                 }
-                // `click:<command>` for what has no step of its own.
                 "textless" => Some(Cmd::ShowTextless),
                 // `findpdf` asks about the papers of the list on show, `findpdf:one` about the selected paper; `fetched` shows what came of it.
                 "findpdf" => Some(Cmd::FindPdfs(if arg == "one" { self.lib.as_ref().and_then(|lib| lib.selected.clone()) } else { None })),

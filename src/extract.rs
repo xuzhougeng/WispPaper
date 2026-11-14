@@ -189,6 +189,8 @@ impl Library {
         let mut proposal = Proposal { paper_id: paper_id.to_string(), field_id: field.id.clone(), values: answer.values, excerpt: answer.excerpt, page: answer.page, basis: basis.to_string(), author: author.to_string(), asked: extract::asked_as(field), ..Default::default() };
         self.store.save_proposal(&mut proposal).map_err(|err| format!("{err:#}"))?;
         let found = !proposal.values.is_empty();
+        // An answer, from the run or the field's own sparkle, takes the place of what an earlier question failed with.
+        self.extract.ask_errors.remove(&(paper_id.to_string(), field.id.clone()));
         self.extract.proposals.put(proposal);
         Ok(found)
     }
@@ -350,7 +352,7 @@ impl Workspace {
         state.error.clear();
         state.last = None;
         state.asked = fields;
-        state.model = format!("{} · {}", profile.title(), profile.model);
+        state.model = profile.labelled();
         let run = state.run;
         for _ in 0..workers {
             self.extract_next(run, cx);
@@ -365,7 +367,11 @@ impl Workspace {
         let profile = self.settings.speaking_profile_for(Task::Screen);
         let Some(lib) = self.lib.as_mut().filter(|l| l.extract.run == run) else { return };
         let Some((id, wanted)) = lib.extract.todo.pop() else { return };
-        let Some(paper) = lib.paper(&id).cloned() else { return self.extract_next(run, cx) };
+        // A paper that left the library meanwhile is done with, so the run still ends at its total.
+        let Some(paper) = lib.paper(&id).cloned() else {
+            lib.extract.done += 1;
+            return self.extract_next(run, cx);
+        };
         // The fields as they are defined now: one removed meanwhile is not asked about.
         let fields: Vec<FieldDef> = lib.fields.iter().filter(|field| wanted.contains(&field.id)).cloned().collect();
         let pages = lib.store.paper_pages(&id).ok().flatten();
@@ -385,7 +391,7 @@ impl Workspace {
             }
         };
         lib.extract.reading.push(id);
-        let author = format!("{} · {}", profile.title(), profile.model);
+        let author = profile.labelled();
         let (library, protocol) = (lib.info.id.clone(), profile.protocol);
         let work = cx.background_executor().spawn(async move {
             let answers = wisp_net::complete(request, protocol).and_then(|reply| extract::parse(&reply, &fields, &paper, pages.as_deref()));
@@ -453,7 +459,7 @@ impl Workspace {
             }
         };
         lib.extract.asking.insert(key.clone());
-        let author = format!("{} · {}", profile.title(), profile.model);
+        let author = profile.labelled();
         let (library, protocol) = (lib.info.id.clone(), profile.protocol);
         let work = cx.background_executor().spawn(async move {
             let answer = wisp_net::complete(request, protocol).and_then(|reply| extract::parse(&reply, &fields, &paper, pages.as_deref())).and_then(|mut answers| answers.pop().ok_or_else(|| t("模型没有回答这个词条。").to_string()));
@@ -681,7 +687,7 @@ impl Workspace {
                         .when(!lib.fields.is_empty(), |d| d.child(again))
                         .child(div().px(px(8.)).text_size(text_px(12.)).line_height(text_px(19.)).text_color(Theme::text_secondary()).child(count))
                         .child(if configured {
-                            div().px(px(8.)).text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(tf!("用筛选的模型：{} · {}，同时读 {} 篇。", "Uses the screening model: {} · {}, {} papers at a time.", profile.title(), profile.model, self.settings.screen_workers))
+                            div().px(px(8.)).text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(tf!("用筛选的模型：{}，同时读 {} 篇。", "Uses the screening model: {}, {} papers at a time.", profile.labelled(), self.settings.screen_workers))
                         } else {
                             div().flex().items_center().gap(px(6.)).px(px(8.)).text_size(text_px(12.)).text_color(Theme::warning()).child(t("还没有配置模型。")).child(self.screen_setup_button(cx))
                         })
@@ -993,7 +999,7 @@ impl Workspace {
                         None => line.child(div().flex_none().text_color(Theme::text_tertiary()).child(t("摘要"))),
                     }
                 };
-                let mut about: Vec<String> = vec![paper.short_authors(), paper.year.map(|y| y.to_string()).unwrap_or_default(), paper.title.clone()];
+                let mut about: Vec<String> = vec![crate::i18n::short_authors(paper), paper.year.map(|y| y.to_string()).unwrap_or_default(), paper.title.clone()];
                 about.retain(|part| !part.is_empty());
                 let text = div()
                     .id(id("text"))

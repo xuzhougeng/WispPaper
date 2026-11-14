@@ -75,6 +75,7 @@ impl Zip {
         self.entries.iter().any(|entry| entry.name == name)
     }
 
+    #[cfg(test)]
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.entries.iter().map(|entry| entry.name.as_str())
     }
@@ -83,7 +84,8 @@ impl Zip {
     pub fn get(&self, name: &str) -> Result<Option<Vec<u8>>> {
         let Some(entry) = self.entries.iter().find(|entry| entry.name == name) else { return Ok(None) };
         if entry.method == 0 { return Ok(Some(entry.data.clone())) }
-        let mut out = Vec::with_capacity(entry.size as usize);
+        // The size an archive claims is a hint, not a promise: a damaged one may claim gigabytes.
+        let mut out = Vec::with_capacity((entry.size as usize).min(1 << 20));
         // No part of a document is this large: an archive that says so is not one.
         flate2::read::DeflateDecoder::new(&entry.data[..]).take(1 << 29).read_to_end(&mut out).map_err(|_| anyhow!(NOT_DOCX))?;
         Ok(Some(out))

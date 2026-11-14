@@ -363,7 +363,7 @@ impl Workspace {
             // A request refused before it was sent has nothing to show.
             .children(body)
             .when(!card.note.is_empty(), |d| d.child(div().text_size(text_px(11.)).line_height(text_px(16.)).text_color(Theme::text_tertiary()).child(card.note.clone())))
-            .when(!card.error.is_empty(), |d| d.child(ui::error_line(&card.error)))
+            .when(!card.error.is_empty(), |d| d.child(ui::error_line(t(&card.error))))
             .children(actions);
         Some(card_el.into_any_element())
     }

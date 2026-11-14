@@ -60,7 +60,7 @@ impl Workspace {
         let batch = Batch::new(ids.iter().filter_map(|id| lib.paper(id)), field, &prompt);
         if batch.total == 0 { return }
         lib.show_translation = true;
-        lib.translation_run = Some(TranslationRun { batch, model: format!("{} · {}", profile.title(), profile.model), profile, prompt, workers });
+        lib.translation_run = Some(TranslationRun { batch, model: profile.labelled(), profile, prompt, workers });
         self.batch_translation_next(cx);
         cx.notify();
     }
@@ -132,7 +132,7 @@ impl Workspace {
         let ask = lib.translation_asks.entry(key.clone()).or_default();
         *ask += 1;
         let ask = *ask;
-        let (session, protocol, author) = (lib.translation_session.clone(), profile.protocol, format!("{} · {}", profile.title(), profile.model));
+        let (session, protocol, author) = (lib.translation_session.clone(), profile.protocol, profile.labelled());
         let work = cx.background_executor().spawn(async move { wisp_net::complete(request, protocol) });
         cx.spawn(async move |this, cx| {
             let translated = work.await;

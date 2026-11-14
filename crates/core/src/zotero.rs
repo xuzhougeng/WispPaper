@@ -32,13 +32,6 @@ pub struct Row {
     pub problems: Vec<String>,
 }
 
-impl Row {
-    pub fn summary(&self) -> String {
-        let status = if self.in_trash { "在回收站中，未导入" } else if self.added { "新增文献" } else if self.paper_id.is_some() { "已有文献，保留原记录" } else { "文献未导入" };
-        format!("{status} · 新增 PDF {} · 已有 PDF {}{}", self.files_added, self.files_existing, if self.problems.is_empty() { String::new() } else { format!(" · {} 项待处理", self.problems.len()) })
-    }
-}
-
 /// A read transaction includes committed WAL data and keeps all queries on the
 /// same snapshot. Do not use `immutable=1`, which would ignore Zotero's WAL.
 pub fn read(path: &Path) -> Result<Import> {
@@ -91,7 +84,8 @@ fn read_items(db: &Connection, root: &Path) -> Result<Import> {
         let extra_field = |key: &str| extra.lines().find_map(|line| line.split_once(':').filter(|(name, _)| name.trim().eq_ignore_ascii_case(key)).map(|(_, value)| value.trim().to_string())).unwrap_or_default();
         let doi = get("DOI");
         let date = get("date");
-        let year = date.split(|c: char| !c.is_ascii_digit()).find(|word| word.len() == 4).and_then(|word| word.parse().ok());
+        // The first four digits that are a year a paper can have: Zotero writes a date it could not read as `0000-00-00 in press`.
+        let year = date.split(|c: char| !c.is_ascii_digit()).filter(|word| word.len() == 4).filter_map(|word| word.parse::<i32>().ok()).find(|year| (1800..=2200).contains(year));
         let paper = Paper {
             title: strip_markup(&get("title")), authors, year,
             doi: normalize_doi(&if doi.is_empty() { extra_field("DOI") } else { doi }),

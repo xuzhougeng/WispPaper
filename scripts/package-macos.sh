@@ -24,9 +24,9 @@ set -euo pipefail
 arch=host
 while (($# > 0)); do
   case "$1" in
-    --arch) arch="${2:-}"; shift 2 ;;
+    --arch) arch="${2:-}"; shift; (($# > 0)) && shift ;;
     --arch=*) arch="${1#--arch=}"; shift ;;
-    -h | --help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h | --help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done

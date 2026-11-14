@@ -306,7 +306,7 @@ impl Workspace {
                     .cursor_pointer()
                     .on_click(self.on(Cmd::ConfirmTick(paper.id.clone()), cx))
                     .child(div().flex().items_center().justify_center().size(px(16.)).rounded(px(4.)).border_1().when(ticked, |d| d.bg(Theme::accent()).border_color(Theme::accent()).child(ui::icon("check", 11., Theme::on_accent()))).when(!ticked, |d| d.border_color(Theme::line_strong()).bg(Theme::bg_body())));
-                let mut about: Vec<String> = vec![paper.short_authors(), paper.year.map(|y| y.to_string()).unwrap_or_default(), basis(suggestion), suggestion.reason.clone()];
+                let mut about: Vec<String> = vec![crate::i18n::short_authors(paper), paper.year.map(|y| y.to_string()).unwrap_or_default(), basis(suggestion), suggestion.reason.clone()];
                 about.retain(|part| !part.is_empty());
                 let text = div()
                     .id(id("text"))

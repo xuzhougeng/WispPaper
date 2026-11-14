@@ -1034,8 +1034,11 @@ impl Store {
 
     /// Keep what is typed in a section.
     pub fn save_section_body(&mut self, id: &str, body: &str) -> Result<()> {
-        let changed = self.db.execute("UPDATE manuscript_sections SET body = ?2, updated_at = ?3 WHERE id = ?1", params![id, body, now_iso()])?;
+        let now = now_iso();
+        let changed = self.db.execute("UPDATE manuscript_sections SET body = ?2, updated_at = ?3 WHERE id = ?1", params![id, body, now])?;
         if changed == 0 { bail!("没有这一节：{id}") }
+        // The manuscript written in is the one last worked on, which is the one a library opens with.
+        self.db.execute("UPDATE manuscripts SET updated_at = ?2 WHERE id = (SELECT manuscript_id FROM manuscript_sections WHERE id = ?1)", params![id, now])?;
         Ok(())
     }
 
@@ -1055,6 +1058,7 @@ impl Store {
         }
         let body = if body.trim().is_empty() { text.trim().to_string() } else { format!("{}\n\n{}", body.trim_end(), text.trim()) };
         tx.execute("UPDATE manuscript_sections SET body = ?2, updated_at = ?3 WHERE id = ?1", params![id, body, now])?;
+        tx.execute("UPDATE manuscripts SET updated_at = ?2 WHERE id = (SELECT manuscript_id FROM manuscript_sections WHERE id = ?1)", params![id, now])?;
         tx.commit()?;
         Ok(body)
     }

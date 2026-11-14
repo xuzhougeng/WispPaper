@@ -22,7 +22,7 @@
 
 <header class="top">
   <div class="wrap top-in">
-    <a class="brand" href="#top"><img src="app-icon.svg" width="26" height="26" alt=""><span>Wisp Paper</span></a>
+    <a class="brand" href="#top" aria-label="Wisp Paper"><img src="app-icon.svg" width="26" height="26" alt=""><span>Wisp Paper</span></a>
     <nav aria-label="本页的章节">
       <a href="#case">案例</a>
       <a href="#ideas">理念</a>
@@ -172,10 +172,10 @@
 
         <article role="tabpanel" id="step-g" aria-labelledby="tab-g">
           <h3><i>g</i>读翻译的摘要</h3>
-          <p>摘要旁边的「翻译」把题目和摘要译成中文，原文留在下面对照。打开之后，切到别的文献也会自动翻译。译过的保存在文献库里，同一段文字只请求一次。</p>
+          <p>摘要旁边的「显示译文」把题目和摘要在原位置换成译文，再点「显示原文」切回。打开之后，切到别的文献也会自动翻译。译过的保存在文献库里，同一段文字只请求一次。</p>
           <figure class="shot">
             <img src="img/16-translate.jpg" width="1372" height="870" loading="lazy" alt="文献详情：摘要上方是译文，题目译为「玉米根尖铁缺乏响应的单细胞转录解码」。">
-            <figcaption><b>图 3g</b>　译文在上，原文在下。目标语言和术语译法可以在设置里写。</figcaption>
+            <figcaption><b>图 3g</b>　译文显示在摘要的位置。目标语言和术语译法可以在设置里写。</figcaption>
           </figure>
         </article>
 
@@ -321,10 +321,8 @@
       <h3>目前的边界</h3>
       <ul>
         <li>还在早期，变化很快。</li>
-        <li>界面只有中文。</li>
         <li>助手的部分需要你自己的模型服务；API Key 以明文保存在本机的 <code>settings.json</code>。</li>
         <li>每次运行一条检索式，最多取回最新的 200 篇。</li>
-        <li>对话不保存，关闭文献库即清空。</li>
         <li>应用不会自己更新，只提示有新版本。</li>
         <li>Linux 版没有签名，也没有在真机上测试过。</li>
       </ul>

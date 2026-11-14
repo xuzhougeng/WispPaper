@@ -154,14 +154,31 @@ pub fn merge_lookup(mut paper: Paper, extra: Paper) -> Paper {
     paper
 }
 
+/// The stretch of a text a DOI can run over: up to a space, a quote or a
+/// bracket. Round brackets belong to it while they close
+/// (`10.1016/S0092-8674(00)81683-9`); one that closes nothing, or is not
+/// closed, is the text's own.
+fn doi_run(text: &str) -> &str {
+    let mut open = vec![];
+    let mut end = text.len();
+    for (at, c) in text.char_indices() {
+        let closes_nothing = c == ')' && open.pop().is_none();
+        if closes_nothing || c.is_whitespace() || "\"<>[]{}，。；".contains(c) {
+            end = at;
+            break;
+        }
+        if c == '(' { open.push(at) }
+    }
+    &text[..open.first().map_or(end, |at| end.min(*at))]
+}
+
 /// The first DOI printed in a text (the first page of a PDF, usually).
 pub fn find_doi(text: &str) -> Option<String> {
     let lower = text.to_lowercase();
     let mut from = 0;
     while let Some(at) = lower[from..].find("10.") {
         let start = from + at;
-        let candidate: String = lower[start..].chars().take_while(|c| !c.is_whitespace() && !"\"<>()[]{}，。；".contains(*c)).collect();
-        let doi = normalize_doi(&candidate);
+        let doi = normalize_doi(doi_run(&lower[start..]));
         // Something must follow the slash, and a registrant number precede it.
         if valid_doi(&doi) && doi.split_once('/').is_some_and(|(_, suffix)| suffix.len() >= 3) { return Some(doi) }
         from = start + 3;
@@ -228,5 +245,8 @@ mod tests {
     fn doi_in_text() {
         assert_eq!(find_doi("Nature 585 (2020). https://doi.org/10.1038/s41586-020-2649-2\nmore"), Some("10.1038/s41586-020-2649-2".into()));
         assert_eq!(find_doi("version 10.2 of 10.5 items"), None);
+        // Brackets that close are the DOI's own (old Elsevier ones); the text's are not.
+        assert_eq!(find_doi("Cell 100, 57 (doi:10.1016/S0092-8674(00)81683-9) 2000"), Some("10.1016/s0092-8674(00)81683-9".into()));
+        assert_eq!(find_doi("see 10.1038/s41586-020-2649-2(Fig. 1"), Some("10.1038/s41586-020-2649-2".into()));
     }
 }
