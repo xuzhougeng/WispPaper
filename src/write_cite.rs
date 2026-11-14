@@ -5,12 +5,18 @@
 //! takes it to fit. The person ticks; 插入 writes `[@Key]` at the ends of
 //! those sentences and nothing else (`wisp_core::citefind`).
 //!
-//! Three steps, said in the card as they go: the translation model turns
-//! each sentence into search words in the language of the library's papers
-//! (so a Chinese paragraph finds English papers), the library is searched,
-//! and the chat model says which of the papers found bear each sentence
-//! out. Without a model the papers found by their words are listed
-//! unticked, for the person to judge.
+//! Three steps, said in the card as they go: the translation model says
+//! what each sentence does (background, a finding of someone else's, a
+//! method …) and turns it into search words in the language of the
+//! library's papers (so a Chinese paragraph finds English papers), the
+//! library is searched, and the chat model says which of the papers found
+//! bear each sentence out. Without a model the papers found by their words
+//! are listed unticked, for the person to judge.
+//!
+//! What a sentence can cite goes by what it does. A paper that only tells
+//! what others found is no source: it is not ticked, and the card says
+//! under the sentence that it restates it and which works it names for it,
+//! offering those the library holds.
 
 use crate::app::{Cmd, Workspace};
 use crate::i18n::{label, t};
@@ -22,7 +28,7 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashSet};
 use std::ops::Range;
 use wisp_core::ai::{self, Assist, Profile};
-use wisp_core::citefind::{self, Offered, Pick};
+use wisp_core::citefind::{self, Asked, Offered, Pick};
 use wisp_core::libraries::LibraryInfo;
 use wisp_core::settings::Task;
 use wisp_core::structure::SECTIONS;
@@ -65,7 +71,22 @@ pub struct Row {
     /// Where the sentence stands in the text asked about.
     pub range: Range<usize>,
     pub sentence: String,
+    /// What the sentence does, a key of `citefind::INTENTS`; empty when no model said.
+    pub intent: String,
     pub offers: Vec<Offer>,
+}
+
+/// A work a paper's sentence names by author and year.
+#[derive(Clone, Default)]
+pub struct Name {
+    /// As the sentence names it: `Tang et al., 2009`.
+    pub text: String,
+    /// The paper of the library it is; empty when the library has none.
+    pub paper: String,
+    pub key: String,
+    pub title: String,
+    pub year: Option<i64>,
+    pub cite: String,
 }
 
 /// A paper a sentence may cite.
@@ -87,6 +108,23 @@ pub struct Offer {
     /// The model chose it.
     pub chosen: bool,
     pub ticked: bool,
+    /// The paper reads as a review.
+    pub review: bool,
+    /// What the model took it for when it chose it: `citefind::SOURCE` or `REVIEW`; empty when it did not say.
+    pub role: String,
+    /// The model says its sentence only tells what others found: a lead to the works it names, not a citation.
+    pub restates: bool,
+    /// The works its sentence names.
+    pub names: Vec<Name>,
+    /// For a paper offered because another one names it for the sentence: how that one is cited.
+    pub via: String,
+}
+
+impl Offer {
+    /// Whether it stands under its sentence without being asked for: the model chose it, or a paper that restates the sentence names it.
+    fn standing(&self) -> bool {
+        self.chosen || !self.via.is_empty()
+    }
 }
 
 /// What the person does in the card.
@@ -117,10 +155,10 @@ impl Found {
         self.rows.iter().flat_map(|row| &row.offers).filter(|offer| offer.ticked).count()
     }
 
-    /// Whether a sentence leads the card: a model chose a paper for it, or, before a model has chosen, any was found.
+    /// Whether a sentence leads the card: a model chose a paper for it or found one that restates it, or, before a model has chosen, any was found.
     /// A tick of the person's own moves nothing: the card says what the model made of the sentences.
     pub fn leads(&self, n: usize) -> bool {
-        self.rows.get(n).is_some_and(|row| if self.judged { row.offers.iter().any(|offer| offer.chosen) } else { !row.offers.is_empty() })
+        self.rows.get(n).is_some_and(|row| if self.judged { row.offers.iter().any(|offer| offer.standing() || offer.restates) } else { !row.offers.is_empty() })
     }
 
     /// The sentences a model chose nothing for although papers were found by their words.
@@ -141,30 +179,49 @@ impl Found {
         self.rest || self.ticked() > 0 || (0..self.rows.len()).any(|n| self.leads(n))
     }
 
-    /// The model's choices, ticked and put first in its order. A paper it names for a sentence it was found for under another is taken along.
+    /// What the model made of the papers found. Its choices are ticked and put first in its order; a paper it names for a
+    /// sentence it was found for under another is taken along. A paper it says only restates the sentence is marked, and
+    /// the works that paper names which the library holds are offered after the choices, unticked: nobody read them for this.
     fn take(&mut self, picks: Vec<Pick>) {
         let known: Vec<Offer> = self.rows.iter().flat_map(|row| row.offers.iter().cloned()).collect();
         let mut order: Vec<Vec<String>> = vec![vec![]; self.rows.len()];
         for pick in picks {
             let Some(row) = self.rows.get_mut(pick.sentence) else { continue };
             let same = |offer: &Offer| offer.key.eq_ignore_ascii_case(&pick.key);
+            if !pick.chosen() {
+                let Some(at) = row.offers.iter().position(same) else { continue };
+                if row.offers[at].chosen { continue }
+                row.offers[at].restates = true;
+                let (via, names) = (row.offers[at].cite.clone(), row.offers[at].names.clone());
+                for name in names.iter().filter(|name| !name.paper.is_empty()) {
+                    if citefind::cites(&row.sentence, &name.key) { continue }
+                    match row.offers.iter_mut().find(|offer| offer.paper == name.paper) {
+                        Some(held) => {
+                            if held.via.is_empty() && !held.restates { held.via = via.clone() }
+                        }
+                        None => row.offers.push(Offer { paper: name.paper.clone(), key: name.key.clone(), title: name.title.clone(), year: name.year, cite: name.cite.clone(), part: "record".into(), page: None, evidence: String::new(), why: String::new(), chosen: false, ticked: false, review: false, role: String::new(), restates: false, names: vec![], via: via.clone() }),
+                    }
+                }
+                continue;
+            }
             if !row.offers.iter().any(same) {
                 let Some(other) = known.iter().find(|offer| same(offer)) else { continue };
                 if citefind::cites(&row.sentence, &other.key) { continue }
-                row.offers.push(Offer { chosen: false, ticked: false, why: String::new(), ..other.clone() });
+                row.offers.push(Offer { chosen: false, ticked: false, restates: false, why: String::new(), role: String::new(), via: String::new(), ..other.clone() });
             }
             let Some(offer) = row.offers.iter_mut().find(|offer| same(offer)) else { continue };
-            (offer.chosen, offer.ticked, offer.why) = (true, true, pick.why);
+            (offer.chosen, offer.ticked, offer.restates, offer.why, offer.role) = (true, true, false, pick.why, pick.role);
             order[pick.sentence].push(offer.key.clone());
         }
         for (row, order) in self.rows.iter_mut().zip(order) {
-            row.offers.sort_by_key(|offer| order.iter().position(|key| *key == offer.key).unwrap_or(usize::MAX));
+            row.offers.sort_by_key(|offer| order.iter().position(|key| *key == offer.key).unwrap_or(if offer.via.is_empty() { usize::MAX } else { usize::MAX - 1 }));
         }
         self.judged = true;
     }
 }
 
 /// The rows of a card: the sentences of `text` with what `find_citations` found for each, named by citation key.
+/// A work a paper's sentence names counts as held only when the library's paper has a key to cite it by.
 fn rows_of(found: &Value, text: &str, ranges: &[Range<usize>], keys: &BTreeMap<String, String>) -> Vec<Row> {
     ranges
         .iter()
@@ -180,10 +237,22 @@ fn rows_of(found: &Value, text: &str, ranges: &[Range<usize>], keys: &BTreeMap<S
                     let key = keys.get(c["paperId"].as_str()?)?.clone();
                     // A paper the sentence cites already is not offered again.
                     if citefind::cites(&sentence, &key) { return None }
-                    Some(Offer { paper: field("paperId"), key, title: field("title"), year: c["year"].as_i64(), cite: field("cite"), part: field("in"), page: c["page"].as_u64().map(|page| page as usize), evidence: field("snippet"), why: String::new(), chosen: false, ticked: false })
+                    let names = c["names"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(|name| {
+                            let said = |field: &str| name[field].as_str().unwrap_or("").to_string();
+                            match name["paperId"].as_str().and_then(|paper| Some((paper, keys.get(paper)?))) {
+                                Some((paper, key)) => Name { text: said("text"), paper: paper.to_string(), key: key.clone(), title: said("title"), year: name["year"].as_i64(), cite: said("cite") },
+                                None => Name { text: said("text"), ..Default::default() },
+                            }
+                        })
+                        .collect();
+                    Some(Offer { paper: field("paperId"), key, title: field("title"), year: c["year"].as_i64(), cite: field("cite"), part: field("in"), page: c["page"].as_u64().map(|page| page as usize), evidence: field("snippet"), why: String::new(), chosen: false, ticked: false, review: c["review"].as_bool().unwrap_or(false), role: String::new(), restates: false, names, via: String::new() })
                 })
                 .collect();
-            Row { range: range.clone(), sentence, offers }
+            Row { range: range.clone(), sentence, intent: found["sentences"][n]["intent"].as_str().unwrap_or("").to_string(), offers }
         })
         .collect()
 }
@@ -193,14 +262,15 @@ fn rows_of(found: &Value, text: &str, ranges: &[Range<usize>], keys: &BTreeMap<S
 fn work(send: &dyn Fn(Event), info: &LibraryInfo, text: &str, language: &str, keys: &BTreeMap<String, String>, wording: Option<Profile>, judging: Option<Profile>, reply_in: &str) {
     let ranges: Vec<Range<usize>> = citefind::sentences(text).into_iter().take(citefind::MAX_SENTENCES).collect();
     let sentences: Vec<&str> = ranges.iter().map(|range| &text[range.clone()]).collect();
-    let mut queries = vec![String::new(); sentences.len()];
+    let (mut queries, mut intents) = (vec![String::new(); sentences.len()], vec![String::new(); sentences.len()]);
     let mut worded = false;
     if let Some(profile) = &wording {
         send(Event::Stage(Stage::Words));
-        let (system, message) = citefind::words_prompt(&sentences, language);
+        // What each sentence does, with its search words: what it can cite goes by that.
+        let (system, message) = citefind::plan_prompt(&sentences, language);
         match ai::plain_request(profile, &system, &message).and_then(|request| wisp_net::complete(request, profile.protocol)) {
             Ok(reply) => {
-                queries = citefind::parse_words(&reply, sentences.len(), language);
+                (intents, queries) = citefind::parse_plan(&reply, sentences.len(), language).into_iter().map(|planned| (planned.intent, planned.words)).unzip();
                 worded = queries.iter().any(|words| !words.is_empty());
             }
             Err(error) => send(Event::Note(tf!("没有生成检索词（{error}），按原文的词查找。", "No search terms were made ({error}); searching with the words as written."))),
@@ -209,7 +279,7 @@ fn work(send: &dyn Fn(Event), info: &LibraryInfo, text: &str, language: &str, ke
     send(Event::Stage(Stage::Search));
     let found = wisp_core::store::Store::open(&info.dir)
         .map_err(|e| format!("{e:#}"))
-        .and_then(|mut store| wisp_core::tools::call_in(&mut store, info, "find_citations", &json!({"text": text, "queries": queries, "perSentence": PER_SENTENCE}), &wisp_net::get_text, &wisp_net::download));
+        .and_then(|mut store| wisp_core::tools::call_in(&mut store, info, "find_citations", &json!({"text": text, "queries": queries, "intents": intents, "perSentence": PER_SENTENCE}), &wisp_net::get_text, &wisp_net::download));
     let found = match found {
         Ok(found) => found,
         Err(error) => return send(Event::Failed(error)),
@@ -218,6 +288,7 @@ fn work(send: &dyn Fn(Event), info: &LibraryInfo, text: &str, language: &str, ke
     let nothing = rows.iter().all(|row| row.offers.is_empty());
     let counted = |name: &str| found[name].as_u64().unwrap_or(0) as usize;
     send(Event::Rows(rows.clone(), counted("papersSearched"), counted("papersWithoutText")));
+    if nothing && !rows.is_empty() && rows.iter().all(|row| row.intent == citefind::OWN) { return send(Event::Failed(t("这几句是作者对本文工作的说明，不需要配引用。").to_string())) }
     if nothing {
         // Words of one language find nothing in papers of another: said, since it is the likeliest reason.
         let other_script = sentences.iter().any(|sentence| sentence.chars().any(wisp_core::structure::is_cjk)) != matches!(language, "zh" | "ja" | "ko");
@@ -231,9 +302,9 @@ fn work(send: &dyn Fn(Event), info: &LibraryInfo, text: &str, language: &str, ke
         None => send(Event::Note(t("没有配置模型：下面是按用词找到的相近文献，没有核对过，请自己判断后勾选。").into())),
         Some(profile) => {
             send(Event::Stage(Stage::Judge));
-            let offered: Vec<(String, Vec<Offered>)> = rows
+            let offered: Vec<Asked> = rows
                 .iter()
-                .map(|row| (row.sentence.clone(), row.offers.iter().map(|offer| Offered { key: offer.key.clone(), title: offer.title.clone(), year: offer.year, part: if offer.part == "record" { String::new() } else { wisp_core::model::label(&SECTIONS, &offer.part).to_string() }, evidence: offer.evidence.clone() }).collect()))
+                .map(|row| Asked { sentence: row.sentence.clone(), intent: row.intent.clone(), offered: row.offers.iter().map(|offer| Offered { key: offer.key.clone(), title: offer.title.clone(), year: offer.year, part: if offer.part == "record" { String::new() } else { wisp_core::model::label(&SECTIONS, &offer.part).to_string() }, evidence: offer.evidence.clone(), review: offer.review }).collect() })
                 .collect();
             let judged = citefind::judge_prompt(&offered, reply_in)
                 .and_then(|(system, message)| ai::plain_request(profile, &system, &message))
@@ -397,10 +468,13 @@ impl Workspace {
         };
         let waiting = card.busy.then(|| div().flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(Theme::text_tertiary()).child(ui::spinner("write-cite-wait", 12., Theme::accent())).child(stage));
         let (first, rest): (Vec<usize>, Vec<usize>) = (0..found.rows.len()).partition(|n| found.leads(*n));
+        // What the authors say of their own work was not searched for: it is neither found nor missing.
+        let (own, rest): (Vec<usize>, Vec<usize>) = rest.into_iter().partition(|n| found.rows[*n].intent == citefind::OWN && found.rows[*n].offers.is_empty());
         let with_offers = rest.iter().filter(|n| !found.rows[**n].offers.is_empty()).count();
         // The model looked and chose nothing: one line says so, and the papers found by their words come up only when asked for.
         let none = found.judged && first.is_empty();
-        let about = (!card.busy && found.judged && !none).then(|| t("勾选的是模型核对后认为可以引用的文献；每篇下面是它自己的原句，点一下可以取消或另选。"));
+        let chose = found.rows.iter().flat_map(|row| &row.offers).any(|offer| offer.chosen);
+        let about = (!card.busy && found.judged && !none).then(|| if chose { t("勾选的是模型核对后认为可以引用的文献；每篇下面是它自己的原句，点一下可以取消或另选。") } else { t("模型没有选出可以直接引用的文献，但找到了转述这些内容的文献：出处是它们所引的文献。") });
         let mut body = div().id("write-cite-body").flex().flex_col().gap(px(10.)).max_h(px(480.)).overflow_y_scroll().children(waiting).children(about.map(|text| div().text_size(px(11.)).line_height(px(16.)).text_color(Theme::text_tertiary()).child(text)));
         for n in &first {
             body = body.child(self.render_cite_row(*n, &found.rows[*n], found, cx));
@@ -427,6 +501,9 @@ impl Workspace {
                 if !found.rows[*n].offers.is_empty() { body = body.child(self.render_cite_row(*n, &found.rows[*n], found, cx)) }
             }
         }
+        if !own.is_empty() && !card.busy {
+            body = body.child(div().text_size(px(11.)).line_height(px(16.)).text_color(Theme::text_tertiary()).child(tf!("{} 句是作者自己的话，没有去找文献。", "{} sentences are the authors' own words; nothing was looked for.", own.len())));
+        }
         // Where it looked, so that an empty answer is not taken for a narrow search: every part of the full texts, not the part being written.
         if !card.busy && found.searched > 0 {
             let scope = tf!("查找范围：{} 篇文献的题录、摘要和全文的各个部分（导言、方法、结果、讨论）", "Searched: the records, abstracts and every part of the full text (introduction, methods, results, discussion) of {} papers", found.searched);
@@ -438,11 +515,14 @@ impl Workspace {
 
     /// One sentence of the text and the papers found for it.
     fn render_cite_row(&self, n: usize, row: &Row, found: &Found, cx: &mut Context<Self>) -> Div {
-        // What the model chose, and what the person ticked besides, are on show; the other papers found come up when asked for.
-        let shown = |offer: &Offer| !found.judged || offer.chosen || offer.ticked || found.unfolded.contains(&n);
+        // What the model chose, what a restating paper names, and what the person ticked besides, are on show; the other papers found come up when asked for.
+        let shown = |offer: &Offer| !found.judged || offer.standing() || offer.ticked || found.unfolded.contains(&n);
         let hidden = row.offers.iter().filter(|offer| !shown(offer)).count();
-        let others = row.offers.iter().filter(|offer| !offer.chosen).count();
+        let others = row.offers.iter().filter(|offer| !offer.standing()).count();
         let offers: Vec<AnyElement> = row.offers.iter().enumerate().filter(|(_, offer)| shown(offer)).map(|(m, offer)| self.render_cite_offer(n, m, offer, cx)).collect();
+        // A paper that only tells what others found is a lead to them, said in a line of its own.
+        let hints: Vec<AnyElement> = row.offers.iter().filter(|offer| found.judged && offer.restates).map(|offer| self.render_cite_hint(n, offer, cx)).collect();
+        let intent = (!row.intent.is_empty()).then(|| div().flex_none().mt(px(1.)).px(px(5.)).h(px(16.)).flex().items_center().rounded(px(4.)).bg(Theme::bg_sunken()).text_size(px(10.)).text_color(Theme::text_tertiary()).child(label(&citefind::INTENTS, &row.intent).to_string()));
         div()
             .flex()
             .flex_col()
@@ -453,14 +533,38 @@ impl Workspace {
                     .items_start()
                     .gap(px(6.))
                     .child(div().flex().flex_none().items_center().justify_center().min_w(px(16.)).h(px(16.)).mt(px(1.)).px(px(3.)).rounded(px(8.)).bg(Theme::bg_sunken()).text_size(px(10.)).text_color(Theme::text_secondary()).child((n + 1).to_string()))
-                    .child(div().flex_1().min_w_0().text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_secondary()).line_clamp(2).text_ellipsis().child(row.sentence.clone())),
+                    .child(div().flex_1().min_w_0().text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_secondary()).line_clamp(2).text_ellipsis().child(row.sentence.clone()))
+                    .children(intent),
             )
             .children(offers)
+            .children(hints)
             .when(found.judged && others > 0 && (hidden > 0 || found.unfolded.contains(&n)), |d| {
                 // 「还有」 only where some papers stand under the sentence already.
                 let name = if hidden == 0 { t("收起").to_string() } else if hidden == row.offers.len() { tf!("看 {hidden} 篇相近的", "Show {hidden} similar papers") } else { tf!("还有 {hidden} 篇相近的", "{hidden} more similar papers") };
                 d.child(div().flex().child(ui::ghost_button(("write-cite-more", n), None, Some(name.into())).h(px(20.)).px(px(5.)).text_size(px(11.)).text_color(Theme::text_tertiary()).on_click(self.on(Cmd::WriteCited(Do::Unfold(n)), cx))))
             })
+    }
+
+    /// A paper that restates the sentence: where it does, and the works it names for it. A click shows that sentence in the paper.
+    fn render_cite_hint(&self, n: usize, offer: &Offer, cx: &mut Context<Self>) -> AnyElement {
+        let part = if offer.part != "record" && !offer.part.is_empty() { label(&SECTIONS, &offer.part) } else { "" };
+        let told = if part.is_empty() { tf!("{} 转述了这一点", "{} restates this", offer.cite) } else { tf!("{} 在{}里转述了这一点", "{} restates this in its {}", offer.cite, part) };
+        let names: Vec<String> = offer.names.iter().map(|name| if name.paper.is_empty() { tf!("{}（库里没有）", "{} (not in the library)", name.text) } else { tf!("{}（库里有，见上）", "{} (in the library, above)", name.text) }).collect();
+        let whose = if names.is_empty() { tf!("，出处是它在那里引的文献：点开原文看。", "; the source is what it cites there: open the sentence to see.") } else { tf!("，引的是 {}。", ", citing {}.", names.join(if crate::i18n::is_english() { ", " } else { "、" })) };
+        let (paper, page, evidence) = (offer.paper.clone(), offer.page, offer.evidence.clone());
+        div()
+            .id(SharedString::from(format!("write-cite-hint-{n}-{}", offer.paper)))
+            .pl(px(7.))
+            .border_l_2()
+            .border_color(Theme::accent().opacity(0.45))
+            .text_size(px(11.))
+            .line_height(px(16.))
+            .text_color(Theme::text_secondary())
+            .cursor_pointer()
+            .hover(|s| s.text_color(Theme::text()))
+            .on_click(self.on(Cmd::GotoSource(paper, page, if page.is_some() { evidence } else { String::new() }), cx))
+            .child(format!("{told}{whose}"))
+            .into_any_element()
     }
 
     /// A paper a sentence may cite: who and when, its title, why it fits, and the sentence of its own that says so.
@@ -472,6 +576,8 @@ impl Workspace {
         let from = from.join(" · ");
         let (paper, page, evidence) = (offer.paper.clone(), offer.page, offer.evidence.clone());
         let tip = if page.is_some() { t("在 PDF 里看这句原文") } else { t("打开这篇文献") };
+        // What kind of source it is for the sentence: as the model took it, else as the paper reads.
+        let kind = if offer.role == citefind::SOURCE { Some(t("原始研究")) } else if offer.role == citefind::REVIEW || offer.review { Some(t("综述")) } else { None };
         // The way to the paper stands over the corner of its card and takes the click for itself: the card under it is a tick.
         div()
             .relative()
@@ -498,9 +604,10 @@ impl Workspace {
                             .flex_1()
                             .min_w_0()
                             .gap(px(3.))
-                            .child(div().flex().items_baseline().gap(px(6.)).pr(px(22.)).child(div().flex_none().text_size(px(12.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text()).child(offer.cite.clone())).child(div().flex_1().min_w_0().truncate().text_size(px(11.)).text_color(Theme::text_tertiary()).child(format!("@{}", offer.key))))
+                            .child(div().flex().items_baseline().gap(px(6.)).pr(px(22.)).child(div().flex_none().text_size(px(12.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text()).child(offer.cite.clone())).children(kind.map(|kind| div().flex_none().text_size(px(10.)).text_color(Theme::text_secondary()).child(kind))).child(div().flex_1().min_w_0().truncate().text_size(px(11.)).text_color(Theme::text_tertiary()).child(format!("@{}", offer.key))))
                             .child(div().text_size(px(12.)).line_height(px(17.)).text_color(Theme::text()).line_clamp(2).text_ellipsis().child(offer.title.clone()))
                             .when(!offer.why.is_empty(), |d| d.child(div().text_size(px(11.)).line_height(px(16.)).text_color(Theme::accent()).child(offer.why.clone())))
+                            .when(!offer.via.is_empty() && !offer.chosen, |d| d.child(div().text_size(px(11.)).line_height(px(16.)).text_color(Theme::accent()).child(tf!("{} 把这一点归于它。它自己的原文没有核对过。", "{} attributes this to it. Its own text was not checked.", offer.via))))
                             .when(!offer.evidence.is_empty(), |d| {
                                 d.child(
                                     div()
@@ -545,7 +652,7 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::{Found, Offer, Row, rows_of};
+    use super::{Found, Name, Offer, Row, rows_of};
     use serde_json::json;
     use std::collections::BTreeMap;
     use wisp_core::citefind::{self, Pick};
@@ -566,7 +673,8 @@ mod tests {
         let mut card = Found { rows, ..Default::default() };
         assert_eq!(card.ticked(), 0);
         // The model's choices are ticked, first, with its reason; a paper found under another sentence comes along, an unknown one does not.
-        card.take(vec![Pick { sentence: 1, key: "lee2020".into(), why: "乙烯".into() }, Pick { sentence: 1, key: "Nobody1999".into(), why: String::new() }, Pick { sentence: 7, key: "Lee2020".into(), why: String::new() }]);
+        let pick = |sentence: usize, key: &str, why: &str, role: &str| Pick { sentence, key: key.into(), why: why.into(), role: role.into() };
+        card.take(vec![pick(1, "lee2020", "乙烯", citefind::SOURCE), pick(1, "Nobody1999", "", ""), pick(7, "Lee2020", "", "")]);
         let keys = |row: &Row| row.offers.iter().map(|offer: &Offer| (offer.key.clone(), offer.ticked)).collect::<Vec<_>>();
         assert_eq!(keys(&card.rows[1]), [("Lee2020".to_string(), true), ("Pandey2021".to_string(), false)]);
         assert_eq!((card.rows[1].offers[0].why.as_str(), card.judged, card.ticked()), ("乙烯", true, 1));
@@ -581,8 +689,8 @@ mod tests {
 
     #[test]
     fn a_model_that_chose_nothing() {
-        let offer = |key: &str| Offer { paper: key.to_lowercase(), key: key.into(), title: String::new(), year: None, cite: String::new(), part: "record".into(), page: None, evidence: String::new(), why: String::new(), chosen: false, ticked: false };
-        let row = |offers: Vec<Offer>| Row { range: 0..0, sentence: String::new(), offers };
+        let offer = |key: &str| Offer { paper: key.to_lowercase(), key: key.into(), title: String::new(), year: None, cite: String::new(), part: "record".into(), page: None, evidence: String::new(), why: String::new(), chosen: false, ticked: false, review: false, role: String::new(), restates: false, names: vec![], via: String::new() };
+        let row = |offers: Vec<Offer>| Row { range: 0..0, sentence: String::new(), intent: String::new(), offers };
         let mut card = Found { rows: vec![row(vec![offer("A2020"), offer("B2021")]), row(vec![])], ..Default::default() };
         // Before a model has looked, a sentence leads with whatever was found for it.
         assert!(card.leads(0) && !card.leads(1) && card.offering());
@@ -595,5 +703,33 @@ mod tests {
         card.rows[0].offers[1].ticked = true;
         card.turn_rest();
         assert!(!card.leads(0) && card.offering() && card.ticked() == 1);
+    }
+
+    #[test]
+    fn a_paper_that_only_restates() {
+        let text = "单细胞转录组测序最早在 2009 年实现。";
+        let ranges = citefind::sentences(text);
+        let found = json!({"sentences": [{"intent": "finding", "candidates": [
+            {"paperId": "a", "title": "Root atlas", "cite": "Zhang et al., 2019", "in": "introduction", "page": 1, "snippet": "Single-cell RNA-seq was first achieved by Tang et al. (2009) and scaled by Macosko et al. (2015).", "names": [{"text": "Tang et al., 2009", "paperId": "t", "title": "mRNA-Seq of a single cell", "year": 2009, "cite": "Tang et al., 2009"}, {"text": "Macosko et al., 2015"}, {"text": "No key, 2001", "paperId": "gone"}]},
+            {"paperId": "r", "title": "Single-cell methods: a review", "cite": "Lee, 2020", "in": "record", "review": true},
+        ]}]});
+        let keys = BTreeMap::from([("a".to_string(), "Zhang2019".to_string()), ("t".to_string(), "Tang2009".to_string()), ("r".to_string(), "Lee2020".to_string())]);
+        let rows: Vec<Row> = rows_of(&found, text, &ranges, &keys);
+        // A named work is held only when the library's paper has a key to cite it by.
+        let held = |name: &Name| !name.paper.is_empty();
+        assert_eq!((rows[0].intent.as_str(), rows[0].offers[0].names.iter().map(held).collect::<Vec<_>>(), rows[0].offers[1].review), ("finding", vec![true, false, false], true));
+        let mut card = Found { rows, ..Default::default() };
+        card.take(vec![Pick { sentence: 0, key: "Zhang2019".into(), why: String::new(), role: citefind::RESTATES.into() }]);
+        // It is marked and not ticked; the work it names that the library holds is offered after it, unticked, and the sentence leads the card.
+        let row = &card.rows[0];
+        assert!(row.offers.iter().any(|offer| offer.key == "Zhang2019" && offer.restates && !offer.chosen && !offer.ticked));
+        let traced = row.offers.iter().find(|offer| offer.key == "Tang2009").unwrap();
+        assert_eq!((traced.via.as_str(), traced.ticked, traced.standing(), traced.evidence.as_str()), ("Zhang et al., 2019", false, true, ""));
+        assert_eq!(row.offers.iter().map(|offer| offer.key.as_str()).collect::<Vec<_>>(), ["Tang2009", "Zhang2019", "Lee2020"]);
+        assert!(card.leads(0) && card.ticked() == 0);
+        // A paper the model chose is not also one that restates.
+        card.take(vec![Pick { sentence: 0, key: "Lee2020".into(), why: "综述".into(), role: citefind::REVIEW.into() }, Pick { sentence: 0, key: "Lee2020".into(), why: String::new(), role: citefind::RESTATES.into() }]);
+        let lee = card.rows[0].offers.iter().find(|offer| offer.key == "Lee2020").unwrap();
+        assert!(lee.chosen && lee.ticked && !lee.restates && lee.role == citefind::REVIEW);
     }
 }

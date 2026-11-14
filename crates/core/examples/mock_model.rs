@@ -214,7 +214,8 @@ fn answer(mut stream: TcpStream, delay: u64) {
             events.push_str(&event(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#));
         } else if request.contains("文献检索助手") || request.contains("只能从给出的候选里选") {
             // 配引用. Asked for search words, it hands each numbered sentence back as its own words (it knows no other language);
-            // asked which of the papers found bear the sentences out, it takes the first candidate of every sentence that has one.
+            // asked which of the papers found bear the sentences out, it takes the first candidate of every sentence that has one
+            // (for a sentence containing 「试试转述」 it says that candidate only restates it).
             let value: serde_json::Value = serde_json::from_str(&request).unwrap_or_default();
             let message = value["messages"][0]["content"].as_str().unwrap_or("").to_string();
             let reply = if request.contains("文献检索助手") {
@@ -224,7 +225,9 @@ fn answer(mut stream: TcpStream, delay: u64) {
                 for part in message.split("\n句 ").skip(1) {
                     let number: usize = part.chars().take_while(char::is_ascii_digit).collect::<String>().parse().unwrap_or(0);
                     let key: String = part.split("\n  - [").nth(1).unwrap_or("").chars().take_while(|c| *c != ']').collect();
-                    if number > 0 && !key.is_empty() { chosen.push(serde_json::json!({"sentence": number, "cite": [{"key": key, "why": "（假模型）它的原句说的是这件事。"}]})) }
+                    if number == 0 || key.is_empty() { continue }
+                    let sentence = part.lines().next().unwrap_or("");
+                    chosen.push(if sentence.contains("试试转述") { serde_json::json!({"sentence": number, "restates": [key]}) } else { serde_json::json!({"sentence": number, "cite": [{"key": key, "role": "source", "why": "（假模型）它的原句说的是这件事。"}]}) });
                 }
                 serde_json::Value::Array(chosen).to_string()
             };
