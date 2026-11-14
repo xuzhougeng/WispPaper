@@ -328,7 +328,7 @@ impl Workspace {
         let small = |id: &'static str, name: &'static str| ui::ghost_button(id, None, Some(name.into())).h(text_px(24.)).px(px(7.)).text_size(text_px(12.));
         // 配引用 lists papers; every other action shows a version of the words beside the original.
         let (body, actions, working) = match &card.cite {
-            Some(found) => ((card.busy || !found.rows.is_empty()).then(|| self.render_cite_body(card, found, cx)), (!card.busy && !found.rows.is_empty()).then(|| self.render_cite_actions(found, cx)), false),
+            Some(found) => ((card.busy || !found.rows.is_empty()).then(|| self.render_cite_body(card, found, cx)), (!card.busy && found.offering()).then(|| self.render_cite_actions(found, cx)), false),
             None => {
                 let done = !card.busy && !card.result.trim().is_empty();
                 ((card.busy || !card.result.is_empty()).then(|| self.render_assist_compared(card, done)), done.then(|| self.render_assist_actions(cx)), card.busy && !card.result.is_empty())

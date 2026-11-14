@@ -189,10 +189,11 @@ pub fn catalog() -> Vec<ToolDef> {
         scoped(
             "find_citations",
             "查找可引用的文献",
-            "为一段文字逐句找出文献库中可能支持它的文献：每句话按文献的题目、摘要、笔记和全文里的句子检索，返回候选文献和它自己最贴近的一句原文（in 是这句所在的部分，全文里的附页码）。只是按词语找出的候选，是否真的支持这句话需要读原文判断。文字和文献不是同一种语言时（返回的 language 是文献的语言），用 queries 给每句配上那种语言的检索词，否则找不到。",
+            "为一段文字逐句找出文献库中可能支持它的文献：每句话按文献的题目、摘要、笔记和全文里的句子检索，返回候选文献和它自己最贴近的一句原文（in 是这句所在的部分，全文里的附页码）。只是按词语找出的候选，是否真的支持这句话需要读原文判断。文字和文献不是同一种语言时（返回的 language 是文献的语言），用 queries 给每句配上那种语言的检索词，否则找不到。一句话该引什么看它在做什么，用 intents 说明：转述前人发现、与前人比较或说到方法的句子，优先给出文献自己（导言以外）的原句；讲背景的句子把综述（review 为 true）排在前面；作者自己的话不查。原句里按作者和年份点了名的文献列在 names 里，带 paperId 的是文献库里有的：原句只是在转述时，出处是它们，不是这篇。",
             json!({
                 "text": {"type": "string", "description": "要配引用的文字，可以是一句或一段。"},
                 "queries": {"type": "array", "items": {"type": "string"}, "description": "各句的检索词，按句子的顺序，用文献的语言写（术语、同义词、缩写，空格分隔）；不需要的句子给空字符串。"},
+                "intents": {"type": "array", "items": {"type": "string"}, "description": "各句在做什么，按句子的顺序：background（领域背景、共识）、finding（转述前人的具体发现）、method（方法、工具、数据）、gap（未解决的问题）、compare（与前人结果比较）、own（本文自己的话，不查）；不清楚的给空字符串。"},
                 "perSentence": {"type": "integer", "description": "每句最多几篇候选，默认 3，最大 10。"},
             }),
             &["text"],
@@ -953,6 +954,12 @@ fn find_citations(store: &mut Store, args: &Value) -> Result<Value> {
         Value::Array(items) => items.iter().map(|item| item.as_str().unwrap_or("").trim().to_string()).collect(),
         _ => bail!("queries 应是一组字符串，第 n 个是第 n 句的检索词。"),
     };
+    // What each sentence does, in their order: it decides what of a paper is shown for it.
+    let intents: Vec<&str> = match &args["intents"] {
+        Value::Null => vec![],
+        Value::Array(items) => items.iter().map(|item| crate::citefind::intent_of(item.as_str().unwrap_or(""))).collect(),
+        _ => bail!("intents 应是一组字符串，第 n 个说明第 n 句在做什么。"),
+    };
     extract_missing(store, None)?;
     let papers: Vec<Paper> = store.list_papers()?.into_iter().filter(|p| p.screening != "irrelevant").collect();
     let known: std::collections::HashSet<&str> = papers.iter().map(|p| p.id.as_str()).collect();
@@ -972,11 +979,12 @@ fn find_citations(store: &mut Store, args: &Value) -> Result<Value> {
         .enumerate()
         .map(|(n, sentence)| if crate::citefind::worth(sentence) { std::iter::once(sentence.to_string()).chain(extra.get(n).filter(|words| !words.is_empty()).cloned()).collect() } else { vec![] })
         .collect();
-    let found = crate::citefind::search(&papers, &held, &queries, per_sentence);
+    let found = crate::citefind::search(&papers, &held, &queries, &intents, per_sentence);
     let out: Vec<Value> = asked
         .iter()
         .zip(&found)
-        .map(|(sentence, hits)| {
+        .enumerate()
+        .map(|(n, (sentence, hits))| {
             let candidates: Vec<Value> = hits
                 .iter()
                 .map(|hit| {
@@ -988,11 +996,26 @@ fn find_citations(store: &mut Store, args: &Value) -> Result<Value> {
                         candidate["in"] = json!(own.section);
                         candidate["snippet"] = json!(own.text);
                         if own.page > 0 { candidate["page"] = json!(own.page) }
+                        // The works that sentence names: where it only tells what others found, they are the source, and the library may hold them.
+                        let names: Vec<Value> = crate::citefind::named(&own.text)
+                            .iter()
+                            .map(|named| {
+                                let mut name = json!({"text": named.text});
+                                if let Some(other) = crate::citefind::holds(&papers, named).filter(|other| *other != hit.paper).map(|other| &papers[other]) {
+                                    (name["paperId"], name["title"], name["year"], name["cite"]) = (json!(other.id), json!(other.title), json!(other.year), json!(other.citation()));
+                                }
+                                name
+                            })
+                            .collect();
+                        if !names.is_empty() { candidate["names"] = json!(names) }
                     }
+                    if hit.review { candidate["review"] = json!(true) }
                     candidate
                 })
                 .collect();
-            json!({"sentence": sentence, "candidates": candidates})
+            let mut row = json!({"sentence": sentence, "candidates": candidates});
+            if let Some(intent) = intents.get(n).filter(|intent| !intent.is_empty()) { row["intent"] = json!(intent) }
+            row
         })
         .collect();
     Ok(json!({
@@ -1750,6 +1773,12 @@ pub(crate) mod tests {
         let helped = call(&root, "find_citations", &json!({"text": chinese, "queries": ["libraries prepared Chromium platform"]})).unwrap();
         assert_eq!(helped["sentences"][0]["candidates"][0]["paperId"].as_str(), Some(id.as_str()));
         assert!(call(&root, "find_citations", &json!({"text": chinese, "queries": "x"})).is_err());
+        // What a sentence does is said back; the authors' own words are not searched for, and an intent nobody knows is none.
+        let by_intent = call(&root, "find_citations", &json!({"text": "Libraries were prepared with the Chromium platform. Libraries were prepared with the Chromium platform.", "intents": ["method", "own"]})).unwrap();
+        assert_eq!((by_intent["sentences"][0]["intent"].as_str(), by_intent["sentences"][0]["candidates"][0]["paperId"].as_str()), (Some("method"), Some(id.as_str())));
+        assert_eq!((by_intent["sentences"][1]["intent"].as_str(), &by_intent["sentences"][1]["candidates"]), (Some("own"), &json!([])));
+        assert!(call(&root, "find_citations", &json!({"text": chinese, "intents": ["whatever"]})).unwrap()["sentences"][0]["intent"].is_null());
+        assert!(call(&root, "find_citations", &json!({"text": chinese, "intents": "x"})).is_err());
         // In one paper: the sentences of its own closest to a sentence that cites it, the full text's with their page.
         let within = call(&root, "find_passages", &json!({"paperId": id, "texts": ["Libraries were built on the Chromium platform from protoplasts.", chinese], "queries": ["", "libraries prepared Chromium platform"]})).unwrap();
         for n in 0..2 {
