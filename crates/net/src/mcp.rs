@@ -53,6 +53,14 @@ enum Link {
 impl Drop for Link {
     fn drop(&mut self) {
         if let Link::Stdio { child, .. } = self {
+            #[cfg(windows)]
+            if child.try_wait().is_ok_and(|status| status.is_none()) {
+                // cmd -> npx -> node: killing only cmd leaves the OAuth callback
+                // listener alive and subsequent connections wait on that orphan.
+                use std::os::windows::process::CommandExt;
+                let _ = Command::new("taskkill.exe").args(["/T", "/F", "/PID", &child.id().to_string()])
+                    .creation_flags(0x0800_0000).stdout(Stdio::null()).stderr(Stdio::null()).status();
+            }
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -131,7 +139,11 @@ impl Client {
                 if send(message).is_err() { return Err(Failure::Failed(gone(errors))) }
                 let Some(id) = id else { return Ok(Value::Null) };
                 loop {
-                    let Ok(line) = lines.recv_timeout(PATIENCE) else { return Err(Failure::Failed(gone(errors))) };
+                    let line = match lines.recv_timeout(PATIENCE) {
+                        Ok(line) => line,
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return Err(Failure::Failed("连接器等待应答超时；如浏览器已打开，请完成授权后重新连接。".into())),
+                        Err(_) => return Err(Failure::Failed(gone(errors))),
+                    };
                     match connector::hear(&line, id) {
                         Heard::Reply(reply) => return Ok(reply?),
                         Heard::Answer(answer) => if send(&answer).is_err() { return Err(Failure::Failed(gone(errors))) },
@@ -163,7 +175,19 @@ fn spawn(line: &str) -> Result<Link, String> {
         use std::os::windows::process::CommandExt;
         let mut command = Command::new("cmd");
         // No console window flashes up behind the app.
-        command.args(["/C", line]).creation_flags(0x0800_0000);
+        // Some launchers pass a partial PATHEXT. Keep custom extensions but
+        // restore the standard ones needed by npm's npx.cmd and node.exe.
+        let mut extensions = std::env::var("PATHEXT").unwrap_or_default();
+        for ext in [".COM", ".EXE", ".BAT", ".CMD"] {
+            if !extensions.split(';').any(|e| e.eq_ignore_ascii_case(ext)) {
+                if !extensions.is_empty() { extensions.push(';') }
+                extensions.push_str(ext);
+            }
+        }
+        command.env("PATHEXT", extensions);
+        // /S strips the outer pair. Pass the command as shell syntax:
+        // Command::arg would escape it as one executable name, spaces included.
+        command.args(["/D", "/S", "/C"]).raw_arg(format!("\"{line}\"")).creation_flags(0x0800_0000);
         command
     };
     #[cfg(not(windows))]
@@ -293,6 +317,13 @@ mod tests {
         assert!(error.contains("「Other」") && error.contains("设置 › 自定义"), "{error}");
         disconnect(&connector);
         assert!(kept(&connector).is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_command_preserves_arguments_and_quoted_paths() {
+        let Link::Stdio { ref lines, .. } = spawn(r#"echo connected "two words""#).unwrap() else { unreachable!() };
+        assert_eq!(lines.recv_timeout(Duration::from_secs(5)).unwrap(), r#"connected "two words""#);
     }
 
     #[cfg(unix)]
