@@ -311,6 +311,13 @@ pub fn call(connector: &Connector, tool: &str, args: &Value) -> Result<String, S
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_command_preserves_arguments_and_quoted_paths() {
+        let Link::Stdio { ref lines, .. } = spawn(r#"echo connected "two words""#).unwrap() else { unreachable!() };
+        assert_eq!(lines.recv_timeout(Duration::from_secs(5)).unwrap(), r#"connected "two words""#);
+    }
+
     #[test]
     fn an_address_is_asked_over_http_with_its_token_and_session() {
         let (base, served) = crate::tests::serve_in_turn(vec![
@@ -354,13 +361,6 @@ mod tests {
         assert!(error.contains("「Other」") && error.contains("设置 › 自定义"), "{error}");
         disconnect(&connector);
         assert!(kept(&connector).is_none());
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_command_preserves_arguments_and_quoted_paths() {
-        let Link::Stdio { ref lines, .. } = spawn(r#"echo connected "two words""#).unwrap() else { unreachable!() };
-        assert_eq!(lines.recv_timeout(Duration::from_secs(5)).unwrap(), r#"connected "two words""#);
     }
 
     #[cfg(unix)]
