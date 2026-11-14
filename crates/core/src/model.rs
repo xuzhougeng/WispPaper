@@ -144,10 +144,16 @@ pub fn normalize_doi(value: &str) -> String {
     let after_host = after_scheme.strip_prefix("dx.").or_else(|| after_scheme.strip_prefix("www.")).unwrap_or(after_scheme);
     if let Some(bare) = after_host.strip_prefix("doi.org/") {
         rest = bare;
-    } else if let Some(labelled) = rest.strip_prefix("doi") && labelled.starts_with(|c: char| c == ':' || c.is_whitespace()) {
-        rest = labelled[1..].trim_start();
+    } else if let Some(labelled) = rest.strip_prefix("doi") && labelled.starts_with(label_break) {
+        rest = labelled.trim_start_matches(label_break);
     }
     rest.trim().trim_end_matches(['.', ',', ';']).to_string()
+}
+
+/// What stands between a label (`doi`, `pmid`) and its number: a colon of
+/// either width or any space, a no-break one included.
+fn label_break(c: char) -> bool {
+    c == ':' || c == '：' || c.is_whitespace()
 }
 
 /// `10.<4–9 digits>/<anything without spaces>`; an empty DOI is fine.
@@ -166,8 +172,8 @@ pub fn normalize_pmid(value: &str) -> String {
     let after_www = after_scheme.strip_prefix("www.").unwrap_or(after_scheme);
     if let Some(bare) = after_www.strip_prefix("pubmed.ncbi.nlm.nih.gov/").or_else(|| after_www.strip_prefix("ncbi.nlm.nih.gov/pubmed/")) {
         rest = bare;
-    } else if let Some(labelled) = rest.strip_prefix("pmid") && labelled.starts_with(|c: char| c == ':' || c.is_whitespace()) {
-        rest = labelled[1..].trim_start();
+    } else if let Some(labelled) = rest.strip_prefix("pmid") && labelled.starts_with(label_break) {
+        rest = labelled.trim_start_matches(label_break);
     }
     rest.trim().trim_end_matches(['/', '.', ',', ';']).to_string()
 }
@@ -178,21 +184,27 @@ pub fn title_key(title: &str) -> String {
     strip_markup(title).chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
 }
 
-/// Text without `<tags>`, with whitespace collapsed.
+/// Text without `<tags>`, with whitespace collapsed. A tag opens with a
+/// letter or a slash and closes: a `<` on its own ("IL-6 < 10 pg/mL",
+/// "p<0.05") is a character of the text.
 pub fn strip_markup(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
-    let mut in_tag = false;
-    for c in value.chars() {
-        match c {
-            '<' => in_tag = true,
-            '>' if in_tag => {
-                in_tag = false;
+    let mut rest = value;
+    while let Some(at) = rest.find('<') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        match after.find('>').filter(|_| after.starts_with(|c: char| c.is_ascii_alphabetic() || c == '/')) {
+            Some(end) => {
                 out.push(' ');
+                rest = &after[end + 1..];
             }
-            _ if !in_tag => out.push(c),
-            _ => {}
+            None => {
+                out.push('<');
+                rest = after;
+            }
         }
     }
+    out.push_str(rest);
     decode_entities(&out).split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -435,6 +447,10 @@ mod tests {
     #[test]
     fn pmid_forms() {
         assert_eq!(normalize_pmid("PMID: 32939066"), "32939066");
+        // A label followed by a space or colon of more than one byte.
+        assert_eq!((normalize_doi("DOI\u{a0}10.1038/x"), normalize_doi("doi：10.1038/x"), normalize_pmid("PMID\u{3000}123")), ("10.1038/x".to_string(), "10.1038/x".to_string(), "123".to_string()));
+        // A `<` that opens no tag stays, however often the title is normalized.
+        assert_eq!((strip_markup("IL-6 < 10 pg/mL in <i>Mus</i>"), strip_markup("Tumours <2 cm: a cohort"), strip_markup("a <b")), ("IL-6 < 10 pg/mL in Mus".to_string(), "Tumours <2 cm: a cohort".to_string(), "a <b".to_string()));
         assert_eq!(normalize_pmid("https://pubmed.ncbi.nlm.nih.gov/32939066/"), "32939066");
     }
 

@@ -7595,7 +7595,6 @@ dependencies = [
  "hayro",
  "image",
  "raw-window-handle",
- "serde",
  "serde_json",
  "tray-icon",
  "unicode-segmentation",

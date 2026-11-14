@@ -255,7 +255,7 @@ impl Workspace {
     fn render_screen_row(&self, paper: &Paper, suggestion: Option<&Suggestion>, group: &str, selected: bool, reading: bool, cx: &mut Context<Self>) -> AnyElement {
         // Rows are known by their paper, not their place: the queue is sorted anew with every suggestion.
         let id = |part: &str| SharedString::from(format!("screen-{part}-{}", paper.id));
-        let mut about: Vec<String> = vec![paper.short_authors(), paper.year.map(|y| y.to_string()).unwrap_or_default(), paper.journal.clone()];
+        let mut about: Vec<String> = vec![crate::i18n::short_authors(paper), paper.year.map(|y| y.to_string()).unwrap_or_default(), paper.journal.clone()];
         about.retain(|part| !part.is_empty());
         let decided = paper.screening != "pending";
         let mark: Option<AnyElement> = match suggestion {

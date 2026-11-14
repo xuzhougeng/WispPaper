@@ -684,11 +684,6 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// The papers the library's questions are put to, to look through
-    /// without leaving the page: with the labels of this conversation and
-    /// what each was handed over as once the material is built; the papers
-    /// of the current list before that. A row opens the paper beside the
-    /// conversation; the scope stays what it is.
     /// The assistant's page before anything is said: what it can be asked
     /// to do, by kind. A line is a request sent as it stands, or a command
     /// left in the box for its words to follow.
@@ -1108,8 +1103,9 @@ impl Workspace {
                         if call.details.is_empty() { return div().pl(px(20.)).child(line) }
                         // What it would change, paper by paper: all of it, in a box that scrolls when it is long.
                         let rows = call.details.iter().map(|detail| {
-                            let (title, change) = detail.split_once('：').unwrap_or((detail.as_str(), ""));
-                            div().flex().flex_col().py(px(3.)).text_size(text_px(12.)).line_height(text_px(18.)).child(div().truncate().text_color(Theme::text_tertiary()).child(title.to_string())).child(div().text_color(Theme::text()).child(change.to_string()))
+                            // A title may hold a colon of its own: the line is cut where the title's bracket closes.
+                            let (title, change) = detail.split_once("》：").map(|(title, change)| (format!("{title}》"), change)).unwrap_or((detail.clone(), ""));
+                            div().flex().flex_col().py(px(3.)).text_size(text_px(12.)).line_height(text_px(18.)).child(div().truncate().text_color(Theme::text_tertiary()).child(title)).child(div().text_color(Theme::text()).child(change.to_string()))
                         });
                         div().pl(px(20.)).flex().flex_col().gap(px(4.)).child(line).child(div().id(SharedString::from(format!("consent-details-{side}-{n}"))).flex().flex_col().max_h(px(240.)).overflow_y_scroll().px(px(10.)).py(px(4.)).rounded(px(8.)).bg(Theme::bg_body()).border_1().border_color(Theme::line()).children(rows))
                     }))

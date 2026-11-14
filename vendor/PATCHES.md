@@ -1,13 +1,14 @@
 # vendor 补丁
 
-`vendor/gpui` 是 crates.io 的 gpui 0.2.2，`vendor/taffy` 是 taffy 0.9.0，`vendor/xattr` 是 xattr 0.2.3，都打了本地补丁。项目通过 `Cargo.toml` 的 `[patch.crates-io]` 使用这些目录。补丁处都带 `quiet.md:` 注释；完整列表以下表和 diff 为准。
+`vendor/gpui` 是 crates.io 的 gpui 0.2.2，`vendor/taffy` 是 taffy 0.9.0，`vendor/xattr` 是 xattr 0.2.3，都打了本地补丁。项目通过 `Cargo.toml` 的 `[patch.crates-io]` 使用这些目录。多数补丁处带 `quiet.md:` 注释，但不是每一处都有；完整列表以下表和 diff 为准。
 
 和上游对比：
 
 ```sh
-R=~/.cargo/registry/src/index.crates.io-*/
+R=$(echo ~/.cargo/registry/src/index.crates.io-*)
 diff -ru $R/gpui-0.2.2/src vendor/gpui/src
 diff -ru $R/taffy-0.9.0/src vendor/taffy/src
+diff -ru $R/xattr-0.2.3/src vendor/xattr/src
 ```
 
 升级上游时，按下表逐条重新打补丁，并在补丁处保留注释。
@@ -35,7 +36,6 @@ diff -ru $R/taffy-0.9.0/src vendor/taffy/src
 | 15 | `platform/windows/directx_renderer.rs` | 调试构建编译着色器时，路径按宽字符串传给 `D3DCompileFromFile`（原来 `to_str().unwrap()`） | 仓库放在含中文等非 ASCII 字符的目录下也能跑调试构建 |
 | 16 | `platform/windows/clipboard.rs` | 读剪贴板时文字、图片、复制的文件一起读（原来只取第一个认得的格式）；新增位图（`CF_DIB`，转成 PNG）；复制的图片文件读成图片，其他文件的路径按行分开（原来连成一串） | 截图工具放进剪贴板的位图能粘贴，不再贴出截图文件的路径；从资源管理器复制的图片能粘贴 |
 | 17 | `elements/div.rs` | `paint_scroll_listener`：只在一个方向上可滚动的容器，只接收偏向这个方向的滚动（横向量大于竖向量才横滚，反之才竖滚）。原来竖向滚轮在只能横滚的容器上会被转成横滚，触控板竖滑带的少量横向分量也会照单全收；原有的方向锁只在两个方向都有量时才生效，单向容器另一方向恒为 0，所以从不触发 | 竖着滚动经过宽表格时，表格不再跟着左右滑动；在表格上横向滑动仍然能横滚 |
-
 | 18 | `platform/linux/wayland/client.rs`、`platform/linux/x11/client.rs` | 外观变化时先复制窗口句柄，释放 client 的 RefCell 借用后再触发窗口回调 | 避免回调重新访问平台、更新菜单时触发重复借用 panic |
 | 19 | `platform/mac/metal_renderer.rs`、`platform/windows/directx_renderer.rs` | 画路径用的两张整窗纹理（中间纹理和 4× MSAA 纹理）改为某一帧有路径时才创建，后续无路径帧距最后使用超过 1 秒时释放；窗口尺寸变化时丢掉，下次用到再按新尺寸建。Apple GPU 上 MSAA 纹理用 `Memoryless`（采样只在片上 tile 内存里，渲染过程里清空、只存 resolve 结果） | 原来每个窗口常驻这两张纹理，2560×1600 时约 80MB；路径只用于连续圆角、进度波浪和提示箭头，编辑器里平时一条都不画。抗锯齿不变 |
 | 20 | `elements/img.rs`、`elements/image_cache.rs` | 图片缓存增加不触发加载的 `peek`；显式尺寸图片可选择延迟到可见区域绘制时才解码 | 卡片裁剪范围之外的图片不再预先解码；原始像素、尺寸和动图播放保持不变 |

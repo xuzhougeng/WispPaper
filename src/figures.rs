@@ -151,7 +151,7 @@ fn grid(width: f32) -> (usize, f32) {
 /// Where a figure is from, in a line: who and when, then the title.
 fn source_line(paper: Option<&Paper>) -> String {
     let Some(paper) = paper else { return t("文献已不在库里").into() };
-    let mut who = paper.short_authors();
+    let mut who = crate::i18n::short_authors(paper);
     if let Some(year) = paper.year { who = if who.is_empty() { year.to_string() } else { format!("{who} {year}") } }
     if who.is_empty() { paper.title.clone() } else { format!("{who} · {}", paper.title) }
 }

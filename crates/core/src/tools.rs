@@ -38,7 +38,6 @@ pub struct ToolDef {
     pub confirm: bool,
 }
 
-/// A tool that works inside one library: it also takes `library`.
 /// The tools that change the library.
 const WRITING: [&str; 13] = ["create_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "suggest_field", "sync_searches", "find_pdf", "organise_papers"];
 /// Of those, the ones the window's assistant runs only with the person's
@@ -47,6 +46,7 @@ const WRITING: [&str; 13] = ["create_library", "import_pdf", "import_references"
 /// run as asked.
 const CONFIRMING: [&str; 8] = ["import_pdf", "import_references", "import_zotero", "run_search", "undo_import", "remove_search", "find_pdf", "organise_papers"];
 
+/// A tool that works inside one library: it also takes `library`.
 fn scoped(name: &'static str, title: &'static str, description: &'static str, mut properties: Value, required: &[&str]) -> ToolDef {
     properties["library"] = json!({"type": "string", "description": "文献库的 ID 或名称；只有一个文献库时可以省略。"});
     ToolDef { name, title, description, input_schema: json!({"type": "object", "properties": properties, "required": required, "additionalProperties": false}), writes: WRITING.contains(&name), confirm: CONFIRMING.contains(&name) }
@@ -100,7 +100,7 @@ pub fn catalog() -> Vec<ToolDef> {
             writes: true,
             confirm: false,
         },
-        scoped("library_status", "文献库概况", "一个文献库的概况：主题、文献数量、收录判断和阅读状态的分布、自定义词条，以及各状态值在界面上的显示名称。", json!({}), &[]),
+        scoped("library_status", "文献库概况", "一个文献库的概况：主题、文献数量、收录判断和阅读状态的分布、自定义词条、已有的标签，以及各状态值在界面上的显示名称。", json!({}), &[]),
         scoped(
             "list_pdf_annotations",
             "读取 PDF 标注",
@@ -317,7 +317,7 @@ pub fn catalog() -> Vec<ToolDef> {
                             "addTags": {"type": "array", "items": {"type": "string"}, "description": "要加上的标签。优先用文献库里已有的标签（library_status 的 tags），不要为同一个意思另造一个。"},
                             "removeTags": {"type": "array", "items": {"type": "string"}, "description": "要去掉的标签。"},
                             "starred": {"type": "boolean", "description": "true 加星标，false 取消。"},
-                            "reading": {"type": "string", "enum": ["unread", "skimmed", "read"], "description": "阅读状态：未读、已浏览、已精读。这是用户自己的阅读记录，只在用户说明时修改。"},
+                            "reading": {"type": "string", "enum": keys(&READINGS), "description": "阅读状态：未读、已浏览、已精读。这是用户自己的阅读记录，只在用户说明时修改。"},
                             "note": {"type": "string", "description": "追加到「我的笔记」末尾的一段话。"},
                         },
                         "required": ["id"],
@@ -543,6 +543,8 @@ fn library_status(store: &mut Store, info: &LibraryInfo) -> Result<Value> {
         "reading": tally(&papers, &READINGS, |p| &p.reading),
         "fulltext": tally(&papers, &FULLTEXTS, |p| &p.fulltext),
         "fields": fields,
+        // The tags in use with how many papers carry each, so an agent that tags takes one that is there.
+        "tags": crate::filter::tag_counts(&papers).into_iter().map(|(tag, count)| json!({"tag": tag, "papers": count})).collect::<Vec<_>>(),
         // The stored keys are not what the window shows: `excluded` reads 「相关」.
         "labels": {"screening": labels(&SCREENINGS), "reading": labels(&READINGS), "fulltext": labels(&FULLTEXTS)},
     }))
@@ -971,7 +973,7 @@ fn find_citations(store: &mut Store, args: &Value) -> Result<Value> {
     let stored: Vec<crate::store::PaperSentence> = store.section_sentences("", "")?.into_iter().filter(|s| known.contains(s.paper_id.as_str()) && s.sentence.section != "abstract" && !crate::structure::apparatus(&s.sentence.text)).collect();
     let with_text: std::collections::HashSet<&str> = stored.iter().map(|s| s.paper_id.as_str()).collect();
     let without_text = papers.iter().filter(|p| !with_text.contains(p.id.as_str())).count();
-    held.extend(stored.iter().cloned());
+    held.extend(stored);
     let all = crate::citefind::sentences(text);
     let asked: Vec<&str> = all.iter().take(crate::citefind::MAX_SENTENCES).map(|range| &text[range.clone()]).collect();
     let queries: Vec<Vec<String>> = asked
@@ -1124,6 +1126,7 @@ fn search_online(store: &mut Store, args: &Value, fetch: Fetch) -> Result<Value>
     let found = sources::search(kind, query, number(args, "limit", 20, 100)?.max(1), fetch).map_err(|e| anyhow!(e))?;
     let mut known = 0;
     let mut results = vec![];
+    let trashed: std::collections::HashSet<String> = store.list_trash()?.into_iter().map(|entry| entry.paper.id).collect();
     for mut paper in found.papers {
         paper.normalize();
         // What the library already holds for this record, and what its owner decided about it.
@@ -1131,7 +1134,7 @@ fn search_online(store: &mut Store, args: &Value, fetch: Fetch) -> Result<Value>
             Some(id) => {
                 known += 1;
                 let held = store.get_paper(&id)?;
-                json!({"id": held.id, "screening": held.screening, "inTrash": store.list_trash()?.iter().any(|entry| entry.paper.id == held.id)})
+                json!({"id": held.id, "screening": held.screening, "inTrash": trashed.contains(&held.id)})
             }
             None => Value::Null,
         };
@@ -1211,8 +1214,15 @@ fn sync_searches(root: &Path, args: &Value, fetch: Fetch, now_ms: i64) -> Result
     let mut runs = vec![];
     let (mut added, mut failed) = (0, 0);
     for info in all.iter().filter(|info| force || info.auto_sync_hours > 0) {
-        let mut store = Store::open(&info.dir)?;
-        let searches = store.list_searches()?;
+        // A library that cannot be opened (written by a newer build, damaged) does not stop the others either.
+        let (mut store, searches) = match Store::open(&info.dir).and_then(|store| store.list_searches().map(|searches| (store, searches))) {
+            Ok(opened) => opened,
+            Err(error) => {
+                failed += 1;
+                runs.push(json!({"library": info.name, "libraryId": info.id, "error": format!("{error:#}")}));
+                continue;
+            }
+        };
         let due: Vec<String> = if force { searches.iter().filter(|s| s.enabled).map(|s| s.id.clone()).collect() } else { due_searches(&searches, info.auto_sync_hours, now_ms).iter().map(|s| s.id.clone()).collect() };
         for id in due {
             // One search failing does not stop the others.
@@ -1274,10 +1284,6 @@ fn suggest_screening(store: &mut Store, info: &LibraryInfo, args: &Value) -> Res
 
 // ---- extraction
 
-/// Record what an agent thinks a custom field of a paper should hold. The
-/// field itself is the person's to write and is not touched here; a
-/// quotation the paper's text does not hold is not kept as evidence, and a
-/// Select field is proposed one of its options or nothing.
 /// What a call would do, a line per thing it changes, for the person who
 /// is asked whether it may run; an error when it cannot run as written.
 /// Only `organise_papers` has more to say than its arguments already do.
@@ -1327,6 +1333,10 @@ fn read_manuscript(store: &mut Store, args: &Value) -> Result<Value> {
     }))
 }
 
+/// Record what an agent thinks a custom field of a paper should hold. The
+/// field itself is the person's to write and is not touched here; a
+/// quotation the paper's text does not hold is not kept as evidence, and a
+/// Select field is proposed one of its options or nothing.
 fn suggest_field(store: &mut Store, args: &Value) -> Result<Value> {
     let paper = store.get_paper(text(args, "id")?)?;
     let wanted = text(args, "field")?;

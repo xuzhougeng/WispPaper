@@ -151,7 +151,8 @@ pub fn library_language(papers: &[Paper]) -> &'static str {
         let language = if !told.is_empty() { told } else if text.chars().filter(|c| structure::is_cjk(*c)).count() >= 4 { "zh" } else { "en" };
         *counts.entry(language).or_default() += 1;
     }
-    counts.into_iter().max_by_key(|(language, count)| (*count, *language == "en")).map_or("en", |(language, _)| language)
+    // Of two languages with as many papers, English, else the first by its key: the same answer every time.
+    counts.into_iter().max_by_key(|(language, count)| (*count, *language == "en", std::cmp::Reverse(*language))).map_or("en", |(language, _)| language)
 }
 
 /// A language's name as the prompts say it: 英文.

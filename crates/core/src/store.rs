@@ -1238,7 +1238,6 @@ impl Store {
         Ok(())
     }
 
-    /// Every extracted full text, by paper id: (file, pages).
     /// The full-text files that gave no text, with why: (file, paper, reason).
     /// A paper that has another file with text is not among them.
     pub fn fulltext_failures(&self) -> Result<Vec<(String, String, String)>> {
@@ -1252,6 +1251,7 @@ impl Store {
         Ok(rows)
     }
 
+    /// Every extracted full text, by paper id: (file, pages).
     pub fn all_fulltext(&self) -> Result<BTreeMap<String, (PaperFile, Vec<String>)>> {
         let mut out = BTreeMap::new();
         for file in self.read_files("WHERE resource_type = 'fulltext' AND paper_id NOT IN (SELECT paper_id FROM trashed_papers)", [])? {

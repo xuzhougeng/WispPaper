@@ -23,7 +23,10 @@ Wisp Paper 是本地优先的文献管理软件。每个文献库是独立文件
 | 为已有条目下载开放获取 PDF | 支持 | `find_pdf` |
 | 全文检索、按页阅读、候选引用与句子 | 支持 | `search_fulltext`、`read_fulltext`、`find_citations`、`find_sentences` |
 | 提出收录建议 | 支持；最终判断在桌面确认 | `suggest_screening` |
-| 修改文献字段、标签、笔记，导出 BibTeX / CSV | 暂无对应命令 | 桌面编辑与导出 |
+| 整理已有文献：标签、星标、阅读状态、追加笔记 | 支持 | `organise_papers` |
+| 为自定义词条提出取值 | 支持；写入在桌面确认 | `suggest_field` |
+| 查看稿件、为引用找出处 | 支持 | `list_manuscripts`、`read_manuscript`、`find_passages` |
+| 修改题录字段，导出 BibTeX / CSV | 暂无对应命令 | 桌面编辑与导出 |
 
 通过工具接口操作，不直接修改 SQLite 或拼装 `library.json`。BibTeX 和 RIS 共用 `import_references`，没有单独的 `import_bibtex`、`import_ris` 或通用 `import` 命令。
 
@@ -69,7 +72,7 @@ $Library = 'L-实际文献库ID'
 - `--data-dir` 只选择文献数据，仍读取当前设置。隔离测试可用 `WISP_PAPER_HOME` 将设置文件和默认数据目录放到另一处；其中已有 `settings.json` 的 `dataDir` 仍会生效。
 - 工具成功时向 stdout 输出 JSON；`help` 输出文字。失败时错误写到 stderr，退出码为 1。PowerShell 调用后检查 `$LASTEXITCODE`，不要把错误当成空结果继续执行。
 - CLI 参数使用 `--paper-id`、`--max-results` 等形式；MCP 参数使用 schema 中的 `paperId`、`maxResults` 等名称。
-- 布尔参数开启用 `--force`、`--look-only`；关闭用 `--enabled=false`，不要写成 `--enabled false`。数组参数优先通过 MCP 传递，当前 CLI 不解析 JSON 数组。
+- 布尔参数开启用 `--force`、`--look-only`；关闭用 `--enabled=false`，不要写成 `--enabled false`。数组和对象参数写成一段 JSON（例如 `--queries '["root hair","auxin"]'`）；只有一项时可以直接写这一项。
 
 ## 从零开始或导入已有资料
 

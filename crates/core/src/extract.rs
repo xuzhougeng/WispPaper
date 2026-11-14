@@ -147,10 +147,6 @@ impl Proposals {
         of_paper.retain(|p| p.field_id != proposal.field_id);
         of_paper.push(proposal);
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.values().all(Vec::is_empty)
-    }
 }
 
 // ---- values
@@ -173,9 +169,10 @@ fn spelled<'a>(options: &'a [String], value: &str) -> Option<&'a String> {
 /// field gets one line; a Tags field its values one by one, in an option's
 /// spelling where it is one; a Select field the option the answer names,
 /// and the answer as it came when it names none or several, which `fits`
-/// then refuses.
+/// then refuses. A way of saying nothing (`NOTHING`) is an answer when
+/// it is one of the field's options (有 | 无).
 pub fn coerce(field: &FieldDef, raw: &[String]) -> Vec<String> {
-    let said: Vec<String> = raw.iter().map(|value| value.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|value| !value.is_empty() && !NOTHING.contains(&plain(value).as_str())).collect();
+    let said: Vec<String> = raw.iter().map(|value| value.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|value| !value.is_empty() && (spelled(&field.options, value).is_some() || !NOTHING.contains(&plain(value).as_str()))).collect();
     match field.kind {
         FieldKind::Text => if said.is_empty() { vec![] } else { vec![said.join("；")] },
         FieldKind::Tags => clean_strings(said.iter().flat_map(|value| split_list(value)).map(|value| spelled(&field.options, &value).cloned().unwrap_or(value))).into_iter().take(MAX_VALUES).collect(),
@@ -594,6 +591,9 @@ mod tests {
         let other = coerce(method, &["Smart-seq2".into()]);
         assert!(!fits(method, &other) && fits(method, &["snRNA-seq".into()]) && !fits(method, &[]));
         assert!(coerce(method, &["None".into()]).is_empty());
+        // A way of saying nothing is an answer where it is one of the options.
+        let asked = field("F-control", "对照", FieldKind::Select, &["有", "无", "未知"]);
+        assert_eq!((coerce(&asked, &["无".into()]), coerce(&asked, &["未知".into()]), coerce(&asked, &["N/A".into()])), (vec!["无".to_string()], vec!["未知".to_string()], vec![]));
         // Text is one line, whatever the model gave; tags are split and take an option's spelling.
         assert_eq!(coerce(&fields[2], &["a".into(), " b ".into()]), vec!["a；b"]);
         assert_eq!(coerce(&fields[0], &["ARABIDOPSIS THALIANA; rice".into(), "rice".into()]), vec!["Arabidopsis thaliana", "rice"]);

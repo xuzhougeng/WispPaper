@@ -206,8 +206,8 @@ impl Workspace {
             Do::Go(n) => self.revise_go(n, cx),
             Do::Step(on) => {
                 let Some(run) = self.lib.as_ref().and_then(|lib| lib.writing.revise.run.as_ref()) else { return };
-                // Past the changes that can still be shown.
-                let there: Vec<usize> = run.made.iter().enumerate().filter(|(_, made)| made.range.is_some()).map(|(n, _)| n).collect();
+                // Past the changes that can still be shown: one taken back has nothing to light.
+                let there: Vec<usize> = run.made.iter().enumerate().filter(|(_, made)| made.range.is_some() && !made.undone).map(|(n, _)| n).collect();
                 let Some(now) = run.at.and_then(|at| there.iter().position(|n| *n == at)) else { return if let Some(first) = there.first() { self.revise_go(*first, cx) } };
                 self.revise_go(there[if on { (now + 1) % there.len() } else { (now + there.len() - 1) % there.len() }], cx);
             }
@@ -238,7 +238,7 @@ impl Workspace {
         writing.revise.generation += 1;
         let generation = writing.revise.generation;
         let now = Instant::now();
-        let mut run = Run { section: writing.section_id.clone(), wish: wish.clone(), model: format!("{} · {}", profile.title(), profile.model), reply: String::new(), taken: 0, said: String::new(), busy: true, error: String::new(), note: String::new(), made: vec![], missed: vec![], target: None, target_since: now, at: None };
+        let mut run = Run { section: writing.section_id.clone(), wish: wish.clone(), model: profile.labelled(), reply: String::new(), taken: 0, said: String::new(), busy: true, error: String::new(), note: String::new(), made: vec![], missed: vec![], target: None, target_since: now, at: None };
         let asked = revise::Asked { language: &language, title: &title, outline: &outline, section: &section, text: &text, selection: &selection, wish: &wish, reply_in };
         let request = match revise::prompt(&asked).and_then(|(system, message)| ai::plain_request(&profile, &system, &message)) {
             Ok(request) => request,

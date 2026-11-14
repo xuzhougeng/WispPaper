@@ -34,6 +34,15 @@ pub fn label<'a>(table: &'a [(&'a str, &'a str)], value: &'a str) -> &'a str {
     table.iter().find(|(key, _)| *key == value).map_or(value, |(_, text)| t(text))
 }
 
+/// `Paper::short_authors` in the interface's language: core says "Zhang 等" for three authors or more.
+pub fn short_authors(paper: &wisp_core::model::Paper) -> String {
+    let short = paper.short_authors();
+    match short.strip_suffix(" 等") {
+        Some(first) if is_english() && paper.authors.split(';').filter(|name| !name.trim().is_empty()).count() > 2 => format!("{first} et al."),
+        _ => short,
+    }
+}
+
 pub fn manuscript_title(manuscript: &wisp_core::manuscript::Manuscript) -> &str {
     if manuscript.title.trim().is_empty() { t(wisp_core::manuscript::UNTITLED) } else { manuscript.shown_title() }
 }

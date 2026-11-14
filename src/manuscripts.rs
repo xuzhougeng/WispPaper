@@ -889,6 +889,7 @@ impl Workspace {
             "split" => t("拆分前"),
             "merge" => t("并入前"),
             "assistant" => t("助手改动前"),
+            "insert" => t("插入前"),
             _ => "",
         };
         let rows: Vec<AnyElement> = snapshots

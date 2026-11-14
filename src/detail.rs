@@ -53,7 +53,7 @@ impl Workspace {
                 .px(px(16.))
                 .border_b_1()
                 .border_color(Theme::line())
-                .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(p.title.clone()))
+                .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(title.clone()))
                 .child(tab_button("tab-info", t("信息"), Tab::Info, self, cx))
                 .child(tab_button("tab-pdf", if has_pdf { "PDF" } else { t("PDF（无）") }, Tab::Pdf, self, cx))
                 .child(tab_button("tab-ask", t("提问"), Tab::Ask, self, cx))
@@ -261,7 +261,7 @@ impl Workspace {
                             None => count,
                         }
                     }
-                    Some(Err(error)) => tf!("没读出文字：{}", "No text extracted: {}", wisp_core::fulltext::failure_brief(error)),
+                    Some(Err(error)) => tf!("没读出文字：{}", "No text extracted: {}", t(wisp_core::fulltext::failure_brief(error))),
                     None => String::new(),
                 };
                 // A fetched file says where it is from.
@@ -284,7 +284,7 @@ impl Workspace {
                             .flex()
                             .items_center()
                             .gap(px(8.))
-                            .child(if reading || by_eye { ui::spinner(("file-busy", i), 16., Theme::accent()).into_any_element() } else { ui::icon("file-text", 18., Theme::accent()).into_any_element() })
+                            .child(if reading || by_eye { ui::spinner(SharedString::from(format!("file-busy-{}", file.id)), 16., Theme::accent()).into_any_element() } else { ui::icon("file-text", 18., Theme::accent()).into_any_element() })
                             .child(
                                 div()
                                     .flex()

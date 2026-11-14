@@ -416,7 +416,7 @@ impl Workspace {
             }
         };
         comments.generation += 1;
-        (comments.busy, comments.model) = (true, format!("{} · {}", profile.title(), profile.model));
+        (comments.busy, comments.model) = (true, profile.labelled());
         let (generation, library, protocol) = (comments.generation, lib.info.id.clone(), profile.protocol);
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -711,7 +711,7 @@ impl Workspace {
                     )
                     .when(comments.busy && !comments.model.is_empty(), |d| d.child(div().text_size(text_px(11.)).text_color(Theme::text_tertiary()).truncate().child(comments.model.clone())))
                     .when(!comments.note.is_empty(), |d| d.child(div().text_size(text_px(11.)).line_height(text_px(16.)).text_color(Theme::text_secondary()).child(comments.note.clone())))
-                    .when(!comments.error.is_empty(), |d| d.child(ui::error_line(&comments.error)))
+                    .when(!comments.error.is_empty(), |d| d.child(ui::error_line(t(&comments.error))))
                     .when(proposals > 1, |d| d.child(div().flex().child(ui::ghost_button("comment-take-all", Some("check"), Some(tf!("采纳全部 {proposals} 处修改", "Apply all {proposals} changes").into())).h(text_px(24.)).text_size(text_px(12.)).on_click(self.on(Cmd::Comment(Do::TakeAll), cx))))),
             )
             .children(comments.drafting.as_ref().map(|quote| {

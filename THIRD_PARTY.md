@@ -25,6 +25,6 @@ Wisp Paper 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随
 
 `assets/icons/*.svg` 除 `provider-*.svg` 外全部来自 [Lucide](https://lucide.dev/)（lucide-static 0.469.0，ISC 许可，见 `assets/icons/LICENSE-lucide`），文件名按用途改过。
 
-`assets/icons/provider-{deepseek,kimi,glm,claude,openai}.svg` 是各模型服务的标志，取自 [lobe-icons](https://github.com/lobehub/lobe-icons)（@lobehub/icons-static-svg 1.100.0，MIT 许可），只用来在 设置 › AI 里认出是哪家的服务；标志本身归各自的公司所有。`provider-custom.svg` 是 Lucide 的 server。
+`assets/icons/provider-{deepseek,kimi,glm,claude,openai}.svg` 是各模型服务的标志，取自 [lobe-icons](https://github.com/lobehub/lobe-icons)（@lobehub/icons-static-svg 1.100.0，MIT 许可），只用来在 设置 › AI 里认出是哪家的服务；标志本身归各自的公司所有。`provider-custom.svg` 是 Lucide 的 server。`provider-{ark,gemini,typesafe}.svg` 为本项目绘制，所指的标志归各自的公司所有。
 
 `assets/branding/` 里的应用图标为本项目绘制。

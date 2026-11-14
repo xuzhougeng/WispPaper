@@ -483,6 +483,11 @@ impl PdfView {
             }
         })
         .detach();
+        // A page's picture stays in the window's atlas until it is let go of there: dropping the view alone would leave every page it drew.
+        cx.on_release(|this: &mut Self, cx| {
+            for (_, (image, ..)) in this.images.drain() { cx.drop_image(image, None) }
+        })
+        .detach();
         PdfView {
             sizes: vec![],
             images: HashMap::new(),
@@ -1199,13 +1204,6 @@ impl PdfView {
         if (self.height - height).abs() <= 0.5 { return }
         self.resize((0., 0.), |this| this.height = height);
         cx.notify();
-    }
-}
-
-impl Drop for PdfView {
-    fn drop(&mut self) {
-        // The textures of dropped images are released with the window's atlas entries.
-        self.images.clear();
     }
 }
 
