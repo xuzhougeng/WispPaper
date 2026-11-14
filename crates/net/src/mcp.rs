@@ -43,18 +43,6 @@ impl Failure {
     }
 }
 
-// Keep the PKCE URL in memory only while this exact bridge is authorizing.
-static NOTION_LOGIN: Mutex<Option<(u32, String)>> = Mutex::new(None);
-
-pub fn pending_notion_login(connector: &Connector) -> Option<String> {
-    if !crate::notion::notion_bridge(&connector.target) { return None }
-    NOTION_LOGIN.lock().ok()?.as_ref().map(|(_, url)| url.clone())
-}
-
-fn clear_login(pid: u32) {
-    if let Ok(mut login) = NOTION_LOGIN.lock() && login.as_ref().is_some_and(|(owner, _)| *owner == pid) { *login = None; }
-}
-
 enum Link {
     /// `token` is the connector's own; `bearer` the sign-in's, when it has none.
     /// `version` is the protocol revision the server answered with.
@@ -259,6 +247,18 @@ fn keep(connector: &Connector, client: Client) -> Shared {
 /// Close a connector's connection (signed out: the next call connects anew).
 pub fn disconnect(connector: &Connector) {
     if let Ok(mut clients) = CLIENTS.lock() && let Some(clients) = clients.as_mut() { clients.remove(&key(connector)); }
+}
+
+// Keep the PKCE URL in memory only while this exact bridge is authorizing.
+static NOTION_LOGIN: Mutex<Option<(u32, String)>> = Mutex::new(None);
+
+pub fn pending_notion_login(connector: &Connector) -> Option<String> {
+    if !crate::notion::notion_bridge(&connector.target) { return None }
+    NOTION_LOGIN.lock().ok()?.as_ref().map(|(_, url)| url.clone())
+}
+
+fn clear_login(pid: u32) {
+    if let Ok(mut login) = NOTION_LOGIN.lock() && login.as_ref().is_some_and(|(owner, _)| *owner == pid) { *login = None; }
 }
 
 /// Borrow an already authorized session. Manual writes must never start a second
