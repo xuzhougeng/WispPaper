@@ -23,6 +23,10 @@ const NARROWING_TAGS: usize = 24;
 /// The manuscript's right margin while comments mark it: room for their markers.
 const MARGIN: f32 = 36.;
 
+/// What the empty manuscript says: to the person who writes it, and beside the conversation in which the assistant does.
+pub(crate) const PLACEHOLDER: &str = "在这里写。写好一段，按「查找候选句」的快捷键，右边就列出文献库里的文献在同一部分相近的写法；中文或别的语言也可以，先写下想表达的意思。";
+const PLACEHOLDER_AGENT: &str = "这一节还是空的。在左边告诉助手要写什么，它会写在这里；也可以自己动笔。";
+
 /// How long a text is, as a writer counts it: a Chinese, Japanese or Korean
 /// letter is one, and so is every word of a language that spaces them.
 /// The second is whether letters were counted, which is what to call the number.
@@ -42,6 +46,21 @@ pub(crate) fn length_label(text: &str) -> String {
 
 impl Workspace {
     pub fn render_write(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        // The other mode: the assistant writes, the person talks with it beside the manuscript.
+        if self.settings.agent_writing { return self.render_write_agent(width, window, cx) }
+        let stacked = width < 680.;
+        let panel = if stacked { width } else if width > 980. { 420. } else { 340. };
+        let editor = self.render_manuscript_column(if stacked { width } else { width - panel }, false, stacked, window, cx);
+        let reading = self.lib.as_ref().is_some_and(|lib| lib.writing.reading);
+        div().id("write-page").flex().size_full().when(stacked, |d| d.flex_col().overflow_y_scroll()).child(editor)
+            .when(!reading, |d| d.child(self.render_candidates(panel, window, cx).when(stacked, |d| d.flex_none().h(px(560.)))))
+            .into_any_element()
+    }
+
+    /// The manuscript: its bar, the section being written (or the whole of it to read, or an earlier version of
+    /// the section), and what stands under it. `width` is the column's own. Beside the conversation that writes
+    /// (`agent`) the actions on a paragraph and the box of 改稿 are left out: what is to change is said there.
+    pub(crate) fn render_manuscript_column(&mut self, width: f32, agent: bool, stacked: bool, window: &mut Window, cx: &mut Context<Self>) -> Div {
         self.comment_reveal(window, cx);
         let lib = self.lib.as_ref().unwrap();
         let writing = &lib.writing;
@@ -57,16 +76,24 @@ impl Workspace {
         if moving { window.request_animation_frame() }
         let bars = self.render_revise_bars(&bars, cx);
         let lib = self.lib.as_ref().unwrap();
-        lib.writing.editor.update(cx, |input, _| input.set_marks(noted.into_iter().chain(changed).collect()));
+        lib.writing.editor.update(cx, |input, _| {
+            input.set_marks(noted.into_iter().chain(changed).collect());
+            input.set_placeholder(if agent { PLACEHOLDER_AGENT } else { PLACEHOLDER });
+        });
         let lib = self.lib.as_ref().unwrap();
         let writing = &lib.writing;
         let text = writing.editor.read(cx).text();
         let (length, characters) = (length_label(text), text.chars().filter(|c| !c.is_whitespace()).count());
         let focused = writing.editor.focus_handle(cx).is_focused(window);
-        let stacked = width < 680.;
-        let panel = if stacked { width } else if width > 980. { 420. } else { 340. };
+        // An earlier version of the section, looked at in its place.
+        let version = writing.agent.versions.shown().filter(|version| agent && version.section_id == writing.section_id);
+        let editing = !writing.reading && version.is_none();
+        // What is selected goes with the next thing said to the assistant.
+        let picked = if agent && editing { text_length(writing.editor.read(cx).selected()).0 } else { 0 };
+        // What the assistant changed in this section in answer to the last question: each change to go to or take back.
+        let told = writing.revise.run.as_ref().filter(|run| agent && editing && run.section == writing.section_id);
 
-        let editor = div()
+        div()
             .flex()
             .flex_col()
             .flex_1()
@@ -85,7 +112,8 @@ impl Workspace {
                     .child(self.render_manuscript_bar(window, cx)),
             )
             .child(
-                div().flex().flex_col().flex_1().min_h_0().px(px(20.)).pb(px(8.)).child(if writing.reading { self.render_manuscript_reading(cx) } else {
+                div().flex().flex_col().flex_1().min_h_0().px(px(20.)).pb(px(8.)).child(if writing.reading { self.render_manuscript_reading(cx) } else if let Some(version) = version { self.render_version(version, cx) } else {
+                    let page = div().relative().w_full().max_w(theme::manuscript_width()).mx_auto().pl(px(18.)).pr(px(if markers.is_empty() { 18. } else { MARGIN })).py(px(14.)).text_size(text_px(15.)).line_height(theme::body_line(26.)).text_color(Theme::text());
                     div()
                         .id("write-editor")
                         .flex_1()
@@ -96,27 +124,30 @@ impl Workspace {
                         .border_1()
                         .border_color(if focused { Theme::accent().opacity(0.55) } else { Theme::line() })
                         .bg(Theme::bg_body())
-                        .child(div().relative().w_full().max_w(theme::manuscript_width()).mx_auto().pl(px(18.)).pr(px(if markers.is_empty() { 18. } else { MARGIN })).py(px(14.)).text_size(text_px(15.)).line_height(theme::body_line(26.)).text_color(Theme::text()).child(crate::input::with_selection_toolbar(&writing.editor, self.render_assist_bar(true, cx))).children(markers).children(bars))
+                        .child(if agent { page.child(writing.editor.clone()) } else { page.child(crate::input::with_selection_toolbar(&writing.editor, self.render_assist_bar(true, cx))) }.children(markers).children(bars))
                         .into_any_element()
                 }),
             )
-            .when(!writing.reading && writing.editor.read(cx).selection().is_empty(), |d| d.child(self.render_assist_bar(false, cx)))
+            .when(!agent && editing && writing.editor.read(cx).selection().is_empty(), |d| d.child(self.render_assist_bar(false, cx)))
             // With the caret in a citation: the paper it names and the passage of that paper its sentence rests on.
-            .children(if writing.reading { None } else { self.render_source_strip(if stacked { width } else { width - panel } - 40., cx) })
+            .children(if editing { self.render_source_strip(width - 40., cx) } else { None })
             // Under the manuscript, the box where the assistant is told what to change in this section.
-            .when(!writing.reading, |d| d.child(self.render_revise(if stacked { width } else { width - panel } - 40., window, cx)))
+            .when(!agent && editing, |d| d.child(self.render_revise(width - 40., window, cx)))
+            .when_some(told, |d, run| d.child(div().flex().flex_col().flex_none().mx(px(20.)).mb(px(8.)).px(px(10.)).pt(px(8.)).pb(px(2.)).rounded(px(10.)).border_1().border_color(Theme::line()).bg(Theme::bg_body()).child(self.render_revise_run(run, cx).border_b_0())))
             .child(div().flex().flex_none().px(px(22.)).pb(px(12.)).text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(div().flex_1().min_w_0().child(if writing.reading {
                 let whole: String = writing.current().map_or(String::new(), |m| m.sections.iter().map(|s| s.body.as_str()).collect::<Vec<_>>().join("\n"));
                 tf!("全文 {} · 点一节的名称，回到那一节写", "Manuscript: {} · Click a section name to edit it", length_label(&whole))
+            } else if version.is_some() {
+                t("这是早先的一版，不能在这里改；恢复它，或回到现在的文字").to_string()
+            } else if picked > 0 {
+                tf!("{length} · 已选中 {picked} 字：对助手说的话会针对它", "{length} · {picked} selected: what you say to the assistant is about it")
             } else if characters == 0 {
-                t("随写随存").to_string()
+                if agent { t("这一节还没有写：让助手写，或自己动笔") } else { t("随写随存") }.to_string()
+            } else if agent {
+                tf!("{length} · 已保存 · 可以直接在这里改", "{length} · Saved · You can edit here")
             } else {
                 tf!("{length} · 已保存", "{length} · Saved")
-            })));
-
-        div().id("write-page").flex().size_full().when(stacked, |d| d.flex_col().overflow_y_scroll()).child(editor)
-            .when(!writing.reading, |d| d.child(self.render_candidates(panel, window, cx).when(stacked, |d| d.flex_none().h(px(560.)))))
-            .into_any_element()
+            })))
     }
 
     /// The key that asks for candidates, as people read it.

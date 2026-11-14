@@ -3,7 +3,7 @@
 //! right click opens a menu of what can be done with the thing under it.
 
 use crate::i18n::t;
-use crate::app::{Cmd, MenuItem, MenuKind, Page, Tab, Workspace};
+use crate::app::{Cmd, MenuItem, MenuKind, Page, Tab, Talk, Workspace};
 use gpui::*;
 use wisp_core::model::READINGS;
 
@@ -96,7 +96,7 @@ impl Workspace {
         match cmd {
             Cmd::AskPapers(ids) => {
                 // A conversation of its own: what was being asked before is kept in the history.
-                self.run(Cmd::NewChat(false), window, cx);
+                self.run(Cmd::NewChat(Talk::Library), window, cx);
                 if let Some(lib) = self.lib.as_mut() { lib.asked = ids }
                 self.run(Cmd::SetPage(Page::Ask), window, cx);
             }
@@ -237,7 +237,7 @@ impl Workspace {
                 }
                 items.push(item(t("复制整段回答"), Cmd::CopyText(text.clone())));
                 // `/review` starts a review's record by itself; a conversation that began otherwise can be made one here.
-                if !*paper && !lib.library_chat.id.is_empty() && lib.library_chat.review.is_none() && !lib.library_chat.busy {
+                if *paper == Talk::Library && !lib.library_chat.id.is_empty() && lib.library_chat.review.is_none() && !lib.library_chat.busy {
                     breaks.push(items.len());
                     items.push(item(t("把这次对话作为综述来写"), Cmd::StartReview));
                 }

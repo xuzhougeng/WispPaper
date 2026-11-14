@@ -224,7 +224,7 @@ impl Workspace {
         if page == Page::Write { self.cite_refresh(cx) }
         let main = match page {
             Page::Papers => self.render_papers(main_width, window, cx),
-            Page::Ask => self.render_chat(false, window, cx),
+            Page::Ask => self.render_chat(crate::app::Talk::Library, window, cx),
             Page::Trash => self.render_trash(cx),
             Page::Sources => self.render_searches(cx),
             Page::Guide => self.render_guide(window, cx),

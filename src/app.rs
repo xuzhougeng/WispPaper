@@ -57,6 +57,39 @@ pub enum Edge {
     Detail,
     /// Between a paper's conversation and its PDF.
     Split,
+    /// Between the conversation that writes and its manuscript (`write_agent.rs`).
+    Manuscript,
+}
+
+/// Which of a library's conversations: the one with the library (助手), the one about the selected paper,
+/// or the one that writes the manuscript on the writing page (助手写, `write_agent.rs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Talk {
+    Library,
+    Paper,
+    Write,
+}
+
+impl Talk {
+    /// A word for the ids of a conversation's elements: more than one conversation can be on screen.
+    pub fn side(self) -> &'static str {
+        match self {
+            Talk::Library => "library",
+            Talk::Paper => "paper",
+            Talk::Write => "write",
+        }
+    }
+}
+
+/// The conversation `$talk` names, borrowed alone: the rest of the library can be read meanwhile.
+macro_rules! chat_of {
+    ($lib:expr, $talk:expr) => {
+        match $talk {
+            Talk::Library => &mut $lib.library_chat,
+            Talk::Paper => &mut $lib.paper_chat,
+            Talk::Write => &mut $lib.write_chat,
+        }
+    };
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,9 +152,9 @@ pub enum MenuKind {
     Trashed(String),
     File(String),
     Tag(String),
-    Conversation(bool, String),
+    Conversation(Talk, String),
     Text(String),
-    Answer(bool, String),
+    Answer(Talk, String),
     /// A figure of the figure library.
     Figure(String),
 }
@@ -326,31 +359,31 @@ pub enum Cmd {
     ToggleFieldInTable(String),
     AddPreset,
     // Questions
-    Ask(bool),
+    Ask(Talk),
     /// Ask one of the suggested questions.
-    Suggest(bool, String),
+    Suggest(Talk, String),
     /// Leave a slash command in the assistant's box, for its words to follow.
     StartCommand(&'static str),
-    NewChat(bool),
+    NewChat(Talk),
     /// Stop the answer being given.
-    StopChat(bool),
+    StopChat(Talk),
     /// Show the past conversations, or go back to the one in hand.
-    ToggleHistory(bool),
+    ToggleHistory(Talk),
     /// Take up a past conversation again.
-    OpenChat(bool, String),
-    AskRemoveChat(bool, String),
-    RemoveChat(bool, String),
+    OpenChat(Talk, String),
+    AskRemoveChat(Talk, String),
+    RemoveChat(Talk, String),
     /// Take the n-th of the slash commands on offer.
-    PickSlash(bool, usize),
+    PickSlash(Talk, usize),
     /// Choose pictures to go with the next question.
-    AttachImages(bool),
-    RemoveAttachment(bool, usize),
+    AttachImages(Talk),
+    RemoveAttachment(Talk, usize),
     /// Take a passage quoted for the next question away again.
-    RemoveQuote(bool, usize),
+    RemoveQuote(Talk, usize),
     /// The person's answer to the assistant wanting to change the library.
-    AnswerTools(bool, Consent),
+    AnswerTools(Talk, Consent),
     /// Unfold or fold the tool calls that start at this place in the conversation.
-    ToggleTools(bool, usize),
+    ToggleTools(Talk, usize),
     CopyText(String),
     /// Save an answer and its source labels to a new manuscript, at the person's request.
     AnswerToManuscript(String, String),
@@ -383,10 +416,10 @@ pub enum Cmd {
     AskRemoveTag(String),
     RemoveTag(String),
     /// The pointer over the text of an answer (by its place in the conversation): selecting it.
-    PickText(bool, usize, crate::markdown::Pointer, crate::markdown::Place),
+    PickText(Talk, usize, crate::markdown::Pointer, crate::markdown::Place),
     /// Copy what is selected in an answer; or put it into the question box as a quotation.
-    CopyPicked(bool),
-    QuotePicked(bool),
+    CopyPicked(Talk),
+    QuotePicked(Talk),
     /// Make a note of the selected paper out of an answer about it: the question, and the answer.
     AnswerToNote(String, String),
     /// Show or put away the panel of the papers the library's questions are put to.
@@ -394,11 +427,11 @@ pub enum Cmd {
     /// What that panel does to the scope of the next conversation (`ScopeDo`).
     Scope(ScopeDo),
     /// Show every source of an answer (by its place in the conversation), or the first few again.
-    ToggleSources(bool, usize),
+    ToggleSources(Talk, usize),
     /// Open a paper; with a page, its PDF there; with a quoted sentence too, that sentence highlighted.
     GotoSource(String, Option<usize>, String),
     /// The same for a citation as an answer writes it: the label of a conversation, a page, a quotation.
-    GotoCited(bool, String, Option<usize>, String),
+    GotoCited(Talk, String, Option<usize>, String),
     // Searches and imports
     NewSearch,
     EditSearch(String),
@@ -518,6 +551,8 @@ pub enum Cmd {
     WriteCited(crate::write_cite::Do),
     /// 改稿: the box under the manuscript where the assistant is told what to change (`revise.rs`).
     Revise(crate::revise::Do),
+    /// 写作's other mode, where the assistant writes (`write_agent.rs`).
+    Agent(crate::write_agent::Do),
     // The figure library (`src/figures.rs`)
     /// Only the figures with this tag; the tag chosen already, or none, shows all of them.
     FigureTag(String),
@@ -749,6 +784,8 @@ pub struct Writing {
     pub library_nav: bool,
     /// Which page the panel beside the manuscript shows.
     pub side: Side,
+    /// The other mode, where the assistant writes: which manuscript its conversation is about, what it changed, the versions to step through (`write_agent.rs`).
+    pub agent: crate::write_agent::Agent,
 }
 
 /// The pages of the panel beside the manuscript: what there is to draw on, what was said about the text, what it cites.
@@ -1193,6 +1230,8 @@ pub struct Library {
     pub zoom: Zoom,
     pub library_chat: Chat,
     pub paper_chat: Chat,
+    /// The conversation that writes the manuscript on the writing page (`write_agent.rs`).
+    pub write_chat: Chat,
     pub table_scroll: UniformListScrollHandle,
     pub detail_scroll: ScrollHandle,
     /// Files whose text is being extracted.
@@ -1376,7 +1415,7 @@ impl Chat {
         ai::Transcript { items, sources: self.sources().iter().filter(|source| cited.contains(&source.label)).cloned().collect() }
     }
 
-    fn reset(&mut self, cx: &mut App) {
+    pub(crate) fn reset(&mut self, cx: &mut App) {
         self.messages.clear();
         self.wire.clear();
         self.protocol = None;
@@ -1416,12 +1455,27 @@ impl Chat {
 }
 
 impl Library {
-    pub fn chat(&self, about_paper: bool) -> &Chat {
-        if about_paper { &self.paper_chat } else { &self.library_chat }
+    pub fn chat(&self, talk: Talk) -> &Chat {
+        match talk {
+            Talk::Library => &self.library_chat,
+            Talk::Paper => &self.paper_chat,
+            Talk::Write => &self.write_chat,
+        }
     }
 
-    fn chat_mut(&mut self, about_paper: bool) -> &mut Chat {
-        if about_paper { &mut self.paper_chat } else { &mut self.library_chat }
+    pub(crate) fn chat_mut(&mut self, talk: Talk) -> &mut Chat {
+        chat_of!(self, talk)
+    }
+
+    /// What a conversation of this kind is about, which is what it is kept under in the library's history
+    /// (`conversations.paper_id`): nothing for the library's, the selected paper, the manuscript being written.
+    /// None while there is no such paper or manuscript.
+    pub fn talk_about(&self, talk: Talk) -> Option<String> {
+        match talk {
+            Talk::Library => Some(String::new()),
+            Talk::Paper => self.selected.clone(),
+            Talk::Write => Some(self.writing.agent.about.clone()).filter(|id| !id.is_empty()),
+        }
     }
 
     pub fn paper(&self, id: &str) -> Option<&Paper> {
@@ -1538,7 +1592,7 @@ impl Library {
     /// A full text was read that could not be before: the next question
     /// is given the library as it is now. An answer on its way keeps what it has.
     fn texts_changed(&mut self) {
-        for chat in [&mut self.paper_chat, &mut self.library_chat] {
+        for chat in [&mut self.paper_chat, &mut self.library_chat, &mut self.write_chat] {
             if !chat.busy { chat.forget_context() }
         }
     }
@@ -1546,8 +1600,8 @@ impl Library {
     /// Look up, in the papers they name, the quotations of the answers
     /// that have not been looked up yet. An answer still being written is
     /// left until it is whole.
-    pub fn check_quotes(&mut self, about_paper: bool) {
-        let chat = if about_paper { &self.paper_chat } else { &self.library_chat };
+    pub fn check_quotes(&mut self, talk: Talk) {
+        let chat = self.chat(talk);
         let finished = if chat.busy { chat.messages.len().saturating_sub(1) } else { chat.messages.len() };
         let mut wanted: Vec<(ai::Citation, String)> = vec![];
         for item in &chat.messages[..finished] {
@@ -1568,7 +1622,7 @@ impl Library {
             let found = ai::check_quote(&citation.quote, citation.page, paper, pages.as_deref());
             checks.push(((citation.label, citation.page, citation.quote), found));
         }
-        self.chat_mut(about_paper).checks.extend(checks);
+        self.chat_mut(talk).checks.extend(checks);
     }
 
     /// Read the review of the conversation with the library again, and look its quotations up in the papers.
@@ -2112,7 +2166,11 @@ impl Workspace {
                 if let Some(lib) = self.lib.as_mut().filter(|l| l.page == Page::Extract && page != Page::Extract) { lib.extract.last = None }
                 // The same for what 确认 last wrote: taken back later, it would undo decisions made since.
                 if let Some(lib) = self.lib.as_mut().filter(|l| l.page == Page::Screen && page != Page::Screen) { lib.screen.confirmed = None }
-                if page == Page::Write { self.write_ensure(cx) }
+                if page == Page::Write {
+                    self.write_ensure(cx);
+                    self.agent_attend(cx);
+                    self.agent_versions(cx);
+                }
                 if let Some(lib) = self.lib.as_mut() {
                     lib.page = page;
                     lib.reading = false;
@@ -2165,6 +2223,7 @@ impl Workspace {
             Cmd::WriteAssistUse(how) => self.assist_use(how, window, cx),
             Cmd::WriteCited(what) => self.cite_do(what, window, cx),
             Cmd::Revise(what) => self.run_revise(what, cx),
+            Cmd::Agent(what) => self.run_agent(what, window, cx),
             Cmd::WriteStop => {
                 if let Some(lib) = self.lib.as_mut() {
                     let sorting = &mut lib.writing.sorting;
@@ -2363,8 +2422,7 @@ impl Workspace {
             Cmd::Ask(paper) => self.ask(paper, cx),
             Cmd::Suggest(paper, question) => {
                 if let Some(lib) = self.lib.as_ref() {
-                    let chat = if paper { &lib.paper_chat } else { &lib.library_chat };
-                    chat.input.update(cx, |input, cx| input.set_text(&question, cx));
+                    lib.chat(paper).input.update(cx, |input, cx| input.set_text(&question, cx));
                 }
                 self.ask(paper, cx);
             }
@@ -2373,7 +2431,7 @@ impl Workspace {
                     lib.library_chat.input.update(cx, |input, cx| input.set_text(&format!("/{name} "), cx));
                     lib.library_chat.input.read(cx).focus(window);
                 }
-                self.chat_input(false, InputEvent::Changed, cx);
+                self.chat_input(Talk::Library, InputEvent::Changed, cx);
             }
             Cmd::NewChat(paper) => {
                 // An answer still arriving is stopped first, so that what there is of it is kept.
@@ -2382,19 +2440,19 @@ impl Workspace {
                 if self.lib.as_ref().is_some_and(|lib| !lib.chat(paper).kept) { self.save_chat(paper, cx) }
                 let mut kept = false;
                 if let Some(lib) = self.lib.as_mut() {
-                    let chat = if paper { &mut lib.paper_chat } else { &mut lib.library_chat };
+                    let chat = chat_of!(lib, paper);
                     kept = chat.kept;
                     chat.reset(cx);
                     chat.input.read(cx).focus(window);
                     // A new conversation with the library is about the list on show again.
-                    if !paper { lib.scope_reset(cx) }
+                    if paper == Talk::Library { lib.scope_reset(cx) }
                 }
                 if kept { self.say(t("上一段对话已保存，在「历史」里可以找到。"), cx) }
             }
             Cmd::StopChat(paper) => self.stop_chat(paper, cx),
             Cmd::ToggleHistory(paper) => {
                 if let Some(lib) = self.lib.as_mut() {
-                    let about = if paper { lib.selected.clone().unwrap_or_default() } else { String::new() };
+                    let about = lib.talk_about(paper).unwrap_or_default();
                     let listed = if lib.chat(paper).history.is_some() { Ok(None) } else { lib.store.list_conversations(&about).map(Some) };
                     match listed {
                         Ok(list) => lib.chat_mut(paper).history = list,
@@ -2417,12 +2475,12 @@ impl Workspace {
             }
             Cmd::RemoveChat(paper, id) => {
                 if let Some(lib) = self.lib.as_mut() {
-                    let about = if paper { lib.selected.clone().unwrap_or_default() } else { String::new() };
+                    let about = lib.talk_about(paper).unwrap_or_default();
                     let result = lib.store.remove_conversation(&id).and_then(|()| lib.store.list_conversations(&about));
                     // The conversation in hand, once removed, would only be saved again with the next answer;
                     // the papers it was kept to go with it, as for any new conversation.
                     let in_hand = lib.chat(paper).id == id;
-                    if in_hand && !paper { lib.scope_reset(cx) }
+                    if in_hand && paper == Talk::Library { lib.scope_reset(cx) }
                     let chat = lib.chat_mut(paper);
                     if in_hand {
                         let listed = chat.history.take();
@@ -2565,7 +2623,9 @@ impl Workspace {
                     self.picked = None;
                 }
                 // One selection at a time: starting one in a conversation ends the other's.
-                if pointer == Pointer::Down { lib.chat_mut(!paper).picked = None }
+                if pointer == Pointer::Down {
+                    for other in [Talk::Library, Talk::Paper, Talk::Write].into_iter().filter(|other| *other != paper) { lib.chat_mut(other).picked = None }
+                }
                 let chat = lib.chat_mut(paper);
                 match (pointer, chat.picked.as_mut()) {
                     (Pointer::Down, _) => chat.picked = Some((at, place, place, true)),
@@ -2607,7 +2667,7 @@ impl Workspace {
             Cmd::Scope(what) => self.scope(what, cx),
             Cmd::ToggleSources(paper, at) => {
                 if let Some(lib) = self.lib.as_mut() {
-                    let chat = if paper { &mut lib.paper_chat } else { &mut lib.library_chat };
+                    let chat = lib.chat_mut(paper);
                     if !chat.sources_open.remove(&at) { chat.sources_open.insert(at); }
                 }
             }
@@ -2893,13 +2953,13 @@ impl Workspace {
             "zoom-in" => Cmd::PdfZoom(ZoomTo::In),
             "zoom-out" => Cmd::PdfZoom(ZoomTo::Out),
             "zoom-fit" => Cmd::PdfZoom(ZoomTo::Set(Zoom::FitWidth)),
-            "write-find" if self.lib.as_ref().is_some_and(|l| l.page == Page::Write) => Cmd::WriteFind,
+            // The candidates stand beside the manuscript the person writes; beside the conversation that writes there are none to show.
+            "write-find" if !self.settings.agent_writing && self.lib.as_ref().is_some_and(|l| l.page == Page::Write) => Cmd::WriteFind,
             // What is selected in an answer: the paper's conversation first, when both have something.
             "copy-picked" if self.picked.is_some() => Cmd::CopySelected,
-            "copy-picked" => match self.lib.as_ref().map(|lib| (lib.paper_chat.picked.is_some(), lib.library_chat.picked.is_some())) {
-                Some((true, _)) => Cmd::CopyPicked(true),
-                Some((false, true)) => Cmd::CopyPicked(false),
-                _ => return,
+            "copy-picked" => match self.lib.as_ref().and_then(|lib| [Talk::Paper, Talk::Library, Talk::Write].into_iter().find(|talk| lib.chat(*talk).picked.is_some())) {
+                Some(talk) => Cmd::CopyPicked(talk),
+                None => return,
             },
             _ => return,
         };
@@ -2946,9 +3006,10 @@ impl Workspace {
         ];
         let library_chat = Chat::new("交代一件事或提一个问题，输入 / 选择命令，可以粘贴图片", cx);
         let paper_chat = Chat::new("就这篇文献提问，输入 / 选择命令", cx);
+        let write_chat = Chat::new("告诉助手写什么、改什么", cx);
         let mut subscriptions = subscriptions;
-        for (chat, paper) in [(&library_chat, false), (&paper_chat, true)] {
-            subscriptions.push(cx.subscribe(&chat.input, move |this, _, event: &InputEvent, cx| this.chat_input(paper, *event, cx)));
+        for (chat, talk) in [(&library_chat, Talk::Library), (&paper_chat, Talk::Paper), (&write_chat, Talk::Write)] {
+            subscriptions.push(cx.subscribe(&chat.input, move |this, _, event: &InputEvent, cx| this.chat_input(talk, *event, cx)));
         }
         let guide = Guide::new(&info.topic, cx);
         let screen = Screen::new(&info.criteria, cx);
@@ -2968,7 +3029,7 @@ impl Workspace {
         subscriptions.push(cx.subscribe(&title, |this, input, event: &InputEvent, cx| {
             if *event == InputEvent::Changed { this.write_title_typed(input.read(cx).text().to_string(), cx) }
         }));
-        let editor = cx.new(|cx| TextInput::new("在这里写。写好一段，按「查找候选句」的快捷键，右边就列出文献库里的文献在同一部分相近的写法；中文或别的语言也可以，先写下想表达的意思。", cx).multiline(14).markdown().with_text(&draft));
+        let editor = cx.new(|cx| TextInput::new(crate::write::PLACEHOLDER, cx).multiline(14).markdown().with_text(&draft));
         let find = cx.new(|cx| TextInput::new("找句子：输入词或短语，例如 remains unclear", cx));
         subscriptions.push(cx.subscribe(&editor, |this, input, event: &InputEvent, cx| {
             if let InputEvent::MarkClicked(n) = *event { return this.comment_mark_clicked(n, cx) }
@@ -2981,7 +3042,7 @@ impl Workspace {
         let (comments, heard) = crate::comments::Commenting::new(store.comments(&manuscript).unwrap_or_default(), store.manuscript_source(&manuscript).ok().flatten(), cx);
         subscriptions.extend(heard);
         let revise = crate::revise::Revising::new(&mut subscriptions, cx);
-        let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new(), assist: Default::default(), revise, comments, editor_scroll: ScrollHandle::new(), library_nav: false, side: Side::default() };
+        let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new(), assist: Default::default(), revise, comments, editor_scroll: ScrollHandle::new(), library_nav: false, side: Side::default(), agent: Default::default() };
         let citing = crate::cite::Citing::new(&store, &writing.manuscript, &mut subscriptions, cx);
         let gallery = crate::figures::Gallery::new(&mut subscriptions, cx);
         let mut lib = Library {
@@ -3010,6 +3071,7 @@ impl Workspace {
             zoom: Zoom::FitWidth,
             library_chat,
             paper_chat,
+            write_chat,
             marked: vec![],
             anchor: None,
             cursor: None,
@@ -3059,7 +3121,7 @@ impl Workspace {
         // One paper on show ends a marking of several.
         if id.is_some() && let Some(lib) = self.lib.as_mut() { lib.marked.clear() }
         // The conversation with the paper being left is kept as far as it got.
-        self.stop_chat(true, cx);
+        self.stop_chat(Talk::Paper, cx);
         let Some(lib) = self.lib.as_mut() else { return };
         lib.selected = id;
         lib.pdf = None;
@@ -3136,14 +3198,14 @@ impl Workspace {
             PdfEvent::AnnotationNote { resource, id, note } => self.change_pdf_annotation(resource, |store| store.update_pdf_annotation_note(resource, id, note), cx),
             PdfEvent::RemoveAnnotation { resource, id } => self.change_pdf_annotation(resource, |store| store.remove_pdf_annotation(resource, id), cx),
             PdfEvent::Picture(png, to_library) => {
-                self.attach_images(!*to_library, vec![Picture::Bytes(png.clone())], cx);
+                self.attach_images(if *to_library { Talk::Library } else { Talk::Paper }, vec![Picture::Bytes(png.clone())], cx);
                 if *to_library { self.say(t("截图已加到文献库对话的输入框上方。"), cx) } else { self.show_paper_chat(cx) }
             }
             PdfEvent::Quote(page, text, to_library) => {
                 let Some(lib) = self.lib.as_mut() else { return };
                 let Some(paper_id) = lib.selected.clone() else { return };
                 let quote = ChatQuote { paper_id, page: *page, text: text.clone() };
-                let chat = lib.chat_mut(!*to_library);
+                let chat = lib.chat_mut(if *to_library { Talk::Library } else { Talk::Paper });
                 if chat.quotes.len() >= MAX_QUOTES { return self.fail(tf!("一个问题最多带 {MAX_QUOTES} 段原文。先发出去，或者去掉一段。", "A question can include at most {MAX_QUOTES} passages. Send it first or remove one."), cx) }
                 if !chat.quotes.contains(&quote) { chat.quotes.push(quote) }
                 chat.history = None;
@@ -3630,15 +3692,15 @@ impl Workspace {
     // ---- questions
 
     /// A key or a paste in a conversation's box.
-    fn chat_input(&mut self, about_paper: bool, event: InputEvent, cx: &mut Context<Self>) {
+    fn chat_input(&mut self, talk: Talk, event: InputEvent, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
-        let chat = lib.chat_mut(about_paper);
+        let chat = lib.chat_mut(talk);
         let (offered, picked) = (chat.slash_list(&self.settings.commands, cx).len(), chat.slash);
         match event {
             // Enter on a command in the list takes it; otherwise the message goes.
-            InputEvent::Submit if offered > 0 => return self.pick_slash(about_paper, picked, cx),
-            InputEvent::Submit => return self.ask(about_paper, cx),
-            InputEvent::Tab if offered > 0 => return self.pick_slash(about_paper, picked, cx),
+            InputEvent::Submit if offered > 0 => return self.pick_slash(talk, picked, cx),
+            InputEvent::Submit => return self.ask(talk, cx),
+            InputEvent::Tab if offered > 0 => return self.pick_slash(talk, picked, cx),
             InputEvent::Changed => {
                 chat.slash_closed = false;
                 chat.slash = 0;
@@ -3648,7 +3710,7 @@ impl Workspace {
             InputEvent::Cancel => chat.slash_closed = true,
             InputEvent::Images => {
                 let pictures = chat.input.update(cx, |input, _| input.take_images()).into_iter().map(|image| Picture::Bytes(image.bytes)).collect();
-                return self.attach_images(about_paper, pictures, cx);
+                return self.attach_images(talk, pictures, cx);
             }
             _ => {}
         }
@@ -3661,9 +3723,9 @@ impl Workspace {
     /// Take one of the slash commands on offer: one the window carries out
     /// runs, the others are written out for their subject to follow, or
     /// to be sent as they are.
-    fn pick_slash(&mut self, about_paper: bool, at: usize, cx: &mut Context<Self>) {
+    fn pick_slash(&mut self, talk: Talk, at: usize, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
-        let chat = lib.chat_mut(about_paper);
+        let chat = lib.chat_mut(talk);
         let Some(command) = chat.slash_list(&self.settings.commands, cx).into_iter().nth(at) else { return };
         let alone = command.runs;
         chat.slash = 0;
@@ -3671,16 +3733,16 @@ impl Workspace {
             input.choosing = false;
             input.set_text(&if alone { format!("/{}", command.name) } else { format!("/{} ", command.name) }, cx);
         });
-        if alone { self.ask(about_paper, cx) }
+        if alone { self.ask(talk, cx) }
         cx.notify();
     }
 
     /// Read pictures in and put them with the next question. Each is made
     /// one a model takes (`picture::prepare`) off the main thread.
-    pub(crate) fn attach_images(&mut self, about_paper: bool, mut pictures: Vec<Picture>, cx: &mut Context<Self>) {
+    pub(crate) fn attach_images(&mut self, talk: Talk, mut pictures: Vec<Picture>, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
         let (library, selected) = (lib.info.id.clone(), lib.selected.clone());
-        let chat = lib.chat_mut(about_paper);
+        let chat = lib.chat_mut(talk);
         let room = MAX_ATTACHMENTS.saturating_sub(chat.attachments.len() + chat.attaching);
         let too_many = pictures.len() > room;
         pictures.truncate(room);
@@ -3698,8 +3760,8 @@ impl Workspace {
             let prepared = work.await;
             this.update(cx, |this, cx| {
                 // Another library, or another paper's conversation by now: the pictures were not meant for it.
-                let Some(lib) = this.lib.as_mut().filter(|l| l.info.id == library && (!about_paper || l.selected == selected)) else { return };
-                let chat = lib.chat_mut(about_paper);
+                let Some(lib) = this.lib.as_mut().filter(|l| l.info.id == library && (talk != Talk::Paper || l.selected == selected)) else { return };
+                let chat = lib.chat_mut(talk);
                 chat.attaching = chat.attaching.saturating_sub(prepared.len());
                 let mut failed = None;
                 for picture in prepared {
@@ -3716,13 +3778,20 @@ impl Workspace {
         .detach();
     }
 
-    fn ask(&mut self, about_paper: bool, cx: &mut Context<Self>) {
+    fn ask(&mut self, talk: Talk, cx: &mut Context<Self>) {
         let profile = self.settings.profile_for_or_default(Task::Chat);
+        // The conversation that writes says of its manuscript what it is and where it stands.
+        let composing = if talk == Talk::Write {
+            let Some(note) = self.agent_note(cx) else { return self.fail(t("先在写作里打开一份稿件。"), cx) };
+            Some(note)
+        } else {
+            None
+        };
         let Some(lib) = self.lib.as_mut() else { return };
         let paper_id = lib.selected.clone();
-        let chat = if about_paper { &mut lib.paper_chat } else { &mut lib.library_chat };
+        let chat = chat_of!(lib, talk);
         let question = chat.input.read(cx).text().trim().to_string();
-        let begin_review = !about_paper && question.strip_prefix("/review").is_some_and(|rest| rest.starts_with(char::is_whitespace));
+        let begin_review = talk == Talk::Library && question.strip_prefix("/review").is_some_and(|rest| rest.starts_with(char::is_whitespace));
         if (question.is_empty() && chat.attachments.is_empty() && chat.quotes.is_empty()) || chat.busy { return }
         chat.error.clear();
         chat.note.clear();
@@ -3735,7 +3804,7 @@ impl Workspace {
             Ok(ai::Input::Ask(prompt)) => prompt,
             Ok(ai::Input::NewChat) => {
                 chat.reset(cx);
-                if !about_paper { lib.scope_reset(cx) }
+                if talk == Talk::Library { lib.scope_reset(cx) }
                 return cx.notify();
             }
             Err(err) => {
@@ -3745,15 +3814,15 @@ impl Workspace {
         };
         chat.history = None;
         // The panel of papers floats over the place the answer comes to.
-        if !about_paper { chat.materials_open = false }
+        if talk != Talk::Paper { chat.materials_open = false }
 
         // A changed context or protocol starts the wire again from the text of what was said:
         // the model's own turns are only valid in the conversation that produced them.
         let replay = chat.ctx.is_none() || chat.protocol != Some(profile.protocol);
         if chat.ctx.is_none() {
-            let scope = match (about_paper, &paper_id) {
-                (true, Some(id)) => Scope::Paper(id.clone()),
-                (true, None) => return,
+            let scope = match (talk, &paper_id) {
+                (Talk::Paper, Some(id)) => Scope::Paper(id.clone()),
+                (Talk::Paper, None) => return,
                 _ => Scope::Library,
             };
             let fulltext = match lib.store.all_fulltext() {
@@ -3766,11 +3835,13 @@ impl Workspace {
             // A question about one paper reads that paper; one about the library reads the current list.
             let papers: Vec<&Paper> = match &scope {
                 Scope::Paper(_) => lib.papers.iter().collect(),
+                // The assistant that writes draws on the whole library, whatever the list shows.
+                Scope::Library if talk == Talk::Write => lib.papers.iter().collect(),
                 // As `Library::scope_papers`, field by field: the conversation is held meanwhile.
                 Scope::Library if !lib.asked.is_empty() => lib.papers.iter().filter(|p| lib.asked.contains(&p.id)).collect(),
                 Scope::Library => lib.shown.iter().map(|&i| &lib.papers[i]).filter(|p| lib.scope_hits.as_ref().is_none_or(|hits| hits.contains(&p.id))).collect(),
             };
-            if papers.is_empty() {
+            if papers.is_empty() && talk != Talk::Write {
                 chat.error = t("当前列表里没有文献。先添加文献，或清空筛选条件。").into();
                 return cx.notify();
             }
@@ -3780,7 +3851,7 @@ impl Workspace {
             ctx.add_sources(&lib.papers);
             chat.ctx = Some(ctx);
             // The panel over the conversation lists what was handed over from here on: all of it, not what its search had narrowed the list to.
-            if !about_paper && lib.scope_hits.take().is_some() {
+            if talk == Talk::Library && lib.scope_hits.take().is_some() {
                 lib.scope_words.clear();
                 lib.scope_find.update(cx, |input, cx| input.set_text("", cx));
             }
@@ -3818,8 +3889,13 @@ impl Workspace {
         };
         // The record, not what the model says of itself, is where the review stands: each question of a review's conversation says so.
         // Only what steers the writing goes along (the sections by name: their text was said in this conversation, and sending it with every question would send it many times over).
-        let prompt = match chat.review.as_ref().filter(|_| !about_paper) {
+        let prompt = match chat.review.as_ref().filter(|_| talk == Talk::Library) {
             Some(review) => format!("{prompt}\n\n{}", crate::chat::review_note(review)),
+            None => prompt,
+        };
+        // The same for the conversation that writes a manuscript: where the manuscript stands, what is on show and selected in it.
+        let prompt = match composing {
+            Some(note) => format!("{prompt}\n\n{note}"),
             None => prompt,
         };
         let images = std::mem::take(&mut chat.attachments);
@@ -3829,9 +3905,14 @@ impl Workspace {
         chat.messages.push(ChatItem::User { text: question, images, prompt: sent });
         chat.steps = 0;
         chat.started = Some(Instant::now());
-        let sent = self.chat_step(about_paper, cx);
+        // What the last question changed in the manuscript has been seen: the next changes are this one's.
+        if talk == Talk::Write {
+            let asked = match chat.messages.last() { Some(ChatItem::User { text, .. }) => text.clone(), _ => String::new() };
+            self.agent_asked(&asked);
+        }
+        let sent = self.chat_step(talk, cx);
         if let Some(lib) = self.lib.as_mut() {
-            let chat = if about_paper { &mut lib.paper_chat } else { &mut lib.library_chat };
+            let chat = chat_of!(lib, talk);
             if sent {
                 chat.input.update(cx, |input, cx| input.set_text("", cx));
             } else {
@@ -3844,7 +3925,7 @@ impl Workspace {
         }
         // Kept from the question on, so that closing the window mid-answer does not lose it.
         if sent {
-            self.save_chat(about_paper, cx);
+            self.save_chat(talk, cx);
             // The transcript is saved first so the review and its conversation
             // can be associated atomically, including across application restarts.
             if begin_review { self.start_review(cx) }
@@ -3855,10 +3936,10 @@ impl Workspace {
     /// Send the conversation to the model and follow its turn: the text as
     /// it arrives, then either the end of the answer or the tools it asked
     /// for. False when the request could not be made.
-    fn chat_step(&mut self, about_paper: bool, cx: &mut Context<Self>) -> bool {
+    fn chat_step(&mut self, talk: Talk, cx: &mut Context<Self>) -> bool {
         let profile = self.settings.profile_for_or_default(Task::Chat);
         let Some(lib) = self.lib.as_mut() else { return false };
-        let chat = if about_paper { &mut lib.paper_chat } else { &mut lib.library_chat };
+        let chat = chat_of!(lib, talk);
         let Some(ctx) = chat.ctx.as_ref() else { return false };
         let request = match ai::chat_request(&profile, ctx, &chat.wire, &tools::library_catalog()) {
             Ok(request) => request,
@@ -3882,7 +3963,7 @@ impl Workspace {
             while let Ok(event) = events.recv().await {
                 let alive = this.update(cx, |this, cx| {
                     let Some(lib) = this.lib.as_mut().filter(|l| l.info.id == library) else { return false };
-                    let chat = if about_paper { &mut lib.paper_chat } else { &mut lib.library_chat };
+                    let chat = chat_of!(lib, talk);
                     if chat.generation != generation { return false }
                     // Keep following the answer while the reader is at the bottom.
                     let at_bottom = chat.scroll.offset().y <= -chat.scroll.max_offset().height + px(40.);
@@ -3929,8 +4010,8 @@ impl Workspace {
                     };
                     if at_bottom { chat.scroll.scroll_to_bottom() }
                     let ended = !chat.busy;
-                    if let Some(calls) = calls { this.run_tools(about_paper, calls, cx) }
-                    if ended { this.save_chat(about_paper, cx) }
+                    if let Some(calls) = calls { this.run_tools(talk, calls, cx) }
+                    if ended { this.save_chat(talk, cx) }
                     cx.notify();
                     more
                 });
@@ -3944,10 +4025,12 @@ impl Workspace {
     /// Make the tools a turn asked for ready, show them, and run them:
     /// at once, or after the person's consent when one of them would bring
     /// papers in, take them out, or drop a saved search.
-    fn run_tools(&mut self, about_paper: bool, calls: Vec<ToolCall>, cx: &mut Context<Self>) {
+    fn run_tools(&mut self, talk: Talk, calls: Vec<ToolCall>, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
         let store = &lib.store;
-        let chat = if about_paper { &mut lib.paper_chat } else { &mut lib.library_chat };
+        // The manuscript the conversation that writes is about.
+        let about = Some(lib.writing.agent.about.clone()).filter(|id| talk == Talk::Write && !id.is_empty());
+        let chat = chat_of!(lib, talk);
         let first = chat.messages.len();
         let catalog = tools::catalog();
         let mut prepared = vec![];
@@ -3956,12 +4039,17 @@ impl Workspace {
             let line = tools::describe_call(&call.name, call.args.as_ref().unwrap_or(&Value::Null));
             chat.messages.push(ChatItem::Tool { call: line.clone(), result: None });
             // The model may name a paper by its label.
+            let composes = tools::MANUSCRIPT.contains(&call.name.as_str()) || ["read_manuscript"].contains(&call.name.as_str());
             let args = call.args.map(|mut args| {
                 ai::resolve_labels(&mut args, chat.sources());
+                // Said of no manuscript, a call of that conversation is about its own.
+                if composes && let Some(about) = &about && args["manuscript"].as_str().is_none_or(|named| named.trim().is_empty()) && args.is_object() { args["manuscript"] = Value::String(about.clone()) }
                 args
             });
+            // In the conversation that writes a manuscript the pen was handed over: writing that manuscript is not asked about again.
+            let handed = about.as_ref().is_some_and(|about| tools::MANUSCRIPT.contains(&call.name.as_str()) && args.as_ref().is_ok_and(|args| args["manuscript"].as_str() == Some(about)));
             // A call that cannot run as written has nothing to ask about: it fails by itself.
-            let asks = args.is_ok() && tool.is_some_and(|t| t.confirm);
+            let asks = args.is_ok() && tool.is_some_and(|t| t.confirm) && !handed;
             // What it would change, for the card that asks; one that would be refused anyway is not asked about.
             let details = match &args {
                 Ok(args) if asks => tools::preview_call(store, &call.name, args).ok(),
@@ -3975,7 +4063,7 @@ impl Workspace {
             chat.pending = Some(PendingTools { calls: prepared, first });
             return cx.notify();
         }
-        self.execute_tools(about_paper, prepared, first, true, cx);
+        self.execute_tools(talk, prepared, first, true, cx);
     }
 
     /// Run a turn's tools off the main thread, then hand the results to
@@ -3983,15 +4071,16 @@ impl Workspace {
     /// side; a turn that changes the library runs in the order it was
     /// given. Without the person's consent (`allowed`) the calls that asked
     /// for it are answered with a refusal and the others still run.
-    fn execute_tools(&mut self, about_paper: bool, calls: Vec<PreparedCall>, first: usize, allowed: bool, cx: &mut Context<Self>) {
+    fn execute_tools(&mut self, talk: Talk, calls: Vec<PreparedCall>, first: usize, allowed: bool, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
         let info = lib.info.clone();
-        let chat = lib.chat_mut(about_paper);
+        let chat = lib.chat_mut(talk);
         let Some(protocol) = chat.protocol else { return };
         let sources: Arc<Vec<ai::Source>> = Arc::new(chat.sources().to_vec());
         let generation = chat.generation;
         chat.running = calls.iter().map(|call| call.id.clone()).collect();
         let wrote = calls.iter().any(|call| call.writes && (allowed || !call.confirm));
+        let composed = calls.iter().any(|call| tools::MANUSCRIPT.contains(&call.name.as_str()) && (allowed || !call.confirm));
         let library = info.id.clone();
         let executor = cx.background_executor().clone();
         let tasks: Vec<gpui::Task<Vec<(String, String, bool, String)>>> = if wrote || calls.len() == 1 {
@@ -4014,7 +4103,10 @@ impl Workspace {
                 let Some(lib) = this.lib.as_mut().filter(|l| l.info.id == library) else { return };
                 // A change was made whether or not its answer is still wanted: the window reads the library again.
                 let reloaded = if wrote { lib.reload() } else { Ok(()) };
-                let chat = lib.chat_mut(about_paper);
+                // And the manuscripts, when one was written: the editor follows, and what changed is shown.
+                if composed { this.manuscripts_synced(cx) }
+                let Some(lib) = this.lib.as_mut() else { return };
+                let chat = lib.chat_mut(talk);
                 if chat.generation == generation {
                     for (n, (_, _, failed, shown)) in done.iter().enumerate() {
                         if let Some(ChatItem::Tool { result, .. }) = chat.messages.get_mut(first + n) { *result = Some((shown.clone(), *failed)) }
@@ -4025,7 +4117,7 @@ impl Workspace {
                     if chat.steps + 1 >= MAX_CHAT_STEPS { results = ai::with_note(protocol, results, ai::LAST_STEP_NOTE) }
                     chat.wire.extend(results);
                     chat.running.clear();
-                    if !this.chat_step(about_paper, cx) { this.save_chat(about_paper, cx) }
+                    if !this.chat_step(talk, cx) { this.save_chat(talk, cx) }
                 }
                 if let Err(err) = reloaded { this.fail(format!("{err:#}"), cx) }
                 cx.notify();
@@ -4038,9 +4130,9 @@ impl Workspace {
     /// Stop the answer being given. What still arrives for it is dropped;
     /// the conversation stays one that can go on: the calls in flight are
     /// answered as stopped, and the text so far stays as the model's turn.
-    fn stop_chat(&mut self, about_paper: bool, cx: &mut Context<Self>) {
+    pub(crate) fn stop_chat(&mut self, talk: Talk, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
-        let chat = lib.chat_mut(about_paper);
+        let chat = lib.chat_mut(talk);
         if !chat.busy { return }
         chat.generation += 1;
         let unanswered: Vec<String> = match chat.pending.take() {
@@ -4060,19 +4152,16 @@ impl Workspace {
         }
         chat.note = t("已停止。").into();
         chat.end_run();
-        self.save_chat(about_paper, cx);
+        self.save_chat(talk, cx);
         cx.notify();
     }
 
     /// Keep the conversation in the library's history, as it stands.
-    fn save_chat(&mut self, about_paper: bool, cx: &mut Context<Self>) {
+    fn save_chat(&mut self, talk: Talk, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
-        let paper_id = match (about_paper, &lib.selected) {
-            (true, Some(id)) => id.clone(),
-            (true, None) => return,
-            _ => String::new(),
-        };
-        let chat = if about_paper { &mut lib.paper_chat } else { &mut lib.library_chat };
+        // What the conversation is about is what it is kept under: nothing for the library's, the paper, the manuscript.
+        let Some(paper_id) = lib.talk_about(talk) else { return };
+        let chat = chat_of!(lib, talk);
         if !chat.messages.iter().any(|item| matches!(item, ChatItem::User { .. })) { return }
         let mut conversation = Conversation { id: chat.id.clone(), paper_id, transcript: chat.transcript(), created_at: chat.created_at.clone(), ..Default::default() };
         let mut kept = vec![];
@@ -4095,9 +4184,9 @@ impl Workspace {
     /// Take up a conversation from the history: what was said is shown
     /// again, and the next question continues it. The model is given the
     /// library as it is now, under the labels the old answers use.
-    fn open_chat(&mut self, about_paper: bool, id: &str, cx: &mut Context<Self>) {
-        self.open_chat_said(about_paper, id, cx);
-        if !about_paper && let Some(Err(err)) = self.lib.as_mut().map(|lib| lib.load_review()) { self.fail(tf!("无法读取综述记录：{err:#}", "Cannot read review record: {err:#}"), cx) }
+    pub(crate) fn open_chat(&mut self, talk: Talk, id: &str, cx: &mut Context<Self>) {
+        self.open_chat_said(talk, id, cx);
+        if talk == Talk::Library && let Some(Err(err)) = self.lib.as_mut().map(|lib| lib.load_review()) { self.fail(tf!("无法读取综述记录：{err:#}", "Cannot read review record: {err:#}"), cx) }
     }
 
     /// The search box of the panel over the library's conversation was typed into.
@@ -4129,15 +4218,15 @@ impl Workspace {
         cx.notify();
     }
 
-    fn open_chat_said(&mut self, about_paper: bool, id: &str, cx: &mut Context<Self>) {
+    fn open_chat_said(&mut self, talk: Talk, id: &str, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
         let conversation = match lib.store.conversation(id) {
             Ok(Some(conversation)) => conversation,
             Ok(None) => return self.fail(t("这次对话已经不在了。"), cx),
             Err(err) => return self.fail(format!("{err:#}"), cx),
         };
-        if !about_paper { lib.scope_reset(cx) }
-        let chat = if about_paper { &mut lib.paper_chat } else { &mut lib.library_chat };
+        if talk == Talk::Library { lib.scope_reset(cx) }
+        let chat = chat_of!(lib, talk);
         chat.reset(cx);
         for item in conversation.transcript.items {
             chat.messages.push(match item {
@@ -4981,7 +5070,8 @@ fn run_tool(info: &LibraryInfo, sources: &[ai::Source], call: PreparedCall, allo
     }
     let result = call.args.and_then(|args| {
         let mut store = Store::open(&info.dir).map_err(|e| format!("{e:#}"))?;
-        let mut value = tools::call_in(&mut store, info, &call.name, &args, &wisp_net::get_text, &wisp_net::download)?;
+        // As the tool table has it; what is written into a manuscript cites as the conversation does (`compose::call`).
+        let mut value = wisp_core::compose::call(&mut store, info, &call.name, &args, sources, &wisp_net::get_text, &wisp_net::download)?;
         ai::add_labels(&mut value, sources);
         Ok(value)
     });
@@ -5276,8 +5366,8 @@ impl Workspace {
                         _ => Some(Cmd::StartReview),
                     }
                 }),
-                "history-paper" => Some(Cmd::ToggleHistory(true)),
-                "newchat" => Some(Cmd::NewChat(arg == "paper")),
+                "history-paper" => Some(Cmd::ToggleHistory(Talk::Paper)),
+                "newchat" => Some(Cmd::NewChat(match arg { "paper" => Talk::Paper, "write" => Talk::Write, _ => Talk::Library })),
                 "note" => {
                     let Some(answer) = self.lib.as_ref().and_then(|lib| lib.paper_chat.messages.iter().rev().find_map(|item| if let ChatItem::Answer(text) = item { Some(text.clone()) } else { None })) else { return };
                     Some(Cmd::AnswerToNote("（脚本）".into(), answer))
@@ -5518,12 +5608,28 @@ impl Workspace {
                 // Ask the library a question (no commas in it: they separate the steps).
                 "ask" => {
                     if let Some(lib) = self.lib.as_ref() { lib.library_chat.input.update(cx, |input, cx| input.set_text(arg, cx)) }
-                    Some(Cmd::Ask(false))
+                    Some(Cmd::Ask(Talk::Library))
                 }
+                // `agent` / `agent:off` is 写作's other mode, where the assistant writes; `agent:earlier|later|now|restore` steps through the versions of the section on show.
+                "agent" => Some(Cmd::Agent(match arg {
+                    "off" => crate::write_agent::Do::Mode(false),
+                    "earlier" => crate::write_agent::Do::Step(false),
+                    "later" => crate::write_agent::Do::Step(true),
+                    "now" => crate::write_agent::Do::Now,
+                    "restore" => crate::write_agent::Do::Restore,
+                    _ => crate::write_agent::Do::Mode(true),
+                })),
+                // `askwrite:<what to write>` says it to the assistant that writes the manuscript on show.
+                "askwrite" => {
+                    self.agent_attend(cx);
+                    if let Some(lib) = self.lib.as_ref() { lib.write_chat.input.update(cx, |input, cx| input.set_text(arg, cx)) }
+                    Some(Cmd::Ask(Talk::Write))
+                }
+                "history-write" => Some(Cmd::ToggleHistory(Talk::Write)),
                 // The same of the selected paper.
                 "askpaper" => {
                     if let Some(lib) = self.lib.as_ref() { lib.paper_chat.input.update(cx, |input, cx| input.set_text(arg, cx)) }
-                    Some(Cmd::Ask(true))
+                    Some(Cmd::Ask(Talk::Paper))
                 }
                 // `type:/se` leaves text in the library's question box, as if typed (the slash commands show).
                 "type" => {
@@ -5531,15 +5637,15 @@ impl Workspace {
                         lib.library_chat.input.update(cx, |input, cx| input.set_text(arg, cx));
                         lib.library_chat.input.read(cx).focus(window);
                     }
-                    self.chat_input(false, InputEvent::Changed, cx);
+                    self.chat_input(Talk::Library, InputEvent::Changed, cx);
                     None
                 }
                 // `image:/path/to.png` puts a picture with the next question to the library.
                 "image" => {
-                    self.attach_images(false, vec![Picture::File(arg.into())], cx);
+                    self.attach_images(Talk::Library, vec![Picture::File(arg.into())], cx);
                     None
                 }
-                "history" => Some(Cmd::ToggleHistory(false)),
+                "history" => Some(Cmd::ToggleHistory(Talk::Library)),
                 "settings" => Some(match arg {
                     "ai" | "models" => Cmd::AiTab(AiTab::Models),
                     "tasks" => Cmd::AiTab(AiTab::Tasks),

@@ -137,6 +137,27 @@ pub struct Snapshot {
     pub taken_at: String,
 }
 
+/// A section a manuscript is to have (`Store::arrange_sections`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Arrange {
+    /// The section it is now; empty for one to be made.
+    pub id: String,
+    pub name: String,
+    /// A key of `structure::SECTIONS`.
+    pub kind: String,
+}
+
+/// What arranging a manuscript's sections came to.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Arranged {
+    /// The ids of the sections made.
+    pub added: Vec<String>,
+    /// The names of the unwritten sections that went.
+    pub removed: Vec<String>,
+    /// The names of the sections that were not asked for and stay, because something was written in them.
+    pub kept: Vec<String>,
+}
+
 impl Manuscript {
     pub fn section(&self, id: &str) -> Option<&Section> {
         self.sections.iter().find(|section| section.id == id)
@@ -918,6 +939,48 @@ impl Store {
         let (manuscript, _) = self.section_row(id)?;
         self.db.execute("UPDATE manuscript_sections SET name = ?2, kind = ?3 WHERE id = ?1", params![id, name.trim(), kind])?;
         self.touch_manuscript(&manuscript)
+    }
+
+    /// Give a manuscript these sections, in this order: one named by its id
+    /// stays what it is under the name and kind given, the others are made.
+    /// A section of the manuscript that is not among them goes when nothing
+    /// was ever written in it (no text, no snapshot); one with text stays,
+    /// after the others. All of it or nothing.
+    pub fn arrange_sections(&mut self, manuscript_id: &str, wanted: &[Arrange]) -> Result<Arranged> {
+        let existing = self.sections_of(manuscript_id)?;
+        for one in wanted {
+            if !is_kind(&one.kind) { bail!("没有这种部分：{}", one.kind) }
+            if one.name.trim().is_empty() { bail!("这一节需要一个名称。") }
+            if !one.id.is_empty() && !existing.iter().any(|section| section.id == one.id) { bail!("没有这一节：{}", one.id) }
+        }
+        let mut arranged = Arranged::default();
+        let now = now_iso();
+        let tx = self.db.transaction()?;
+        let mut position = 0i64;
+        for one in wanted {
+            if one.id.is_empty() {
+                let id = new_id("S");
+                tx.execute("INSERT INTO manuscript_sections(id, manuscript_id, position, name, kind, body, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, '', ?6)", params![id, manuscript_id, position, one.name.trim(), one.kind, now])?;
+                arranged.added.push(id);
+            } else {
+                tx.execute("UPDATE manuscript_sections SET position = ?2, name = ?3, kind = ?4 WHERE id = ?1", params![one.id, position, one.name.trim(), one.kind])?;
+            }
+            position += 1;
+        }
+        for section in existing.iter().filter(|section| !wanted.iter().any(|one| one.id == section.id)) {
+            let versions: i64 = tx.query_row("SELECT count(*) FROM section_snapshots WHERE section_id = ?1", [&section.id], |r| r.get(0))?;
+            if section.body.trim().is_empty() && versions == 0 {
+                tx.execute("DELETE FROM manuscript_sections WHERE id = ?1", [&section.id])?;
+                arranged.removed.push(section.name.clone());
+            } else {
+                tx.execute("UPDATE manuscript_sections SET position = ?2 WHERE id = ?1", params![section.id, position])?;
+                arranged.kept.push(section.name.clone());
+                position += 1;
+            }
+        }
+        tx.commit()?;
+        self.touch_manuscript(manuscript_id)?;
+        Ok(arranged)
     }
 
     /// Move a section by `by` places (negative: towards the start), within the manuscript.

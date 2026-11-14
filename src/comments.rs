@@ -367,11 +367,17 @@ impl Workspace {
     /// A change the model made to a paragraph of a manuscript that came from a Word file is said where it was made, as in Word's review:
     /// a comment on the new words that keeps the old. One on the words replaced gives way to it.
     pub(crate) fn comment_on_change(&mut self, original: &str, result: &str, why: &str) {
+        let Some(section) = self.lib.as_ref().map(|lib| lib.writing.section_id.clone()) else { return };
+        self.comment_on_change_in(&section, original, result, why);
+    }
+
+    /// The same for a change to any section of the manuscript on show: the conversation that writes changes more than the one in the editor.
+    pub(crate) fn comment_on_change_in(&mut self, section: &str, original: &str, result: &str, why: &str) {
         let Some(lib) = self.lib.as_mut() else { return };
         let writing = &mut lib.writing;
         if !writing.comments.source.as_ref().is_some_and(|source| source.kind == "docx") || original.trim() == result.trim() { return }
         // Changed a second time, it still says what the file had.
-        let earlier = writing.comments.list.iter().position(|comment| comment.origin == comment::ASSISTANT && comment.state == comment::APPLIED && comment.section_id == writing.section_id && comment.quote == original.trim());
+        let earlier = writing.comments.list.iter().position(|comment| comment.origin == comment::ASSISTANT && comment.state == comment::APPLIED && comment.section_id == section && comment.quote == original.trim());
         let replaced = earlier.map_or(original.trim().to_string(), |at| writing.comments.list[at].replaced.clone());
         if let Some(at) = earlier {
             let gone = writing.comments.list.remove(at);
@@ -379,7 +385,8 @@ impl Workspace {
         }
         // Words of one paragraph: of a result over several, the first.
         let quote = result.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or("").to_string();
-        let Ok(mut made) = lib.store.add_comment(&writing.manuscript, &writing.section_id, &quote, why, comment::ASSISTANT_NAME, comment::ASSISTANT) else { return };
+        if quote.is_empty() { return }
+        let Ok(mut made) = lib.store.add_comment(&writing.manuscript, section, &quote, why, comment::ASSISTANT_NAME, comment::ASSISTANT) else { return };
         (made.replaced, made.state) = (replaced, comment::APPLIED.into());
         if lib.store.save_comment(&made).is_ok() { writing.comments.list.push(made) }
     }

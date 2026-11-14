@@ -2,7 +2,7 @@
 //! fields, notes, files), PDF (preview) and 提问 (questions about this paper).
 
 use crate::i18n::{label, t};
-use crate::app::{Cmd, Edge, MenuKind, Tab, Translated, Workspace};
+use crate::app::{Cmd, Edge, MenuKind, Tab, Talk, Translated, Workspace};
 use crate::pdf::{Zoom, ZoomTo};
 use crate::theme::{self, Theme, text_px};
 use crate::ui;
@@ -98,7 +98,7 @@ impl Workspace {
             Tab::Ask if split && has_pdf && self.settings.floating.on => self.render_floating(width, window, cx),
             Tab::Ask if split => {
                 let chat_width = self.chat_width(width);
-                let chat = self.render_chat(true, window, cx);
+                let chat = self.render_chat(Talk::Paper, window, cx);
                 let pdf = self.render_pdf_tab(width - chat_width, cx);
                 // The edge between the two: drag it to give either more room, click it twice for the widths they came with.
                 let held = self.resizing == Some(Edge::Split);
@@ -130,7 +130,7 @@ impl Workspace {
             }
             Tab::Info => self.render_info(window, cx),
             Tab::Pdf => self.render_pdf_tab(width, cx),
-            Tab::Ask => self.render_chat(true, window, cx),
+            Tab::Ask => self.render_chat(Talk::Paper, window, cx),
         };
         // The panel's left edge: drag it to give the list or the paper more room, click it twice for the width it came with.
         let resizing = self.resizing == Some(Edge::Detail);
