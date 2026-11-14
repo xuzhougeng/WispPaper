@@ -57,6 +57,9 @@ pub struct Run {
     target_since: Instant,
     /// The change being looked at.
     pub at: Option<usize>,
+    /// The changes were made in 写作's other mode, by the conversation that writes the manuscript (`write_agent.rs`):
+    /// they are only shown here, and taking them all back puts no wish into the box.
+    pub told: bool,
 }
 
 /// A change made to the manuscript.
@@ -96,6 +99,21 @@ impl Revising {
         });
         subscriptions.push(cx.subscribe(&input, |this, _, event: &InputEvent, cx| if *event == InputEvent::Submit { this.revise_start(cx) }));
         Revising { input, run: None, generation: 0, seen: String::new() }
+    }
+
+    /// Show changes the assistant made to `section` from outside this box, in answer to `wish`: `text` is what the
+    /// section reads now, and each change the bytes of it that are new with the words that stood there before.
+    pub(crate) fn show(&mut self, section: &str, wish: &str, model: &str, text: &str, changes: Vec<(Range<usize>, String)>) {
+        self.generation += 1;
+        let now = Instant::now();
+        let made = changes.into_iter().map(|(range, old)| {
+            let new = text[range.clone()].to_string();
+            // A section written from nothing is all new: its bar in the margin says so, and no tint lies over all of it.
+            let lit = if old.trim().is_empty() && new.trim().len() == text.trim().len() { vec![] } else { revise::added(&old, &new) };
+            Made { range: Some(range), lit, old, new, since: now, undone: false }
+        }).collect();
+        self.seen = text.to_string();
+        self.run = Some(Run { section: section.into(), wish: wish.into(), model: model.into(), reply: String::new(), taken: 0, said: String::new(), busy: false, error: String::new(), note: String::new(), made, missed: vec![], target: None, target_since: now, at: None, told: true });
     }
 
     /// The person went on to another section: the changes were to this one.
@@ -214,7 +232,11 @@ impl Workspace {
             Do::Undo(n) => self.revise_undo(Some(n), cx),
             Do::UndoAll => self.revise_undo(None, cx),
             Do::Keep => {
-                if let Some(lib) = self.lib.as_mut() { lib.writing.revise.leave() }
+                if let Some(lib) = self.lib.as_mut() {
+                    // Changes made by the conversation that writes are not lit again when the section is come back to.
+                    if let Some(run) = lib.writing.revise.run.as_ref().filter(|run| run.told) { lib.writing.agent.changed.remove(&run.section); }
+                    lib.writing.revise.leave();
+                }
             }
         }
         cx.notify();
@@ -238,7 +260,7 @@ impl Workspace {
         writing.revise.generation += 1;
         let generation = writing.revise.generation;
         let now = Instant::now();
-        let mut run = Run { section: writing.section_id.clone(), wish: wish.clone(), model: profile.labelled(), reply: String::new(), taken: 0, said: String::new(), busy: true, error: String::new(), note: String::new(), made: vec![], missed: vec![], target: None, target_since: now, at: None };
+        let mut run = Run { section: writing.section_id.clone(), wish: wish.clone(), model: profile.labelled(), reply: String::new(), taken: 0, said: String::new(), busy: true, error: String::new(), note: String::new(), made: vec![], missed: vec![], target: None, target_since: now, at: None, told: false };
         let asked = revise::Asked { language: &language, title: &title, outline: &outline, section: &section, text: &text, selection: &selection, wish: &wish, reply_in };
         let request = match revise::prompt(&asked).and_then(|(system, message)| ai::plain_request(&profile, &system, &message)) {
             Ok(request) => request,
@@ -406,8 +428,8 @@ impl Workspace {
         // All taken back: the wish is in the box again, to be put another way.
         if which.is_none() && let Some(lib) = self.lib.as_mut() {
             let revise = &mut lib.writing.revise;
-            let wish = revise.run.as_ref().map(|run| run.wish.clone()).unwrap_or_default();
-            if revise.input.read(cx).text().trim().is_empty() { revise.input.update(cx, |input, cx| input.set_text(&wish, cx)) }
+            let wish = revise.run.as_ref().filter(|run| !run.told).map(|run| run.wish.clone()).unwrap_or_default();
+            if !wish.is_empty() && revise.input.read(cx).text().trim().is_empty() { revise.input.update(cx, |input, cx| input.set_text(&wish, cx)) }
             revise.leave();
             if back > 0 { self.say(tf!("已撤销助手的 {back} 处改动", "Took back the assistant's {back} changes"), cx) }
         }
@@ -497,13 +519,15 @@ impl Workspace {
     }
 
     /// One request above the field: what was asked, where it stands, what the model says and the changes it made.
-    fn render_revise_run(&self, run: &Run, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn render_revise_run(&self, run: &Run, cx: &mut Context<Self>) -> Div {
         let small = |id: &'static str, name: &'static str| ui::ghost_button(id, None, Some(name.into())).h(text_px(22.)).px(px(6.)).text_size(text_px(12.));
         let (count, standing) = (run.made.len(), run.made.iter().filter(|made| !made.undone && made.range.is_some()).count());
         let state = if run.busy {
             if run.target.is_some() { tf!("正在改第 {} 处…", "Writing change {}…", count + 1) } else if count == 0 { t("正在读这一节…").to_string() } else { tf!("已改 {count} 处，接着看…", "{count} changed, reading on…") }
         } else if count == 0 {
             if run.error.is_empty() { t("没有改动").to_string() } else { String::new() }
+        } else if run.told {
+            tf!("助手在这一节改了 {count} 处", "The assistant made {count} changes in this section")
         } else {
             tf!("改了 {count} 处", "{count} changes")
         };
@@ -556,7 +580,8 @@ impl Workspace {
             .pb(px(6.))
             .border_b_1()
             .border_color(Theme::line())
-            .child(
+            // What was asked: said in the conversation itself where the changes were asked for there.
+            .when(!run.told, |d| d.child(
                 div()
                     .flex()
                     .items_center()
@@ -564,7 +589,7 @@ impl Workspace {
                     .child(div().flex_1().min_w_0().truncate().text_size(text_px(12.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text_secondary()).child(run.wish.clone()))
                     .child(div().flex_none().max_w(px(200.)).truncate().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(run.model.clone()))
                     .when(!run.busy, |d| d.child(ui::ghost_button("revise-close", Some("x"), None).size(px(22.)).min_w(px(22.)).on_click(self.on(Cmd::Revise(Do::Keep), cx)))),
-            )
+            ))
             .child(
                 div()
                     .flex()

@@ -39,6 +39,7 @@ mod translate;
 mod ui;
 mod write;
 mod write_find;
+mod write_agent;
 mod write_assist;
 mod write_cite;
 mod write_source;

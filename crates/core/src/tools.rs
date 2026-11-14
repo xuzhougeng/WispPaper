@@ -39,12 +39,16 @@ pub struct ToolDef {
 }
 
 /// The tools that change the library.
-const WRITING: [&str; 13] = ["create_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "suggest_field", "sync_searches", "find_pdf", "organise_papers"];
+const WRITING: [&str; 15] = ["create_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "suggest_field", "sync_searches", "find_pdf", "organise_papers", "edit_section", "set_outline"];
 /// Of those, the ones the window's assistant runs only with the person's
 /// consent. Saving a search, suggesting a screening decision or proposing
 /// a field's value changes nothing a person has not yet to act on, so they
-/// run as asked.
-const CONFIRMING: [&str; 8] = ["import_pdf", "import_references", "import_zotero", "run_search", "undo_import", "remove_search", "find_pdf", "organise_papers"];
+/// run as asked. The two that write a manuscript (`MANUSCRIPT`) are asked
+/// about everywhere but in the conversation that writes that manuscript,
+/// where the person has handed the pen over.
+const CONFIRMING: [&str; 10] = ["import_pdf", "import_references", "import_zotero", "run_search", "undo_import", "remove_search", "find_pdf", "organise_papers", "edit_section", "set_outline"];
+/// The tools that write a manuscript (`compose`).
+pub const MANUSCRIPT: [&str; 2] = ["edit_section", "set_outline"];
 
 /// A tool that works inside one library: it also takes `library`.
 fn scoped(name: &'static str, title: &'static str, description: &'static str, mut properties: Value, required: &[&str]) -> ToolDef {
@@ -330,10 +334,57 @@ pub fn catalog() -> Vec<ToolDef> {
         scoped(
             "read_manuscript",
             "读取稿件",
-            "读取用户在写作页写的稿件正文，可以只读其中一节。只读：稿件只由用户本人修改，你可以在回答里给出修改建议或可以插入的段落。稿件里的引用写作 [@Key]，Key 对应文献库里的一篇文献；每节的 passages 是已记下的引用出处：稿件里的哪句话（sentence）依据文献的哪句原文（passage，page 为 0 时出自摘要）。",
+            "读取用户在写作页写的稿件正文，可以只读其中一节。只读；要改稿件用 edit_section。稿件里的引用写作 [@Key]，Key 对应文献库里的一篇文献；每节的 passages 是已记下的引用出处：稿件里的哪句话（sentence）依据文献的哪句原文（passage，page 为 0 时出自摘要）。",
             json!({
                 "manuscript": {"type": "string", "description": "稿件的 ID 或题目；只有一份稿件时可以省略。"},
                 "section": {"type": "string", "description": "只读这一节：节的 ID 或名称。省略时返回所有写了内容的节。"},
+            }),
+            &[],
+        ),
+        scoped(
+            "edit_section",
+            "写稿件",
+            "写或修改写作页稿件的一节。只在用户要求你动笔（写、改、补、删稿件里的文字）时使用。两种用法取其一：edits 逐处修改，每项的 old 是从这一节现在的文字里逐字摘出的原文（先用 read_manuscript 读），new 是改成的文字，old 留空表示加在这一节末尾，new 留空表示删去；text 是这一节的全部新正文，用于空的一节或整节重写。正文是 Markdown，用稿件的语言写，节的名称不要写进正文。引用写作 [@Key]（Key 见 read_manuscript 里已有的引用），不知道 Key 时写 [@文献ID]，写入时会换成这篇文献的引用键；不要引用文献库里没有的文献。改动前这一节的文字会留作一个历史版本，用户可以随时换回去。返回改了几处；missed 是没有在这一节里找到原文、因而没有改的地方。",
+            json!({
+                "manuscript": {"type": "string", "description": "稿件的 ID 或题目；只有一份稿件时可以省略。"},
+                "section": {"type": "string", "description": "要写的一节：节的 ID 或名称。"},
+                "edits": {
+                    "type": "array",
+                    "description": "逐处修改，按在这一节里的先后排列，互不重叠。",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "old": {"type": "string", "description": "从这一节逐字摘出的原文，尽量短但能唯一定位；留空表示加在末尾。"},
+                            "new": {"type": "string", "description": "改成的文字；留空表示删去。插入新内容时，先原样写出 old，再接上新内容。"},
+                        },
+                        "required": ["old", "new"],
+                    },
+                },
+                "text": {"type": "string", "description": "这一节的全部新正文（与 edits 二选一）。"},
+            }),
+            &["section"],
+        ),
+        scoped(
+            "set_outline",
+            "定大纲",
+            "设定写作页一份稿件的大纲：它有哪些节、各叫什么、按什么顺序，也可以改题目和正文语言（只改这两样时不给 sections，大纲保持原样）。sections 是完整的新大纲：保留的节带上它的 id（或现在的名称），可以改名、改类型、换位置；不带 id 的是新加的节。没有列出的节，从没写过内容的会去掉，写过内容的不会删除，排到最后并在 kept 里说明。kind 是这一节相当于论文的哪一部分，决定写这一节时参考文献库里文献的哪一部分；综述自拟的各节用 other。只在用户要求拟定或调整大纲时使用。",
+            json!({
+                "manuscript": {"type": "string", "description": "稿件的 ID 或题目；只有一份稿件时可以省略。"},
+                "title": {"type": "string", "description": "稿件的新题目；省略时不改。"},
+                "language": {"type": "string", "enum": crate::manuscript::LANGUAGES.iter().map(|(code, _)| *code).collect::<Vec<_>>(), "description": "稿件正文用什么语言写；省略时不改。"},
+                "sections": {
+                    "type": "array",
+                    "description": "各节，按先后排列。",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string", "description": "保留现有的一节：它的 ID 或现在的名称。新加的节不写。"},
+                            "name": {"type": "string", "description": "这一节的名称。"},
+                            "kind": {"type": "string", "enum": keys(&crate::structure::SECTIONS), "description": "相当于论文的哪一部分；省略时现有的节保持原样，新加的节按名称判断。"},
+                        },
+                        "required": ["name"],
+                    },
+                },
             }),
             &[],
         ),
@@ -384,9 +435,13 @@ pub fn describe_call(name: &str, args: &Value) -> String {
     for (key, value) in args.as_object().into_iter().flatten().filter(|(key, _)| key.as_str() != "library") {
         match (key.as_str(), value) {
             ("page", Value::Number(n)) => numbers.push((key, format!("第 {n} 页起"))),
+            // The words written are for the manuscript, not for the line that says a section is being written.
+            ("text", Value::String(text)) if name == "edit_section" => numbers.push((key, format!("全文 {} 字", text.trim().chars().count()))),
             (_, Value::String(text)) if !text.trim().is_empty() => words.push((key, text.split_whitespace().collect::<Vec<_>>().join(" "))),
             (_, Value::Number(n)) => numbers.push((key, format!("{key} {n}"))),
             ("changes", Value::Array(items)) => numbers.push((key, format!("{} 篇", items.len()))),
+            ("edits", Value::Array(items)) => numbers.push((key, format!("{} 处", items.len()))),
+            ("sections", Value::Array(items)) => numbers.push((key, format!("{} 节", items.len()))),
             _ => {}
         }
     }
@@ -406,6 +461,17 @@ pub fn describe_result(result: &Result<Value, String>) -> String {
                 format!("{total} 条结果")
             } else if let (Some(changed), Some(unchanged)) = (value["changed"].as_u64(), value["unchanged"].as_u64()) {
                 if unchanged > 0 { format!("改了 {changed} 篇，{unchanged} 篇不用改") } else { format!("改了 {changed} 篇") }
+            } else if let Some(edited) = value["edited"].as_u64() {
+                let missed = value["missed"].as_array().map_or(0, Vec::len);
+                let name = value["section"]["name"].as_str().unwrap_or("");
+                match (edited, missed) {
+                    (0, 0) => format!("「{name}」不用改"),
+                    (_, 0) => format!("已写入「{name}」"),
+                    (0, _) => format!("「{name}」的 {missed} 处没有对上原文，没有改"),
+                    _ => format!("已写入「{name}」，另有 {missed} 处没有对上原文"),
+                }
+            } else if let (Some(sections), Some(_)) = (value["sections"].as_array(), value["added"].as_array()) {
+                format!("大纲现有 {} 节", sections.len())
             } else if let Some(manuscripts) = value["manuscripts"].as_array() {
                 format!("{} 份稿件", manuscripts.len())
             } else if let Some(sections) = value["sections"].as_array() {
@@ -465,6 +531,8 @@ fn dispatch(store: &mut Store, info: &LibraryInfo, name: &str, args: &Value, fet
         "organise_papers" => Ok(organise::report(&store.organise(&organise::parse(args).map_err(|e| anyhow!(e))?)?)),
         "list_manuscripts" => list_manuscripts(store),
         "read_manuscript" => read_manuscript(store, args),
+        "edit_section" => crate::compose::edit(store, args),
+        "set_outline" => crate::compose::outline(store, args),
         "library_status" => library_status(store, info),
         "list_papers" => list_papers(store, info, args),
         "list_figures" => list_figures(store, info, args),
@@ -1288,7 +1356,11 @@ fn suggest_screening(store: &mut Store, info: &LibraryInfo, args: &Value) -> Res
 /// is asked whether it may run; an error when it cannot run as written.
 /// Only `organise_papers` has more to say than its arguments already do.
 pub fn preview_call(store: &Store, name: &str, args: &Value) -> Result<Vec<String>, String> {
-    if name == "organise_papers" { organise::preview(store, args) } else { Ok(vec![]) }
+    match name {
+        "organise_papers" => organise::preview(store, args),
+        "edit_section" | "set_outline" => crate::compose::preview(store, name, args).map_err(|e| format!("{e:#}")),
+        _ => Ok(vec![]),
+    }
 }
 
 fn list_manuscripts(store: &mut Store) -> Result<Value> {
@@ -2084,6 +2156,16 @@ pub(crate) mod tests {
         let name = made.sections[0].name.clone();
         assert_eq!(call(&root, "read_manuscript", &json!({"manuscript": "根的综述", "section": name})).unwrap()["sections"][0]["body"], "");
         assert!(call(&root, "read_manuscript", &json!({"section": "没有这一节"})).unwrap_err().contains("没有名为"));
+        // An agent writes a section and sets the outline; how each reads in a conversation.
+        let wrote = call(&root, "edit_section", &json!({"section": name, "text": format!("根尖的干细胞 [@{atlas}]。")})).unwrap();
+        assert_eq!(describe_result(&Ok(wrote)), format!("已写入「{name}」"));
+        assert!(call(&root, "read_manuscript", &json!({"section": name})).unwrap()["sections"][0]["body"].as_str().unwrap().starts_with("根尖的干细胞 [@"));
+        assert_eq!(describe_call("edit_section", &json!({"section": "导言", "text": "一二三"})), "写稿件：导言 · 全文 3 字");
+        assert_eq!(describe_call("edit_section", &json!({"section": "导言", "edits": [{"old": "a", "new": "b"}]})), "写稿件：导言 · 1 处");
+        let outlined = call(&root, "set_outline", &json!({"sections": [{"name": name}, {"name": "展望"}]})).unwrap();
+        assert_eq!((describe_result(&Ok(outlined.clone())), outlined["sections"].as_array().map(Vec::len)), ("大纲现有 3 节".to_string(), Some(3)));
+        assert_eq!(outlined["kept"].as_array().map(Vec::len), Some(1));
+        assert_eq!(preview_call(&Store::open(&info.dir).unwrap(), "set_outline", &json!({"sections": [{"name": "甲"}]})).unwrap(), vec!["《根的综述》的大纲改为：甲"]);
         std::fs::remove_dir_all(root).ok();
     }
 
@@ -2097,7 +2179,9 @@ pub(crate) mod tests {
             // Only a tool that changes the library has anything to ask the person about.
             assert!(tool.writes || !tool.confirm, "{}", tool.name);
         }
-        assert_eq!(library_catalog().iter().filter(|tool| tool.confirm).map(|tool| tool.name).collect::<Vec<_>>().len(), 8);
+        assert_eq!(library_catalog().iter().filter(|tool| tool.confirm).map(|tool| tool.name).collect::<Vec<_>>().len(), 10);
+        // The tools that write a manuscript are asked about outside the conversation that writes it.
+        assert!(MANUSCRIPT.iter().all(|name| catalog().iter().any(|tool| tool.name == *name && tool.writes && tool.confirm)));
         std::fs::remove_dir_all(root).ok();
     }
 }

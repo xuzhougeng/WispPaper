@@ -1278,5 +1278,22 @@
   "解析不了": "cannot be parsed",
   "插入前": "Before insert",
   "加星标 / 取消星标": "Star / unstar",
-  "显示译文 / 显示原文": "Show translation / original"
+  "显示译文 / 显示原文": "Show translation / original",
+  "告诉助手写什么、改什么": "Tell the assistant what to write or change",
+  "接着这份稿件上次的对话": "Continuing this manuscript's last conversation",
+  "先在写作里打开一份稿件。": "Open a manuscript in Writing first.",
+  "这份稿件的历史对话": "Past conversations about this manuscript",
+  "助手写": "Assistant writes",
+  "和助手就这份稿件有过的对话；点开一次可以接着说": "Conversations with the assistant about this manuscript; open one to continue it",
+  "助手刚改过这一节": "The assistant just changed this section",
+  "这一节还是空的。在左边告诉助手要写什么，它会写在这里；也可以自己动笔。": "This section is empty. Tell the assistant at the left what to write and it will write here; or write it yourself.",
+  "这是早先的一版，不能在这里改；恢复它，或回到现在的文字": "An earlier version, not editable here; restore it or go back to the present text",
+  "这一节还没有写：让助手写，或自己动笔": "Not written yet: ask the assistant, or write it yourself",
+  "自己写": "I write",
+  "你来写：助手在旁边找句子、配引用，按你的话改一节": "You write: the assistant finds sentences and citations beside you and revises a section when told",
+  "和助手对话，由它查文献、动笔；稿件在右边，你看着它写，随时亲手改或换回早先的版本": "Talk with the assistant, which searches the library and writes; the manuscript is at the right, to watch, edit by hand, or take back to an earlier version",
+  "这一节的各个版本：助手每次动笔前、你停笔或离开时都会留一版。翻到早先的一版可以看，也可以恢复": "The versions of this section: one is kept before each change by the assistant and when you pause or leave. Step back to look at an earlier one, or restore it",
+  "回到现在": "Back to now",
+  "让助手来写": "Let the assistant write",
+  "交代要写什么、改什么，助手会查文献库、读全文，直接写进右边的稿件，并说明依据。每次动笔前，那一节的文字都会留一个版本，随时可以换回去；稿件你也可以随时亲手改。": "Say what to write or change. The assistant searches the library, reads full texts, writes straight into the manuscript at the right and says what it relied on. A version of the section is kept before each change, so you can always go back; you can also edit the manuscript by hand at any time."
 }
