@@ -220,6 +220,21 @@ pub enum Cmd {
     ToggleAutoUpdate,
     ToggleKeepRunning,
     CheckUpdate,
+    CheckNotion,
+    NotionField(String, i32),
+    NotionHistory(Option<usize>, bool),
+    NotionSelect(Option<usize>, bool),
+    NotionBack,
+    NotionNotes,
+    NotionAccountDetails,
+    NotionRefine(Option<usize>),
+    NotionRefineChoice(Option<usize>, bool),
+    NotionRefineStop,
+    NotionRefineSkip,
+    NotionMove(usize, bool),
+    NotionTitleMode(bool),
+    NotionTitlePart(String, i32),
+    PreviewNotion(bool, Option<usize>),
     SetAppearance(String),
     SetLanguage(Language),
     SetDensity(String),
@@ -845,7 +860,7 @@ pub enum ChatItem {
     /// A question, as typed, with the pictures that went with it, and
     /// what went to the model where that is not the text (a slash command
     /// written out, passages from a PDF put before it).
-    User { text: String, images: Vec<ChatImage>, prompt: String },
+    User { asked_at: String, text: String, images: Vec<ChatImage>, prompt: String },
     /// Text of the model; one answer may come in several pieces with tool calls between them.
     Answer(String),
     /// A tool the model called, and what came back (summary, failed) once it has run.
@@ -1169,6 +1184,7 @@ pub enum Modal {
     FetchReport,
     /// An answer about a paper, to be looked over before it joins that paper's notes.
     Note { paper_id: String, text: Entity<TextInput> },
+    Notion(Box<crate::notion::Form>),
     /// 写作: a section's name and kind (`editing` its id, `None` for a new one).
     Section { editing: Option<String>, name: Entity<TextInput>, kind: String },
     /// 写作: a section's earlier versions, newest first.
@@ -1280,7 +1296,7 @@ pub struct Library {
 pub struct Workspace {
     pub focus: FocusHandle,
     pub settings: Settings,
-    settings_path: PathBuf,
+    pub(crate) settings_path: PathBuf,
     pub root: PathBuf,
     pub libraries: Vec<LibraryInfo>,
     pub lib: Option<Library>,
@@ -1290,6 +1306,7 @@ pub struct Workspace {
     pub connections: Vec<(wisp_core::connector::Connector, crate::custom::Connection)>,
     /// 技能: what the skills' folder held when it was last read.
     pub skills: Vec<wisp_core::skill::Skill>,
+    pub notion: crate::notion::State,
     pub update: UpdateState,
     /// The version the automatic check last announced, so it says it once.
     pub update_told: Option<String>,
@@ -1403,13 +1420,13 @@ impl Chat {
 
     /// The conversation as it is kept in the library: what was said, and
     /// the papers its answers cite, so the labels still lead somewhere later.
-    fn transcript(&self) -> ai::Transcript {
+    pub(crate) fn transcript(&self) -> ai::Transcript {
         let mut cited: HashSet<String> = HashSet::new();
         let items = self
             .messages
             .iter()
             .filter_map(|item| match item {
-                ChatItem::User { text, images, prompt } => Some(ai::Said::User { text: text.clone(), images: images.iter().map(|picture| picture.id.clone()).collect(), prompt: prompt.clone() }),
+                ChatItem::User { text, images, prompt, asked_at } => Some(ai::Said::User { asked_at: asked_at.clone(), text: text.clone(), images: images.iter().map(|picture| picture.id.clone()).collect(), prompt: prompt.clone() }),
                 ChatItem::Answer(text) if !text.is_empty() => {
                     cited.extend(ai::citations(text).into_iter().map(|citation| citation.label));
                     Some(ai::Said::Answer { text: text.clone() })
@@ -1708,7 +1725,7 @@ impl Workspace {
         theme::set_accent("blue");
         shortcuts::rebuild(&settings.shortcuts, cx);
         let libraries = libraries::list(&root);
-        let mut this = Workspace { focus, settings, settings_path, root, libraries, lib: None, settings_view: None, connections: vec![], skills: vec![], update: UpdateState::Idle, update_told: None, modal: None, modal_error: String::new(), modal_subscriptions: vec![], menu: None, toast, home_scroll: ScrollHandle::new(), resizing: None, picked: None, pinning: false };
+        let mut this = Workspace { focus, settings, settings_path, root, libraries, lib: None, settings_view: None, notion: crate::notion::State::default(), connections: vec![], skills: vec![], update: UpdateState::Idle, update_told: None, modal: None, modal_error: String::new(), modal_subscriptions: vec![], menu: None, toast, home_scroll: ScrollHandle::new(), resizing: None, picked: None, pinning: false };
         this.apply_appearance(window);
         this.apply_typography(window, cx);
         cx.observe_window_appearance(window, |this, window, _| this.apply_appearance(window)).detach();
@@ -1984,6 +2001,21 @@ impl Workspace {
                 self.settings.keep_running = !self.settings.keep_running;
                 self.save_settings(cx);
             }
+            Cmd::CheckNotion => self.check_notion(cx),
+            Cmd::NotionField(field, movement) => self.notion_field(field, movement, cx),
+            Cmd::NotionHistory(index, chosen) => self.notion_history(index, chosen, cx),
+            Cmd::NotionSelect(index, selected) => self.notion_select(index, selected, cx),
+            Cmd::NotionBack => { self.notion_back(cx); window.focus(&self.focus); }
+            Cmd::NotionNotes => self.preview_notion_notes(window, cx),
+            Cmd::NotionAccountDetails => { self.notion.account_details = !self.notion.account_details; cx.notify(); }
+            Cmd::NotionRefine(index) => self.notion_refine(index, cx),
+            Cmd::NotionRefineChoice(index, refined) => self.notion_refine_choice(index, refined, cx),
+            Cmd::NotionRefineStop => self.notion_refine_stop(cx),
+            Cmd::NotionRefineSkip => self.notion_refine_skip(cx),
+            Cmd::NotionMove(i, down) => { if let Some(Modal::Notion(form)) = &mut self.modal { form.move_question(i, down); } cx.notify(); }
+            Cmd::NotionTitleMode(custom) => self.notion_title_mode(custom, cx),
+            Cmd::NotionTitlePart(part, movement) => self.notion_title_part(part, movement, cx),
+            Cmd::PreviewNotion(paper, only) => self.preview_notion(paper, only, window, cx),
             Cmd::CheckUpdate => self.check_update(true, cx),
             Cmd::SetAppearance(value) => {
                 self.settings.appearance = value;
@@ -2855,6 +2887,11 @@ impl Workspace {
             }
 
             Cmd::CloseModal => {
+                if !self.notion.busy && matches!(self.modal.as_ref(), Some(Modal::Notion(form)) if form.stage == crate::notion::Stage::Titling) {
+                    self.notion_back(cx);
+                    window.focus(&self.focus);
+                    return;
+                }
                 // A file not imported: the next one waiting is asked about.
                 if matches!(self.modal, Some(Modal::Headings(_))) { self.headings_done(false, cx) }
                 if matches!(self.modal, Some(Modal::Headings(_))) { return cx.notify() }
@@ -3874,7 +3911,7 @@ impl Workspace {
             let mut answer = String::new();
             for item in &chat.messages {
                 match item {
-                    ChatItem::User { text, images, prompt } => {
+                    ChatItem::User { text, images, prompt, .. } => {
                         if !answer.is_empty() { wire.push(ai::assistant_message(&std::mem::take(&mut answer))) }
                         // A question from before the request was kept is read again as it would be now.
                         let sent = if prompt.is_empty() { ai::expand_slash(text) } else { prompt.clone() };
@@ -3914,7 +3951,7 @@ impl Workspace {
         chat.wire.push(ai::user_message_with(profile.protocol, &prompt, &wire_images(&images)));
         // Kept with the question, so the conversation taken up later asks what was asked now, whatever the command says by then.
         let sent = if prompt == question { String::new() } else { prompt };
-        chat.messages.push(ChatItem::User { text: question, images, prompt: sent });
+        chat.messages.push(ChatItem::User { asked_at: wisp_core::time::now_iso(), text: question, images, prompt: sent });
         chat.steps = 0;
         chat.started = Some(Instant::now());
         // What the last question changed in the manuscript has been seen: the next changes are this one's.
@@ -4252,7 +4289,7 @@ impl Workspace {
         chat.reset(cx);
         for item in conversation.transcript.items {
             chat.messages.push(match item {
-                ai::Said::User { text, images, prompt } => {
+                ai::Said::User { text, images, prompt, asked_at } => {
                     let mut pictures = vec![];
                     for image_id in images {
                         // A picture that cannot be read back is left out; the question stays.
@@ -4261,7 +4298,7 @@ impl Workspace {
                         chat.stored_images.insert(image_id.clone());
                         pictures.push(ChatImage { id: image_id, image: Arc::new(Image::from_bytes(format, data)) });
                     }
-                    ChatItem::User { text, images: pictures, prompt }
+                    ChatItem::User { text, images: pictures, prompt, asked_at }
                 }
                 ai::Said::Answer { text } => ChatItem::Answer(text),
                 ai::Said::Tool { call, result, failed } => ChatItem::Tool { call, result: Some((result, failed)) },
@@ -4890,6 +4927,7 @@ impl Workspace {
             Modal::ReviewEvidence(_) => self.submit_review_evidence(window, cx),
             Modal::ReviewText { .. } => self.submit_review_text(window, cx),
             Modal::Figure(_) => self.submit_figure(window, cx),
+            Modal::Notion(_) => self.submit_notion(window, cx),
             Modal::Complete(form) => {
                 if form.chosen.is_some() { self.complete_apply(window, cx) } else { self.complete_find(cx) }
             }
@@ -5690,6 +5728,7 @@ impl Workspace {
                         "appearance" => SettingsPage::Appearance,
                         "shortcuts" => SettingsPage::Shortcuts,
                         "network" => SettingsPage::Network,
+                        "notion" => SettingsPage::Notion,
                         "about" => SettingsPage::About,
                         _ => SettingsPage::General,
                     }),

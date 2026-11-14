@@ -28,3 +28,6 @@ Wisp Paper 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随
 `assets/icons/provider-{deepseek,kimi,glm,claude,openai}.svg` 是各模型服务的标志，取自 [lobe-icons](https://github.com/lobehub/lobe-icons)（@lobehub/icons-static-svg 1.100.0，MIT 许可），只用来在 设置 › AI 里认出是哪家的服务；标志本身归各自的公司所有。`provider-custom.svg` 是 Lucide 的 server。`provider-{ark,gemini,typesafe}.svg` 为本项目绘制，所指的标志归各自的公司所有。
 
 `assets/branding/` 里的应用图标为本项目绘制。
+
+
+`assets/plugins/notion.svg` 取自 [Simple Icons 的 Notion 矢量图标](https://github.com/simple-icons/simple-icons/blob/develop/icons/notion.svg)（[CC0-1.0](https://github.com/simple-icons/simple-icons/blob/develop/LICENSE.md)），用于插件介绍和账户卡片，按屏幕缩放比例渲染。`assets/plugins/notion.png` 取自 [Notion 官方站点](https://www.notion.com/images/logo-ios.png)，保留为图文上传验收素材。Notion 标志及商标属于其权利人；WispPaper 的集成页面不表示该应用由 Notion 发布。

@@ -14,7 +14,7 @@ use crate::input::{InputEvent, TextInput};
 use crate::settings::{button, group, note, row, switch};
 use crate::theme::{Theme, text_px};
 use crate::ui;
-use gpui::*;
+use gpui::{prelude::FluentBuilder, *};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use wisp_core::connector::{Connector, Tool};
@@ -90,8 +90,8 @@ pub struct Fields {
 
 impl Fields {
     fn new(connector: &Connector, cx: &mut Context<Workspace>) -> Fields {
-        let name = cx.new(|cx| TextInput::new("Notion", cx).with_text(&connector.name));
-        let target = cx.new(|cx| TextInput::new("https://example.com/mcp · npx -y some-mcp-server", cx).with_text(&connector.target));
+        let name = cx.new(|cx| TextInput::new(t("输入连接器名称"), cx).with_text(&connector.name));
+        let target = cx.new(|cx| TextInput::new(t("输入 MCP 服务地址或本机命令"), cx).with_text(&connector.target));
         let token = cx.new(|cx| TextInput::new(t("没有就留空"), cx).with_text(&connector.token));
         let subscriptions = [&name, &target, &token]
             .into_iter()
@@ -172,7 +172,7 @@ impl Workspace {
     }
 
     fn connect_to(&mut self, connector: Connector, asked: bool, cx: &mut Context<Self>) {
-        if connector.target.trim().is_empty() { return }
+        if connector.target.trim().is_empty() || self.connection(&connector) == Some(&Connection::Connecting) { return }
         self.prune(Some(&connector));
         self.connections.push((connector.clone(), Connection::Connecting));
         cx.notify();
@@ -313,7 +313,7 @@ impl Workspace {
                 if connect { self.connect(index, false, cx) }
                 cx.notify();
             }
-            Do::Connect(index) => self.connect(index, true, cx),
+            Do::Connect(index) => { if let Some(c) = self.settings.connectors.get(index) && let Some(url) = wisp_net::mcp::pending_notion_login(c) { cx.open_url(&url); } else { self.connect(index, true, cx); } }
             Do::SignIn(index) => {
                 let Some(connector) = self.settings.connectors.get(index).cloned() else { return };
                 self.sign_in(connector, cx);
@@ -453,17 +453,18 @@ impl Workspace {
             .map(|(i, connector)| {
                 let shown = view.connector.as_ref().filter(|(index, _)| *index == i);
                 let state = self.connection(connector);
+                let notion_target = wisp_net::notion::is_notion_target(&connector.target);
                 let (status, color): (SharedString, Hsla) = match state {
                     _ if connector.off => (t("已停用").into(), Theme::text_tertiary()),
-                    _ if connector.target.trim().is_empty() => (t("还没有填写地址或命令").into(), Theme::text_tertiary()),
+                    _ if connector.target.trim().is_empty() => (t("待配置").into(), Theme::text_tertiary()),
                     None => (t("未连接").into(), Theme::text_tertiary()),
                     Some(Connection::Connecting) => (t("正在连接…").into(), Theme::text_tertiary()),
-                    Some(Connection::Ready { tools, .. }) => (tf!("已连接 · {} 个工具", "Connected · {} tools", tools.len()).into(), Theme::text_secondary()),
+                    Some(Connection::Ready { tools, .. }) => (tf!("已连接 · {} 个工具", "Connected · {} tools", tools.len()).into(), Theme::success()),
                     Some(Connection::SignIn) => (t("需要在浏览器中登录").into(), Theme::warning()),
                     Some(Connection::SigningIn { .. }) => (t("正在等待浏览器中的登录…").into(), Theme::text_tertiary()),
                     Some(Connection::Failed(why)) => (why.clone().into(), Theme::danger()),
                 };
-                let name: SharedString = if connector.name.trim().is_empty() { t("未命名的连接器").into() } else { connector.name.clone().into() };
+                let name: SharedString = if connector.name.trim().is_empty() && notion_target { "Notion".into() } else if connector.name.trim().is_empty() && connector.target.trim().is_empty() { t("新连接器").into() } else if connector.name.trim().is_empty() { t("未命名的连接器").into() } else { connector.name.clone().into() };
                 // The row opens the fields; the switch beside it is not inside it, or the row would hear its click.
                 let head = div()
                     .flex()
@@ -489,10 +490,12 @@ impl Workspace {
                             .child(div().flex_none().font_weight(FontWeight::MEDIUM).child(name))
                             .child(div().flex_1().min_w_0().truncate().text_size(text_px(12.)).text_color(color).child(status)),
                     )
+                    .when(notion_target && !connector.off && matches!(state, Some(Connection::Ready { .. })), |d| d.child(
+                        button(("notion-settings", i), t("设置 Notion")).flex_none().on_click(self.on(Cmd::OpenSettings(crate::settings::SettingsPage::Notion), cx))))
                     .child(switch(("connector-on", i), !connector.off).on_click(self.on(Cmd::Custom(Do::ToggleConnector(i)), cx)));
                 let fields = shown.map(|(_, fields)| {
                     let field = |input: &Entity<TextInput>| div().w(px(360.)).child(ui::field(input, window, cx));
-                    let token = if connector.remote() { t("服务给了你令牌（API key）才填：作为 Authorization: Bearer 发送，和模型的密钥一样以明文保存在 settings.json 里。要在浏览器中登录的服务留空。") } else { t("只对网址形式的连接器有用。命令需要的密钥写在命令里或它自己的配置里。") };
+                    let token = if notion_target && !connector.remote() { t("浏览器授权，无需填写令牌。") } else if connector.remote() { t("服务给了你令牌（API key）才填：作为 Authorization: Bearer 发送，和模型的密钥一样以明文保存在 settings.json 里。要在浏览器中登录的服务留空。") } else { t("只对网址形式的连接器有用。命令需要的密钥写在命令里或它自己的配置里。") };
                     let target = t("以 http(s):// 开头的是远程 MCP 服务的地址；其它内容当作一条在本机运行的命令，通过标准输入输出通信。");
                     let mut rows = vec![row(t("名称"), None, field(&fields.name)), row(t("地址或命令"), Some(target.into()), field(&fields.target)), row(t("令牌"), Some(token.into()), field(&fields.token))];
                     if connector.remote() && connector.token.trim().is_empty() && let Some((detail, control)) = self.sign_in_row(i, state, cx) {

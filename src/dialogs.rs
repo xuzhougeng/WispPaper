@@ -48,6 +48,7 @@ impl Workspace {
         let body = || div().id("modal-body").flex().flex_col().flex_1().min_h_0().overflow_y_scroll().gap(px(12.)).px(px(20.)).py(px(8.));
 
         let card = match modal {
+            Modal::Notion(form) => self.render_notion_form(form, window, cx),
             Modal::Section { .. } => self.render_section_dialog(window, cx)?,
             Modal::History { .. } => self.render_history_dialog(cx)?,
             Modal::ReviewEvidence(_) => self.render_review_evidence_dialog(window, cx)?,

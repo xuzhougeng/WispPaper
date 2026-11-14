@@ -1211,6 +1211,8 @@ pub fn slash_matches(input: &str, custom: &[Command]) -> Vec<Offer> {
 pub enum Said {
     /// A question as typed, with the ids of the pictures that went with it.
     User {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        asked_at: String,
         text: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         images: Vec<String>,
@@ -2348,7 +2350,7 @@ mod tests {
     fn transcripts() {
         let transcript = Transcript {
             items: vec![
-                Said::User { text: "这张图\n说明了什么？".into(), images: vec!["I-1".into()], prompt: String::new() },
+                Said::User { asked_at: String::new(), text: "这张图\n说明了什么？".into(), images: vec!["I-1".into()], prompt: String::new() },
                 Said::Tool { call: "检索全文：WOX5".into(), result: "3 条结果".into(), failed: false },
                 Said::Answer { text: "见 [P1]。".into() },
             ],
@@ -2360,7 +2362,7 @@ mod tests {
         assert_eq!((transcript.title(), transcript.questions()), ("这张图 说明了什么？".to_string(), 1));
         // Kept by an older build, or damaged: what is missing is empty, not an error.
         assert_eq!(serde_json::from_str::<Transcript>("{}").unwrap(), Transcript::default());
-        let pictures = Transcript { items: vec![Said::User { text: String::new(), images: vec!["I-1".into()], prompt: String::new() }], sources: vec![] };
+        let pictures = Transcript { items: vec![Said::User { asked_at: String::new(), text: String::new(), images: vec!["I-1".into()], prompt: String::new() }], sources: vec![] };
         assert_eq!((pictures.title(), Transcript::default().title()), ("（图片）".to_string(), "未命名对话".to_string()));
     }
 }
