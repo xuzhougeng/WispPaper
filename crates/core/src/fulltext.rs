@@ -146,22 +146,56 @@ pub fn bare(text: &str) -> String {
     out
 }
 
-/// Where a quotation stands among the glyphs of a page, given the text of
-/// each glyph in drawing order: the range of glyphs it covers. When the whole
-/// quotation is not there, its first 80, 40 or 20 characters are looked for,
-/// so a quotation that drifts from the page after a while is still found.
-pub fn find_quote(glyphs: &[String], quote: &str) -> Option<std::ops::Range<usize>> {
-    // Every compared character, with the glyph it came from.
-    let mut stream: Vec<(char, usize)> = vec![];
+/// Which glyphs are raised citation numbers, by their boxes (`[left, top,
+/// right, bottom]`): digits set smaller and higher than the glyph of the
+/// running text before them. After a digit they are a power, and stay. The
+/// page text a quotation is taken from leaves such numbers out (`pdftext`).
+fn raised_numbers(glyphs: &[String], boxes: &[[f32; 4]]) -> Vec<bool> {
+    let mut raised = vec![false; glyphs.len()];
+    let mut before: Option<usize> = None;
     for (index, glyph) in glyphs.iter().enumerate() {
-        stream.extend(bare(glyph).chars().map(|c| (c, index)));
+        let said = bare(glyph);
+        if said.is_empty() { continue }
+        if let Some(at) = before.filter(|at| !bare(&glyphs[*at]).ends_with(|c: char| c.is_numeric())) {
+            // A font's own superscript digits, or ordinary ones set small above the line they follow.
+            let small = || boxes.get(index).zip(boxes.get(at)).is_some_and(|(b, line)| {
+                let height = line[3] - line[1];
+                b[3] - b[1] < 0.82 * height && b[3] < line[3] - 0.12 * height && b[3] > line[1]
+            });
+            if said.chars().all(|c| "⁰¹²³⁴⁵⁶⁷⁸⁹".contains(c)) || said.chars().all(|c| c.is_ascii_digit()) && small() {
+                raised[index] = true;
+                continue;
+            }
+        }
+        before = Some(index);
     }
+    raised
+}
+
+/// Where a quotation stands among the glyphs of a page, given the text and
+/// the box of each glyph in drawing order: the range of glyphs it covers,
+/// and whether that is the whole quotation. Raised citation numbers between
+/// its words do not break it. When the whole quotation is not there, its
+/// first 80, 40 or 20 characters are looked for, so a quotation that drifts
+/// from the page after a while is still found, and said to be found in part.
+pub fn find_quote(glyphs: &[String], boxes: &[[f32; 4]], quote: &str) -> Option<(std::ops::Range<usize>, bool)> {
+    let raised = raised_numbers(glyphs, boxes);
+    // Every compared character, with the glyph it came from: without the raised numbers, then with them.
+    let streams = [true, false].map(|skip| {
+        let mut stream: Vec<(char, usize)> = vec![];
+        for (index, glyph) in glyphs.iter().enumerate() {
+            if !(skip && raised[index]) { stream.extend(bare(glyph).chars().map(|c| (c, index))) }
+        }
+        stream
+    });
     let wanted: Vec<char> = bare(quote).chars().collect();
     for length in [wanted.len(), 80, 40, 20] {
         if length > wanted.len() || length < 8 { continue }
         let part = &wanted[..length];
-        if let Some(at) = stream.windows(length).position(|window| window.iter().map(|(c, _)| c).eq(part.iter())) {
-            return Some(stream[at].1..stream[at + length - 1].1 + 1);
+        for stream in &streams {
+            if let Some(at) = stream.windows(length).position(|window| window.iter().map(|(c, _)| c).eq(part.iter())) {
+                return Some((stream[at].1..stream[at + length - 1].1 + 1, length == wanted.len()));
+            }
         }
     }
     None
@@ -272,15 +306,35 @@ mod tests {
         assert_eq!(bare("Single-cell\nRNA-seq: ﬁve ﬂoors, 10×!"), "singlecellrnaseqfivefloors10");
         // One glyph per character, as a PDF draws them; the ligature is one glyph.
         let glyphs: Vec<String> = "Libraries were prepared with 10x Genomics Chromium. The ﬁrst run failed.".chars().map(String::from).collect();
-        let found = find_quote(&glyphs, "prepared with\n10X genomics chromium").unwrap();
-        assert_eq!(glyphs[found.clone()].concat(), "prepared with 10x Genomics Chromium");
-        assert_eq!(glyphs[find_quote(&glyphs, "The first run").unwrap()].concat(), "The ﬁrst run");
+        let find_quote = |glyphs: &[String], quote: &str| find_quote(glyphs, &[], quote);
+        let (found, whole) = find_quote(&glyphs, "prepared with\n10X genomics chromium").unwrap();
+        assert_eq!((glyphs[found].concat().as_str(), whole), ("prepared with 10x Genomics Chromium", true));
+        assert_eq!(glyphs[find_quote(&glyphs, "The first run").unwrap().0].concat(), "The ﬁrst run");
         // A quotation that leaves the page after its beginning is found by that beginning: its first 40 characters here.
-        let drifting = find_quote(&glyphs, "Libraries were prepared with 10x Genomics Chromium and then something the page never says at all").unwrap();
-        assert_eq!(glyphs[drifting].concat(), "Libraries were prepared with 10x Genomics Chro");
+        let (drifting, whole) = find_quote(&glyphs, "Libraries were prepared with 10x Genomics Chromium and then something the page never says at all").unwrap();
+        assert_eq!((glyphs[drifting].concat().as_str(), whole), ("Libraries were prepared with 10x Genomics Chro", false));
         assert_eq!(find_quote(&glyphs, "nothing of the kind here"), None);
         assert_eq!(find_quote(&glyphs, "with"), None);
         assert_eq!(find_quote(&[], "prepared with 10x"), None);
+    }
+
+    #[test]
+    fn raised_citation_numbers_do_not_cut_a_quotation() {
+        // Issue 92: "16" is set small above the line after "challenging"; "20" and "5" are of the text.
+        let page = "The assay remains challenging16, especially for the 20 samples with low input in 2019 5.";
+        let glyphs: Vec<String> = page.chars().map(String::from).collect();
+        let boxes: Vec<[f32; 4]> = (0..glyphs.len()).map(|i| if (29..31).contains(&i) { [i as f32 * 5., 97., i as f32 * 5. + 3., 103.] } else { [i as f32 * 5., 100., i as f32 * 5. + 5., 110.] }).collect();
+        let quote = "The assay remains challenging, especially for the 20 samples with low input";
+        let (found, whole) = find_quote(&glyphs, &boxes, quote).unwrap();
+        assert_eq!((glyphs[found].concat().as_str(), whole), (&page[..page.find(" in 2019").unwrap()], true));
+        // A quotation that has the number is found as well; without the boxes only its beginning is.
+        assert!(find_quote(&glyphs, &boxes, "remains challenging 16, especially for").unwrap().1);
+        assert_eq!(find_quote(&glyphs, &[], quote).map(|(found, whole)| (found.len(), whole)), Some((23, false)));
+        // Numbers of the running text are compared as before: another figure is not the quotation.
+        assert_eq!(find_quote(&glyphs, &boxes, "especially for the 30 samples with low input"), None);
+        // The font's own superscripts need no boxes.
+        let glyphs: Vec<String> = "The assay remains challenging¹⁶, especially for samples.".chars().map(String::from).collect();
+        assert!(find_quote(&glyphs, &[], "The assay remains challenging, especially for samples").unwrap().1);
     }
 
     #[test]
