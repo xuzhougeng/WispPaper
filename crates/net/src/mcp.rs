@@ -1,6 +1,7 @@
 //! The connectors' transports: an MCP server at an address (Streamable
-//! HTTP) or a command whose standard streams speak the protocol. The
-//! messages and how they are read are `wisp_core::connector`'s. An address
+//! HTTP, or for a server from before it, HTTP with an event stream) or a
+//! command whose standard streams speak the protocol. The messages and how
+//! they are read are `wisp_core::connector`'s. An address
 //! is asked with the connector's own token or, without one, the token of
 //! the person's sign-in in the browser (`crate::oauth`), refreshed once when
 //! the server refuses it; a server that still refuses wants a sign-in.
@@ -10,14 +11,19 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use wisp_core::connector::{self, Connector, Heard, Tool};
+use std::time::{Duration, Instant};
+use ureq::Body;
+use ureq::http::Response;
+use wisp_core::connector::{self, Connector, Events, Heard, Tool};
 
 /// How long a server has to answer. A first connection may wait for the
 /// person to sign in in a browser (`mcp-remote`), so it is generous.
 const PATIENCE: Duration = Duration::from_secs(180);
+
+/// How long a server's event stream has to say where messages go: at once, as a rule.
+const ENDPOINT_WAIT: Duration = Duration::from_secs(30);
 
 /// Why a connector could not be used.
 #[derive(Clone, Debug, PartialEq)]
@@ -43,10 +49,183 @@ impl Failure {
     }
 }
 
+/// What an address is asked with: the connector's own token or, without
+/// one, the sign-in's. `url` is the connector's address, which the sign-in is kept under.
+struct Auth {
+    url: String,
+    token: String,
+    bearer: Option<String>,
+}
+
+impl Auth {
+    fn of(target: &str, token: &str) -> Result<Auth, String> {
+        let token = token.trim().to_string();
+        let bearer = if token.is_empty() { oauth::bearer(target)? } else { None };
+        Ok(Auth { url: target.to_string(), token, bearer })
+    }
+
+    /// Send the request `ask` makes with an authorization header, if there is
+    /// one to send; when the server refuses the sign-in's token it is
+    /// refreshed once, and a server that still refuses wants a new sign-in.
+    fn send(&mut self, ask: impl Fn(Option<&str>) -> Result<Response<Body>, String>) -> Result<Response<Body>, Failure> {
+        let mut renewed = false;
+        loop {
+            let sent = if self.token.is_empty() { self.bearer.as_deref() } else { Some(self.token.as_str()) };
+            let response = ask(sent.map(|sent| format!("Bearer {sent}")).as_deref())?;
+            if response.status().as_u16() != 401 { return Ok(response) }
+            if !self.token.is_empty() { return Err(Failure::Failed("连接器不接受这个令牌（HTTP 401）。请检查令牌；要在浏览器中登录，就把令牌留空。".into())) }
+            // The sign-in's token ran out early or was taken back: refreshed once, then it is a new sign-in.
+            if !renewed && let Some(rejected) = self.bearer.take() {
+                renewed = true;
+                self.bearer = oauth::renew(&self.url, &rejected)?;
+                if self.bearer.is_some() { continue }
+            }
+            return Err(Failure::SignIn);
+        }
+    }
+}
+
+/// What a response that is no success says, as a failure.
+fn refusal(response: &mut Response<Body>) -> Failure {
+    let status = response.status().as_u16();
+    if status == 403 { return Failure::Failed("连接器拒绝了访问（HTTP 403）：这个账号或令牌没有使用它的权限。".into()) }
+    Failure::Failed(format!("连接器返回 HTTP {status}：{}", response.body_mut().read_to_string().unwrap_or_default().chars().take(200).collect::<String>()))
+}
+
+fn succeeded(response: &mut Response<Body>) -> Result<(), Failure> {
+    if response.status().is_success() { Ok(()) } else { Err(refusal(response)) }
+}
+
+/// Streamable HTTP: every message is posted to the address, and its reply
+/// is the response's body or an event of the stream the response is.
+struct Http {
+    auth: Auth,
+    session: Option<String>,
+    /// The protocol revision the server answered with.
+    version: String,
+}
+
+impl Http {
+    fn post(&mut self, message: &Value) -> Result<Response<Body>, Failure> {
+        let (url, body) = (self.auth.url.clone(), message.to_string());
+        let (session, version) = (&self.session, &self.version);
+        self.auth.send(|authorization| {
+            let mut call = agent(Some(PATIENCE), "")?.post(url.as_str()).header("content-type", "application/json").header("accept", "application/json, text/event-stream");
+            if !version.is_empty() { call = call.header("mcp-protocol-version", version.as_str()) }
+            if let Some(authorization) = authorization { call = call.header("authorization", authorization) }
+            if let Some(session) = session.as_deref() { call = call.header("mcp-session-id", session) }
+            call.send(body.as_str()).map_err(network_error)
+        })
+    }
+
+    /// The reply to `id` in the response to a post.
+    fn read(&mut self, mut response: Response<Body>, id: Option<u64>) -> Result<Value, Failure> {
+        succeeded(&mut response)?;
+        if let Some(given) = response.headers().get("mcp-session-id").and_then(|value| value.to_str().ok()) { self.session = Some(given.to_string()) }
+        let Some(id) = id else { return Ok(Value::Null) };
+        let stream = response.headers().get("content-type").and_then(|value| value.to_str().ok()).is_some_and(|kind| kind.contains("event-stream"));
+        // The reply is the body, or one event of a stream that may carry others before it.
+        let mut said = String::new();
+        for line in BufReader::new(response.body_mut().as_reader()).lines() {
+            let line = line.map_err(|err| format!("连接中断：{err}"))?;
+            if let Heard::Reply(reply) = connector::hear(line.strip_prefix("data:").unwrap_or(&line), id) { return Ok(reply?) }
+            if !stream && said.is_empty() { said = line.trim().chars().take(200).collect() }
+        }
+        // A body that is no reply is usually the service's own complaint (a key it does not know).
+        Err(Failure::Failed(if said.is_empty() { "连接器没有应答。".into() } else { format!("连接器没有应答，它说：{said}") }))
+    }
+
+    fn exchange(&mut self, message: &Value, id: Option<u64>) -> Result<Value, Failure> {
+        let response = self.post(message)?;
+        self.read(response, id)
+    }
+}
+
+/// HTTP with an event stream, the transport before Streamable HTTP
+/// (2024-11-05): the replies come on a stream opened at the address, and
+/// messages are posted to the address its first event names.
+struct Sse {
+    auth: Auth,
+    endpoint: String,
+    lines: Receiver<String>,
+    events: Events,
+}
+
+impl Sse {
+    /// Open the stream at the address that refused a post; `refused` is
+    /// what is said when the address has no stream either.
+    fn open(mut auth: Auth, refused: Failure) -> Result<Sse, Failure> {
+        let url = auth.url.clone();
+        let mut response = auth.send(|authorization| {
+            // The stream lasts as long as the connection: no overall timeout.
+            let mut call = agent(None, "")?.get(url.as_str()).header("accept", "text/event-stream");
+            if let Some(authorization) = authorization { call = call.header("authorization", authorization) }
+            call.call().map_err(network_error)
+        })?;
+        if response.status().as_u16() == 403 { return Err(refusal(&mut response)) }
+        let streams = response.headers().get("content-type").and_then(|value| value.to_str().ok()).is_some_and(|kind| kind.contains("event-stream"));
+        if !response.status().is_success() || !streams { return Err(refused) }
+        let (sender, lines) = channel();
+        let reader = response.into_body().into_reader();
+        // Ends when the server closes the stream, or at its next line once the connection is let go.
+        std::thread::spawn(move || {
+            for line in BufReader::new(reader).lines().map_while(Result::ok) {
+                if sender.send(line).is_err() { break }
+            }
+        });
+        let mut sse = Sse { auth, endpoint: String::new(), lines, events: Events::default() };
+        let deadline = Instant::now() + ENDPOINT_WAIT;
+        loop {
+            let Ok(event) = sse.next(deadline) else { return Err(Failure::Failed("连接器的事件流没有说消息发到哪里（endpoint），这可能不是 MCP 服务的地址。".into())) };
+            if event.name != "endpoint" { continue }
+            let Some(endpoint) = connector::endpoint(&sse.auth.url, &event.data) else { return Err(Failure::Failed(format!("连接器要把消息发到另一个网站（{}），为了令牌的安全没有照做。", event.data.trim()))) };
+            sse.endpoint = endpoint;
+            return Ok(sse);
+        }
+    }
+
+    /// The next event of the stream, by `deadline`.
+    fn next(&mut self, deadline: Instant) -> Result<connector::Event, Failure> {
+        loop {
+            match self.lines.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(line) => if let Some(event) = self.events.line(&line) { return Ok(event) },
+                Err(RecvTimeoutError::Timeout) => return Err(Failure::Failed("连接器没有应答。".into())),
+                Err(RecvTimeoutError::Disconnected) => return Err(Failure::Failed("连接器的事件流断开了。".into())),
+            }
+        }
+    }
+
+    fn post(&mut self, message: &Value) -> Result<(), Failure> {
+        let (endpoint, body) = (self.endpoint.clone(), message.to_string());
+        let mut response = self.auth.send(|authorization| {
+            let mut call = agent(Some(PATIENCE), "")?.post(endpoint.as_str()).header("content-type", "application/json");
+            if let Some(authorization) = authorization { call = call.header("authorization", authorization) }
+            call.send(body.as_str()).map_err(network_error)
+        })?;
+        succeeded(&mut response)
+    }
+
+    /// Post a message and, when it has an id, wait for its reply on the
+    /// stream, answering by post what the server asks meanwhile (a ping).
+    fn exchange(&mut self, message: &Value, id: Option<u64>) -> Result<Value, Failure> {
+        self.post(message)?;
+        let Some(id) = id else { return Ok(Value::Null) };
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            let event = self.next(deadline)?;
+            if event.name != "message" { continue }
+            match connector::hear(&event.data, id) {
+                Heard::Reply(reply) => return Ok(reply?),
+                Heard::Answer(answer) => self.post(&answer)?,
+                Heard::Nothing => {}
+            }
+        }
+    }
+}
+
 enum Link {
-    /// `token` is the connector's own; `bearer` the sign-in's, when it has none.
-    /// `version` is the protocol revision the server answered with.
-    Http { url: String, token: String, bearer: Option<String>, session: Option<String>, version: String },
+    Http(Http),
+    Sse(Sse),
     Stdio { child: Child, stdin: ChildStdin, lines: Receiver<String>, errors: Arc<Mutex<String>> },
 }
 
@@ -68,17 +247,11 @@ impl Client {
     fn connect(connector: &Connector) -> Result<Client, Failure> {
         let target = connector.target.trim();
         if target.is_empty() { return Err(Failure::Failed("还没有填写地址或命令。".into())) }
-        let link = if connector.remote() {
-            let token = connector.token.trim().to_string();
-            let bearer = if token.is_empty() { oauth::bearer(target)? } else { None };
-            Link::Http { url: target.to_string(), token, bearer, session: None, version: String::new() }
-        } else {
-            spawn(target)?
+        let mut client = if connector.remote() { Client { link: remote(target, &connector.token)?, next: 1 } } else {
+            let mut client = Client { link: spawn(target)?, next: 1 };
+            client.exchange(&connector::initialize(0), Some(0))?;
+            client
         };
-        let mut client = Client { link, next: 1 };
-        let answered = client.exchange(&connector::initialize(0), Some(0))?;
-        // Every later request says the revision agreed on.
-        if let Link::Http { version, .. } = &mut client.link { *version = answered["protocolVersion"].as_str().unwrap_or(connector::VERSION).to_string() }
         client.exchange(&connector::initialized(), None)?;
         Ok(client)
     }
@@ -91,37 +264,8 @@ impl Client {
     /// Send a message and, when it has an id, wait for its reply.
     fn exchange(&mut self, message: &Value, id: Option<u64>) -> Result<Value, Failure> {
         match &mut self.link {
-            Link::Http { url, token, bearer, session, version } => {
-                let mut renewed = false;
-                let mut response = loop {
-                    let mut call = agent(Some(PATIENCE), "")?.post(url.as_str()).header("content-type", "application/json").header("accept", "application/json, text/event-stream");
-                    if !version.is_empty() { call = call.header("mcp-protocol-version", version.as_str()) }
-                    let sent = if token.is_empty() { bearer.as_deref() } else { Some(token.as_str()) };
-                    if let Some(sent) = sent { call = call.header("authorization", &format!("Bearer {sent}")) }
-                    if let Some(session) = session.as_deref() { call = call.header("mcp-session-id", session) }
-                    let response = call.send(message.to_string().as_str()).map_err(network_error)?;
-                    if response.status().as_u16() != 401 { break response }
-                    if !token.is_empty() { return Err(Failure::Failed("连接器不接受这个令牌（HTTP 401）。请检查令牌；要在浏览器中登录，就把令牌留空。".into())) }
-                    // The sign-in's token ran out early or was taken back: refreshed once, then it is a new sign-in.
-                    if !renewed && let Some(rejected) = bearer.take() {
-                        renewed = true;
-                        *bearer = oauth::renew(url, &rejected)?;
-                        if bearer.is_some() { continue }
-                    }
-                    return Err(Failure::SignIn);
-                };
-                let status = response.status().as_u16();
-                if status == 403 { return Err(Failure::Failed("连接器拒绝了访问（HTTP 403）：这个账号或令牌没有使用它的权限。".into())) }
-                if !(200..300).contains(&status) { return Err(Failure::Failed(format!("连接器返回 HTTP {status}：{}", response.body_mut().read_to_string().unwrap_or_default().chars().take(200).collect::<String>()))) }
-                if let Some(given) = response.headers().get("mcp-session-id").and_then(|value| value.to_str().ok()) { *session = Some(given.to_string()) }
-                let Some(id) = id else { return Ok(Value::Null) };
-                // The reply is the body, or one event of a stream that may carry others before it.
-                for line in BufReader::new(response.body_mut().as_reader()).lines() {
-                    let line = line.map_err(|err| format!("连接中断：{err}"))?;
-                    if let Heard::Reply(reply) = connector::hear(line.strip_prefix("data:").unwrap_or(&line), id) { return Ok(reply?) }
-                }
-                Err(Failure::Failed("连接器没有应答。".into()))
-            }
+            Link::Http(http) => http.exchange(message, id),
+            Link::Sse(sse) => sse.exchange(message, id),
             Link::Stdio { stdin, lines, errors, .. } => {
                 let gone = |errors: &Arc<Mutex<String>>| {
                     let said = errors.lock().map(|said| said.trim().to_string()).unwrap_or_default();
@@ -153,6 +297,25 @@ impl Client {
         }
         Ok(tools)
     }
+}
+
+/// Initialize the server at an address, over Streamable HTTP or, when the
+/// address takes no post (400, 404, 405), over the event stream of a server
+/// from before it, as the protocol's revision of 2025-03-26 has clients do.
+fn remote(target: &str, token: &str) -> Result<Link, Failure> {
+    let hello = connector::initialize(0);
+    let mut http = Http { auth: Auth::of(target, token)?, session: None, version: String::new() };
+    let mut response = http.post(&hello)?;
+    if matches!(response.status().as_u16(), 400 | 404 | 405) {
+        let refused = refusal(&mut response);
+        let mut sse = Sse::open(http.auth, refused)?;
+        sse.exchange(&hello, Some(0))?;
+        return Ok(Link::Sse(sse));
+    }
+    let answered = http.read(response, Some(0))?;
+    // Every later request says the revision agreed on.
+    http.version = answered["protocolVersion"].as_str().unwrap_or(connector::VERSION).to_string();
+    Ok(Link::Http(http))
 }
 
 /// Start a command the way a terminal would, so that it finds what the
@@ -293,6 +456,91 @@ mod tests {
         assert!(error.contains("「Other」") && error.contains("设置 › 自定义"), "{error}");
         disconnect(&connector);
         assert!(kept(&connector).is_none());
+    }
+
+    /// A server of the transport before Streamable HTTP, as the SDKs of
+    /// 2024 made them: the address takes no post, its event stream names where
+    /// to post, and every reply comes on the stream. Before it lists its tools
+    /// it asks a ping of its own, and lists them once the ping is answered.
+    /// Returns the address and the requests it heard (the first line and the head).
+    fn old_server() -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::net::{TcpListener, TcpStream};
+        // One event, as one chunk of the stream.
+        fn say(stream: &mut Option<TcpStream>, event: &str) {
+            let chunk = format!("{event}\n\n");
+            let _ = write!(stream.as_mut().unwrap(), "{:x}\r\n{chunk}\r\n", chunk.len());
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let heard: Arc<Mutex<Vec<String>>> = Arc::default();
+        let kept = heard.clone();
+        std::thread::spawn(move || {
+            let (mut stream, mut listing) = (None, Value::Null);
+            for connection in listener.incoming() {
+                let Ok(mut connection) = connection else { continue };
+                let (method, path, head, body) = crate::oauth::tests::read_request(&mut connection);
+                kept.lock().unwrap().push(format!("{method} {path}\n{head}"));
+                match (method.as_str(), path.split('?').next().unwrap_or("")) {
+                    ("GET", "/sse") => {
+                        let _ = connection.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nTransfer-Encoding: chunked\r\n\r\n");
+                        stream = Some(connection);
+                        say(&mut stream, ": connected");
+                        say(&mut stream, "event: endpoint\ndata: /messages?session_id=s7");
+                    }
+                    ("POST", "/messages") => {
+                        let _ = connection.write_all(b"HTTP/1.1 202 Accepted\r\nConnection: close\r\nContent-Length: 8\r\n\r\nAccepted");
+                        let message: Value = serde_json::from_str(&body).unwrap();
+                        let reply = |id: &Value, result: Value| format!("event: message\ndata: {}", json!({"jsonrpc": "2.0", "id": id, "result": result}));
+                        match message["method"].as_str() {
+                            Some("initialize") => say(&mut stream, &reply(&message["id"], json!({"protocolVersion": "2024-11-05"}))),
+                            Some("tools/list") => {
+                                listing = message["id"].clone();
+                                say(&mut stream, &format!("event: message\ndata: {}", json!({"jsonrpc": "2.0", "id": "p", "method": "ping"})));
+                            }
+                            Some("tools/call") => say(&mut stream, &reply(&message["id"], json!({"content": [{"type": "text", "text": message["params"]["arguments"]["text"]}]}))),
+                            None if message["id"] == "p" => say(&mut stream, &reply(&listing, json!({"tools": [{"name": "echo", "annotations": {"readOnlyHint": true}}]}))),
+                            _ => {}
+                        }
+                    }
+                    _ => { let _ = connection.write_all(b"HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"); }
+                }
+            }
+        });
+        (base, heard)
+    }
+
+    #[test]
+    fn an_old_server_is_asked_over_its_event_stream() {
+        let (base, heard) = old_server();
+        let connector = Connector { name: "Old".into(), target: format!("{base}/sse"), token: "secret".into(), off: false };
+        let tools = tools(&connector).unwrap();
+        assert_eq!(tools.iter().map(|tool| (tool.name.as_str(), tool.read_only)).collect::<Vec<_>>(), [("old__echo", true)]);
+        assert_eq!(call(&connector, "echo", &json!({"text": "hello"})), Ok("hello".into()));
+        keep_only(&[]);
+        let heard = heard.lock().unwrap().clone();
+        // The post at the address is refused, the stream opened there, and every message
+        // after it posted to the endpoint: initialize, initialized, tools/list, the ping's answer, tools/call.
+        let firsts: Vec<&str> = heard.iter().map(|request| request.lines().next().unwrap_or("")).collect();
+        assert_eq!(firsts, [&["POST /sse", "GET /sse"][..], &["POST /messages?session_id=s7"; 5]].concat());
+        assert!(heard[1].contains("accept: text/event-stream"), "{}", heard[1]);
+        assert!(heard.iter().all(|request| request.contains("authorization: bearer secret")), "{heard:?}");
+    }
+
+    #[test]
+    fn an_old_server_wants_the_sign_in_too_and_an_address_of_neither_says_so() {
+        crate::oauth::tests::private_file();
+        let answer = |status: &str| format!("HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+        // The stream refuses without a token: a sign-in is wanted, as at the post.
+        let base = crate::oauth::tests::route(move |method, _, _, _| answer(if method == "GET" { "401 Unauthorized" } else { "405 Method Not Allowed" }));
+        assert_eq!(tools(&Connector { target: format!("{base}/sse"), ..Default::default() }).unwrap_err(), Failure::SignIn);
+        // No stream either: what the post was answered is the reason.
+        let base = crate::oauth::tests::route(move |_, _, _, _| answer("404 Not Found"));
+        let error = tools(&Connector { target: format!("{base}/nothing"), ..Default::default() }).unwrap_err();
+        assert!(matches!(&error, Failure::Failed(why) if why.contains("HTTP 404")), "{error:?}");
+        // A body that is no reply is said.
+        let base = crate::oauth::tests::route(|_, _, _, _| crate::oauth::tests::json("200 OK", r#"{"status":"0","info":"INVALID_USER_KEY"}"#));
+        let error = tools(&Connector { target: format!("{base}/sse"), ..Default::default() }).unwrap_err();
+        assert!(matches!(&error, Failure::Failed(why) if why.contains("INVALID_USER_KEY")), "{error:?}");
     }
 
     #[cfg(unix)]

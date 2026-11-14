@@ -364,6 +364,30 @@ pub(crate) mod tests {
         ONCE.call_once(|| set_file(std::env::temp_dir().join(format!("wisp-net-oauth-{}", std::process::id())).join("oauth.json")));
     }
 
+    /// Read one request off a connection: its method, path, head (in small letters) and body.
+    pub(crate) fn read_request(stream: &mut TcpStream) -> (String, String, String, String) {
+        let mut received = vec![];
+        let mut buffer = [0u8; 4096];
+        while let Ok(n) = stream.read(&mut buffer) {
+            received.extend_from_slice(&buffer[..n]);
+            let text = String::from_utf8_lossy(&received).to_string();
+            if let Some(end) = text.find("\r\n\r\n") {
+                let head = text[..end].to_lowercase();
+                let length: usize = head.lines().find_map(|l| l.strip_prefix("content-length:").map(|v| v.trim().parse().unwrap_or(0))).unwrap_or(0);
+                let chunked = head.contains("transfer-encoding: chunked");
+                if (chunked && text.ends_with("0\r\n\r\n")) || (!chunked && received.len() >= end + 4 + length) { break }
+            }
+            if n == 0 { break }
+        }
+        let text = String::from_utf8_lossy(&received).to_string();
+        let (head, body) = text.split_once("\r\n\r\n").unwrap_or((&text, ""));
+        let mut words = head.split_whitespace();
+        let (method, path) = (words.next().unwrap_or("").to_string(), words.next().unwrap_or("").to_string());
+        // A chunked body: its one chunk's text is enough for these tests.
+        let body = if head.to_lowercase().contains("transfer-encoding: chunked") { body.split("\r\n").nth(1).unwrap_or("").to_string() } else { body.to_string() };
+        (method, path, head.to_lowercase(), body)
+    }
+
     /// A server that answers by the request: `answer(method, path, headers, body)` gives the whole response.
     pub(crate) fn route(answer: impl Fn(&str, &str, &str, &str) -> String + Send + Sync + 'static) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -374,26 +398,8 @@ pub(crate) mod tests {
                 let Ok(mut stream) = stream else { continue };
                 let answer = answer.clone();
                 std::thread::spawn(move || {
-                    let mut received = vec![];
-                    let mut buffer = [0u8; 4096];
-                    while let Ok(n) = stream.read(&mut buffer) {
-                        received.extend_from_slice(&buffer[..n]);
-                        let text = String::from_utf8_lossy(&received).to_string();
-                        if let Some(end) = text.find("\r\n\r\n") {
-                            let head = text[..end].to_lowercase();
-                            let length: usize = head.lines().find_map(|l| l.strip_prefix("content-length:").map(|v| v.trim().parse().unwrap_or(0))).unwrap_or(0);
-                            let chunked = head.contains("transfer-encoding: chunked");
-                            if (chunked && text.ends_with("0\r\n\r\n")) || (!chunked && received.len() >= end + 4 + length) { break }
-                        }
-                        if n == 0 { break }
-                    }
-                    let text = String::from_utf8_lossy(&received).to_string();
-                    let (head, body) = text.split_once("\r\n\r\n").unwrap_or((&text, ""));
-                    let mut words = head.split_whitespace();
-                    let (method, path) = (words.next().unwrap_or("").to_string(), words.next().unwrap_or("").to_string());
-                    // A chunked body: its one chunk's text is enough for these tests.
-                    let body = if head.to_lowercase().contains("transfer-encoding: chunked") { body.split("\r\n").nth(1).unwrap_or("").to_string() } else { body.to_string() };
-                    let _ = stream.write_all(answer(&method, &path, &head.to_lowercase(), &body).as_bytes());
+                    let (method, path, head, body) = read_request(&mut stream);
+                    let _ = stream.write_all(answer(&method, &path, &head, &body).as_bytes());
                 });
             }
         });
