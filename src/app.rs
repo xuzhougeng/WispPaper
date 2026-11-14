@@ -612,6 +612,8 @@ pub struct Menu {
     pub active: Option<usize>,
     /// The paper the menu is about, marked in its list while the menu is open.
     pub paper: Option<String>,
+    /// A filter's choices: the card of all the filters stays open under it (`render_papers`).
+    pub filter: bool,
 }
 
 pub struct Toast {
@@ -1304,6 +1306,10 @@ pub struct Workspace {
     pub picked: Option<crate::select::Picked>,
     /// A paper of the scope panel is held and on its way into the conversation (`chat::PaperDrag`).
     pub pinning: bool,
+    /// The pointer is over the filters of a list too narrow for them, or over the card that shows them all.
+    pub filters_over: [bool; 2],
+    /// Those filters were drawn in this frame; a frame without them forgets the pointer.
+    pub filters_drawn: bool,
 }
 
 impl Chat {
@@ -1707,7 +1713,7 @@ impl Workspace {
         theme::set_accent("blue");
         shortcuts::rebuild(&settings.shortcuts, cx);
         let libraries = libraries::list(&root);
-        let mut this = Workspace { focus, settings, settings_path, root, libraries, lib: None, settings_view: None, connections: vec![], skills: vec![], update: UpdateState::Idle, update_told: None, modal: None, modal_error: String::new(), modal_subscriptions: vec![], menu: None, toast, home_scroll: ScrollHandle::new(), resizing: None, picked: None, pinning: false };
+        let mut this = Workspace { focus, settings, settings_path, root, libraries, lib: None, settings_view: None, connections: vec![], skills: vec![], update: UpdateState::Idle, update_told: None, modal: None, modal_error: String::new(), modal_subscriptions: vec![], menu: None, toast, home_scroll: ScrollHandle::new(), resizing: None, picked: None, pinning: false, filters_over: [false; 2], filters_drawn: false };
         this.apply_appearance(window);
         this.apply_typography(window, cx);
         cx.observe_window_appearance(window, |this, window, _| this.apply_appearance(window)).detach();
@@ -1783,6 +1789,7 @@ impl Workspace {
             MenuKind::Paper(id) => Some(id.clone()),
             _ => None,
         };
+        let filter = matches!(kind, MenuKind::Filter(_));
         match kind {
             MenuKind::Paper(_) | MenuKind::Papers(_) | MenuKind::Trashed(_) | MenuKind::File(_) | MenuKind::Tag(_) | MenuKind::Conversation(..) | MenuKind::Text(_) | MenuKind::Answer(..) => (items, breaks) = self.context_menu(&kind),
             MenuKind::Figure(id) => (items, breaks) = self.figure_menu(&id),
@@ -1917,7 +1924,7 @@ impl Workspace {
             }
         }
         if items.is_empty() { return }
-        self.menu = Some(Menu { at, items, breaks, active: None, paper });
+        self.menu = Some(Menu { at, items, breaks, active: None, paper, filter });
         cx.notify();
     }
 

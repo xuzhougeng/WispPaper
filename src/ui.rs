@@ -394,15 +394,24 @@ pub fn window_controls(window: &Window) -> Option<Div> {
 /// A small ⓘ that says on hover what a part of the page is for: an
 /// explanation kept out of the way of what it explains.
 pub fn hint(id: impl Into<ElementId>, text: impl Into<String>) -> Stateful<Div> {
+    div().id(id).flex().flex_none().items_center().justify_center().size(px(18.)).rounded(px(9.)).cursor_default().hover(|s| s.bg(Theme::hover())).child(icon("info", 13., Theme::text_tertiary())).tooltip(tip(text))
+}
+
+/// What a control does, said on hover: for `.tooltip`.
+pub fn tip(text: impl Into<String>) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
     let text = text.into();
-    div().id(id).flex().flex_none().items_center().justify_center().size(px(18.)).rounded(px(9.)).cursor_default().hover(|s| s.bg(Theme::hover())).child(icon("info", 13., Theme::text_tertiary())).tooltip(move |_, cx| cx.new(|_| crate::write_assist::Tip(text.clone())).into())
+    move |_, cx| cx.new(|_| crate::write_assist::Tip(text.clone())).into()
+}
+
+/// A toolbar's button in a place too narrow for its words: the icon in the button's frame, the words on hover.
+pub fn tool_button(id: impl Into<ElementId>, name: &str, words: impl Into<String>) -> Stateful<Div> {
+    div().id(id).flex().flex_none().items_center().justify_center().size(text_px(32.)).rounded(px(8.)).border_1().border_color(Theme::line_strong()).bg(Theme::bg_body()).cursor_pointer().hover(|s| s.bg(Theme::bg_sunken())).active(|s| s.bg(Theme::pressed())).child(icon(name, 14., Theme::text_secondary())).tooltip(tip(words))
 }
 
 /// A button that is only an icon, with what it does said on hover; the
 /// sparkle of what a model does is one of these.
 pub fn icon_action(id: impl Into<ElementId>, name: &str, color: Hsla, tip: impl Into<String>) -> Stateful<Div> {
-    let tip = tip.into();
-    div().id(id).flex().flex_none().items_center().justify_center().size(px(24.)).rounded(px(6.)).cursor_pointer().hover(|s| s.bg(Theme::hover())).active(|s| s.bg(Theme::pressed())).child(icon(name, 14., color)).tooltip(move |_, cx| cx.new(|_| crate::write_assist::Tip(tip.clone())).into())
+    div().id(id).flex().flex_none().items_center().justify_center().size(px(24.)).rounded(px(6.)).cursor_pointer().hover(|s| s.bg(Theme::hover())).active(|s| s.bg(Theme::pressed())).child(icon(name, 14., color)).tooltip(self::tip(tip))
 }
 
 #[cfg(test)]
