@@ -100,19 +100,9 @@ impl Workspace {
             .min_w_0()
             .h_full()
             .when(stacked, |d| d.flex_none().h(px(800.)))
+            .child(self.render_manuscript_bar(width, window, cx))
             .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_none()
-                    .gap(px(10.))
-                    .px(px(20.))
-                    .pt(px(16.))
-                    .pb(px(12.))
-                    .child(self.render_manuscript_bar(window, cx)),
-            )
-            .child(
-                div().flex().flex_col().flex_1().min_h_0().px(px(20.)).pb(px(8.)).child(if writing.reading { self.render_manuscript_reading(cx) } else if let Some(version) = version { self.render_version(version, cx) } else {
+                div().flex().flex_col().flex_1().min_h_0().px(px(16.)).pt(px(12.)).pb(px(8.)).child(if writing.reading { self.render_manuscript_reading(cx) } else if let Some(version) = version { self.render_version(version, cx) } else {
                     let page = div().relative().w_full().max_w(theme::manuscript_width()).mx_auto().pl(px(18.)).pr(px(if markers.is_empty() { 18. } else { MARGIN })).py(px(14.)).text_size(text_px(15.)).line_height(theme::body_line(26.)).text_color(Theme::text());
                     div()
                         .id("write-editor")
@@ -130,11 +120,11 @@ impl Workspace {
             )
             .when(!agent && editing && writing.editor.read(cx).selection().is_empty(), |d| d.child(self.render_assist_bar(false, cx)))
             // With the caret in a citation: the paper it names and the passage of that paper its sentence rests on.
-            .children(if editing { self.render_source_strip(width - 40., cx) } else { None })
+            .children(if editing { self.render_source_strip(width - 32., cx) } else { None })
             // Under the manuscript, the box where the assistant is told what to change in this section.
-            .when(!agent && editing, |d| d.child(self.render_revise(width - 40., window, cx)))
-            .when_some(told, |d, run| d.child(div().flex().flex_col().flex_none().mx(px(20.)).mb(px(8.)).px(px(10.)).pt(px(8.)).pb(px(2.)).rounded(px(10.)).border_1().border_color(Theme::line()).bg(Theme::bg_body()).child(self.render_revise_run(run, cx).border_b_0())))
-            .child(div().flex().flex_none().px(px(22.)).pb(px(12.)).text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(div().flex_1().min_w_0().child(if writing.reading {
+            .when(!agent && editing, |d| d.child(self.render_revise(width - 32., window, cx)))
+            .when_some(told, |d, run| d.child(div().flex().flex_col().flex_none().mx(px(16.)).mb(px(8.)).px(px(10.)).pt(px(8.)).pb(px(2.)).rounded(px(10.)).border_1().border_color(Theme::line()).bg(Theme::bg_body()).child(self.render_revise_run(run, cx).border_b_0())))
+            .child(div().flex().flex_none().px(px(18.)).pb(px(12.)).text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(div().flex_1().min_w_0().child(if writing.reading {
                 let whole: String = writing.current().map_or(String::new(), |m| m.sections.iter().map(|s| s.body.as_str()).collect::<Vec<_>>().join("\n"));
                 tf!("全文 {} · 点一节的名称，回到那一节写", "Manuscript: {} · Click a section name to edit it", length_label(&whole))
             } else if version.is_some() {
@@ -209,7 +199,7 @@ impl Workspace {
         let count = found.map(|value| value["sentencesInSection"].as_u64().unwrap_or(0));
         let drawn_on = count.zip(drawn_on).map(|(count, text)| div().id("write-drawn-on").flex_none().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(tf!("{count} 句", "{count} sentences")).tooltip(move |_, cx| cx.new(|_| crate::write_assist::Tip(text.clone())).into()));
 
-        let side = div().flex().flex_col().flex_none().w(px(width)).h_full().border_l_1().border_color(Theme::line()).bg(Theme::bg_sunken()).child(self.render_side_switch(cx));
+        let side = div().relative().flex().flex_col().flex_none().w(px(width)).h_full().border_l_1().border_color(Theme::line()).bg(Theme::bg_sunken()).child(ui::strip_cap(Theme::bg_sunken())).child(self.render_side_switch(cx));
         // What an action on the text came to stands over any page of the panel.
         if writing.side != Side::Candidates {
             let card = self.render_assist_card(width, cx);

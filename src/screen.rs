@@ -136,11 +136,18 @@ impl Workspace {
         let rows: Vec<AnyElement> = queue.iter().take(SHOWN).map(|paper| self.render_screen_row(paper, lib.suggestions.get(&paper.id), lib.screen_group(&paper.id), lib.selected.as_deref() == Some(paper.id.as_str()), screen.reading.contains(&paper.id), cx)).collect();
         let titles: Vec<String> = screen.reading.iter().filter_map(|id| lib.paper(id)).map(|p| p.title.clone()).collect();
 
+        // The title stays in the header band, level with the paper's beside it; the rest scrolls under it.
         div()
-            .id("screen-page")
             .flex()
             .flex_col()
             .size_full()
+            .child(ui::column_head().gap(px(12.)).child(div().flex_none().text_size(text_px(ui::HEAD_TITLE)).font_weight(FontWeight::SEMIBOLD).child(t("筛选"))).child(self.render_screen_modes(cx)))
+            .child(div()
+            .id("screen-page")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
             .overflow_y_scroll()
             .child(
                 div()
@@ -149,9 +156,8 @@ impl Workspace {
                     .flex_none()
                     .gap(px(10.))
                     .px(px(16.))
-                    .pt(px(16.))
+                    .pt(px(12.))
                     .pb(px(12.))
-                    .child(div().flex().flex_wrap().items_center().gap(px(12.)).child(div().flex_none().text_size(text_px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("筛选"))).child(self.render_screen_modes(cx)))
                     .child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(t("助手读待判断的文献（有全文读全文，否则读摘要），几篇同时进行，给出建议、理由和原文依据；读完后一起确认，或切到「逐篇」一篇篇用按键判断。建议只是建议：收录判断由你确认。")))
                     .child(
                         div()
@@ -201,7 +207,7 @@ impl Workspace {
                     .children(rows)
                     .when(queue.len() > SHOWN, |d| d.child(div().px(px(16.)).py(px(10.)).text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(tf!("还有 {} 篇，判断完上面的会继续出现。", "{} more papers will appear as you screen the ones above.", queue.len() - SHOWN))))
                     .into_any_element()
-            })
+            }))
             .into_any_element()
     }
 
