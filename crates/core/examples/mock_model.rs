@@ -18,6 +18,8 @@
 //! paper the search returned, saying how many pictures came with the
 //! conversation. A question containing 「试试撤销」 makes it call
 //! `undo_import` instead, a tool the window asks the person about first;
+//! one containing 「试试连接器」 makes it call the first tool of a connector
+//! (a name with `__`) that the request offers;
 //! one containing 「试试整理」 makes it call `organise_papers` for the first
 //! two papers, whose changes the window lists before it asks.
 //! Asked to review a section of the manuscript (批注), it proposes a change
@@ -384,6 +386,13 @@ fn answer(mut stream: TcpStream, delay: u64) {
             events.push_str(&event(r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"我来撤销那次导入。"}}"#));
             events.push_str(&event(r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_3","name":"undo_import","input":{}}}"#));
             events.push_str(&event(r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"id\": \"B-demo\"}"}}"#));
+            events.push_str(&event(r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"}}"#));
+        } else if let Some(tool) = request.rfind("试试连接器").filter(|at| request.rfind("\"role\":\"user\"").is_some_and(|user| user < *at)).and_then(|_| request.split("\"name\":\"").skip(1).filter_map(|rest| rest.split('"').next()).find(|name| name.contains("__"))) {
+            // A connector's tool (the first one offered): the window asks first unless the server says it only reads.
+            events.push_str(&event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#));
+            events.push_str(&event(r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"我用连接器试一下。"}}"#));
+            events.push_str(&event(&format!(r#"{{"type":"content_block_start","index":1,"content_block":{{"type":"tool_use","id":"toolu_5","name":"{tool}","input":{{}}}}}}"#)));
+            events.push_str(&event(r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"text\": \"来自假模型\"}"}}"#));
             events.push_str(&event(r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"}}"#));
         } else if request.rfind("试试整理").is_some_and(|at| request.rfind("\"role\":\"user\"").is_some_and(|user| user < at)) {
             // A tool that changes papers the library holds: the window lists what it would change and asks first.

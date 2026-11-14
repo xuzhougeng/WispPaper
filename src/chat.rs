@@ -1097,7 +1097,7 @@ impl Workspace {
                     .border_1()
                     .border_color(Theme::line_strong())
                     .bg(Theme::bg_sunken())
-                    .child(div().flex().items_center().gap(px(6.)).font_weight(FontWeight::MEDIUM).child(ui::icon("info", 14., Theme::accent())).child(t("助手想改动文献库，等你同意")))
+                    .child(div().flex().items_center().gap(px(6.)).font_weight(FontWeight::MEDIUM).child(ui::icon("info", 14., Theme::accent())).child(if pending.calls.iter().any(|call| call.confirm && call.outside.is_some()) { t("助手想执行下面的操作，等你同意") } else { t("助手想改动文献库，等你同意") }))
                     .children(pending.calls.iter().enumerate().filter(|(_, call)| call.confirm).map(|(n, call)| {
                         let line = div().text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text_secondary()).child(call.line.clone());
                         if call.details.is_empty() { return div().pl(px(20.)).child(line) }

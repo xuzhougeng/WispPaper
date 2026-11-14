@@ -231,6 +231,8 @@ pub enum Cmd {
     /// Show or fold up the fields of the n-th.
     SelectCommand(usize),
     AskRemoveCommand(usize),
+    /// 设置 › 自定义: the connectors and the skills (`custom.rs`).
+    Custom(crate::custom::Do),
     RemoveCommand(usize),
     // Collect
     AddById,
@@ -834,6 +836,8 @@ pub struct PreparedCall {
     pub line: String,
     /// What it would change, a line per paper (`tools::preview_call`), for the card that asks.
     pub details: Vec<String>,
+    /// Not a tool of the library: a connector's, or a skill being read.
+    pub outside: Option<crate::custom::Outside>,
 }
 
 /// The calls of a turn that wait for the person's consent, and where their lines stand in the conversation.
@@ -1242,6 +1246,10 @@ pub struct Workspace {
     pub lib: Option<Library>,
     /// 设置, shown instead of the home page or the library while it is open.
     pub settings_view: Option<SettingsView>,
+    /// 连接器: where the connection of each one tried stands (`custom.rs`).
+    pub connections: Vec<(wisp_core::connector::Connector, crate::custom::Connection)>,
+    /// 技能: what the skills' folder held when it was last read.
+    pub skills: Vec<wisp_core::skill::Skill>,
     pub update: UpdateState,
     /// The version the automatic check last announced, so it says it once.
     pub update_told: Option<String>,
@@ -1645,12 +1653,14 @@ impl Workspace {
         theme::set_accent("blue");
         shortcuts::rebuild(&settings.shortcuts, cx);
         let libraries = libraries::list(&root);
-        let mut this = Workspace { focus, settings, settings_path, root, libraries, lib: None, settings_view: None, update: UpdateState::Idle, update_told: None, modal: None, modal_error: String::new(), modal_subscriptions: vec![], menu: None, toast, home_scroll: ScrollHandle::new(), resizing: None, picked: None, pinning: false };
+        let mut this = Workspace { focus, settings, settings_path, root, libraries, lib: None, settings_view: None, connections: vec![], skills: vec![], update: UpdateState::Idle, update_told: None, modal: None, modal_error: String::new(), modal_subscriptions: vec![], menu: None, toast, home_scroll: ScrollHandle::new(), resizing: None, picked: None, pinning: false };
         this.apply_appearance(window);
         this.apply_typography(window, cx);
         cx.observe_window_appearance(window, |this, window, _| this.apply_appearance(window)).detach();
         this.watch_updates(cx);
         this.watch_searches(cx);
+        this.load_skills();
+        this.connect_all(cx);
         this
     }
 
@@ -2028,6 +2038,7 @@ impl Workspace {
             }
             Cmd::ResetTranslationPrompt => self.reset_translation_prompt(cx),
             Cmd::AddCommand => self.add_command(cx),
+            Cmd::Custom(what) => self.run_custom(what, window, cx),
             Cmd::SelectCommand(index) => self.select_command(index, cx),
             Cmd::AskRemoveCommand(index) => {
                 let Some(command) = self.settings.commands.get(index) else { return };
@@ -3857,10 +3868,12 @@ impl Workspace {
     /// for. False when the request could not be made.
     fn chat_step(&mut self, about_paper: bool, cx: &mut Context<Self>) -> bool {
         let profile = self.settings.profile_for_or_default(Task::Chat);
+        // Beside the library's tools: the connectors' and the one that reads a skill.
+        let outside: Vec<_> = self.outside_tools().into_iter().map(|(tool, _)| tool).collect();
         let Some(lib) = self.lib.as_mut() else { return false };
         let chat = if about_paper { &mut lib.paper_chat } else { &mut lib.library_chat };
         let Some(ctx) = chat.ctx.as_ref() else { return false };
-        let request = match ai::chat_request(&profile, ctx, &chat.wire, &tools::library_catalog()) {
+        let request = match ai::chat_request_with(&profile, ctx, &chat.wire, &tools::library_catalog(), &outside) {
             Ok(request) => request,
             Err(err) => {
                 chat.error = err;
@@ -3945,6 +3958,9 @@ impl Workspace {
     /// at once, or after the person's consent when one of them would bring
     /// papers in, take them out, or drop a saved search.
     fn run_tools(&mut self, about_paper: bool, calls: Vec<ToolCall>, cx: &mut Context<Self>) {
+        // A connector's tool or a skill: looked up before the library is borrowed.
+        let mut outside: Vec<_> = calls.iter().map(|call| self.outside_call(&call.name, &call.args)).collect();
+        outside.reverse();
         let Some(lib) = self.lib.as_mut() else { return };
         let store = &lib.store;
         let chat = if about_paper { &mut lib.paper_chat } else { &mut lib.library_chat };
@@ -3952,6 +3968,11 @@ impl Workspace {
         let catalog = tools::catalog();
         let mut prepared = vec![];
         for call in calls {
+            if let Some((outside, confirm, line, details)) = outside.pop().flatten() {
+                chat.messages.push(ChatItem::Tool { call: line.clone(), result: None });
+                prepared.push(PreparedCall { id: call.id, name: call.name, args: call.args, writes: false, confirm, line, details, outside: Some(outside) });
+                continue;
+            }
             let tool = catalog.iter().find(|t| t.name == call.name);
             let line = tools::describe_call(&call.name, call.args.as_ref().unwrap_or(&Value::Null));
             chat.messages.push(ChatItem::Tool { call: line.clone(), result: None });
@@ -3968,7 +3989,7 @@ impl Workspace {
                 _ => Some(vec![]),
             };
             let (confirm, details) = (asks && details.is_some(), details.unwrap_or_default());
-            prepared.push(PreparedCall { id: call.id, name: call.name, args, writes: tool.is_some_and(|t| t.writes), confirm, line, details });
+            prepared.push(PreparedCall { id: call.id, name: call.name, args, writes: tool.is_some_and(|t| t.writes), confirm, line, details, outside: None });
         }
         chat.scroll.scroll_to_bottom();
         if prepared.iter().any(|call| call.confirm) && !chat.allow_changes {
@@ -4979,6 +5000,16 @@ fn run_tool(info: &LibraryInfo, sources: &[ai::Source], call: PreparedCall, allo
     if call.confirm && !allowed {
         return (call.id, "用户没有同意这次操作，它没有执行。不要重试；需要时向用户说明它会做什么，由用户决定。".into(), true, t("没有执行：未获同意").into());
     }
+    if let Some(outside) = call.outside {
+        let result = match outside {
+            crate::custom::Outside::Said(said) => said,
+            crate::custom::Outside::Connector(connector, tool) => call.args.and_then(|args| wisp_net::mcp::call(&connector, &tool, &args)),
+        };
+        return match result {
+            Ok(text) => (call.id, text, false, t("完成").into()),
+            Err(err) => (call.id, err.clone(), true, err),
+        };
+    }
     let result = call.args.and_then(|args| {
         let mut store = Store::open(&info.dir).map_err(|e| format!("{e:#}"))?;
         let mut value = tools::call_in(&mut store, info, &call.name, &args, &wisp_net::get_text, &wisp_net::download)?;
@@ -5544,6 +5575,7 @@ impl Workspace {
                     "ai" | "models" => Cmd::AiTab(AiTab::Models),
                     "tasks" => Cmd::AiTab(AiTab::Tasks),
                     "commands" => Cmd::AiTab(AiTab::Commands),
+                    "customize" => Cmd::OpenSettings(SettingsPage::Customize),
                     _ => Cmd::OpenSettings(match arg {
                         "appearance" => SettingsPage::Appearance,
                         "shortcuts" => SettingsPage::Shortcuts,
@@ -5555,6 +5587,10 @@ impl Workspace {
                 "candidate" => Some(Cmd::CompleteChoose(arg.parse().ok())),
                 // `command:0` opens the first of the person's own commands on 设置 › 命令.
                 "command" => Some(Cmd::SelectCommand(arg.parse().unwrap_or(0))),
+                // `consent` / `consent:always` / `consent:deny` answers the card that asks about the assistant's tools.
+                "consent" => Some(Cmd::AnswerTools(false, match arg { "always" => Consent::Always, "deny" => Consent::Deny, _ => Consent::Once })),
+                // `connector:0` opens the first connector on 设置 › 自定义 (after `settings:customize`).
+                "connector" => Some(Cmd::Custom(crate::custom::Do::SelectConnector(arg.parse().unwrap_or(0)))),
                 // Saved like the choice in 设置 › 外观: "light", "dark", or empty for the system's.
                 "theme" => Some(Cmd::SetAppearance(arg.to_string())),
                 // Typography is saved just as through the appearance controls.
