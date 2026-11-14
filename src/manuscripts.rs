@@ -698,14 +698,23 @@ impl Workspace {
             .child(
                 div()
                     .flex()
-                    .flex_col()
-                    .gap(px(3.))
-                    .px(px(8.))
-                    .child(div().text_size(text_px(15.)).font_weight(FontWeight::SEMIBOLD).line_height(text_px(21.)).text_color(Theme::text()).child(crate::i18n::manuscript_title(manuscript).to_string()))
-                    .child(div().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(about.join(" · "))),
+                    .items_start()
+                    .gap(px(6.))
+                    .pl(px(8.))
+                    .pr(px(2.))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(3.))
+                            .child(div().text_size(text_px(15.)).font_weight(FontWeight::SEMIBOLD).line_height(text_px(21.)).text_color(Theme::text()).child(crate::i18n::manuscript_title(manuscript).to_string()))
+                            .child(div().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(about.join(" · "))),
+                    )
+                    // Who writes: the person, or the assistant in a conversation beside the manuscript.
+                    .child(self.render_mode_switch(cx)),
             )
-            // Who writes: the person, or the assistant in a conversation beside the manuscript.
-            .child(div().flex().flex_none().px(px(6.)).child(self.render_mode_switch(cx).flex_1()))
             .child(
                 div()
                     .flex()
@@ -777,6 +786,8 @@ impl Workspace {
             .collect();
         let add = div().id("write-part-add").flex().flex_none().items_center().justify_center().size(px(28.)).rounded(px(14.)).cursor_pointer().border_1().border_color(Theme::line()).hover(|s| s.bg(Theme::hover())).on_click(self.on(Cmd::EditSection(None), cx)).child(ui::icon("plus", 14., Theme::text_secondary()));
         let title_focused = writing.title.focus_handle(cx).is_focused(window);
+        // The outline in the sidebar has the title, who writes, the sections and the manuscripts: here they are only while it is put away or shows the library.
+        let outlined = self.outline_shown() && !self.settings.sidebar_hidden;
         div()
             .flex()
             .flex_col()
@@ -796,21 +807,21 @@ impl Workspace {
                             .ml(px(-6.))
                             .rounded(px(6.))
                             .border_1()
-                            .border_color(if title_focused { Theme::accent().opacity(0.55) } else { transparent_black() })
+                            .border_color(if title_focused { if outlined { Theme::line() } else { Theme::accent().opacity(0.55) } } else { transparent_black() })
                             .hover(|s| s.bg(Theme::hover()))
-                            .text_size(text_px(17.))
-                            .font_weight(FontWeight::SEMIBOLD)
+                            // Beside the outline it is only where the title is changed: the outline shows it.
+                            .when(outlined, |d| d.text_size(text_px(13.)).text_color(Theme::text_secondary()))
+                            .when(!outlined, |d| d.text_size(text_px(17.)).font_weight(FontWeight::SEMIBOLD))
                             .child(writing.title.clone()),
                     )
-                    .child(tool("write-manuscripts", "list", Some(tf!("稿件 {}", "Manuscript {}", writing.manuscripts.len()).into())).on_click(self.on_menu(MenuKind::Manuscripts, cx)))
+                    .when(!outlined, |d| d.child(self.render_mode_switch(cx)).child(tool("write-manuscripts", "list", Some(tf!("稿件 {}", "Manuscript {}", writing.manuscripts.len()).into())).on_click(self.on_menu(MenuKind::Manuscripts, cx))))
                     .child(tool("write-language", "chevron-down", Some(language.to_string().into())).on_click(self.on_menu(MenuKind::WriteLanguage, cx)))
                     .children(if self.settings.agent_writing { self.render_version_stepper(cx) } else { None })
                     .child(tool("write-history", "history", None).on_click(self.on(Cmd::WriteHistory, cx)))
                     .child(tool("write-export", "export", Some(t("导出").into())).on_click(self.on_menu(MenuKind::ManuscriptExport, cx)))
                     .child(if writing.reading { tool("write-reading", "pen-line", Some(t("写作").into())).on_click(self.on(Cmd::WriteReading(false), cx)) } else { tool("write-reading", "eye", Some(t("通读").into())).on_click(self.on(Cmd::WriteReading(true), cx)) }),
             )
-            // The outline in the sidebar lists the sections and says who writes: here only while it is put away or shows the library.
-            .when(!(self.outline_shown() && !self.settings.sidebar_hidden), |d| d.child(div().flex().child(self.render_mode_switch(cx))).child(div().flex().items_center().flex_wrap().gap(px(6.)).children(pills).child(add)))
+            .when(!outlined, |d| d.child(div().flex().items_center().flex_wrap().gap(px(6.)).children(pills).child(add)))
     }
 
     /// The whole manuscript, to be read through; a heading opens its section.

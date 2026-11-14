@@ -301,28 +301,26 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// The two ways of writing, to choose between: in the outline, or over the manuscript while the outline is away.
+    /// The two ways of writing, to choose between, as two icons: beside the outline's title, or among the manuscript's buttons while the outline is away.
     pub(crate) fn render_mode_switch(&self, cx: &mut Context<Self>) -> Div {
         let on = self.settings.agent_writing;
         let tab = |id: &'static str, icon: &'static str, name: &'static str, tip: &'static str, lit: bool, to: bool, this: &Self, cx: &mut Context<Self>| {
             div()
                 .id(id)
                 .flex()
-                .flex_1()
+                .flex_none()
                 .items_center()
                 .justify_center()
-                .gap(px(5.))
-                .h(text_px(26.))
-                .px(px(10.))
+                .w(px(30.))
+                .h(text_px(24.))
                 .rounded(px(6.))
-                .text_size(text_px(12.))
                 .cursor_pointer()
-                .when(lit, |d| d.bg(Theme::segment()).text_color(Theme::text()).font_weight(FontWeight::MEDIUM))
-                .when(!lit, |d| d.text_color(Theme::text_secondary()).hover(|s| s.text_color(Theme::text())))
+                .when(lit, |d| d.bg(Theme::segment()))
+                .when(!lit, |d| d.hover(|s| s.bg(Theme::hover())))
                 .on_click(this.on(Cmd::Agent(Do::Mode(to)), cx))
-                .tooltip(move |_, cx| cx.new(|_| crate::write_assist::Tip(t(tip).to_string())).into())
-                .child(ui::icon(icon, 13., if lit { Theme::accent() } else { Theme::text_tertiary() }))
-                .child(div().flex_none().child(t(name)))
+                // Icons alone, so the name is said with what the mode does.
+                .tooltip(move |_, cx| cx.new(|_| crate::write_assist::Tip(format!("{} — {}", t(name), t(tip)))).into())
+                .child(ui::icon(icon, 14., if lit { Theme::accent() } else { Theme::text_tertiary() }))
         };
         div()
             .flex()
