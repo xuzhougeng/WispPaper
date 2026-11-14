@@ -399,6 +399,7 @@ impl Workspace {
                 div().text_color(Theme::text_placeholder()).child(t("这个文献库还没有自定义词条。在左下角「自定义词条」里添加，例如物种、研究方法、所属课题。"))
             }))
             .child(div().flex().flex_col().gap(px(6.)).child(abstract_head).child(abstract_body))
+            .when(!p.publication_date.is_empty(), |d| d.child(div().text_size(text_px(12.)).text_color(Theme::text_secondary()).child(tf!("出版日期：{}", "Publication date: {}", p.publication_date))))
             .child(section(t("我的笔记")).child(ui::field(&lib.notes, window, cx)))
             .child(section(t("文件")).child(div().flex().flex_col().gap(px(6.)).children(file_rows).child(ui::secondary_button("attach", if files.is_empty() { t("添加 PDF 或附件") } else { t("再添加一个文件") }).on_click(self.on(Cmd::AttachPdf(id.clone()), cx)))))
             .child(div().text_size(text_px(12.)).text_color(Theme::text_placeholder()).child(tf!("来源：{} · 添加于 {}", "Source: {} · Added {}", p.source, time::date_text(&p.added_at))))
