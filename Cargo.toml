@@ -1,6 +1,6 @@
 [package]
 name = "wisp_paper"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 description = "A local-first literature library drawn with GPUI: collect, organise, preview PDFs and ask AI about your papers"
 license = "MIT"
