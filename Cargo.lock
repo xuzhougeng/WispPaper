@@ -7550,7 +7550,7 @@ dependencies = [
 
 [[package]]
 name = "wisp_cli"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "serde_json",
  "wisp_core",
@@ -7559,7 +7559,7 @@ dependencies = [
 
 [[package]]
 name = "wisp_core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7576,7 +7576,7 @@ dependencies = [
 
 [[package]]
 name = "wisp_net"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "async-channel 2.5.0",
  "serde_json",
@@ -7586,7 +7586,7 @@ dependencies = [
 
 [[package]]
 name = "wisp_paper"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "async-channel 2.5.0",
