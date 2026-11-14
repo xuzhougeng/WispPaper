@@ -3,6 +3,7 @@
 //! here blocks, so the app runs it on the background executor.
 
 pub mod mcp;
+pub mod oauth;
 
 use serde_json::Value;
 use std::io::{BufRead, BufReader};

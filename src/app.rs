@@ -5697,6 +5697,9 @@ impl Workspace {
                 "consent" => Some(Cmd::AnswerTools(Talk::Library, match arg { "always" => Consent::Always, "deny" => Consent::Deny, _ => Consent::Once })),
                 // `connector:0` opens the first connector on 设置 › 自定义 (after `settings:customize`).
                 "connector" => Some(Cmd::Custom(crate::custom::Do::SelectConnector(arg.parse().unwrap_or(0)))),
+                // `signin:0` signs in to the first connector in the browser (a scripted run prints the address instead of opening it); `signout:0` signs out.
+                "signin" => Some(Cmd::Custom(crate::custom::Do::SignIn(arg.parse().unwrap_or(0)))),
+                "signout" => Some(Cmd::Custom(crate::custom::Do::SignOut(arg.parse().unwrap_or(0)))),
                 // Saved like the choice in 设置 › 外观: "light", "dark", or empty for the system's.
                 "theme" => Some(Cmd::SetAppearance(arg.to_string())),
                 // Typography is saved just as through the appearance controls.

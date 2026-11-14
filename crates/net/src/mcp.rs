@@ -1,8 +1,11 @@
 //! The connectors' transports: an MCP server at an address (Streamable
 //! HTTP) or a command whose standard streams speak the protocol. The
-//! messages and how they are read are `wisp_core::connector`'s.
+//! messages and how they are read are `wisp_core::connector`'s. An address
+//! is asked with the connector's own token or, without one, the token of
+//! the person's sign-in in the browser (`crate::oauth`), refreshed once when
+//! the server refuses it; a server that still refuses wants a sign-in.
 
-use crate::{agent, network_error};
+use crate::{agent, network_error, oauth};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -16,8 +19,34 @@ use wisp_core::connector::{self, Connector, Heard, Tool};
 /// person to sign in in a browser (`mcp-remote`), so it is generous.
 const PATIENCE: Duration = Duration::from_secs(180);
 
+/// Why a connector could not be used.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Failure {
+    /// The server wants the person to sign in in the browser, and no kept sign-in answers.
+    SignIn,
+    Failed(String),
+}
+
+impl From<String> for Failure {
+    fn from(why: String) -> Failure {
+        Failure::Failed(why)
+    }
+}
+
+impl Failure {
+    /// The failure as a sentence for the model or the person.
+    pub fn said(self, connector: &Connector) -> String {
+        match self {
+            Failure::SignIn => format!("连接器「{}」需要在浏览器中登录（或登录已失效）：请到 设置 › 自定义 › 连接器 里登录后再试。", connector.name.trim()),
+            Failure::Failed(why) => why,
+        }
+    }
+}
+
 enum Link {
-    Http { url: String, token: String, session: Option<String> },
+    /// `token` is the connector's own; `bearer` the sign-in's, when it has none.
+    /// `version` is the protocol revision the server answered with.
+    Http { url: String, token: String, bearer: Option<String>, session: Option<String>, version: String },
     Stdio { child: Child, stdin: ChildStdin, lines: Receiver<String>, errors: Arc<Mutex<String>> },
 }
 
@@ -36,40 +65,62 @@ struct Client {
 }
 
 impl Client {
-    fn connect(connector: &Connector) -> Result<Client, String> {
+    fn connect(connector: &Connector) -> Result<Client, Failure> {
         let target = connector.target.trim();
-        if target.is_empty() { return Err("还没有填写地址或命令。".into()) }
-        let link = if connector.remote() { Link::Http { url: target.to_string(), token: connector.token.trim().to_string(), session: None } } else { spawn(target)? };
+        if target.is_empty() { return Err(Failure::Failed("还没有填写地址或命令。".into())) }
+        let link = if connector.remote() {
+            let token = connector.token.trim().to_string();
+            let bearer = if token.is_empty() { oauth::bearer(target)? } else { None };
+            Link::Http { url: target.to_string(), token, bearer, session: None, version: String::new() }
+        } else {
+            spawn(target)?
+        };
         let mut client = Client { link, next: 1 };
-        client.exchange(&connector::initialize(0), Some(0))?;
+        let answered = client.exchange(&connector::initialize(0), Some(0))?;
+        // Every later request says the revision agreed on.
+        if let Link::Http { version, .. } = &mut client.link { *version = answered["protocolVersion"].as_str().unwrap_or(connector::VERSION).to_string() }
         client.exchange(&connector::initialized(), None)?;
         Ok(client)
     }
 
-    fn ask(&mut self, method: &str, params: Value) -> Result<Value, String> {
+    fn ask(&mut self, method: &str, params: Value) -> Result<Value, Failure> {
         self.next += 1;
         self.exchange(&connector::request(self.next, method, params), Some(self.next))
     }
 
     /// Send a message and, when it has an id, wait for its reply.
-    fn exchange(&mut self, message: &Value, id: Option<u64>) -> Result<Value, String> {
+    fn exchange(&mut self, message: &Value, id: Option<u64>) -> Result<Value, Failure> {
         match &mut self.link {
-            Link::Http { url, token, session } => {
-                let mut call = agent(Some(PATIENCE), "")?.post(url.as_str()).header("content-type", "application/json").header("accept", "application/json, text/event-stream").header("mcp-protocol-version", connector::VERSION);
-                if !token.is_empty() { call = call.header("authorization", &format!("Bearer {token}")) }
-                if let Some(session) = session.as_deref() { call = call.header("mcp-session-id", session) }
-                let mut response = call.send(message.to_string().as_str()).map_err(network_error)?;
+            Link::Http { url, token, bearer, session, version } => {
+                let mut renewed = false;
+                let mut response = loop {
+                    let mut call = agent(Some(PATIENCE), "")?.post(url.as_str()).header("content-type", "application/json").header("accept", "application/json, text/event-stream");
+                    if !version.is_empty() { call = call.header("mcp-protocol-version", version.as_str()) }
+                    let sent = if token.is_empty() { bearer.as_deref() } else { Some(token.as_str()) };
+                    if let Some(sent) = sent { call = call.header("authorization", &format!("Bearer {sent}")) }
+                    if let Some(session) = session.as_deref() { call = call.header("mcp-session-id", session) }
+                    let response = call.send(message.to_string().as_str()).map_err(network_error)?;
+                    if response.status().as_u16() != 401 { break response }
+                    if !token.is_empty() { return Err(Failure::Failed("连接器不接受这个令牌（HTTP 401）。请检查令牌；要在浏览器中登录，就把令牌留空。".into())) }
+                    // The sign-in's token ran out early or was taken back: refreshed once, then it is a new sign-in.
+                    if !renewed && let Some(rejected) = bearer.take() {
+                        renewed = true;
+                        *bearer = oauth::renew(url, &rejected)?;
+                        if bearer.is_some() { continue }
+                    }
+                    return Err(Failure::SignIn);
+                };
                 let status = response.status().as_u16();
-                if status == 401 || status == 403 { return Err(format!("连接器拒绝了访问（HTTP {status}）。需要令牌的服务请填写令牌；只支持浏览器登录（OAuth）的服务，可以把地址换成命令：npx -y mcp-remote {url}")) }
-                if !(200..300).contains(&status) { return Err(format!("连接器返回 HTTP {status}：{}", response.body_mut().read_to_string().unwrap_or_default().chars().take(200).collect::<String>())) }
+                if status == 403 { return Err(Failure::Failed("连接器拒绝了访问（HTTP 403）：这个账号或令牌没有使用它的权限。".into())) }
+                if !(200..300).contains(&status) { return Err(Failure::Failed(format!("连接器返回 HTTP {status}：{}", response.body_mut().read_to_string().unwrap_or_default().chars().take(200).collect::<String>()))) }
                 if let Some(given) = response.headers().get("mcp-session-id").and_then(|value| value.to_str().ok()) { *session = Some(given.to_string()) }
                 let Some(id) = id else { return Ok(Value::Null) };
                 // The reply is the body, or one event of a stream that may carry others before it.
                 for line in BufReader::new(response.body_mut().as_reader()).lines() {
                     let line = line.map_err(|err| format!("连接中断：{err}"))?;
-                    if let Heard::Reply(reply) = connector::hear(line.strip_prefix("data:").unwrap_or(&line), id) { return reply }
+                    if let Heard::Reply(reply) = connector::hear(line.strip_prefix("data:").unwrap_or(&line), id) { return Ok(reply?) }
                 }
-                Err("连接器没有应答。".into())
+                Err(Failure::Failed("连接器没有应答。".into()))
             }
             Link::Stdio { stdin, lines, errors, .. } => {
                 let gone = |errors: &Arc<Mutex<String>>| {
@@ -77,13 +128,13 @@ impl Client {
                     if said.is_empty() { "连接器的进程没有应答。".to_string() } else { format!("连接器的进程没有应答：{said}") }
                 };
                 let mut send = |message: &Value| writeln!(stdin, "{message}").and_then(|()| stdin.flush());
-                if send(message).is_err() { return Err(gone(errors)) }
+                if send(message).is_err() { return Err(Failure::Failed(gone(errors))) }
                 let Some(id) = id else { return Ok(Value::Null) };
                 loop {
-                    let Ok(line) = lines.recv_timeout(PATIENCE) else { return Err(gone(errors)) };
+                    let Ok(line) = lines.recv_timeout(PATIENCE) else { return Err(Failure::Failed(gone(errors))) };
                     match connector::hear(&line, id) {
-                        Heard::Reply(reply) => return reply,
-                        Heard::Answer(answer) => if send(&answer).is_err() { return Err(gone(errors)) },
+                        Heard::Reply(reply) => return Ok(reply?),
+                        Heard::Answer(answer) => if send(&answer).is_err() { return Err(Failure::Failed(gone(errors))) },
                         Heard::Nothing => {}
                     }
                 }
@@ -91,7 +142,7 @@ impl Client {
         }
     }
 
-    fn tools(&mut self, connector: &Connector) -> Result<Vec<Tool>, String> {
+    fn tools(&mut self, connector: &Connector) -> Result<Vec<Tool>, Failure> {
         let (mut tools, mut cursor) = (vec![], Value::Null);
         // A long list comes in pages; twenty of them is more tools than a model can be told of.
         for _ in 0..20 {
@@ -159,6 +210,11 @@ fn keep(connector: &Connector, client: Client) -> Shared {
     shared
 }
 
+/// Close a connector's connection (signed out: the next call connects anew).
+pub fn disconnect(connector: &Connector) {
+    if let Ok(mut clients) = CLIENTS.lock() && let Some(clients) = clients.as_mut() { clients.remove(&key(connector)); }
+}
+
 /// Close the connections of connectors that are not among `wanted` any more.
 pub fn keep_only(wanted: &[Connector]) {
     let keys: Vec<String> = wanted.iter().map(key).collect();
@@ -166,7 +222,7 @@ pub fn keep_only(wanted: &[Connector]) {
 }
 
 /// Connect to a connector anew and list its tools.
-pub fn tools(connector: &Connector) -> Result<Vec<Tool>, String> {
+pub fn tools(connector: &Connector) -> Result<Vec<Tool>, Failure> {
     let mut client = Client::connect(connector)?;
     let tools = client.tools(connector)?;
     keep(connector, client);
@@ -178,14 +234,14 @@ pub fn tools(connector: &Connector) -> Result<Vec<Tool>, String> {
 /// once more; a failure the tool itself reports is not tried again.
 pub fn call(connector: &Connector, tool: &str, args: &Value) -> Result<String, String> {
     let params = json!({"name": tool, "arguments": args});
-    let ask = |shared: &Shared| shared.lock().map_err(|_| "连接器上一次调用出了错。".to_string())?.ask("tools/call", params.clone());
+    let ask = |shared: &Shared| shared.lock().map_err(|_| Failure::Failed("连接器上一次调用出了错。".into()))?.ask("tools/call", params.clone());
     let first = match kept(connector) {
         Some(shared) => ask(&shared),
-        None => Err(String::new()),
+        None => Err(Failure::SignIn),
     };
     let result = match first {
         Ok(result) => result,
-        Err(_) => ask(&keep(connector, Client::connect(connector)?))?,
+        Err(_) => Client::connect(connector).and_then(|client| ask(&keep(connector, client))).map_err(|failure| failure.said(connector))?,
     };
     connector::read_result(&result)
 }
@@ -214,10 +270,29 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_address_says_what_to_do() {
-        let (base, _served) = crate::tests::serve("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
-        let error = tools(&Connector { target: base, ..Default::default() }).unwrap_err();
-        assert!(error.contains("mcp-remote"), "{error}");
+    fn a_refused_address_wants_a_sign_in_or_another_token() {
+        crate::oauth::tests::private_file();
+        let refused = "HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+        let (base, _served) = crate::tests::serve(refused);
+        assert_eq!(tools(&Connector { target: base, ..Default::default() }).unwrap_err(), Failure::SignIn);
+        // A token of the connector's own is not swapped for a sign-in: it is wrong.
+        let (base, _served) = crate::tests::serve(refused);
+        let error = tools(&Connector { target: base, token: "wrong".into(), ..Default::default() }).unwrap_err();
+        assert!(matches!(&error, Failure::Failed(why) if why.contains("令牌")), "{error:?}");
+    }
+
+    #[test]
+    fn an_address_is_asked_with_the_browser_sign_in() {
+        let connector = Connector { name: "Notes".into(), target: crate::oauth::tests::signed_in_server(), ..Default::default() };
+        let listed = tools(&connector).unwrap();
+        // The server answered with an older revision, and is asked in it from then on.
+        assert_eq!(listed[0].description, "[Notes] negotiated");
+        let other = Connector { name: "Other".into(), target: crate::oauth::tests::unsigned_server(), ..Default::default() };
+        assert_eq!(tools(&other).unwrap_err(), Failure::SignIn);
+        let error = call(&other, "whoami", &json!({})).unwrap_err();
+        assert!(error.contains("「Other」") && error.contains("设置 › 自定义"), "{error}");
+        disconnect(&connector);
+        assert!(kept(&connector).is_none());
     }
 
     #[cfg(unix)]
@@ -232,6 +307,6 @@ mod tests {
         keep_only(&[]);
         // A command that is not there says so in the shell's words.
         let error = super::tools(&Connector { target: "wisp-no-such-command-96".into(), ..Default::default() }).unwrap_err();
-        assert!(error.contains("没有应答"), "{error}");
+        assert!(matches!(&error, Failure::Failed(why) if why.contains("没有应答")), "{error:?}");
     }
 }
