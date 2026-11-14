@@ -1329,5 +1329,9 @@
   "这一节的各个版本：助手每次动笔前、你停笔或离开时都会留一版。翻到早先的一版可以看，也可以恢复": "The versions of this section: one is kept before each change by the assistant and when you pause or leave. Step back to look at an earlier one, or restore it",
   "回到现在": "Back to now",
   "让助手来写": "Let the assistant write",
-  "交代要写什么、改什么，助手会查文献库、读全文，直接写进右边的稿件，并说明依据。每次动笔前，那一节的文字都会留一个版本，随时可以换回去；稿件你也可以随时亲手改。": "Say what to write or change. The assistant searches the library, reads full texts, writes straight into the manuscript at the right and says what it relied on. A version of the section is kept before each change, so you can always go back; you can also edit the manuscript by hand at any time."
+  "交代要写什么、改什么，助手会查文献库、读全文，直接写进右边的稿件，并说明依据。每次动笔前，那一节的文字都会留一个版本，随时可以换回去；稿件你也可以随时亲手改。": "Say what to write or change. The assistant searches the library, reads full texts, writes straight into the manuscript at the right and says what it relied on. A version of the section is kept before each change, so you can always go back; you can also edit the manuscript by hand at any time.",
+  "出版日期": "Publication date",
+  "仅写入勾选且已有的字段，缺失信息不补造。旧库只有年份时，出版日期保持为空；可在编辑文献中补充。": "Only selected, available fields are saved. Missing values stay absent. Older records may only have a year; add the publication date by editing the paper.",
+  "出版日期格式应为 YYYY、YYYY-MM 或 YYYY-MM-DD。": "Use YYYY, YYYY-MM or YYYY-MM-DD for the publication date.",
+  "出版日期按已有精度显示；完整日期显示为 YYYY-MM-DD，缺失的月、日不会补造。旧记录缺少出版日期时可在编辑文献中补充。": "Publication dates retain their known precision; full dates use YYYY-MM-DD. Missing months or days are never invented. Add missing dates by editing the paper."
 }

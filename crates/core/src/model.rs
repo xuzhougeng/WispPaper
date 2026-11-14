@@ -17,6 +17,8 @@ pub struct Paper {
     /// Names separated by "; ".
     pub authors: String,
     pub year: Option<i32>,
+    /// Publication date at its known precision: YYYY, YYYY-MM or YYYY-MM-DD.
+    pub publication_date: String,
     pub journal: String,
     /// unknown, preprint, published or unpublished.
     pub publication_status: String,
@@ -275,6 +277,18 @@ pub fn new_id(prefix: &str) -> String {
     format!("{prefix}-{}-{:08x}", crate::time::now_millis(), hasher.finish() as u32)
 }
 
+/// A publication date at its known precision, without inventing a month or day.
+pub fn valid_publication_date(value: &str) -> bool {
+    if value.is_empty() { return true }
+    if !value.get(..4).and_then(|year| year.parse::<i32>().ok()).is_some_and(|year| (1800..=2200).contains(&year)) { return false }
+    match value.len() {
+        4 => true,
+        7 => chrono::NaiveDate::parse_from_str(&format!("{value}-01"), "%Y-%m-%d").is_ok(),
+        10 => chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok(),
+        _ => false,
+    }
+}
+
 impl Paper {
     /// Bring every field into its stored shape and fill the defaults.
     pub fn normalize(&mut self) {
@@ -284,6 +298,7 @@ impl Paper {
         self.pmid = normalize_pmid(&self.pmid);
         self.authors = clean_authors(&self.authors);
         self.journal = self.journal.trim().to_string();
+        self.publication_date = self.publication_date.trim().to_string();
         self.url = self.url.trim().to_string();
         self.abstract_text = self.abstract_text.trim().to_string();
         self.tags = clean_strings(&self.tags);
@@ -309,6 +324,7 @@ impl Paper {
         if !valid_doi(&self.doi) { return Err(format!("DOI 格式不正确：{}", self.doi)) }
         if !self.pmid.is_empty() && !self.pmid.bytes().all(|b| b.is_ascii_digit()) { return Err(format!("PMID 应为数字：{}", self.pmid)) }
         if let Some(year) = self.year && !(1800..=2200).contains(&year) { return Err("年份应在 1800–2200 之间，或留空。".into()) }
+        if !valid_publication_date(&self.publication_date) { return Err("出版日期格式应为 YYYY、YYYY-MM 或 YYYY-MM-DD。".into()) }
         if !one_of(&SCREENINGS, &self.screening) { return Err(format!("不支持的收录状态：{}", self.screening)) }
         if !one_of(&READINGS, &self.reading) { return Err(format!("不支持的阅读状态：{}", self.reading)) }
         if !one_of(&PUBLICATION_STATUSES, &self.publication_status) { return Err(format!("不支持的发表状态：{}", self.publication_status)) }
