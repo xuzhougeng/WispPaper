@@ -5,6 +5,7 @@
 use crate::theme::Theme;
 use gpui::*;
 use std::ops::Range;
+use wisp_core::selection::{self, Unit};
 use unicode_segmentation::UnicodeSegmentation;
 
 actions!(text_input, [Backspace, Delete, Left, Right, SelectLeft, SelectRight, Home, End, SelectHome, SelectEnd, SelectAll, Copy, Cut, Paste, Enter, ShiftEnter, Escape, Up, Down, Complete, Undo, Redo]);
@@ -163,6 +164,9 @@ pub struct TextInput {
     pasted: Vec<Image>,
     layout: Option<Layout>,
     selecting: bool,
+    /// A press that selected a word, sentence or paragraph: what it selected,
+    /// which a drag then grows by the same unit.
+    grain: Option<(Unit, Range<usize>)>,
     scroll_x: Pixels,
     /// The text and selection before each change, to go back to; what was undone, to go forward to.
     undo: Vec<(String, Range<usize>)>,
@@ -212,6 +216,7 @@ impl TextInput {
             pasted: vec![],
             layout: None,
             selecting: false,
+            grain: None,
             scroll_x: px(0.),
             undo: vec![],
             redo: vec![],
@@ -637,27 +642,51 @@ impl TextInput {
     fn on_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.selection_toolbar_dismissed = false;
         window.focus(&self.focus);
-        if ev.click_count >= 2 {
+        let i = self.index_for_mouse(ev.position);
+        self.selecting = true;
+        if self.markdown { self.reveal_held = Some(i..i) }
+        // Two clicks a word, three a paragraph, ⌘ or Ctrl with one a sentence, as in Word.
+        let unit = match ev.click_count {
+            2 => Some(Unit::Word),
+            n if n >= 3 => Some(Unit::Paragraph),
+            _ => (ev.modifiers.secondary() && !ev.modifiers.shift).then_some(Unit::Sentence),
+        };
+        self.grain = None;
+        let Some(unit) = unit else {
+            return if ev.modifiers.shift { self.select_to(i, cx) } else { self.move_to(i, cx) };
+        };
+        // A hidden text gives nothing away about its words.
+        if self.masked {
+            self.selecting = false;
             self.sel = 0..self.text.len();
             self.reversed = false;
             return cx.notify();
         }
-        let i = self.index_for_mouse(ev.position);
-        self.selecting = true;
-        if self.markdown { self.reveal_held = Some(i..i) }
-        if ev.modifiers.shift { self.select_to(i, cx) } else { self.move_to(i, cx) }
+        let range = selection::around(&self.text, i, unit);
+        self.grain = Some((unit, range.clone()));
+        self.typing = false;
+        self.selection_toolbar_dismissed = false;
+        self.sel = range;
+        self.reversed = false;
+        cx.notify();
     }
 
     fn on_move(&mut self, ev: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
         if self.selecting && ev.pressed_button == Some(MouseButton::Left) {
             let i = self.index_for_mouse(ev.position);
-            self.select_to(i, cx);
+            let Some((unit, first)) = &self.grain else { return self.select_to(i, cx) };
+            let (sel, reversed) = selection::extend(&self.text, first, i, *unit);
+            if (&sel, reversed) != (&self.sel, self.reversed) {
+                (self.sel, self.reversed) = (sel, reversed);
+                cx.notify();
+            }
         }
     }
 
     fn on_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         if self.selecting {
             self.selecting = false;
+            self.grain = None;
             self.reveal_held = None;
             // A click on marked words: the owner says what they are marked for.
             let at = self.cursor();
