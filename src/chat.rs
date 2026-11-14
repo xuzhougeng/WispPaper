@@ -8,7 +8,7 @@
 //! library's past conversations in place of the one in hand.
 
 use crate::i18n::t;
-use crate::app::{Chat, ChatImage, ChatItem, Cmd, Consent, MenuKind, ScopeDo, Workspace};
+use crate::app::{Chat, ChatImage, ChatItem, Cmd, Consent, MenuKind, ScopeDo, Talk, Workspace};
 use crate::input::TextInput;
 use crate::settings::SettingsPage;
 use crate::theme::{self, Theme, text_px};
@@ -517,25 +517,25 @@ impl Workspace {
             .into_any_element()
     }
 
-    pub fn render_chat(&mut self, about_paper: bool, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        if let Some(lib) = self.lib.as_mut() { lib.check_quotes(about_paper) }
+    pub fn render_chat(&mut self, talk: Talk, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(lib) = self.lib.as_mut() { lib.check_quotes(talk) }
         // A drag that ended anywhere but in the conversation says nothing: the flag is put right here.
         if !cx.has_active_drag() { self.pinning = false }
         let lib = self.lib.as_ref().unwrap();
-        let chat = lib.chat(about_paper);
+        let chat = lib.chat(talk);
         let profile = self.settings.profile_for_or_default(wisp_core::settings::Task::Chat);
         let configured = !profile.key().is_empty();
         let model = profile.title();
         // Ids of the two conversations' elements must differ: both can be on screen.
-        let side = if about_paper { "paper" } else { "library" };
+        let side = talk.side();
 
         // The papers in scope that have a PDF no text came of: said, so that nobody takes them for read.
-        let in_scope = lib.scope_papers();
+        let in_scope = if talk == Talk::Write { lib.papers.iter().collect() } else { lib.scope_papers() };
         let textless = in_scope.iter().filter(|p| p.fulltext == "textless").count();
-        let textless_note = if textless > 0 && !about_paper { tf!("；其中 {textless} 篇的 PDF 没读出文字，只有记录和摘要", "; {textless} PDFs have no readable text, so only records and abstracts are used") } else { String::new() };
+        let textless_note = if textless > 0 && talk != Talk::Paper { tf!("；其中 {textless} 篇的 PDF 没读出文字，只有记录和摘要", "; {textless} PDFs have no readable text, so only records and abstracts are used") } else { String::new() };
         // What the model has been given, or will be given with the first question.
         let scope = match &chat.ctx {
-            Some(ctx) if about_paper => {
+            Some(ctx) if talk == Talk::Paper => {
                 let mut line = if ctx.pages > 0 { tf!("已提供这篇文献的记录和 {} 页全文", "Provided this paper's record and {} full-text pages", ctx.pages) } else { t("这篇文献没有可读取的全文，只提供了记录和摘要").to_string() };
                 if ctx.pages_omitted > 0 { line.push_str(&tf!("（另有 {} 页超出长度未提供）", " ({} more pages exceeded the length limit)", ctx.pages_omitted)) }
                 line
@@ -547,8 +547,10 @@ impl Workspace {
                 if ctx.pages > 0 { line.push_str(&tf!("，{} 页相关全文", ", {} relevant full-text pages", ctx.pages)) }
                 line + &textless_note
             }
+            // Beside the manuscript the line is kept to one: the conversation taken up again is the manuscript's last.
+            None if !chat.messages.is_empty() && talk == Talk::Write => t("接着这份稿件上次的对话").to_string(),
             None if !chat.messages.is_empty() => t("历史对话：接着提问时，会按文献库现在的内容重新提供材料").to_string(),
-            None if about_paper => {
+            None if talk == Talk::Paper => {
                 let id = lib.selected.clone().unwrap_or_default();
                 match lib.pdf_file(&id).map(|f| lib.store.fulltext_pages(&f.id)) {
                     Some(Ok(Some(Ok(pages)))) => tf!("将提供这篇文献的记录和 {} 页全文", "Will provide this paper's record and {} full-text pages", pages.len()),
@@ -557,36 +559,40 @@ impl Workspace {
                     None => t("这篇文献没有 PDF，将只提供记录和摘要").to_string(),
                 }
             }
-            None if !about_paper && !lib.asked.is_empty() => tf!("范围：只读你选定的 {} 篇文献，以及其中已存 PDF 的相关页面{textless_note}。「新对话」回到当前列表", "Scope: only the {} papers you picked, with relevant saved PDF pages{textless_note}. “New chat” returns to the current list", in_scope.len()),
-            None if !about_paper && lib.scope_hits.is_some() => tf!("范围：当前列表里符合「{}」的 {} 篇文献，以及其中已存 PDF 的相关页面{textless_note}", "Scope: the {1} papers in the current list matching “{0}”, with relevant saved PDF pages{textless_note}", lib.scope_words.trim(), in_scope.len()),
+            // The assistant that writes draws on the whole library and writes into the manuscript beside it.
+            None if talk == Talk::Write => tf!("读文献库的 {} 篇文献{textless_note}，写进右边的稿件", "Reads the library's {} papers{textless_note} and writes into the manuscript at the right", lib.papers.len()),
+            None if talk == Talk::Library && !lib.asked.is_empty() => tf!("范围：只读你选定的 {} 篇文献，以及其中已存 PDF 的相关页面{textless_note}。「新对话」回到当前列表", "Scope: only the {} papers you picked, with relevant saved PDF pages{textless_note}. “New chat” returns to the current list", in_scope.len()),
+            None if talk == Talk::Library && lib.scope_hits.is_some() => tf!("范围：当前列表里符合「{}」的 {} 篇文献，以及其中已存 PDF 的相关页面{textless_note}", "Scope: the {1} papers in the current list matching “{0}”, with relevant saved PDF pages{textless_note}", lib.scope_words.trim(), in_scope.len()),
             None => tf!("范围：当前列表的 {} 篇文献（受左侧视图、搜索和筛选影响），以及其中已存 PDF 的相关页面{textless_note}", "Scope: {} papers in the current list (affected by views, search and filters), with relevant saved PDF pages{textless_note}", lib.shown.len()),
         };
 
         let listing = chat.history.is_some();
         // The review this conversation writes, as last read: drawing asks the library nothing.
-        let review = chat.review.as_ref().filter(|_| !about_paper && !listing);
+        let review = chat.review.as_ref().filter(|_| talk == Talk::Library && !listing);
 
         // What was asked before can be read without a model; only asking needs one.
         let body = if let Some(history) = &chat.history {
-            self.render_history(about_paper, chat, history, cx)
+            self.render_history(talk, chat, history, cx)
         } else if let Some(review) = review.filter(|_| chat.review_open) {
             self.render_review_record(chat, review, cx)
         } else if !configured && chat.messages.is_empty() {
             ui::empty_state("sparkle", t("还没有配置模型"), t("提问需要一个模型服务：Claude API，或任何 OpenAI 兼容的服务。API Key 只保存在本机。以前的对话在右上角的「历史」里，不配置也能看。")).child(ui::primary_button(SharedString::from(format!("chat-settings-{side}")), t("打开设置")).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx))).into_any_element()
-        } else if chat.messages.is_empty() && chat.error.is_empty() && !about_paper {
+        } else if chat.messages.is_empty() && chat.error.is_empty() && talk == Talk::Write {
+            self.render_agent_start(cx)
+        } else if chat.messages.is_empty() && chat.error.is_empty() && talk == Talk::Library {
             self.render_start(cx)
         } else if chat.messages.is_empty() && chat.error.is_empty() {
             let suggestions: &[&str] = &[t("这篇文献的研究问题、方法和主要结论是什么？"), t("作者的结论有哪些证据支持？有什么局限？"), t("用三句话向同行介绍这篇文章。")];
             ui::empty_state("sparkle", t("就这篇文献提问"), t("回答依据文献库里的记录、笔记和已存 PDF 的全文，并标出出处。需要时助手会自己检索和翻阅全文。"))
                 .id(SharedString::from(format!("chat-empty-{side}"))).w_full().min_h_0().overflow_y_scroll().justify_start()
-                .children(suggestions.iter().enumerate().map(|(i, text)| ui::secondary_button(SharedString::from(format!("suggest-{side}-{i}")), "").w_full().h_auto().min_h(px(30.)).py(px(6.)).child(div().flex_1().min_w_0().child(*text)).on_click(self.on(Cmd::Suggest(about_paper, text.to_string()), cx))))
+                .children(suggestions.iter().enumerate().map(|(i, text)| ui::secondary_button(SharedString::from(format!("suggest-{side}-{i}")), "").w_full().h_auto().min_h(px(30.)).py(px(6.)).child(div().flex_1().min_w_0().child(*text)).on_click(self.on(Cmd::Suggest(talk, text.to_string()), cx))))
                 .into_any_element()
         } else {
-            div().id(SharedString::from(format!("chat-{side}"))).flex().flex_col().flex_1().min_h_0().overflow_y_scroll().track_scroll(&chat.scroll).px(px(16.)).py(px(14.)).gap(px(14.)).children(self.render_messages(about_paper, chat, review, cx)).into_any_element()
+            div().id(SharedString::from(format!("chat-{side}"))).flex().flex_col().flex_1().min_h_0().overflow_y_scroll().track_scroll(&chat.scroll).px(px(16.)).py(px(14.)).gap(px(14.)).children(self.render_messages(talk, chat, review, cx)).into_any_element()
         };
 
         // The papers behind the scope line can be looked through: in a conversation whose material was built, or before the first question.
-        let listable = !about_paper && !listing && (chat.ctx.is_some() || chat.messages.is_empty());
+        let listable = talk == Talk::Library && !listing && (chat.ctx.is_some() || chat.messages.is_empty());
         let materials = (listable && chat.materials_open).then(|| self.render_materials(chat, window, cx));
         // The first question can still be kept to a few papers: dragged from the panel into the conversation.
         let pinnable = listable && chat.ctx.is_none();
@@ -611,19 +617,21 @@ impl Workspace {
                             .flex_col()
                             .flex_1()
                             .min_w(px(200.))
-                            .when(!about_paper, |d| d.child(div().text_size(text_px(15.)).font_weight(FontWeight::SEMIBOLD).child(if listing { t("助手的历史对话") } else { t("助手") })))
+                            .when(talk == Talk::Library, |d| d.child(div().text_size(text_px(15.)).font_weight(FontWeight::SEMIBOLD).child(if listing { t("助手的历史对话") } else { t("助手") })))
+                            .when(talk == Talk::Write, |d| d.child(div().text_size(text_px(15.)).font_weight(FontWeight::SEMIBOLD).child(if listing { t("这份稿件的历史对话") } else { t("助手写") })))
                             // The paper's panel has its title above; its history says whose it is.
-                            .when(about_paper && listing, |d| d.child(div().font_weight(FontWeight::MEDIUM).child(t("这篇文献的历史对话"))))
-                            .child(div().text_size(text_px(12.)).line_height(text_px(17.)).text_color(Theme::text_tertiary()).child(match (listing, about_paper) {
-                                (true, false) => t("和助手就整个文献库有过的对话；点开一次可以接着说。单篇文献的对话在各自的「提问」里").to_string(),
-                                (true, true) => t("就这篇文献提过的问题和回答；点开一次对话可以接着问").to_string(),
+                            .when(talk == Talk::Paper && listing, |d| d.child(div().font_weight(FontWeight::MEDIUM).child(t("这篇文献的历史对话"))))
+                            .child(div().text_size(text_px(12.)).line_height(text_px(17.)).text_color(Theme::text_tertiary()).child(match (listing, talk) {
+                                (true, Talk::Library) => t("和助手就整个文献库有过的对话；点开一次可以接着说。单篇文献的对话在各自的「提问」里").to_string(),
+                                (true, Talk::Paper) => t("就这篇文献提过的问题和回答；点开一次对话可以接着问").to_string(),
+                                (true, Talk::Write) => t("和助手就这份稿件有过的对话；点开一次可以接着说").to_string(),
                                 (false, _) => scope,
                             })),
                     )
-                    .children(self.render_float_switch(about_paper, window, cx))
+                    .children(self.render_float_switch(talk, window, cx))
                     .when(listable, |d| d.child(ui::ghost_button("chat-materials", Some(if chat.materials_open { "chevron-up" } else { "list" }), Some(if chat.materials_open { t("收起").into() } else { t("文献").into() })).on_click(self.on(Cmd::ToggleMaterials, cx))))
-                    .child(ui::ghost_button(SharedString::from(format!("chat-history-{side}")), Some(if listing { "arrow-left" } else { "history" }), Some(if listing { t("返回").into() } else { t("历史").into() })).on_click(self.on(Cmd::ToggleHistory(about_paper), cx)))
-                    .when(!chat.messages.is_empty() && !listing, |d| d.child(ui::ghost_button(SharedString::from(format!("chat-new-{side}")), Some("plus"), Some(t("新对话").into())).on_click(self.on(Cmd::NewChat(about_paper), cx)))),
+                    .child(ui::ghost_button(SharedString::from(format!("chat-history-{side}")), Some(if listing { "arrow-left" } else { "history" }), Some(if listing { t("返回").into() } else { t("历史").into() })).on_click(self.on(Cmd::ToggleHistory(talk), cx)))
+                    .when(!chat.messages.is_empty() && !listing, |d| d.child(ui::ghost_button(SharedString::from(format!("chat-new-{side}")), Some("plus"), Some(t("新对话").into())).on_click(self.on(Cmd::NewChat(talk), cx)))),
             )
             // Under the header, everything the panel of papers floats over: it pushes nothing down.
             .child(div().relative().flex().flex_col().flex_1().min_h_0()
@@ -641,7 +649,7 @@ impl Workspace {
                 let open = review.evidence_rows.iter().filter(|row| row.judgment == wisp_core::review::EvidenceJudgment::Unreviewed || !row.source_current || !review.linked(row)).count();
                 let evidence = if open > 0 { tf!(" · {open} 条证据待判断", " · {open} evidence records awaiting judgment") } else { String::new() };
                 let step = |id: &'static str, label: &'static str, what: ReviewDo, cx: &mut Context<Self>| ui::primary_button(id, label).h(text_px(26.)).on_click(self.on(Cmd::Review(what, String::new()), cx));
-                let ask = |id: &'static str, label: &'static str, request: &'static str, cx: &mut Context<Self>| ui::secondary_button(id, label).h(text_px(26.)).on_click(self.on(Cmd::Suggest(false, request.to_string()), cx));
+                let ask = |id: &'static str, label: &'static str, request: &'static str, cx: &mut Context<Self>| ui::secondary_button(id, label).h(text_px(26.)).on_click(self.on(Cmd::Suggest(Talk::Library, request.to_string()), cx));
                 d.child(div().flex().flex_none().flex_wrap().items_center().gap(px(6.)).px(px(16.)).py(px(6.)).border_b_1().border_color(Theme::line()).bg(Theme::bg_sunken()).text_size(text_px(12.))
                     .child(div().flex_1().min_w_0().text_color(Theme::text_secondary()).child(format!("{}{sections}{evidence}", review_step(review))))
                     .when(review.step() == 1 && !review.requirements.is_empty(), |d| d.child(step("review-confirm-requirements", t("确认要求"), ReviewDo::ConfirmRequirements, cx)))
@@ -661,7 +669,7 @@ impl Workspace {
                     .child(ui::secondary_button("review-toggle", if chat.review_open { t("返回对话") } else { t("查看记录") }).h(text_px(26.)).on_click(self.on(Cmd::ToggleReview, cx))))
             })
             .child(body)
-            .when(configured, |d| d.child(self.render_composer(about_paper, chat, &model, window, cx)))
+            .when(configured, |d| d.child(self.render_composer(talk, chat, &model, window, cx)))
             // An old conversation on show without a model: it can be read, and says what asking on needs.
             .when(!configured && !listing && !chat.messages.is_empty(), |d| {
                 d.child(
@@ -703,7 +711,7 @@ impl Workspace {
             let lines = starts.iter().enumerate().map(|(n, start)| {
                 let line = div().id(SharedString::from(format!("start-{icon}-{n}"))).flex().gap(px(8.)).w_full().px(px(8.)).py(px(6.)).rounded(px(6.)).text_size(text_px(13.)).line_height(text_px(19.)).cursor_pointer().hover(|s| s.bg(Theme::hover()));
                 match start {
-                    Say(text) => line.child(div().flex_1().min_w_0().child(t(text))).on_click(self.on(Cmd::Suggest(false, t(text).to_string()), cx)),
+                    Say(text) => line.child(div().flex_1().min_w_0().child(t(text))).on_click(self.on(Cmd::Suggest(Talk::Library, t(text).to_string()), cx)),
                     Command(name) => {
                         let about = ai::SLASH.iter().find(|slash| slash.name == *name).map_or("", |slash| slash.about);
                         line.child(div().flex_none().font_weight(FontWeight::MEDIUM).text_color(Theme::accent()).child(format!("/{name}"))).child(div().flex_1().min_w_0().text_color(Theme::text_secondary()).child(t(about))).on_click(self.on(Cmd::StartCommand(name), cx))
@@ -902,15 +910,15 @@ impl Workspace {
 
     /// What was said, in order: questions, the assistant's tool calls
     /// folded by run, the pieces of its answers with their sources.
-    fn render_messages(&self, about_paper: bool, chat: &Chat, review: Option<&wisp_core::review::Review>, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let side = if about_paper { "paper" } else { "library" };
+    fn render_messages(&self, talk: Talk, chat: &Chat, review: Option<&wisp_core::review::Review>, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let side = talk.side();
         let mut items: Vec<AnyElement> = vec![];
         // An answer can be added to a manuscript once there is one.
         let has_manuscript = self.lib.as_ref().is_some_and(|lib| !lib.writing.manuscripts.is_empty());
         // A citation clicked where it stands in the text.
         let workspace = cx.entity().downgrade();
         let cite: crate::markdown::OnCite = std::rc::Rc::new(move |citation, window, cx| {
-            workspace.update(cx, |this, cx| this.run(Cmd::GotoCited(about_paper, citation.label.clone(), citation.page, citation.quote.clone()), window, cx)).ok();
+            workspace.update(cx, |this, cx| this.run(Cmd::GotoCited(talk, citation.label.clone(), citation.page, citation.quote.clone()), window, cx)).ok();
         });
         let picker = cx.entity().downgrade();
         let mut i = 0;
@@ -938,7 +946,7 @@ impl Workspace {
                         run.push((call.as_str(), result));
                         i += 1;
                     }
-                    items.push(self.render_tools(about_paper, chat, first, &run, cx));
+                    items.push(self.render_tools(talk, chat, first, &run, cx));
                     continue;
                 }
                 ChatItem::Answer(text) => text,
@@ -968,7 +976,7 @@ impl Workspace {
                 selected: picked,
                 pointer: std::rc::Rc::new(move |pointer, place, window, cx| {
                     pick.update(cx, |this, cx| {
-                        this.run(Cmd::PickText(about_paper, i, pointer, place), window, cx);
+                        this.run(Cmd::PickText(talk, i, pointer, place), window, cx);
                         cx.notify();
                     })
                     .ok();
@@ -1009,7 +1017,7 @@ impl Workspace {
                 .collect();
             if shown < total || open {
                 let label = if open { t("收起").to_string() } else { tf!("另外 {} 个出处", "{} more sources", total - shown) };
-                chips.push(source_chip(SharedString::from(format!("cite-more-{side}-{i}")), 300.).text_color(Theme::accent()).on_click(self.on(Cmd::ToggleSources(about_paper, i), cx)).child(label).into_any_element());
+                chips.push(source_chip(SharedString::from(format!("cite-more-{side}-{i}")), 300.).text_color(Theme::accent()).on_click(self.on(Cmd::ToggleSources(talk, i), cx)).child(label).into_any_element());
             }
             // Under the last piece of a finished answer: a button that copies the whole of it, pieces between tool calls included.
             let last = i + 1 == chat.messages.len();
@@ -1026,7 +1034,7 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .gap(px(8.))
-                    .child(crate::markdown::render(&format!("answer-{side}-{i}"), content, Some(cite.clone()), Some(selecting)).on_mouse_down(MouseButton::Right, self.on_context(MenuKind::Answer(about_paper, content.to_string()), cx)))
+                    .child(crate::markdown::render(&format!("answer-{side}-{i}"), content, Some(cite.clone()), Some(selecting)).on_mouse_down(MouseButton::Right, self.on_context(MenuKind::Answer(talk, content.to_string()), cx)))
                     // What is selected in this answer: copied, or taken into the box as a quotation to ask about.
                     .when(picked.is_some() && !holding, |d| {
                         d.child(
@@ -1034,9 +1042,9 @@ impl Workspace {
                                 .flex()
                                 .items_center()
                                 .gap(px(2.))
-                                .child(ui::ghost_button(SharedString::from(format!("picked-copy-{side}-{i}")), Some("copy"), Some(t("复制所选").into())).h(text_px(24.)).text_size(text_px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::CopyPicked(about_paper), cx)))
-                                .child(ui::ghost_button(SharedString::from(format!("picked-quote-{side}-{i}")), Some("pen-line"), Some(t("引用到输入框").into())).h(text_px(24.)).text_size(text_px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::QuotePicked(about_paper), cx)))
-                                .when(!about_paper && review.is_none() && has_manuscript, |d| d.child(ui::ghost_button(SharedString::from(format!("picked-insert-{side}-{i}")), Some("plus"), Some(t("所选插入稿件").into())).h(text_px(24.)).text_size(text_px(12.)).text_color(Theme::accent()).on_click(self.on_menu(MenuKind::InsertInto(None), cx))))
+                                .child(ui::ghost_button(SharedString::from(format!("picked-copy-{side}-{i}")), Some("copy"), Some(t("复制所选").into())).h(text_px(24.)).text_size(text_px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::CopyPicked(talk), cx)))
+                                .child(ui::ghost_button(SharedString::from(format!("picked-quote-{side}-{i}")), Some("pen-line"), Some(t("引用到输入框").into())).h(text_px(24.)).text_size(text_px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::QuotePicked(talk), cx)))
+                                .when(talk == Talk::Library && review.is_none() && has_manuscript, |d| d.child(ui::ghost_button(SharedString::from(format!("picked-insert-{side}-{i}")), Some("plus"), Some(t("所选插入稿件").into())).h(text_px(24.)).text_size(text_px(12.)).text_color(Theme::accent()).on_click(self.on_menu(MenuKind::InsertInto(None), cx))))
                                 // In a review's conversation, the part selected can be kept in place of the whole answer.
                                 .when_some(review, |d, review| {
                                     let text = chat.picked_text().unwrap_or_default();
@@ -1056,8 +1064,8 @@ impl Workspace {
                                 .gap(px(2.))
                                 .child(ui::ghost_button(SharedString::from(format!("copy-{side}-{i}")), Some("copy"), None).h(text_px(24.)).min_w(px(24.)).opacity(0.7).on_click(self.on(Cmd::CopyText(whole.clone()), cx)))
                                 // A review's answers go to its record, step by step; any other answer about the library can become a manuscript as it is.
-                                .when(!about_paper && review.is_none() && !whole.trim().is_empty(), |d| d.child(ui::ghost_button(SharedString::from(format!("manuscript-{side}-{i}")), Some("pen-line"), Some(t("保存为新稿件").into())).h(text_px(24.)).text_size(text_px(12.)).opacity(0.7).on_click(self.on(Cmd::AnswerToManuscript(question.clone(), whole.clone()), cx))))
-                                .when(!about_paper && review.is_none() && has_manuscript && !whole.trim().is_empty(), |d| d.child(ui::ghost_button(SharedString::from(format!("insert-{side}-{i}")), Some("plus"), Some(t("插入到稿件").into())).h(text_px(24.)).text_size(text_px(12.)).opacity(0.7).on_click(self.on_menu(MenuKind::InsertInto(Some(whole.clone())), cx))))
+                                .when(talk == Talk::Library && review.is_none() && !whole.trim().is_empty(), |d| d.child(ui::ghost_button(SharedString::from(format!("manuscript-{side}-{i}")), Some("pen-line"), Some(t("保存为新稿件").into())).h(text_px(24.)).text_size(text_px(12.)).opacity(0.7).on_click(self.on(Cmd::AnswerToManuscript(question.clone(), whole.clone()), cx))))
+                                .when(talk == Talk::Library && review.is_none() && has_manuscript && !whole.trim().is_empty(), |d| d.child(ui::ghost_button(SharedString::from(format!("insert-{side}-{i}")), Some("plus"), Some(t("插入到稿件").into())).h(text_px(24.)).text_size(text_px(12.)).opacity(0.7).on_click(self.on_menu(MenuKind::InsertInto(Some(whole.clone())), cx))))
                                 .when_some(review, |d, review| {
                                     use crate::app::ReviewDo;
                                     let mut button = |key: &'static str, label: &'static str, what: ReviewDo| ui::ghost_button(SharedString::from(format!("review-{key}-{side}-{i}")), Some("check"), Some(label.into())).h(text_px(24.)).text_size(text_px(12.)).opacity(0.7).on_click(self.on(Cmd::Review(what, whole.clone()), cx));
@@ -1070,7 +1078,7 @@ impl Workspace {
                                     }
                                 })
                                 // An answer about one paper can join that paper's notes; one about the library names many.
-                                .when(about_paper, |d| d.child(ui::ghost_button(SharedString::from(format!("note-{side}-{i}")), Some("pen-line"), Some(t("存为笔记").into())).h(text_px(24.)).text_size(text_px(12.)).opacity(0.7).on_click(self.on(Cmd::AnswerToNote(question, whole), cx)))),
+                                .when(talk == Talk::Paper, |d| d.child(ui::ghost_button(SharedString::from(format!("note-{side}-{i}")), Some("pen-line"), Some(t("存为笔记").into())).h(text_px(24.)).text_size(text_px(12.)).opacity(0.7).on_click(self.on(Cmd::AnswerToNote(question, whole), cx)))),
                         )
                     })
                     .into_any_element(),
@@ -1085,7 +1093,7 @@ impl Workspace {
             let button = |name: &str, label: &'static str, consent: Consent, this: &Self, cx: &mut Context<Self>| {
                 let id = SharedString::from(format!("consent-{name}-{side}"));
                 let shell = if consent == Consent::Once { ui::primary_button(id, label) } else { ui::secondary_button(id, label) };
-                shell.h(text_px(28.)).on_click(this.on(Cmd::AnswerTools(about_paper, consent), cx))
+                shell.h(text_px(28.)).on_click(this.on(Cmd::AnswerTools(talk, consent), cx))
             };
             items.push(
                 div()
@@ -1133,8 +1141,8 @@ impl Workspace {
 
     /// A run of tool calls: those done as one line that unfolds, those
     /// still running each with a turning mark.
-    fn render_tools(&self, about_paper: bool, chat: &Chat, first: usize, run: &[(&str, &Option<(String, bool)>)], cx: &mut Context<Self>) -> AnyElement {
-        let side = if about_paper { "paper" } else { "library" };
+    fn render_tools(&self, talk: Talk, chat: &Chat, first: usize, run: &[(&str, &Option<(String, bool)>)], cx: &mut Context<Self>) -> AnyElement {
+        let side = talk.side();
         let done: Vec<(&str, &(String, bool))> = run.iter().filter_map(|(call, result)| result.as_ref().map(|result| (*call, result))).collect();
         let failed = done.iter().filter(|(_, (_, failed))| *failed).count();
         let open = chat.tools_open.contains(&first);
@@ -1155,7 +1163,7 @@ impl Workspace {
                         .cursor_pointer()
                         .text_color(Theme::text_tertiary())
                         .hover(|s| s.text_color(Theme::text_secondary()))
-                        .on_click(self.on(Cmd::ToggleTools(about_paper, first), cx))
+                        .on_click(self.on(Cmd::ToggleTools(talk, first), cx))
                         .child(div().min_w_0().truncate().child(tools_summary(&done.iter().map(|(call, _)| *call).collect::<Vec<_>>())))
                         .when(failed > 0, |d| d.child(div().flex_none().text_color(Theme::danger()).child(tf!("· {failed} 项没有成功", "· {failed} items failed"))))
                         .child(ui::icon(if open { "chevron-down" } else { "chevron-right" }, 12., Theme::text_tertiary())),
@@ -1188,8 +1196,8 @@ impl Workspace {
     }
 
     /// The library's past conversations (or the paper's), the latest first.
-    fn render_history(&self, about_paper: bool, chat: &Chat, history: &[wisp_core::store::ConversationInfo], cx: &mut Context<Self>) -> AnyElement {
-        let side = if about_paper { "paper" } else { "library" };
+    fn render_history(&self, talk: Talk, chat: &Chat, history: &[wisp_core::store::ConversationInfo], cx: &mut Context<Self>) -> AnyElement {
+        let side = talk.side();
         if history.is_empty() {
             return ui::empty_state("history", t("还没有历史对话"), t("提过的问题和回答会留在这个文献库里，之后可以在这里找到，接着问下去。")).into_any_element();
         }
@@ -1214,7 +1222,7 @@ impl Workspace {
                     .pr(px(4.))
                     .rounded(px(8.))
                     .hover(|s| s.bg(Theme::hover()))
-                    .on_mouse_down(MouseButton::Right, self.on_context(MenuKind::Conversation(about_paper, conversation.id.clone()), cx))
+                    .on_mouse_down(MouseButton::Right, self.on_context(MenuKind::Conversation(talk, conversation.id.clone()), cx))
                     .child(
                         div()
                             .id(SharedString::from(format!("history-{side}-{}", conversation.id)))
@@ -1226,7 +1234,7 @@ impl Workspace {
                             .px(px(8.))
                             .py(px(7.))
                             .cursor_pointer()
-                            .on_click(self.on(Cmd::OpenChat(about_paper, conversation.id.clone()), cx))
+                            .on_click(self.on(Cmd::OpenChat(talk, conversation.id.clone()), cx))
                             .child(div().truncate().child(conversation.title.clone()))
                             .child(
                                 div()
@@ -1239,7 +1247,7 @@ impl Workspace {
                                     .when(current, |d| d.child(div().text_color(Theme::accent()).child(t("正在进行")))),
                             ),
                     )
-                    .child(ui::ghost_button(SharedString::from(format!("history-remove-{side}-{}", conversation.id)), Some("bin"), None).invisible().group_hover(group, |s| s.visible()).on_click(self.on(Cmd::AskRemoveChat(about_paper, conversation.id.clone()), cx)))
+                    .child(ui::ghost_button(SharedString::from(format!("history-remove-{side}-{}", conversation.id)), Some("bin"), None).invisible().group_hover(group, |s| s.visible()).on_click(self.on(Cmd::AskRemoveChat(talk, conversation.id.clone()), cx)))
             }))
             .into_any_element()
     }
@@ -1247,14 +1255,14 @@ impl Workspace {
     /// The box the next question is written in: its pictures, a button to
     /// add more, the text, and the button that sends it or stops the answer.
     /// Over it, the slash commands that match what is being typed.
-    fn render_composer(&self, about_paper: bool, chat: &Chat, model: &str, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let side = if about_paper { "paper" } else { "library" };
+    fn render_composer(&self, talk: Talk, chat: &Chat, model: &str, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let side = talk.side();
         let focused = chat.input.focus_handle(cx).is_focused(window);
         let commands = if focused { chat.slash_list(&self.settings.commands, cx) } else { vec![] };
         let ready = !chat.input.read(cx).text().trim().is_empty() || !chat.attachments.is_empty() || !chat.quotes.is_empty();
         let lib = self.lib.as_ref().unwrap();
         // The papers the first question is kept to, while it is still to come; and a paper on its way in.
-        let open = !about_paper && chat.ctx.is_none() && chat.messages.is_empty() && chat.history.is_none();
+        let open = talk == Talk::Library && chat.ctx.is_none() && chat.messages.is_empty() && chat.history.is_none();
         let kept: Vec<&wisp_core::model::Paper> = if open { lib.asked.iter().take(PINNED_SHOWN).filter_map(|id| lib.paper(id)).collect() } else { vec![] };
         let dropping = open && self.pinning && cx.has_active_drag();
         let round = |id: String, icon_name: &'static str, lit: bool| {
@@ -1289,7 +1297,7 @@ impl Workspace {
                                 .cursor_pointer()
                                 .when(n == chat.slash, |d| d.bg(Theme::hover()))
                                 .hover(|s| s.bg(Theme::hover()))
-                                .on_click(self.on(Cmd::PickSlash(about_paper, n), cx))
+                                .on_click(self.on(Cmd::PickSlash(talk, n), cx))
                                 .child(div().flex_none().font_weight(FontWeight::MEDIUM).text_color(Theme::accent()).child(format!("/{}", command.name)))
                                 .when(!command.hint.is_empty(), |d| d.child(div().flex_none().text_color(Theme::text_placeholder()).child(t(&command.hint).to_string())))
                                 .child(div().flex_1().min_w_0().truncate().text_right().text_color(Theme::text_secondary()).child(if command.custom { command.about.clone() } else { t(&command.about).to_string() }))
@@ -1368,7 +1376,7 @@ impl Workspace {
                                         .child(div().line_clamp(2).text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text_secondary()).child(quote.text.clone()))
                                         .child(div().truncate().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(tf!("原文 · 第 {} 页 · {title}", "Original · Page {} · {title}", quote.page))),
                                 )
-                                .child(ui::ghost_button(SharedString::from(format!("quote-remove-{side}-{n}")), Some("x"), None).h(text_px(20.)).min_w(px(20.)).on_click(self.on(Cmd::RemoveQuote(about_paper, n), cx)))
+                                .child(ui::ghost_button(SharedString::from(format!("quote-remove-{side}-{n}")), Some("x"), None).h(text_px(20.)).min_w(px(20.)).on_click(self.on(Cmd::RemoveQuote(talk, n), cx)))
                         })))
                     })
                     .when(!chat.attachments.is_empty() || chat.attaching > 0, |d| {
@@ -1394,7 +1402,7 @@ impl Workspace {
                                             .bg(Theme::text())
                                             .cursor_pointer()
                                             .hover(|s| s.opacity(0.85))
-                                            .on_click(self.on(Cmd::RemoveAttachment(about_paper, n), cx))
+                                            .on_click(self.on(Cmd::RemoveAttachment(talk, n), cx))
                                             .child(ui::icon("x", 11., Theme::bg_body())),
                                     )
                                 }))
@@ -1406,12 +1414,12 @@ impl Workspace {
                             .flex()
                             .items_end()
                             .gap(px(6.))
-                            .child(ui::ghost_button(SharedString::from(format!("chat-attach-{side}")), Some("plus"), None).h(text_px(30.)).min_w(px(30.)).rounded(px(15.)).on_click(self.on(Cmd::AttachImages(about_paper), cx)))
+                            .child(ui::ghost_button(SharedString::from(format!("chat-attach-{side}")), Some("plus"), None).h(text_px(30.)).min_w(px(30.)).rounded(px(15.)).on_click(self.on(Cmd::AttachImages(talk), cx)))
                             .child(div().flex().flex_1().min_w_0().py(px(5.)).max_h(px(170.)).overflow_hidden().text_size(text_px(13.)).line_height(text_px(20.)).text_color(Theme::text()).child(chat.input.clone()))
-                            .child(if chat.busy { round(format!("chat-stop-{side}"), "square", true).on_click(self.on(Cmd::StopChat(about_paper), cx)) } else { round(format!("chat-send-{side}"), "send", ready).on_click(self.on(Cmd::Ask(about_paper), cx)) }),
+                            .child(if chat.busy { round(format!("chat-stop-{side}"), "square", true).on_click(self.on(Cmd::StopChat(talk), cx)) } else { round(format!("chat-send-{side}"), "send", ready).on_click(self.on(Cmd::Ask(talk), cx)) }),
                     ),
             )
-            .child(div().flex().gap(px(8.)).px(px(4.)).text_size(text_px(11.)).text_color(Theme::text_placeholder()).child(div().flex_1().min_w_0().truncate().child(if about_paper { t("Enter 发送 · 回答可能有误，请对照原文") } else { t("Enter 发送，Shift+Enter 换行 · 回答可能有误，请对照原文") })).child(div().flex_none().max_w(relative(0.4)).truncate().child(model.to_string())))
+            .child(div().flex().gap(px(8.)).px(px(4.)).text_size(text_px(11.)).text_color(Theme::text_placeholder()).child(div().flex_1().min_w_0().truncate().child(if talk == Talk::Paper { t("Enter 发送 · 回答可能有误，请对照原文") } else { t("Enter 发送，Shift+Enter 换行 · 回答可能有误，请对照原文") })).child(div().flex_none().max_w(relative(0.4)).truncate().child(model.to_string())))
             .into_any_element()
     }
 }

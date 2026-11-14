@@ -35,6 +35,7 @@ pub mod cite;
 pub mod citefind;
 pub mod comment;
 pub mod complete;
+pub mod compose;
 pub mod connector;
 pub mod docx;
 pub mod export;

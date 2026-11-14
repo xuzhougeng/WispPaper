@@ -21,7 +21,10 @@
 //! one containing 「试试连接器」 makes it call the first tool of a connector
 //! (a name with `__`) that the request offers;
 //! one containing 「试试整理」 makes it call `organise_papers` for the first
-//! two papers, whose changes the window lists before it asks.
+//! two papers, whose changes the window lists before it asks. In the
+//! conversation that writes a manuscript (助手写) it calls `edit_section`
+//! and puts a paragraph citing the first paper at the end of the section on
+//! show; asked there to 「试试大纲」, it calls `set_outline` with three sections.
 //! Asked to review a section of the manuscript (批注), it proposes a change
 //! to the first sentence, remarks on the start of the second paragraph, and
 //! makes one remark on words the manuscript does not have, which is dropped.
@@ -380,6 +383,24 @@ fn answer(mut stream: TcpStream, delay: u64) {
                 events.push_str(&event(&format!(r#"{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"{piece}"}}}}"#)));
             }
             events.push_str(&event(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#));
+        } else if let Some(note) = request.rfind("【写作模式】").filter(|at| request.rfind("\"role\":\"user\"").is_some_and(|user| user < *at)) {
+            // The conversation that writes a manuscript (助手写): a new outline when asked to try one, else a paragraph at the end of the section on show.
+            let said = &request[note..];
+            // What was asked this time stands before the note, after the last question's start.
+            let outline = request[request.rfind("\"role\":\"user\"").unwrap_or(0)..note].contains("试试大纲");
+            let args = if outline {
+                r#"{"title": "假模型拟的题目", "sections": [{"name": "研究背景", "kind": "introduction"}, {"name": "主要进展"}, {"name": "展望", "kind": "discussion"}]}"#.to_string()
+            } else {
+                // `2. S-… · Introduction · 导言 · 未写 ← 右边正显示这一节`: the id on the line that says so, else the first of the outline.
+                let line = said.find("右边正显示").map_or(said, |at| &said[..at]);
+                let id: String = if said.contains("右边正显示") { line.rfind("S-") } else { line.find("S-") }.map(|at| line[at..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-').collect()).unwrap_or_default();
+                format!(r#"{{"section": "{id}", "edits": [{{"old": "", "new": "（假模型）这是助手写进稿件的一段，引了文献库里的第一篇 [P1]。"}}]}}"#)
+            };
+            events.push_str(&event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#));
+            events.push_str(&event(r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"我来动笔。"}}"#));
+            events.push_str(&event(&format!(r#"{{"type":"content_block_start","index":1,"content_block":{{"type":"tool_use","id":"toolu_5","name":"{}","input":{{}}}}}}"#, if outline { "set_outline" } else { "edit_section" })));
+            events.push_str(&event(&format!(r#"{{"type":"content_block_delta","index":1,"delta":{{"type":"input_json_delta","partial_json":{}}}}}"#, quoted(&args))));
+            events.push_str(&event(r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"}}"#));
         } else if request.rfind("试试撤销").is_some_and(|at| request.rfind("\"role\":\"user\"").is_some_and(|user| user < at)) {
             // A tool that takes papers out of the library: the window asks the person before it runs.
             events.push_str(&event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#));

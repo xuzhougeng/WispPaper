@@ -232,7 +232,7 @@ impl Workspace {
                 let Some((paper_id, path)) = self.lib.as_ref().and_then(|lib| lib.gallery.figure(&id).filter(|figure| !figure.drawn()).map(|figure| (figure.paper_id.clone(), lib.store.figure_path(figure)))) else { return };
                 self.run(Cmd::CloseModal, window, cx);
                 self.run(Cmd::OpenPaper(paper_id, Tab::Ask), window, cx);
-                self.attach_images(true, vec![Picture::File(path)], cx);
+                self.attach_images(crate::app::Talk::Paper, vec![Picture::File(path)], cx);
             }
             Cmd::CopyFigure(id) => {
                 let Some(path) = self.lib.as_ref().and_then(|lib| lib.gallery.figure(&id).map(|figure| lib.store.figure_path(figure))) else { return };

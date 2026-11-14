@@ -61,6 +61,20 @@ impl Writing {
     }
 }
 
+/// When a version of a section was kept, in words.
+pub(crate) fn snapshot_why(why: &str) -> &'static str {
+    match why {
+        "pause" => t("停笔时"),
+        "leave" => t("离开时"),
+        "restore" => t("恢复前"),
+        "split" => t("拆分前"),
+        "merge" => t("并入前"),
+        "assistant" => t("助手改动前"),
+        "insert" => t("插入前"),
+        _ => "",
+    }
+}
+
 fn latest_section(manuscript: &Manuscript) -> &str {
     manuscript.sections.iter().map(|s| s.updated_at.as_str()).max().unwrap_or("")
 }
@@ -228,11 +242,15 @@ impl Workspace {
         self.comments_load();
         self.sources_load();
         self.write_openers(cx);
+        // The conversation that writes is this manuscript's; what the assistant changed in this section is lit, and its versions are those to step through.
+        self.agent_attend(cx);
+        self.agent_marks(cx);
+        self.agent_versions(cx);
         cx.notify();
     }
 
     /// Read the manuscripts again after a change to their shape, staying where the person was.
-    fn write_reload(&mut self, section_id: Option<String>, cx: &mut Context<Self>) {
+    pub(crate) fn write_reload(&mut self, section_id: Option<String>, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
         match lib.store.manuscripts() {
             Ok(list) => lib.writing.manuscripts = list,
@@ -635,6 +653,8 @@ impl Workspace {
                             .child(div().truncate().text_size(text_px(13.)).when(on, |d| d.text_color(Theme::accent()).font_weight(FontWeight::MEDIUM)).when(!on, |d| d.text_color(if empty { Theme::text_tertiary() } else { Theme::text() })).child(section.name.clone()))
                             .child(div().truncate().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(said.join(" · "))),
                     )
+                    // The assistant changed it in answer to the last question.
+                    .when(writing.agent.changed.get(&section.id).is_some_and(|before| *before != section.body), |d| d.child(div().id(("outline-changed", n)).flex_none().size(px(6.)).rounded(px(3.)).bg(Theme::accent()).tooltip(|_, cx| cx.new(|_| crate::write_assist::Tip(t("助手刚改过这一节").to_string())).into())))
                     // How many comments wait in the section.
                     .when(noted > 0, |d| d.child(div().flex().flex_none().items_center().justify_center().min_w(px(18.)).h(text_px(18.)).px(px(5.)).rounded(px(9.)).bg(Theme::note_strong()).text_size(text_px(10.)).text_color(Theme::text()).child(noted.to_string())))
                     .when(on, |d| d.child(div().id("outline-section-menu").flex().flex_none().items_center().justify_center().size(px(20.)).rounded(px(10.)).hover(|s| s.bg(Theme::accent().opacity(0.12))).on_click(self.on_menu(MenuKind::Section(section.id.clone()), cx)).child(ui::icon("chevron-down", 12., Theme::accent()))))
@@ -684,6 +704,8 @@ impl Workspace {
                     .child(div().text_size(text_px(15.)).font_weight(FontWeight::SEMIBOLD).line_height(text_px(21.)).text_color(Theme::text()).child(crate::i18n::manuscript_title(manuscript).to_string()))
                     .child(div().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(about.join(" · "))),
             )
+            // Who writes: the person, or the assistant in a conversation beside the manuscript.
+            .child(div().flex().flex_none().px(px(6.)).child(self.render_mode_switch(cx).flex_1()))
             .child(
                 div()
                     .flex()
@@ -782,12 +804,13 @@ impl Workspace {
                     )
                     .child(tool("write-manuscripts", "list", Some(tf!("稿件 {}", "Manuscript {}", writing.manuscripts.len()).into())).on_click(self.on_menu(MenuKind::Manuscripts, cx)))
                     .child(tool("write-language", "chevron-down", Some(language.to_string().into())).on_click(self.on_menu(MenuKind::WriteLanguage, cx)))
+                    .children(if self.settings.agent_writing { self.render_version_stepper(cx) } else { None })
                     .child(tool("write-history", "history", None).on_click(self.on(Cmd::WriteHistory, cx)))
                     .child(tool("write-export", "export", Some(t("导出").into())).on_click(self.on_menu(MenuKind::ManuscriptExport, cx)))
                     .child(if writing.reading { tool("write-reading", "pen-line", Some(t("写作").into())).on_click(self.on(Cmd::WriteReading(false), cx)) } else { tool("write-reading", "eye", Some(t("通读").into())).on_click(self.on(Cmd::WriteReading(true), cx)) }),
             )
-            // The outline in the sidebar lists the sections: here only while it is put away or shows the library.
-            .when(!(self.outline_shown() && !self.settings.sidebar_hidden), |d| d.child(div().flex().items_center().flex_wrap().gap(px(6.)).children(pills).child(add)))
+            // The outline in the sidebar lists the sections and says who writes: here only while it is put away or shows the library.
+            .when(!(self.outline_shown() && !self.settings.sidebar_hidden), |d| d.child(div().flex().child(self.render_mode_switch(cx))).child(div().flex().items_center().flex_wrap().gap(px(6.)).children(pills).child(add)))
     }
 
     /// The whole manuscript, to be read through; a heading opens its section.
@@ -882,16 +905,7 @@ impl Workspace {
     pub(crate) fn render_history_dialog(&self, cx: &mut Context<Self>) -> Option<Div> {
         let Some(Modal::History { section, snapshots, chosen }) = self.modal.as_ref() else { return None };
         let name = self.lib.as_ref().and_then(|l| l.writing.current()?.section(section)).map(|s| s.name.clone()).unwrap_or_default();
-        let why = |why: &str| match why {
-            "pause" => t("停笔时"),
-            "leave" => t("离开时"),
-            "restore" => t("恢复前"),
-            "split" => t("拆分前"),
-            "merge" => t("并入前"),
-            "assistant" => t("助手改动前"),
-            "insert" => t("插入前"),
-            _ => "",
-        };
+        let why = snapshot_why;
         let rows: Vec<AnyElement> = snapshots
             .iter()
             .enumerate()

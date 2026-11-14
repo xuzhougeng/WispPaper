@@ -318,6 +318,11 @@ impl TextInput {
         cx.notify();
     }
 
+    /// What an empty field says; it changes with what the field is for at the moment.
+    pub fn set_placeholder(&mut self, placeholder: &'static str) {
+        if self.placeholder.as_ref() != placeholder { self.placeholder = placeholder.into() }
+    }
+
     /// The pictures pasted since this was last asked.
     pub fn take_images(&mut self) -> Vec<Image> {
         std::mem::take(&mut self.pasted)

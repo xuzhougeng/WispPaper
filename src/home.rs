@@ -95,6 +95,7 @@ impl Render for Workspace {
                         Edge::Sidebar => this.drag_sidebar(event, window, cx),
                         Edge::Detail => this.drag_detail(event, window, cx),
                         Edge::Split => this.drag_split(event, window, cx),
+                        Edge::Manuscript => this.drag_manuscript(event, window, cx),
                     }))
                     .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_drag(cx)))
             }))

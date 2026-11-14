@@ -6,7 +6,7 @@
 //! stand is `wisp_core::floating`.
 
 use crate::i18n::t;
-use crate::app::{Cmd, Tab, Workspace};
+use crate::app::{Cmd, Tab, Talk, Workspace};
 use crate::theme::{self, Theme, text_px};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
@@ -45,8 +45,8 @@ impl Workspace {
     }
 
     /// The button in the header of the conversation beside the PDF that lets it float instead.
-    pub fn render_float_switch(&self, about_paper: bool, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !about_paper || self.settings.floating.on || !self.paper_beside(window) { return None }
+    pub fn render_float_switch(&self, talk: Talk, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if talk != Talk::Paper || self.settings.floating.on || !self.paper_beside(window) { return None }
         Some(ui::ghost_button("chat-float", Some("square"), Some(t("悬浮").into())).on_click(self.on(Cmd::FloatChat(true), cx)).into_any_element())
     }
 
@@ -80,7 +80,7 @@ impl Workspace {
     }
 
     fn render_float_window(&mut self, rect: Rect, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let chat = self.render_chat(true, window, cx);
+        let chat = self.render_chat(Talk::Paper, window, cx);
         let held = self.lib.as_ref().and_then(|lib| lib.float_drag).map(|drag| drag.hold);
         // The buttons of the title bar are not a place to take hold of it.
         let keep_press = |_: &MouseDownEvent, _: &mut Window, cx: &mut App| cx.stop_propagation();
