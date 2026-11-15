@@ -9,6 +9,8 @@ use serde_json::{Value, json};
 /// The protocol revision asked for; a server may answer with an older one.
 pub const VERSION: &str = "2025-06-18";
 
+pub const NOTION_MCP: &str = "https://mcp.notion.com/mcp";
+
 /// One MCP server (设置 › 自定义 › 连接器).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

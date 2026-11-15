@@ -317,6 +317,16 @@ impl Settings {
         Ok(())
     }
 
+    /// The first MCP is the built-in Notion template; it can be disabled, not removed.
+    pub fn connector_is_template(&self, index: usize) -> bool {
+        index == 0 && self.connectors.first().is_some_and(|connector| connector.target.trim() == crate::connector::NOTION_MCP)
+    }
+
+    pub fn remove_connector(&mut self, index: usize) -> Option<Connector> {
+        if self.connector_is_template(index) || index >= self.connectors.len() { return None }
+        Some(self.connectors.remove(index))
+    }
+
     /// Restore visual preferences without touching layout widths, library colours or model settings.
     pub fn reset_appearance(&mut self) {
         self.appearance.clear();
@@ -331,6 +341,14 @@ impl Settings {
     /// own, a task bound to a model that is gone follows the default again,
     /// and the number of screening workers stays in range.
     fn tidy(&mut self) {
+        // Reuse an existing Notion configuration, including its enabled state,
+        // manual token and exact OAuth storage key, as the fixed first template.
+        if let Some(index) = self.connectors.iter().position(|connector| connector.target.trim() == crate::connector::NOTION_MCP) {
+            let notion = self.connectors.remove(index);
+            self.connectors.insert(0, notion);
+        } else {
+            self.connectors.insert(0, Connector { name: "Notion".into(), target: crate::connector::NOTION_MCP.into(), off: true, ..Default::default() });
+        }
         self.font_size = font_size(self.font_size);
         self.font_family = self.font_family.trim().to_string();
         let mut seen = std::collections::HashSet::new();
@@ -625,6 +643,34 @@ mod tests {
         none.save(&path).unwrap();
         assert!(Settings::load(&path).unwrap().providers.is_empty());
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn notion_template_is_first_persistent_and_not_removable() {
+        let mut defaults = Settings::default();
+        assert_eq!(defaults.connectors.len(), 1);
+        assert_eq!(defaults.connectors[0].target, crate::connector::NOTION_MCP);
+        assert!(defaults.connectors[0].off, "A new template must not connect before it is enabled");
+        assert!(defaults.remove_connector(0).is_none());
+        let dir = std::env::temp_dir().join(format!("wisp-mcp-template-{}", crate::model::new_id("T")));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let other = Connector { name: "Local".into(), target: "my-mcp".into(), ..Default::default() };
+        let notion = Connector { name: "My Notion".into(), target: format!(" {} ", crate::connector::NOTION_MCP), token: "existing-token".into(), off: false };
+        std::fs::write(&path, serde_json::json!({"connectors": [other, notion]}).to_string()).unwrap();
+        let mut loaded = Settings::load(&path).unwrap();
+        assert_eq!(loaded.connectors, vec![notion.clone(), other.clone()]);
+        assert!(loaded.connector_is_template(0));
+        assert!(loaded.remove_connector(0).is_none());
+        loaded.save(&path).unwrap();
+        let again = Settings::load(&path).unwrap();
+        assert_eq!(again.connectors, loaded.connectors, "Reload must reuse the existing OAuth target without adding another Notion");
+        assert_eq!(loaded.remove_connector(1), Some(other));
+        assert!(loaded.remove_connector(10).is_none());
+        assert_eq!(loaded.connectors, vec![notion]);
+        std::fs::write(&path, r#"{"connectors":[]}"#).unwrap();
+        assert_eq!(Settings::load(&path).unwrap().connectors, defaults.connectors);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

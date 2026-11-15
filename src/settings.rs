@@ -86,6 +86,7 @@ pub enum AiTab {
 pub struct SettingsView {
     pub page: SettingsPage,
     pub ai_tab: AiTab,
+    pub(crate) custom_tab: crate::custom::Tab,
     scroll: ScrollHandle,
     /// The provider 模型 shows at the right, as an index into `Settings::providers`.
     provider: usize,
@@ -113,6 +114,10 @@ pub struct SettingsView {
 }
 
 impl SettingsView {
+    pub(crate) fn reset_scroll(&mut self) {
+        self.scroll = ScrollHandle::new();
+    }
+
     /// The provider on show on 模型.
     pub(crate) fn provider(&self) -> usize {
         self.provider
@@ -371,7 +376,7 @@ impl Workspace {
                         }
                     }),
                 ];
-                self.settings_view = Some(SettingsView { page, ai_tab: AiTab::default(), scroll: ScrollHandle::new(), provider: index, protocol: shown.protocol, fields, proxy, author, translation_prompt, font_search, font_names, font_picker: false, font_scroll: ScrollHandle::new(), command: None, connector: None, recording: None, shortcut_error: None, _subscriptions: subscriptions });
+                self.settings_view = Some(SettingsView { page, ai_tab: AiTab::default(), custom_tab: crate::custom::Tab::default(), scroll: ScrollHandle::new(), provider: index, protocol: shown.protocol, fields, proxy, author, translation_prompt, font_search, font_names, font_picker: false, font_scroll: ScrollHandle::new(), command: None, connector: None, recording: None, shortcut_error: None, _subscriptions: subscriptions });
             }
         }
         window.focus(&self.focus);
@@ -610,6 +615,15 @@ impl Workspace {
 
     // ---- AI
 
+    /// 自定义 uses the same sub-panel navigation as AI; switching also refreshes skills.
+    pub fn open_custom_tab(&mut self, tab: crate::custom::Tab, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_settings(SettingsPage::Customize, window, cx);
+        let Some(view) = self.settings_view.as_mut() else { return };
+        if view.custom_tab != tab { view.scroll = ScrollHandle::new() }
+        view.custom_tab = tab;
+        cx.notify();
+    }
+
     /// 设置 › AI on one of its tabs, opening 设置 if it is not open.
     pub fn open_ai_tab(&mut self, tab: AiTab, window: &mut Window, cx: &mut Context<Self>) {
         self.open_settings(SettingsPage::Ai, window, cx);
@@ -788,6 +802,7 @@ impl Workspace {
     pub fn render_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(view) = &self.settings_view else { return div().into_any_element() };
         let page = view.page;
+        let wide = matches!(page, SettingsPage::Ai | SettingsPage::Customize);
         let nav = |id: &'static str, icon: &'static str, label: &'static str, active: bool, cmd: Cmd, this: &Self, cx: &mut Context<Self>| {
             div()
                 .id(id)
@@ -843,6 +858,8 @@ impl Workspace {
             .flex_1()
             .min_w_0()
             .h_full()
+            .min_h_0()
+            .overflow_hidden()
             .bg(Theme::bg_body())
             .border_l_1()
             .border_color(Theme::line())
@@ -850,20 +867,24 @@ impl Workspace {
             .child(
                 div()
                     .id("settings-content")
+                    .flex()
+                    .flex_col()
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
                     .track_scroll(&view.scroll)
-                    .child(div().flex().flex_col().items_center().w_full().px(px(32.)).pt(px(12.)).pb(px(64.)).child(div().flex().flex_col().w_full().max_w(px(if page == SettingsPage::Ai { AI_COLUMN_W } else { COLUMN_W })).gap(px(24.)).child(heading).child(body))),
+                    // The scroll handle measures its direct child. Keep that child at its
+                    // natural height: shrinking it hides the overflow of long tool lists.
+                    .child(div().flex().flex_col().flex_none().items_center().w_full().px(px(32.)).pt(px(12.)).pb(px(64.)).child(div().flex().flex_col().flex_none().w_full().max_w(px(if wide { AI_COLUMN_W } else { COLUMN_W })).gap(px(24.)).child(heading).child(body))),
             );
-        div().flex().size_full().child(sidebar).child(content).into_any_element()
+        div().flex().size_full().min_h_0().overflow_hidden().child(sidebar).child(content).into_any_element()
     }
 
     /// The width of the page's column in pixels. A wrapping text field needs
     /// to be told its width, since every width above it is a share of its parent's.
     fn column_width(&self, window: &Window) -> f32 {
         let page = self.settings_view.as_ref().map(|view| view.page);
-        (f32::from(window.viewport_size().width) - SIDEBAR_W - 65.).min(if page == Some(SettingsPage::Ai) { AI_COLUMN_W } else { COLUMN_W })
+        (f32::from(window.viewport_size().width) - SIDEBAR_W - 65.).min(if matches!(page, Some(SettingsPage::Ai | SettingsPage::Customize)) { AI_COLUMN_W } else { COLUMN_W })
     }
 
     fn general_page(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
