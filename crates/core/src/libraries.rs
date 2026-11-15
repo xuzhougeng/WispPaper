@@ -28,6 +28,8 @@ pub struct LibraryInfo {
     pub criteria: String,
     /// Run the enabled saved searches on their own every this many hours; 0 is never.
     pub auto_sync_hours: u32,
+    /// The paper list's last order (`Filters::sort`), so the library opens as it was left.
+    pub sort: String,
     pub created_at: String,
     /// Last time the library was opened: the home page lists the latest first.
     pub opened_at: String,
