@@ -204,7 +204,8 @@ impl Workspace {
                     .hover(|s| s.border_color(accent.strong()))
                     .on_click(self.on(Cmd::OpenLibrary(info.id.clone()), cx))
                     .on_mouse_down(MouseButton::Right, self.on_context(MenuKind::LibraryCard(info.id.clone()), cx))
-                    .child(div().h(px(6.)).w_full().rounded_t(px(11.)).bg(accent.strong()))
+                    // A 6px quad clamps its radius to 3px and the card clips only to a rectangle, so the strip crops a taller quad that keeps the card's inner curve.
+                    .child(div().flex_none().h(px(6.)).w_full().overflow_hidden().child(div().h(px(22.)).w_full().rounded_t(px(11.)).bg(accent.strong())))
                     .child(
                         div()
                             .flex()
