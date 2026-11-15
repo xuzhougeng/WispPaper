@@ -823,7 +823,8 @@ impl Workspace {
                     .children(if self.settings.agent_writing { self.render_version_stepper(cx) } else { None })
                     .child(tool("write-history", "history", None).on_click(self.on(Cmd::WriteHistory, cx)))
                     .child(tool("write-export", "export", Some(t("导出").into())).on_click(self.on_menu(MenuKind::ManuscriptExport, cx)))
-                    .child(if writing.reading { tool("write-reading", "pen-line", Some(t("写作").into())).on_click(self.on(Cmd::WriteReading(false), cx)) } else { tool("write-reading", "eye", Some(t("通读").into())).on_click(self.on(Cmd::WriteReading(true), cx)) }),
+                    // Beside the outline its 通读全文 row is the one way in; a section there is the way back.
+                    .when(!outlined, |d| d.child(if writing.reading { tool("write-reading", "pen-line", Some(t("写作").into())).on_click(self.on(Cmd::WriteReading(false), cx)) } else { tool("write-reading", "eye", Some(t("通读").into())).on_click(self.on(Cmd::WriteReading(true), cx)) })),
             )
             .when(!outlined, |d| d.child(div().flex().items_center().flex_wrap().gap(px(6.)).px(px(16.)).pt(px(12.)).children(pills).child(add)))
     }

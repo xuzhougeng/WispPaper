@@ -11,7 +11,6 @@
 use crate::app::{Cmd, Workspace};
 use crate::i18n::t;
 use crate::input::{InputEvent, TextInput};
-use crate::settings::SettingsPage;
 use crate::theme::{Theme, text_px};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
@@ -489,11 +488,9 @@ impl Workspace {
         let configured = self.settings.profile_for_or_default(Task::Chat).missing().is_none();
         let focused = revise.input.focus_handle(cx).is_focused(window);
         let ready = !busy && !revise.input.read(cx).text().trim().is_empty();
-        let small = |id: &'static str, name: &'static str| ui::ghost_button(id, None, Some(name.into())).h(text_px(22.)).px(px(6.)).text_size(text_px(12.));
         let frame = div().flex().flex_col().flex_none().gap(px(6.)).mx(px(16.)).mb(px(8.)).px(px(10.)).py(px(8.)).rounded(px(10.)).border_1().border_color(if focused || busy { Theme::accent().opacity(0.55) } else { Theme::line() }).bg(Theme::bg_body());
-        if !configured {
-            return frame.child(div().flex().items_center().gap(px(8.)).child(ui::icon("sparkle", 14., Theme::text_tertiary())).child(div().flex_1().min_w_0().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(t("配置模型后，可以在这里让助手按你的话修改这一节。"))).child(small("revise-settings", t("配置模型")).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx))));
-        }
+        // Without a model the assist bar's 配置模型 is the one place that says so.
+        if !configured { return div() }
         let send = div()
             .id("revise-send")
             .flex()
