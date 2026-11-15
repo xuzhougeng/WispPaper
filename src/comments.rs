@@ -8,7 +8,7 @@
 //! export to Word shows its reader. The rules are `wisp_core::comment`'s,
 //! the Word file's reading and writing `wisp_core::docx`'s.
 
-use crate::app::{Cmd, Modal, Page, Side, Workspace};
+use crate::app::{Cmd, Modal, Side, Workspace};
 use crate::i18n::t;
 use crate::input::{InputEvent, TextInput};
 use crate::settings::SettingsPage;
@@ -549,7 +549,7 @@ impl Workspace {
         lib.writing.reading = false;
         lib.writing.side = if draft.comments.is_empty() { Side::Candidates } else { Side::Comments };
         lib.writing.structures = lib.store.structures().unwrap_or_default();
-        lib.page = Page::Write;
+        lib.enter_write();
         self.write_show(id, section, cx);
         self.write_texts_changed(cx);
         self.say(said, cx);

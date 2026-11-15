@@ -188,7 +188,7 @@ impl Workspace {
         lib.writing.manuscripts.push(made);
         lib.writing.reading = false;
         lib.writing.structures = lib.store.structures().unwrap_or_default();
-        lib.page = Page::Write;
+        lib.enter_write();
         // The sentences the assistant quoted are what the citations rest on in the new manuscript.
         for (section, body, quoted) in &brought { self.sources_quoted(&id, section, body, quoted, cx) }
         self.write_show(id, section, cx);
@@ -429,13 +429,11 @@ impl Workspace {
                 }
                 if reading { self.write_snapshot("leave") }
             }
-            Cmd::WriteNav(library) => {
-                if let Some(lib) = self.lib.as_mut() { lib.writing.library_nav = library }
-                // The library's navigation is the sidebar: asked for while the sidebar is away, it comes back.
-                if library && self.settings.sidebar_hidden {
-                    self.settings.sidebar_hidden = false;
-                    self.save_settings(cx);
-                }
+            Cmd::LeaveWrite => {
+                // Back is out of the manuscript altogether: the page changes with the sidebar, to the one 写作 was opened from.
+                let from = self.lib.as_ref().map_or(Page::Papers, |lib| lib.write_from);
+                window.focus(&self.focus);
+                self.run(Cmd::SetPage(from), window, cx);
             }
             Cmd::ExportManuscript(kind) => self.export_manuscript(kind, cx),
             Cmd::WriteHistory => {
@@ -615,13 +613,14 @@ impl Workspace {
 
     // ---- render
 
-    /// The sidebar, when it is there, is the manuscript's outline: 写作 is the page and the library's navigation was not asked for.
+    /// The sidebar, when it is there, is the manuscript's outline: 写作 is the page and there is a manuscript.
+    /// The library's navigation is one level up, behind the corner's arrow (`Cmd::LeaveWrite`).
     pub(crate) fn outline_shown(&self) -> bool {
-        self.lib.as_ref().is_some_and(|lib| lib.page == Page::Write && !lib.writing.library_nav && lib.writing.current().is_some())
+        self.lib.as_ref().is_some_and(|lib| lib.page == Page::Write && lib.writing.current().is_some())
     }
 
-    /// The sidebar while writing: the corner, whose arrow leads back to the library's
-    /// navigation, the manuscript, and its sections with how long each is and how many
+    /// The sidebar while writing: the corner, whose arrow leaves 写作 for the page of the
+    /// library it was opened from, the manuscript, and its sections with how long each is and how many
     /// comments wait in it. A section's row opens it; the one written in has its menu.
     pub(crate) fn render_outline(&self, width: f32, cx: &mut Context<Self>) -> AnyElement {
         let lib = self.lib.as_ref().unwrap();
@@ -779,7 +778,7 @@ impl Workspace {
             .collect();
         let add = div().id("write-part-add").flex().flex_none().items_center().justify_center().size(px(28.)).rounded(px(14.)).cursor_pointer().border_1().border_color(Theme::line()).hover(|s| s.bg(Theme::hover())).on_click(self.on(Cmd::EditSection(None), cx)).child(ui::icon("plus", 14., Theme::text_secondary()));
         let title_focused = writing.title.focus_handle(cx).is_focused(window);
-        // The outline in the sidebar has the title, who writes, the sections and the manuscripts: here they are only while it is put away or shows the library.
+        // The outline in the sidebar has the title, who writes, the sections and the manuscripts: here they are only while it is put away.
         let outlined = self.outline_shown() && !self.settings.sidebar_hidden;
         div()
             .flex()

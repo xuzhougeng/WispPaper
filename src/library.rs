@@ -289,15 +289,17 @@ impl Workspace {
     /// sidebar away or brings it back, and the way back, which goes up one
     /// level and no further: from a manuscript to its library, from the library
     /// to all of them, and from a paper asked about (`asking`) to the library around it.
+    /// Leaving a manuscript changes the page too, not only the sidebar (`Cmd::LeaveWrite`).
     /// It is the only way back in the sidebar, so the topmost
     /// arrow is never the longer jump. A narrow sidebar keeps the arrow and drops its words.
     pub(crate) fn render_corner(&self, roomy: bool, asking: bool, cx: &mut Context<Self>) -> Div {
-        let (id, label, cmd) = if self.outline_shown() { ("back-library", t("文献库"), Cmd::WriteNav(true)) } else if asking { ("back-library", t("文献库"), Cmd::LeaveAsk) } else { ("back-home", t("所有文献库"), Cmd::GoHome) };
+        let (id, label, cmd) = if self.outline_shown() { ("back-library", t("文献库"), Cmd::LeaveWrite) } else if asking { ("back-library", t("文献库"), Cmd::LeaveAsk) } else { ("back-home", t("所有文献库"), Cmd::GoHome) };
         ui::title_strip()
             .when(!ui::custom_titlebar(), |d| d.h(text_px(28.)))
             .pl(px(ui::traffic_lights_width()))
             .child(ui::ghost_button("toggle-sidebar", Some("panel-left"), None).occlude().on_click(self.on(Cmd::ToggleSidebar, cx)))
-            .child(ui::ghost_button(id, Some("arrow-left"), roomy.then(|| label.into())).occlude().on_click(self.on(cmd, cx)))
+            // The arrow one level up takes this one's place under the pointer: the second click of a double click is not a second step back.
+            .child(ui::ghost_button(id, Some("arrow-left"), roomy.then(|| label.into())).occlude().on_click(cx.listener(move |this, event: &ClickEvent, window, cx| if event.click_count() <= 1 { this.run(cmd.clone(), window, cx) })))
     }
 
     /// Each background job stays compact; its dialog owns the live details.
