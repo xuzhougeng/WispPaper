@@ -681,7 +681,7 @@ impl Workspace {
             .pb(px(10.))
             .pt(px(Self::corner_top()))
             .gap(px(10.))
-            .child(self.render_corner(width >= ui::traffic_lights_width() + f32::from(text_px(150.)), cx).when(ui::custom_titlebar(), |d| d.mb(px(4.))))
+            .child(self.render_corner(width >= ui::traffic_lights_width() + f32::from(text_px(150.)), false, cx).when(ui::custom_titlebar(), |d| d.mb(px(4.))))
             .child(
                 div()
                     .flex()

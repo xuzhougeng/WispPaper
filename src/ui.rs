@@ -303,7 +303,7 @@ pub fn caption(text: impl Into<SharedString>) -> Div {
 // so Snap Layouts and the system's close handling keep working.
 
 pub const TITLE_H: f32 = 36.;
-const CONTROL_W: f32 = 46.;
+pub const CONTROL_W: f32 = 46.;
 
 /// The band under the title strip that a column's header fills, ending in a line: the
 /// conversation's, the manuscript's, the panel beside it and the paper's title share it,

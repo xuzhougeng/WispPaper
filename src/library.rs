@@ -269,7 +269,7 @@ impl Workspace {
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_drag(cx)))
             .child(div().w(px(2.)).h_full().when(dragging, |d| d.bg(Theme::accent())).when(!dragging, |d| d.group_hover("sidebar-edge", |s| s.bg(Theme::accent().opacity(0.5)))));
         // With the sidebar put away its two top buttons sit over the list, where they were.
-        let strip = if shown { ui::title_strip() } else { self.render_corner(true, cx).mt(px(Self::corner_top())).pl(px(10. + ui::traffic_lights_width())) };
+        let strip = if shown { ui::title_strip() } else { self.render_corner(true, false, cx).mt(px(Self::corner_top())).pl(px(10. + ui::traffic_lights_width())) };
         div()
             .flex()
             .size_full()
@@ -288,10 +288,11 @@ impl Workspace {
     /// The window's top-left corner in a library: the button that puts the
     /// sidebar away or brings it back, and the way back, which goes up one
     /// level and no further: from a manuscript to its library, from the library
-    /// to all of them. It is the only way back in the sidebar, so the topmost
+    /// to all of them, and from a paper asked about (`asking`) to the library around it.
+    /// It is the only way back in the sidebar, so the topmost
     /// arrow is never the longer jump. A narrow sidebar keeps the arrow and drops its words.
-    pub(crate) fn render_corner(&self, roomy: bool, cx: &mut Context<Self>) -> Div {
-        let (id, label, cmd) = if self.outline_shown() { ("back-library", t("文献库"), Cmd::WriteNav(true)) } else { ("back-home", t("所有文献库"), Cmd::GoHome) };
+    pub(crate) fn render_corner(&self, roomy: bool, asking: bool, cx: &mut Context<Self>) -> Div {
+        let (id, label, cmd) = if self.outline_shown() { ("back-library", t("文献库"), Cmd::WriteNav(true)) } else if asking { ("back-library", t("文献库"), Cmd::LeaveAsk) } else { ("back-home", t("所有文献库"), Cmd::GoHome) };
         ui::title_strip()
             .when(!ui::custom_titlebar(), |d| d.h(text_px(28.)))
             .pl(px(ui::traffic_lights_width()))
@@ -383,7 +384,7 @@ impl Workspace {
             .pb(px(10.))
             .pt(px(Self::corner_top()))
             .gap(px(10.))
-            .child(self.render_corner(width >= ui::traffic_lights_width() + f32::from(text_px(150.)), cx).when(ui::custom_titlebar(), |d| d.mb(px(4.))))
+            .child(self.render_corner(width >= ui::traffic_lights_width() + f32::from(text_px(150.)), false, cx).when(ui::custom_titlebar(), |d| d.mb(px(4.))))
             .child(
                 div()
                     .id("library-head")
@@ -889,7 +890,7 @@ impl Workspace {
             .pb(px(8.))
             .pt(px(Self::corner_top()))
             .gap(px(8.))
-            .child(self.render_corner(width >= ui::traffic_lights_width() + f32::from(text_px(150.)), cx).when(ui::custom_titlebar(), |d| d.mb(px(4.))))
+            .child(self.render_corner(width >= ui::traffic_lights_width() + f32::from(text_px(150.)), true, cx).when(ui::custom_titlebar(), |d| d.mb(px(4.))))
             .child(
                 div()
                     .flex()

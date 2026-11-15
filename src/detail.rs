@@ -24,6 +24,8 @@ impl Workspace {
         let asking = self.asking(window);
         // The edge at the panel's left is there to drag while something stands at its left.
         let edged = !reading && (!asking || self.ask_list_width(window) > 0.);
+        // Beside the narrow list the one-line header is the title strip itself, level with the list's way back.
+        let in_strip = asking && edged && ui::custom_titlebar();
         let has_pdf = lib.pdf_file(&p.id).is_some();
         let title = if lib.show_translation && let Some(Translated::Done(text)) = lib.translations.get(&translation_key(&p.title, ai::translation_prompt(&self.settings.translation_prompt))) { text } else { &p.title };
         let tab_button = |id: &'static str, label: &'static str, value: Tab, this: &Self, cx: &mut Context<Self>| {
@@ -36,6 +38,7 @@ impl Workspace {
                 .px(px(4.))
                 .border_b_2()
                 .cursor_pointer()
+                .occlude()
                 .border_color(if active { Theme::accent() } else { gpui::transparent_black() })
                 .text_color(if active { Theme::text() } else { Theme::text_tertiary() })
                 .when(active, |d| d.font_weight(FontWeight::MEDIUM))
@@ -45,24 +48,21 @@ impl Workspace {
         };
         // Reading mode, and a paper that is asked about, keep one line over the paper: what is read, the three tabs, and the way back.
         let header = if reading || asking {
-            div()
-                .flex()
-                .flex_none()
-                .items_center()
+            (if in_strip { ui::title_strip() } else { div().flex().flex_none().items_center().h(text_px(36.)) })
                 .gap(px(16.))
-                .h(text_px(36.))
                 .px(px(16.))
+                .when(in_strip && cfg!(target_os = "windows"), |d| d.pr(px(3. * ui::CONTROL_W + 8.)))
                 .border_b_1()
                 .border_color(Theme::line())
                 .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(title.clone()))
                 .child(tab_button("tab-info", t("信息"), Tab::Info, self, cx))
                 .child(tab_button("tab-pdf", if has_pdf { "PDF" } else { t("PDF（无）") }, Tab::Pdf, self, cx))
                 .child(tab_button("tab-ask", t("提问"), Tab::Ask, self, cx))
-                .when(tab == Tab::Ask && has_pdf && !(lib.split && width >= SPLIT_MIN), |d| d.child(ui::ghost_button("beside-pdf", Some("file-text"), Some(t("对照 PDF").into())).h(text_px(26.)).text_size(text_px(12.)).on_click(self.on(Cmd::BesidePdf(true), cx))))
+                .when(tab == Tab::Ask && has_pdf && !(lib.split && width >= SPLIT_MIN), |d| d.child(ui::ghost_button("beside-pdf", Some("file-text"), Some(t("对照 PDF").into())).h(text_px(26.)).text_size(text_px(12.)).occlude().on_click(self.on(Cmd::BesidePdf(true), cx))))
                 .child(if reading {
-                    ui::ghost_button("reading-leave", Some("x"), Some(tf!("退出阅读 {}", "Leave reading {}", crate::shortcuts::pretty("escape")).into())).h(text_px(26.)).text_size(text_px(12.)).on_click(self.on(Cmd::ToggleReading, cx))
+                    ui::ghost_button("reading-leave", Some("x"), Some(tf!("退出阅读 {}", "Leave reading {}", crate::shortcuts::pretty("escape")).into())).h(text_px(26.)).text_size(text_px(12.)).occlude().on_click(self.on(Cmd::ToggleReading, cx))
                 } else {
-                    ui::ghost_button("ask-leave", Some("x"), Some(tf!("退出提问 {}", "Leave chat {}", crate::shortcuts::pretty("escape")).into())).h(text_px(26.)).text_size(text_px(12.)).on_click(self.on(Cmd::LeaveAsk, cx))
+                    ui::ghost_button("ask-leave", Some("x"), Some(tf!("退出提问 {}", "Leave chat {}", crate::shortcuts::pretty("escape")).into())).h(text_px(26.)).text_size(text_px(12.)).occlude().on_click(self.on(Cmd::LeaveAsk, cx))
                 })
         } else {
             // The title fills the band the column beside it uses for its header, and the tabs the band of the
@@ -111,7 +111,7 @@ impl Workspace {
                     .child(tab_button("tab-pdf", if has_pdf { "PDF" } else { t("PDF（无）") }, Tab::Pdf, self, cx))
                     .child(tab_button("tab-ask", t("提问"), Tab::Ask, self, cx))
                     // Asking with the PDF put away, or in a panel too narrow for both: one click brings it beside the conversation.
-                    .when(tab == Tab::Ask && has_pdf && !(lib.split && width >= SPLIT_MIN), |d| d.child(div().flex_1()).child(ui::ghost_button("beside-pdf", Some("file-text"), Some(t("对照 PDF").into())).h(text_px(26.)).text_size(text_px(12.)).on_click(self.on(Cmd::BesidePdf(true), cx)))),
+                    .when(tab == Tab::Ask && has_pdf && !(lib.split && width >= SPLIT_MIN), |d| d.child(div().flex_1()).child(ui::ghost_button("beside-pdf", Some("file-text"), Some(t("对照 PDF").into())).h(text_px(26.)).text_size(text_px(12.)).occlude().on_click(self.on(Cmd::BesidePdf(true), cx)))),
             ) };
         // Asking about a paper: the conversation, and the paper's PDF to its right where the panel has room for both.
         // A paper without one keeps the layout it is asked about in, with the ways to get its PDF at the right.
@@ -184,7 +184,7 @@ impl Workspace {
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_drag(cx)))
             .child(div().w(px(2.)).h_full().when(resizing, |d| d.bg(Theme::accent())).when(!resizing, |d| d.group_hover("detail-edge", |s| s.bg(Theme::accent().opacity(0.5)))));
         // Where the panel is the window (reading mode, or asked about without the list): no edge to drag, no line at its left.
-        div().relative().flex().flex_col().flex_none().w(px(width)).h_full().bg(Theme::bg_body()).when(edged, |d| d.border_l_1().border_color(Theme::line())).child(ui::title_strip()).child(header).child(div().flex().flex_col().flex_1().min_h_0().child(body)).when(edged, |d| d.child(edge)).into_any_element()
+        div().relative().flex().flex_col().flex_none().w(px(width)).h_full().bg(Theme::bg_body()).when(edged, |d| d.border_l_1().border_color(Theme::line())).when(!in_strip, |d| d.child(ui::title_strip())).child(header).child(div().flex().flex_col().flex_1().min_h_0().child(body)).when(edged, |d| d.child(edge)).into_any_element()
     }
 
     /// The translated abstract replaces its source in place. Until it is
