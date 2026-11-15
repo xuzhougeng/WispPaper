@@ -1005,8 +1005,8 @@ impl Workspace {
             .flex()
             .flex_col()
             .size_full()
-            .child(div().px(px(16.)).pt(px(16.)).pb(px(10.)).child(div().text_size(text_px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("回收站"))).child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(t("这里的文献保留着笔记、词条和 PDF，可以恢复。它们仍会阻止同一篇文献被重复导入。"))))
-            .child(if rows.is_empty() { ui::empty_state("bin", t("回收站是空的"), "").into_any_element() } else { div().id("trash").flex().flex_col().flex_1().min_h_0().overflow_y_scroll().border_t_1().border_color(Theme::line()).children(rows).into_any_element() })
+            .child(ui::column_head().gap(px(8.)).child(div().flex_none().text_size(text_px(ui::HEAD_TITLE)).font_weight(FontWeight::SEMIBOLD).child(t("回收站"))).child(ui::hint("trash-hint", t("这里的文献保留着笔记、词条和 PDF，可以恢复。它们仍会阻止同一篇文献被重复导入。"))))
+            .child(if rows.is_empty() { ui::empty_state("bin", t("回收站是空的"), "").into_any_element() } else { div().id("trash").flex().flex_col().flex_1().min_h_0().overflow_y_scroll().children(rows).into_any_element() })
             .into_any_element()
     }
 }
