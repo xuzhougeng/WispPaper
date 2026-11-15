@@ -298,7 +298,7 @@ impl Workspace {
                 items.push(button(("write-assist", n).into(), (n == 0).then_some("sparkle"), crate::i18n::assist_title(&assist, &language), tip, !busy, Cmd::WriteAssist(assist), cx));
             }
         } else {
-            items.push(button("write-assist-settings".into(), Some("settings-gear"), t("配置模型").into(), t("配置模型后可以润色、翻译和仿写").into(), true, Cmd::OpenSettings(SettingsPage::Ai), cx));
+            items.push(button("write-assist-settings".into(), Some("settings-gear"), t("配置模型").into(), t("配置模型后可以润色、翻译、仿写，也可以让助手按你的话修改这一节").into(), true, Cmd::OpenSettings(SettingsPage::Ai), cx));
         }
         items.push(rule());
         items.push(button("write-comment".into(), Some("message-square"), t("批注").into(), t("给这段文字写一条批注").into(), true, Cmd::Comment(crate::comments::Do::Write), cx));
