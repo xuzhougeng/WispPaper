@@ -104,15 +104,16 @@ pub fn download(url: &str) -> Result<Vec<u8>, String> {
 
 /// NCBI allows three requests a second without a key, counted across
 /// everything this process sends: searches running side by side take turns,
-/// one every 400 ms. Other hosts are not held back.
+/// one every 400 ms. arXiv asks for three seconds between two requests,
+/// which a search of several pages has to keep. Other hosts are not held back.
 fn take_turn(host: &str) {
-    static NEXT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
-    if !host.ends_with("ncbi.nlm.nih.gov") { return }
+    static NEXT: std::sync::Mutex<[Option<std::time::Instant>; 2]> = std::sync::Mutex::new([None; 2]);
+    let Some((slot, gap)) = [("ncbi.nlm.nih.gov", 400), ("arxiv.org", 3000)].iter().enumerate().find_map(|(slot, (name, gap))| host.ends_with(name).then_some((slot, *gap))) else { return };
     let now = std::time::Instant::now();
     let at = {
         let mut next = NEXT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let at = next.filter(|at| *at > now).unwrap_or(now);
-        *next = Some(at + Duration::from_millis(400));
+        let at = next[slot].filter(|at| *at > now).unwrap_or(now);
+        next[slot] = Some(at + Duration::from_millis(gap));
         at
     };
     std::thread::sleep(at.saturating_duration_since(now));

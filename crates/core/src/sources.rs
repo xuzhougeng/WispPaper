@@ -13,7 +13,19 @@ use serde_json::Value;
 pub const KINDS: [(&str, &str); 4] = [("pubmed", "PubMed"), ("europepmc", "Europe PMC"), ("crossref", "Crossref"), ("arxiv", "arXiv")];
 
 /// The most records one search may bring back.
-pub const MAX_RESULTS: usize = 200;
+pub const MAX_RESULTS: usize = 2000;
+
+/// The most records asked for in one request. A search that wants more
+/// asks again for the next page, until it has them or the database has no more.
+pub const PAGE: usize = 200;
+
+/// How many records a search taken as it stands, without the person setting
+/// a number, should ask for: all that a database sorted by date will give,
+/// and one page of Crossref, which ranks loose matches by relevance and has
+/// hundreds of thousands of them for any few words.
+pub fn broad_limit(kind: &str) -> usize {
+    if kind == "crossref" { PAGE } else { MAX_RESULTS }
+}
 
 /// GET a URL and return the body.
 pub type Fetch<'a> = &'a dyn Fn(&str) -> Result<String, String>;
@@ -27,6 +39,37 @@ pub type Download<'a> = &'a dyn Fn(&str) -> Result<Vec<u8>, String>;
 pub struct Found {
     pub total: Option<u64>,
     pub papers: Vec<Paper>,
+    /// Why a later page did not come, when one did not: the papers are those of the pages before it.
+    pub stopped: Option<String>,
+    /// Records the library holds already and the search therefore did not fetch (`Known`).
+    pub passed: usize,
+}
+
+/// What the caller knows of its library, for a search that runs again and
+/// need not fetch again what the last run brought.
+pub struct Known<'a> {
+    /// Whether the library holds this record. PubMed is asked before it
+    /// fetches a record, with the PMID alone.
+    pub holds: &'a dyn Fn(&Paper) -> bool,
+    /// The count the database gave when an earlier run went as deep as this
+    /// one is to go; `None` when none did, and every page is asked for.
+    pub since: Option<u64>,
+}
+
+/// Where a search stands between two of its requests.
+#[derive(Default)]
+struct Walk {
+    /// The records the database has sent so far, those that could not be read included.
+    sent: usize,
+    total: Option<u64>,
+    /// PubMed: the ids of the run that the library does not hold, asked for once.
+    ids: Option<Vec<String>>,
+    /// PubMed: how many ids the library held.
+    passed: usize,
+    /// Europe PMC: the mark its last page gave for the next one.
+    cursor: Option<String>,
+    /// The database has no more.
+    done: bool,
 }
 
 /// How a query is written for a database, for whoever composes one.
@@ -48,41 +91,106 @@ fn encode(value: &str) -> String {
     out
 }
 
-/// Run `query` against one database and return up to `limit` of the newest records.
+/// Run `query` against one database and return up to `limit` of the newest
+/// records, a page at a time. A page that fails after others came ends the
+/// search with what it has (`Found::stopped`); the first one failing is an error.
 pub fn search(kind: &str, query: &str, limit: usize, fetch: Fetch) -> Result<Found, String> {
+    search_new(kind, query, limit, fetch, None)
+}
+
+/// `search` for a library that may hold most of the records already. PubMed
+/// names its records before it sends them, so those the library holds are
+/// never fetched. The others send whole pages: once a run has gone as deep
+/// as this one (`Known::since`), a page with nothing new ends the walk,
+/// unless the database has grown by more records than were found, which
+/// means a new one stands further down.
+pub fn search_new(kind: &str, query: &str, limit: usize, fetch: Fetch, known: Option<&Known>) -> Result<Found, String> {
     let query = query.trim();
     if query.is_empty() { return Err("请填写检索式。".into()) }
     let limit = limit.clamp(1, MAX_RESULTS);
-    let json = |url: &str| -> Result<Value, String> { serde_json::from_str(&fetch(url)?).map_err(|e| format!("无法解析返回内容：{e}")) };
-    let mut found = match kind {
-        "pubmed" => {
-            let base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils";
-            let hits = json(&format!("{base}/esearch.fcgi?db=pubmed&retmode=json&sort=pub+date&retmax={limit}&term={}", encode(query)))?;
-            let result = &hits["esearchresult"];
-            // PubMed answers a query it cannot read with an error inside a normal reply.
-            if let Some(error) = result["ERROR"].as_str() { return Err(format!("PubMed 没有接受这个检索式：{error}")) }
-            let ids: Vec<&str> = result["idlist"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
-            let total = result["count"].as_str().and_then(|n| n.parse().ok());
-            let papers = if ids.is_empty() { vec![] } else { pubmed_papers(&fetch(&format!("{base}/efetch.fcgi?db=pubmed&retmode=xml&id={}", ids.join(",")))?) };
-            Found { total, papers }
+    let mut found = Found::default();
+    let mut walk = Walk::default();
+    let mut fresh = 0;
+    while !walk.done && walk.sent < limit {
+        match next_page(kind, query, limit, &mut walk, fetch, known) {
+            Ok(papers) => {
+                let new = known.map_or(papers.len(), |known| papers.iter().filter(|paper| !(known.holds)(paper)).count());
+                fresh += new as u64;
+                found.papers.extend(papers);
+                let grown = |since: u64| walk.total.unwrap_or(0).saturating_sub(since);
+                if new == 0 && kind != "pubmed" && known.and_then(|known| known.since).is_some_and(|since| fresh >= grown(since)) { break }
+            }
+            Err(error) if walk.sent > 0 => {
+                found.stopped = Some(error);
+                break;
+            }
+            Err(error) => return Err(error),
         }
-        "europepmc" => {
-            let body = json(&format!("https://www.ebi.ac.uk/europepmc/webservices/rest/search?format=json&resultType=core&sort={}&pageSize={limit}&query={}", encode("P_PDATE_D desc"), encode(query)))?;
-            Found { total: body["hitCount"].as_u64(), papers: body["resultList"]["result"].as_array().into_iter().flatten().filter_map(europepmc_hit).collect() }
-        }
-        "crossref" => {
-            let body = json(&format!("https://api.crossref.org/works?rows={limit}&select={}&query.bibliographic={}", encode("DOI,title,author,published,published-print,published-online,issued,container-title,abstract,type,URL,publisher"), encode(query)))?;
-            Found { total: body["message"]["total-results"].as_u64(), papers: body["message"]["items"].as_array().into_iter().flatten().filter_map(crossref_work).collect() }
-        }
-        "arxiv" => arxiv_found(&fetch(&format!("https://export.arxiv.org/api/query?sortBy=submittedDate&sortOrder=descending&max_results={limit}&search_query={}", encode(query)))?),
-        other => return Err(format!("不支持的来源：{other}。可用：{}", KINDS.iter().map(|(key, _)| *key).collect::<Vec<_>>().join("、"))),
-    };
+    }
+    (found.total, found.passed) = (walk.total, walk.passed);
     let name = KINDS.iter().find(|(key, _)| *key == kind).map_or(kind, |(_, name)| name);
     for paper in &mut found.papers {
         paper.source = name.to_string();
     }
     found.papers.truncate(limit);
     Ok(found)
+}
+
+/// The next page of a search: what could be read of it, with `walk` moved past it.
+fn next_page(kind: &str, query: &str, limit: usize, walk: &mut Walk, fetch: Fetch, known: Option<&Known>) -> Result<Vec<Paper>, String> {
+    let json = |url: &str| -> Result<Value, String> { serde_json::from_str(&fetch(url)?).map_err(|e| format!("无法解析返回内容：{e}")) };
+    let ask = PAGE.min(limit - walk.sent);
+    let (papers, sent) = match kind {
+        "pubmed" => {
+            let base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils";
+            if walk.ids.is_none() {
+                let hits = json(&format!("{base}/esearch.fcgi?db=pubmed&retmode=json&sort=pub+date&retmax={limit}&term={}", encode(query)))?;
+                let result = &hits["esearchresult"];
+                // PubMed answers a query it cannot read with an error inside a normal reply.
+                if let Some(error) = result["ERROR"].as_str() { return Err(format!("PubMed 没有接受这个检索式：{error}")) }
+                walk.total = result["count"].as_str().and_then(|n| n.parse().ok());
+                let ids: Vec<String> = result["idlist"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+                let wanted: Vec<String> = ids.iter().filter(|id| !known.is_some_and(|known| (known.holds)(&Paper { pmid: id.to_string(), ..Default::default() }))).cloned().collect();
+                walk.passed = ids.len() - wanted.len();
+                walk.ids = Some(wanted);
+            }
+            // The ids came in one reply; the records are fetched a page of them at a time.
+            let ids = walk.ids.as_deref().unwrap_or_default();
+            let part = &ids[walk.sent.min(ids.len())..(walk.sent + ask).min(ids.len())];
+            if walk.sent + part.len() >= ids.len() { walk.done = true }
+            let papers = if part.is_empty() { vec![] } else { pubmed_papers(&fetch(&format!("{base}/efetch.fcgi?db=pubmed&retmode=xml&id={}", part.join(",")))?) };
+            (papers, part.len())
+        }
+        "europepmc" => {
+            let body = json(&format!("https://www.ebi.ac.uk/europepmc/webservices/rest/search?format=json&resultType=core&sort={}&pageSize={ask}&cursorMark={}&query={}", encode("P_PDATE_D desc"), encode(walk.cursor.as_deref().unwrap_or("*")), encode(query)))?;
+            let hits = body["resultList"]["result"].as_array().map(Vec::as_slice).unwrap_or_default();
+            // The last page gives no mark, or the one it was asked with.
+            let next = body["nextCursorMark"].as_str().filter(|next| Some(*next) != walk.cursor.as_deref()).map(str::to_string);
+            if next.is_none() { walk.done = true }
+            walk.cursor = next;
+            walk.total = walk.total.or(body["hitCount"].as_u64());
+            (hits.iter().filter_map(europepmc_hit).collect(), hits.len())
+        }
+        "crossref" => {
+            let body = json(&format!("https://api.crossref.org/works?rows={ask}&offset={}&select={}&query.bibliographic={}", walk.sent, encode("DOI,title,author,published,published-print,published-online,issued,container-title,abstract,type,URL,publisher"), encode(query)))?;
+            let items = body["message"]["items"].as_array().map(Vec::as_slice).unwrap_or_default();
+            walk.total = walk.total.or(body["message"]["total-results"].as_u64());
+            (items.iter().filter_map(crossref_work).collect(), items.len())
+        }
+        "arxiv" => {
+            let xml = fetch(&format!("https://export.arxiv.org/api/query?sortBy=submittedDate&sortOrder=descending&start={}&max_results={ask}&search_query={}", walk.sent, encode(query)))?;
+            let found = arxiv_found(&xml);
+            let sent = elements(&xml, "entry").len();
+            walk.total = walk.total.or(found.total);
+            // arXiv now and then answers a later page with nothing in it.
+            if sent == 0 && walk.total.is_some_and(|total| (walk.sent as u64) < total) && walk.sent > 0 { return Err("arXiv 没有返回后面的记录，请稍后再运行一次。".into()) }
+            (found.papers, sent)
+        }
+        other => return Err(format!("不支持的来源：{other}。可用：{}", KINDS.iter().map(|(key, _)| *key).collect::<Vec<_>>().join("、"))),
+    };
+    walk.sent += sent;
+    if sent < ask || walk.total.is_some_and(|total| (walk.sent + walk.passed) as u64 >= total) { walk.done = true }
+    Ok(papers)
 }
 
 // ---- XML, as far as PubMed and arXiv need it
@@ -216,7 +324,7 @@ pub fn arxiv_found(xml: &str) -> Found {
             ..Default::default()
         });
     }
-    Found { total: element(xml, "opensearch:totalResults").and_then(|n| n.trim().parse().ok()), papers }
+    Found { total: element(xml, "opensearch:totalResults").and_then(|n| n.trim().parse().ok()), papers, ..Default::default() }
 }
 
 #[cfg(test)]
@@ -295,7 +403,7 @@ mod tests {
 
         let pmc = search("europepmc", "TITLE:root", 500, &fetch).unwrap();
         assert_eq!((pmc.total, pmc.papers[0].title.as_str(), pmc.papers[0].source.as_str()), (Some(7), "Root atlas", "Europe PMC"));
-        assert!(asked.borrow()[2].contains("pageSize=200&query=TITLE%3Aroot"));
+        assert!(asked.borrow()[2].contains("pageSize=200&cursorMark=%2A&query=TITLE%3Aroot"));
 
         // The limit holds even when a service sends more than it was asked for.
         let crossref = search("crossref", "root atlas", 1, &fetch).unwrap();
@@ -310,5 +418,114 @@ mod tests {
         let offline = |_: &str| -> Result<String, String> { Err("网络请求失败".into()) };
         assert_eq!(search("crossref", "x", 5, &offline), Err("网络请求失败".into()));
         assert!(KINDS.iter().all(|(kind, _)| !syntax(kind).is_empty()));
+    }
+
+    /// The number after `name=` in a URL.
+    fn asked_for(url: &str, name: &str) -> usize {
+        url.split(['?', '&']).find_map(|part| part.strip_prefix(name)?.strip_prefix('=')?.parse().ok()).unwrap()
+    }
+
+    #[test]
+    fn a_search_asks_page_after_page() {
+        let asked = RefCell::new(vec![]);
+        // Every database holds 450 records for the query and sends as many as it is asked for.
+        let fetch = |url: &str| -> Result<String, String> {
+            asked.borrow_mut().push(url.to_string());
+            let records = |from: usize, ask: usize| from..(from + ask).min(450);
+            Ok(if url.contains("esearch") {
+                format!(r#"{{"esearchresult":{{"count":"450","idlist":[{}]}}}}"#, (0..asked_for(url, "retmax").min(450)).map(|n| format!("\"{n}\"")).collect::<Vec<_>>().join(","))
+            } else if url.contains("efetch") {
+                url.rsplit("id=").next().unwrap().split(',').map(|id| format!("<PubmedArticle><PMID>{id}</PMID><ArticleTitle>Paper {id}</ArticleTitle></PubmedArticle>")).collect()
+            } else if url.contains("europepmc") {
+                let from = if url.contains("cursorMark=%2A") { 0 } else { asked_for(url, "cursorMark") };
+                let hits: Vec<String> = records(from, asked_for(url, "pageSize")).map(|n| format!(r#"{{"title":"Paper {n}","pmid":"{n}"}}"#)).collect();
+                format!(r#"{{"hitCount":450,"nextCursorMark":"{}","resultList":{{"result":[{}]}}}}"#, from + hits.len(), hits.join(","))
+            } else if url.contains("crossref") {
+                let items: Vec<String> = records(asked_for(url, "offset"), asked_for(url, "rows")).map(|n| format!(r#"{{"title":["Paper {n}"],"DOI":"10.1000/{n}"}}"#)).collect();
+                format!(r#"{{"message":{{"total-results":450,"items":[{}]}}}}"#, items.join(","))
+            } else {
+                let entries: String = records(asked_for(url, "start"), asked_for(url, "max_results")).map(|n| format!("<entry><id>http://arxiv.org/abs/2401.{n:05}v1</id><title>Paper {n}</title></entry>")).collect();
+                format!("<feed><opensearch:totalResults>450</opensearch:totalResults>{entries}</feed>")
+            })
+        };
+        for (kind, _) in KINDS {
+            // More than the database has: everything, and no request past the end.
+            asked.borrow_mut().clear();
+            let all = search(kind, "root", 1000, &fetch).unwrap();
+            assert_eq!((all.total, all.papers.len(), all.stopped.as_deref()), (Some(450), 450, None), "{kind}");
+            assert_eq!((all.papers[0].title.as_str(), all.papers[449].title.as_str()), ("Paper 0", "Paper 449"), "{kind}");
+            assert_eq!(asked.borrow().len(), if kind == "pubmed" { 4 } else { 3 }, "{kind}: {:?}", asked.borrow());
+            // Fewer: the last page is asked for no more than what is missing.
+            asked.borrow_mut().clear();
+            assert_eq!(search(kind, "root", 250, &fetch).unwrap().papers.len(), 250, "{kind}");
+            let last = asked.borrow().last().cloned().unwrap();
+            match kind {
+                "pubmed" => assert_eq!(last.rsplit("id=").next().unwrap().split(',').count(), 50),
+                "europepmc" => assert!(last.contains("pageSize=50&cursorMark=200&"), "{last}"),
+                "crossref" => assert!(last.contains("rows=50&offset=200&"), "{last}"),
+                _ => assert!(last.contains("start=200&max_results=50&"), "{last}"),
+            }
+            // One page is one request, as before.
+            asked.borrow_mut().clear();
+            assert_eq!(search(kind, "root", PAGE, &fetch).unwrap().papers.len(), PAGE);
+            assert_eq!(asked.borrow().len(), if kind == "pubmed" { 2 } else { 1 }, "{kind}");
+        }
+        assert_eq!(search("crossref", "root", 99_999, &fetch).unwrap().papers.len(), 450);
+    }
+
+    #[test]
+    fn a_search_run_again_fetches_what_is_new() {
+        let asked = RefCell::new(vec![]);
+        // 450 records, numbered from the newest.
+        let fetch = |url: &str| -> Result<String, String> {
+            asked.borrow_mut().push(url.to_string());
+            Ok(if url.contains("esearch") {
+                format!(r#"{{"esearchresult":{{"count":"450","idlist":[{}]}}}}"#, (0..450).map(|n| format!("\"{n}\"")).collect::<Vec<_>>().join(","))
+            } else if url.contains("efetch") {
+                url.rsplit("id=").next().unwrap().split(',').map(|id| format!("<PubmedArticle><PMID>{id}</PMID><ArticleTitle>Paper {id}</ArticleTitle></PubmedArticle>")).collect()
+            } else {
+                let from = if url.contains("cursorMark=%2A") { 0 } else { asked_for(url, "cursorMark") };
+                let hits: Vec<String> = (from..(from + asked_for(url, "pageSize")).min(450)).map(|n| format!(r#"{{"title":"Paper {n}","pmid":"{n}"}}"#)).collect();
+                format!(r#"{{"hitCount":450,"nextCursorMark":"{}","resultList":{{"result":[{}]}}}}"#, from + hits.len(), hits.join(","))
+            })
+        };
+        // The library holds all but these.
+        let run = |kind: &str, missing: &[&str], since: Option<u64>| {
+            asked.borrow_mut().clear();
+            let holds = |paper: &Paper| !missing.contains(&paper.pmid.as_str());
+            let found = search_new(kind, "root", 1000, &fetch, Some(&Known { holds: &holds, since })).unwrap();
+            (found.papers.iter().filter(|paper| missing.contains(&paper.pmid.as_str())).count(), found.papers.len(), found.passed, asked.borrow().len())
+        };
+        // PubMed names its records first: only the missing ones are fetched, wherever they stand and whatever ran before.
+        assert_eq!(run("pubmed", &["3", "300"], None), (2, 2, 448, 2));
+        assert_eq!(run("pubmed", &[], None), (0, 0, 450, 1));
+        // Europe PMC sends pages. No run went this deep yet: all of them.
+        assert_eq!(run("europepmc", &[], None), (0, 450, 0, 3));
+        // One did, and the database has not grown since: the first page says so.
+        assert_eq!(run("europepmc", &[], Some(450)), (0, 200, 0, 1));
+        // Grown by one, which is at the top: the page after it ends the walk.
+        assert_eq!(run("europepmc", &["3"], Some(449)), (1, 400, 0, 2));
+        // Grown by one that stands further down: looked for until it is found.
+        assert_eq!(run("europepmc", &["300"], Some(449)), (1, 450, 0, 3));
+    }
+
+    #[test]
+    fn a_page_that_fails_keeps_the_ones_before_it() {
+        let count = RefCell::new(0);
+        let page = |from: usize| (from..from + PAGE).map(|n| format!(r#"{{"title":["Paper {n}"],"DOI":"10.1000/{n}"}}"#)).collect::<Vec<_>>().join(",");
+        let breaks = |url: &str| -> Result<String, String> {
+            *count.borrow_mut() += 1;
+            if *count.borrow() == 3 { return Err("网络请求失败".into()) }
+            Ok(format!(r#"{{"message":{{"total-results":5000,"items":[{}]}}}}"#, page(asked_for(url, "offset"))))
+        };
+        let found = search("crossref", "root", 1000, &breaks).unwrap();
+        assert_eq!((found.total, found.papers.len(), found.stopped.as_deref(), *count.borrow()), (Some(5000), 400, Some("网络请求失败"), 3));
+        // arXiv sending an empty page before the end is such a failure, not the end.
+        let empty = |url: &str| -> Result<String, String> {
+            let entries: String = if asked_for(url, "start") == 0 { (0..PAGE).map(|n| format!("<entry><id>http://arxiv.org/abs/2401.{n:05}v1</id><title>Paper {n}</title></entry>")).collect() } else { String::new() };
+            Ok(format!("<feed><opensearch:totalResults>450</opensearch:totalResults>{entries}</feed>"))
+        };
+        let found = search("arxiv", "all:root", 450, &empty).unwrap();
+        assert!(found.papers.len() == PAGE && found.stopped.as_deref().is_some_and(|why| why.contains("arXiv")));
     }
 }

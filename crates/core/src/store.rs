@@ -311,10 +311,16 @@ pub struct ImportBatch {
     pub fetched: usize,
     pub added: usize,
     pub skipped: usize,
-    /// Why the run failed; empty when it did not.
+    /// Why the run failed, or why it stopped before it had everything
+    /// (then `fetched` is not 0); empty when it did neither.
     pub error: String,
     /// When the batch was undone; empty when it was not.
     pub undone_at: String,
+    /// How many of the newest records the run was asked for, when it went
+    /// through them all; 0 when it stopped short, and for every run of a
+    /// search once one of its batches is undone. A later run asked for no
+    /// more than this need only look for what is new (`sources::Known`).
+    pub depth: usize,
 }
 
 /// A conversation with the library or with one paper, as it is kept.
@@ -417,7 +423,7 @@ pub struct Undone {
     pub kept: Vec<(String, String)>,
 }
 
-const BATCH_COLUMNS: &str = "id, search_id, label, started_at, remote_total, fetched, added, skipped, error, undone_at";
+const BATCH_COLUMNS: &str = "id, search_id, label, started_at, remote_total, fetched, added, skipped, error, undone_at, depth";
 
 fn row_to_batch(r: &rusqlite::Row) -> rusqlite::Result<ImportBatch> {
     Ok(ImportBatch {
@@ -431,6 +437,7 @@ fn row_to_batch(r: &rusqlite::Row) -> rusqlite::Result<ImportBatch> {
         skipped: r.get::<_, i64>(7)? as usize,
         error: r.get(8)?,
         undone_at: r.get(9)?,
+        depth: r.get::<_, i64>(10)? as usize,
     })
 }
 
@@ -448,6 +455,7 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("structures", "pages_read", "INTEGER NOT NULL DEFAULT 0"),
     ("structures", "page_count", "INTEGER NOT NULL DEFAULT 0"),
     ("manuscript_sections", "bare", "INTEGER NOT NULL DEFAULT 0"),
+    ("import_batches", "depth", "INTEGER NOT NULL DEFAULT 0"),
 ];
 
 /// Add the columns added to a table after it was first made: `CREATE TABLE IF NOT
@@ -898,11 +906,14 @@ impl Store {
         Ok(())
     }
 
-    /// Import what a search brought back as one batch that can be undone.
-    pub fn import_batch(&mut self, search_id: &str, label: &str, remote_total: Option<u64>, papers: Vec<Paper>) -> Result<(ImportBatch, ImportResult)> {
-        let fetched = papers.len();
-        let result = self.import_papers(papers)?;
-        let batch = ImportBatch { id: new_id("B"), search_id: search_id.into(), label: label.into(), started_at: now_iso(), remote_total, fetched, added: result.added.len(), skipped: result.skipped.len(), ..Default::default() };
+    /// Import what a search asked for its newest `limit` records brought
+    /// back, as one batch that can be undone. The records the search passed
+    /// over because the library holds them count as retrieved and skipped.
+    pub fn import_batch(&mut self, search_id: &str, label: &str, found: crate::sources::Found, limit: usize) -> Result<(ImportBatch, ImportResult)> {
+        let fetched = found.papers.len() + found.passed;
+        let result = self.import_papers(found.papers)?;
+        let depth = if found.stopped.is_none() { limit } else { 0 };
+        let batch = ImportBatch { id: new_id("B"), search_id: search_id.into(), label: label.into(), started_at: now_iso(), remote_total: found.total, fetched, added: result.added.len(), skipped: result.skipped.len() + found.passed, error: found.stopped.unwrap_or_default(), depth, ..Default::default() };
         let tx = self.db.transaction()?;
         write_batch(&tx, &batch)?;
         for paper in &result.added {
@@ -955,6 +966,8 @@ impl Store {
             }
         }
         self.db.execute("UPDATE import_batches SET undone_at = ?2 WHERE id = ?1", params![id, now_iso()])?;
+        // What was removed is missing anywhere in the list: the search's next run looks at all of it again.
+        self.db.execute("UPDATE import_batches SET depth = 0 WHERE search_id = (SELECT search_id FROM import_batches WHERE id = ?1) AND search_id != ''", [id])?;
         Ok(undone)
     }
 
@@ -1353,8 +1366,8 @@ fn write_paper(tx: &Transaction, p: &Paper) -> Result<()> {
 
 fn write_batch(tx: &Transaction, batch: &ImportBatch) -> Result<()> {
     tx.execute(
-        &format!("INSERT INTO import_batches({BATCH_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"),
-        params![batch.id, batch.search_id, batch.label, batch.started_at, batch.remote_total.map(|n| n as i64), batch.fetched as i64, batch.added as i64, batch.skipped as i64, batch.error, batch.undone_at],
+        &format!("INSERT INTO import_batches({BATCH_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"),
+        params![batch.id, batch.search_id, batch.label, batch.started_at, batch.remote_total.map(|n| n as i64), batch.fetched as i64, batch.added as i64, batch.skipped as i64, batch.error, batch.undone_at, batch.depth as i64],
     )?;
     Ok(())
 }
@@ -1561,7 +1574,7 @@ mod tests {
         assert!(store.list_searches().unwrap()[0].last_run.is_none());
 
         let existing = store.add_paper(paper("Known", "10.1000/known")).unwrap();
-        let (batch, result) = store.import_batch(&search.id, "PubMed: root[Title]", Some(120), vec![paper("One", "10.1000/1"), paper("Two", "10.1000/2"), paper("Known again", "10.1000/known")]).unwrap();
+        let (batch, result) = store.import_batch(&search.id, "PubMed: root[Title]", crate::sources::Found { total: Some(120), papers: vec![paper("One", "10.1000/1"), paper("Two", "10.1000/2"), paper("Known again", "10.1000/known")], ..Default::default() }, 50).unwrap();
         assert_eq!((batch.remote_total, batch.fetched, batch.added, batch.skipped, result.added.len()), (Some(120), 3, 2, 1, 2));
         store.record_failed_run(&search.id, "PubMed: root[Title]", "网络请求失败").unwrap();
         let listed = store.list_searches().unwrap();
