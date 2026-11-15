@@ -286,14 +286,17 @@ impl Workspace {
     }
 
     /// The window's top-left corner in a library: the button that puts the
-    /// sidebar away or brings it back, and the way back to the libraries.
-    /// A narrow sidebar keeps the arrow and drops its words.
+    /// sidebar away or brings it back, and the way back, which goes up one
+    /// level and no further: from a manuscript to its library, from the library
+    /// to all of them. It is the only way back in the sidebar, so the topmost
+    /// arrow is never the longer jump. A narrow sidebar keeps the arrow and drops its words.
     pub(crate) fn render_corner(&self, roomy: bool, cx: &mut Context<Self>) -> Div {
+        let (id, label, cmd) = if self.outline_shown() { ("back-library", t("文献库"), Cmd::WriteNav(true)) } else { ("back-home", t("所有文献库"), Cmd::GoHome) };
         ui::title_strip()
             .when(!ui::custom_titlebar(), |d| d.h(text_px(28.)))
             .pl(px(ui::traffic_lights_width()))
             .child(ui::ghost_button("toggle-sidebar", Some("panel-left"), None).occlude().on_click(self.on(Cmd::ToggleSidebar, cx)))
-            .child(ui::ghost_button("back-home", Some("arrow-left"), roomy.then(|| t("所有文献库").into())).occlude().on_click(self.on(Cmd::GoHome, cx)))
+            .child(ui::ghost_button(id, Some("arrow-left"), roomy.then(|| label.into())).occlude().on_click(self.on(cmd, cx)))
     }
 
     /// Each background job stays compact; its dialog owns the live details.

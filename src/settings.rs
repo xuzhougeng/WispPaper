@@ -1,5 +1,5 @@
 //! 设置: a view of its own, with a sidebar of pages (通用, 外观, 快捷键, AI,
-//! 自定义 (`custom.rs`), 网络, 关于) and 返回 at the bottom. AI has three tabs: 模型 (the providers,
+//! 自定义 (`custom.rs`), 网络, 关于) under 返回 at the top left, where the library has its way back. AI has three tabs: 模型 (the providers,
 //! a list at the left and the one picked at the right), 任务 (which model
 //! does what, with its instructions) and 命令 (the person's own slash commands). The library that was open stays open
 //! underneath. Every change is saved at once; there is no 保存 button.
@@ -828,13 +828,17 @@ impl Workspace {
             .h_full()
             .px(px(10.))
             .pb(px(10.))
-            .pt(px(if ui::custom_titlebar() { 4. } else { 10. }))
+            .pt(px(Self::corner_top()))
             .gap(px(2.))
-            .child(ui::title_strip())
-            .child(div().px(px(8.)).pt(px(6.)).pb(px(8.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::text_secondary()).child(t("设置")))
-            .children(pages)
-            .child(div().flex_1())
-            .child(nav("settings-back", "arrow-left", t("返回"), false, Cmd::CloseSettings, self, cx));
+            // The way back stands where the library's does: in the window's top-left corner, beside the traffic lights.
+            .child(
+                ui::title_strip()
+                    .when(!ui::custom_titlebar(), |d| d.h(text_px(28.)))
+                    .pl(px(ui::traffic_lights_width()))
+                    .child(ui::ghost_button("settings-back", Some("arrow-left"), Some(t("返回").into())).occlude().on_click(self.on(Cmd::CloseSettings, cx))),
+            )
+            .child(div().px(px(8.)).pt(px(10.)).pb(px(8.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::text_secondary()).child(t("设置")))
+            .children(pages);
 
         let body = match page {
             SettingsPage::General => self.general_page(window, cx),
@@ -875,7 +879,9 @@ impl Workspace {
                     .track_scroll(&view.scroll)
                     // The scroll handle measures its direct child. Keep that child at its
                     // natural height: shrinking it hides the overflow of long tool lists.
-                    .child(div().flex().flex_col().flex_none().items_center().w_full().px(px(32.)).pt(px(12.)).pb(px(64.)).child(div().flex().flex_col().flex_none().w_full().max_w(px(if wide { AI_COLUMN_W } else { COLUMN_W })).gap(px(24.)).child(heading).child(body))),
+                    // Every page stands in one frame, as wide as the widest page and centred; a narrower page
+                    // keeps to its left, so the left edge does not move from page to page.
+                    .child(div().flex().flex_col().flex_none().items_center().w_full().px(px(32.)).pt(px(12.)).pb(px(64.)).child(div().flex().flex_col().flex_none().w_full().max_w(px(AI_COLUMN_W)).child(div().flex().flex_col().flex_none().w_full().max_w(px(if wide { AI_COLUMN_W } else { COLUMN_W })).gap(px(24.)).child(heading).child(body)))),
             );
         div().flex().size_full().min_h_0().overflow_hidden().child(sidebar).child(content).into_any_element()
     }
@@ -945,7 +951,9 @@ impl Workspace {
         let size = self.settings.font_size;
         let family_label = if family.is_empty() { t("系统默认").to_string() } else { family.clone() };
         let unavailable = !family.is_empty() && !view.font_names.contains(family);
-        let choose = button("font-family", family_label).max_w(px(280.)).overflow_hidden()
+        // The picker is set in the system's font whatever is chosen: a font that draws letters as
+        // pictures (Webdings) or has none would otherwise hide its own name and what is typed to find another.
+        let choose = button("font-family", family_label).font_family(theme::UI_FONT).max_w(px(280.)).overflow_hidden()
             .child(ui::icon(if view.font_picker { "chevron-up" } else { "chevron-down" }, 14., Theme::text_secondary()))
             .on_click(cx.listener(|this, _, window, cx| this.toggle_font_picker(window, cx)));
         let step = |id, label, delta, enabled: bool, cx: &mut Context<Self>| button(id, label).min_w(px(32.))
@@ -962,10 +970,12 @@ impl Workspace {
             let empty = fonts.is_empty();
             let height = text_px(30. * fonts.len().clamp(1, 6) as f32).min(px(200.));
             let choices = fonts.into_iter().enumerate().map(|(i, name)| {
+                // The name is always readable; what the font looks like is the sample beside it.
                 ui::menu_row(("font-choice", i), name.clone(), name == family, None)
-                    .font_family(name.clone()).on_click(self.on(Cmd::SetFontFamily(name.clone()), cx)).into_any_element()
+                    .child(div().flex_none().max_w(px(160.)).overflow_hidden().whitespace_nowrap().font_family(name.clone()).text_color(Theme::text_secondary()).child("Aa 文献 123"))
+                    .on_click(self.on(Cmd::SetFontFamily(name.clone()), cx)).into_any_element()
             }).collect::<Vec<_>>();
-            rows.push(div().flex().flex_col().gap(px(8.)).px(px(16.)).py(px(12.))
+            rows.push(div().flex().flex_col().gap(px(8.)).px(px(16.)).py(px(12.)).font_family(theme::UI_FONT)
                 .child(ui::field(&view.font_search, window, cx))
                 .child(ui::menu_row("font-default", t("系统默认"), family.is_empty(), None).on_click(self.on(Cmd::SetFontFamily(String::new()), cx)))
                 .child(div().id("font-choices").h(height).overflow_y_scroll().track_scroll(&view.font_scroll).children(choices)
