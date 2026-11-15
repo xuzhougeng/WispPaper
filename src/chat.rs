@@ -587,7 +587,7 @@ impl Workspace {
         } else if chat.messages.is_empty() && chat.error.is_empty() && talk == Talk::Write {
             self.render_agent_start(cx)
         } else if chat.messages.is_empty() && chat.error.is_empty() && talk == Talk::Library {
-            self.render_start(cx)
+            self.render_start(window, cx)
         } else if chat.messages.is_empty() && chat.error.is_empty() {
             let suggestions: &[&str] = &[t("这篇文献的研究问题、方法和主要结论是什么？"), t("作者的结论有哪些证据支持？有什么局限？"), t("用三句话向同行介绍这篇文章。")];
             ui::empty_state("sparkle", t("就这篇文献提问"), t("回答依据文献库里的记录、笔记和已存 PDF 的全文，并标出出处。需要时助手会自己检索和翻阅全文。"))
@@ -698,7 +698,7 @@ impl Workspace {
     /// The assistant's page before anything is said: what it can be asked
     /// to do, by kind. A line is a request sent as it stands, or a command
     /// left in the box for its words to follow.
-    fn render_start(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_start(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         enum Start {
             Say(&'static str),
             Command(&'static str),
@@ -710,9 +710,13 @@ impl Workspace {
             ("list-todo", "整理", &[Say("给这些文献按主题打上标签，优先用已有的标签。"), Say("把我还没读的文献里最值得先读的几篇加上星标。"), Say("读一遍这些文献，为自定义词条提出取值。")]),
             ("pen-line", "写", &[Command("review"), Command("write"), Command("cite")]),
         ];
+        // A width of its own: a card that shares the row's width is measured before its lines wrap, and is then too short for them.
+        // So the page's width is worked out here (less its padding, edge lines and a scroll bar): two cards to a row while each keeps a readable width, else one, as wide as reads well.
+        let room = f32::from(window.viewport_size().width) - self.sidebar_width(window) - self.detail_width(window) - 60.;
+        let width = if room >= 2. * 270. + 12. { ((room - 12.) / 2.).min(348.) } else { room.clamp(240., 520.) };
         let cards = groups.into_iter().map(|(icon, title, starts)| {
             let lines = starts.iter().enumerate().map(|(n, start)| {
-                let line = div().id(SharedString::from(format!("start-{icon}-{n}"))).flex().gap(px(8.)).w_full().px(px(8.)).py(px(6.)).rounded(px(6.)).text_size(text_px(13.)).line_height(text_px(19.)).cursor_pointer().hover(|s| s.bg(Theme::hover()));
+                let line = div().id(SharedString::from(format!("start-{icon}-{n}"))).flex().gap(px(8.)).w_full().px(px(8.)).py(px(6.)).rounded(px(6.)).text_size(text_px(13.)).line_height(text_px(19.)).cursor_pointer().hover(|s| s.bg(Theme::hover())).active(|s| s.bg(Theme::pressed()));
                 match start {
                     Say(text) => line.child(div().flex_1().min_w_0().child(t(text))).on_click(self.on(Cmd::Suggest(Talk::Library, t(text).to_string()), cx)),
                     Command(name) => {
@@ -725,15 +729,15 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .flex_none()
-                // A width of its own: a card that shares the row's width is measured before its lines wrap, and is then too short for them.
-                .w(px(348.))
+                .w(px(width))
                 .max_w_full()
-                .gap(px(2.))
-                .p(px(8.))
+                .gap(px(1.))
+                .p(px(6.))
                 .rounded(px(10.))
                 .border_1()
                 .border_color(Theme::line())
-                .child(div().flex().items_center().gap(px(7.)).px(px(8.)).pt(px(4.)).pb(px(6.)).child(ui::icon(icon, 14., Theme::text_tertiary())).child(div().text_size(text_px(12.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text_tertiary()).child(t(title))))
+                .bg(Theme::bg_body())
+                .child(div().flex().items_center().gap(px(7.)).px(px(8.)).pt(px(6.)).pb(px(6.)).mb(px(2.)).border_b_1().border_color(Theme::line()).child(ui::icon(icon, 14., Theme::text_secondary())).child(div().text_size(text_px(12.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text_secondary()).child(t(title))))
                 .children(lines)
         });
         div()
@@ -745,15 +749,14 @@ impl Workspace {
             .w_full()
             .min_h_0()
             .overflow_y_scroll()
-            .gap(px(8.))
+            .gap(px(6.))
             .px(px(24.))
-            .pt(px(40.))
+            .pt(px(32.))
             .pb(px(24.))
-            .child(ui::icon("sparkle", 30., Theme::text_placeholder()))
+            .child(div().flex().items_center().justify_center().size(px(44.)).mb(px(4.)).rounded(px(12.)).bg(Theme::accent_soft()).child(ui::icon("sparkle", 22., Theme::accent())))
             .child(div().text_size(text_px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("交给助手")))
             .child(div().max_w(px(600.)).text_size(text_px(12.)).line_height(text_px(18.)).text_center().text_color(Theme::text_tertiary()).child(t("交代一件事，或者提一个问题。助手会自己检索和翻阅文献库，回答标出出处；要改动文献库时先问你。")))
-            // Two cards to a row, one where the page is narrow.
-            .child(div().flex().flex_wrap().justify_center().items_start().gap(px(12.)).w_full().max_w(px(720.)).pt(px(20.)).children(cards))
+            .child(div().flex().flex_wrap().justify_center().items_start().gap(px(12.)).w(px(2. * width + 12.)).max_w_full().pt(px(18.)).children(cards))
             .into_any_element()
     }
 
@@ -1326,32 +1329,41 @@ impl Workspace {
                     // The papers the first question is kept to: each can be let go again, and without any the list on show is back.
                     .when(!kept.is_empty(), |d| {
                         let more = lib.asked.len().saturating_sub(kept.len());
+                        // What the chips are and the way to let go of them all on one line, the chips under it: the label never wraps away from its chips.
                         d.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .gap(px(8.))
+                                .pl(px(6.))
+                                .pr(px(2.))
+                                .child(div().flex().items_center().gap(px(6.)).text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(ui::icon("file-text", 13., Theme::text_tertiary())).child(tf!("第一个问题只读这 {} 篇", "The first question reads only these {}", lib.asked.len())))
+                                .child(ui::ghost_button("scope-unpin-all", None, Some(t("清除").into())).h(text_px(22.)).px(px(6.)).text_size(text_px(12.)).text_color(Theme::text_tertiary()).on_click(self.on(Cmd::Scope(ScopeDo::UnpinAll), cx))),
+                        )
+                        .child(
                             div()
                                 .flex()
                                 .flex_wrap()
                                 .items_center()
                                 .gap(px(6.))
                                 .px(px(2.))
-                                .pt(px(2.))
-                                .child(div().flex_none().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(tf!("只读这 {} 篇", "Only these {}", lib.asked.len())))
                                 .children(kept.iter().map(|paper| {
                                     div()
                                         .flex()
                                         .flex_none()
                                         .items_center()
-                                        .gap(px(2.))
+                                        .gap(px(4.))
                                         .h(text_px(24.))
                                         .pl(px(8.))
-                                        .pr(px(2.))
+                                        .pr(px(3.))
                                         .rounded(px(6.))
                                         .bg(Theme::accent_soft())
                                         .text_size(text_px(12.))
                                         .child(div().max_w(px(226.)).truncate().child(paper.title.clone()))
-                                        .child(ui::ghost_button(SharedString::from(format!("scope-unpin-{}", paper.id)), Some("x"), None).h(text_px(20.)).min_w(px(20.)).on_click(self.on(Cmd::Scope(ScopeDo::Unpin(paper.id.clone())), cx)))
+                                        .child(div().id(SharedString::from(format!("scope-unpin-{}", paper.id))).flex().flex_none().items_center().justify_center().size(px(18.)).rounded(px(4.)).cursor_pointer().hover(|s| s.bg(Theme::pressed())).child(ui::icon("x", 12., Theme::text_tertiary())).on_click(self.on(Cmd::Scope(ScopeDo::Unpin(paper.id.clone())), cx)))
                                 }))
-                                .when(more > 0, |d| d.child(div().flex_none().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(tf!("另外 {more} 篇", "{more} more"))))
-                                .child(ui::ghost_button("scope-unpin-all", None, Some(t("清除").into())).h(text_px(22.)).text_size(text_px(12.)).on_click(self.on(Cmd::Scope(ScopeDo::UnpinAll), cx))),
+                                .when(more > 0, |d| d.child(div().flex_none().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(tf!("另外 {more} 篇", "{more} more")))),
                         )
                     })
                     // The passages selected in a PDF that go with the question: where each is from, its opening, and a way to take it back.
