@@ -431,6 +431,11 @@ impl Workspace {
             }
             Cmd::WriteNav(library) => {
                 if let Some(lib) = self.lib.as_mut() { lib.writing.library_nav = library }
+                // The library's navigation is the sidebar: asked for while the sidebar is away, it comes back.
+                if library && self.settings.sidebar_hidden {
+                    self.settings.sidebar_hidden = false;
+                    self.save_settings(cx);
+                }
             }
             Cmd::ExportManuscript(kind) => self.export_manuscript(kind, cx),
             Cmd::WriteHistory => {
@@ -615,8 +620,8 @@ impl Workspace {
         self.lib.as_ref().is_some_and(|lib| lib.page == Page::Write && !lib.writing.library_nav && lib.writing.current().is_some())
     }
 
-    /// The sidebar while writing: the way back to the library's navigation,
-    /// the manuscript, and its sections with how long each is and how many
+    /// The sidebar while writing: the corner, whose arrow leads back to the library's
+    /// navigation, the manuscript, and its sections with how long each is and how many
     /// comments wait in it. A section's row opens it; the one written in has its menu.
     pub(crate) fn render_outline(&self, width: f32, cx: &mut Context<Self>) -> AnyElement {
         let lib = self.lib.as_ref().unwrap();
@@ -677,24 +682,6 @@ impl Workspace {
             .pt(px(Self::corner_top()))
             .gap(px(10.))
             .child(self.render_corner(width >= ui::traffic_lights_width() + f32::from(text_px(150.)), cx).when(ui::custom_titlebar(), |d| d.mb(px(4.))))
-            // Back to the tags and the views, staying on this page.
-            .child(
-                div()
-                    .id("outline-library")
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .h(text_px(28.))
-                    .px(px(8.))
-                    .rounded(px(6.))
-                    .cursor_pointer()
-                    .text_size(text_px(12.))
-                    .text_color(Theme::text_secondary())
-                    .hover(|s| s.bg(Theme::hover()).text_color(Theme::text()))
-                    .on_click(self.on(Cmd::WriteNav(true), cx))
-                    .child(ui::icon("panel-left", 14., Theme::text_tertiary()))
-                    .child(div().flex_1().min_w_0().truncate().child(tf!("{} · 文献库导航", "{} · Library", lib.info.name))),
-            )
             .child(
                 div()
                     .flex()
