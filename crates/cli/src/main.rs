@@ -51,7 +51,7 @@ fn run(root: &Path, words: &[String]) -> Result<String, String> {
             let Some(tool) = catalog.iter().find(|t| t.name == name) else { return Err(format!("没有这个命令：{command}。运行 wisp help 查看可用的命令。")) };
             if words[1..].iter().any(|w| w == "--help" || w == "-h") { return Ok(tools::usage(tool)) }
             let args = tools::cli_args(&tool.input_schema, &words[1..])?;
-            tools::call(root, tool.name, &args, &wisp_net::get_text, &wisp_net::download).map(|value| pretty(&value))
+            tools::call_with(root, tool.name, &args, &wisp_net::get_text, &wisp_net::download, Some(&wisp_net::notes::publish)).map(|value| pretty(&value))
         }
     }
 }
@@ -86,7 +86,7 @@ fn main() {
     let result = take_data_dir(&mut words).and_then(data_root).and_then(|root| {
         if words.first().map(String::as_str) == Some("mcp") {
             // `wisp mcp --read-only` leaves out the tools that change a library.
-            let server = mcp::Server { fetch: &wisp_net::get_text, download: &wisp_net::download, read_only: words.iter().any(|w| w == "--read-only") };
+            let server = mcp::Server { fetch: &wisp_net::get_text, download: &wisp_net::download, publish: Some(&wisp_net::notes::publish), read_only: words.iter().any(|w| w == "--read-only") };
             serve(&root, &server, std::io::stdin().lock(), std::io::stdout().lock()).map(|()| String::new()).map_err(|e| format!("MCP 连接中断：{e}"))
         } else {
             run(&root, &words)
@@ -183,7 +183,7 @@ mod tests {
         ]
         .join("\n");
         let mut output = vec![];
-        serve(&root, &mcp::Server { fetch: &wisp_net::get_text, download: &wisp_net::download, read_only: false }, input.as_bytes(), &mut output).unwrap();
+        serve(&root, &mcp::Server { fetch: &wisp_net::get_text, download: &wisp_net::download, publish: Some(&wisp_net::notes::publish), read_only: false }, input.as_bytes(), &mut output).unwrap();
         let replies: Vec<Value> = String::from_utf8(output).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect();
         // One line per reply; the notification and the blank line get none.
         assert_eq!(replies.len(), 3);

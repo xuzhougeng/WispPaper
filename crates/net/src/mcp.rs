@@ -416,26 +416,45 @@ pub fn tools(connector: &Connector) -> Result<Vec<Tool>, Failure> {
     Ok(tools)
 }
 
-/// Call a connector's tool by the server's name for it. A connection that
-/// broke meanwhile (a session that ran out, a process that stopped) is made
-/// once more; a failure the tool itself reports is not tried again.
+/// Call once. A broken connection does not tell us whether a write happened.
+/// Reconnect on the next explicit call, never replay a potentially committed write.
 pub fn call(connector: &Connector, tool: &str, args: &Value) -> Result<String, String> {
+    connector::read_result(&call_raw(connector, tool, args)?)
+}
+
+/// Preserve structured results for deterministic consumers, without text truncation.
+pub fn call_raw(connector: &Connector, tool: &str, args: &Value) -> Result<Value, String> {
     let params = json!({"name": tool, "arguments": args});
-    let ask = |shared: &Shared| shared.lock().map_err(|_| Failure::Failed("连接器上一次调用出了错。".into()))?.ask("tools/call", params.clone());
-    let first = match kept(connector) {
-        Some(shared) => ask(&shared),
-        None => Err(Failure::SignIn),
+    let shared = match kept(connector) {
+        Some(shared) => shared,
+        None => keep(connector, Client::connect(connector).map_err(|e| e.said(connector))?),
     };
-    let result = match first {
-        Ok(result) => result,
-        Err(_) => Client::connect(connector).and_then(|client| ask(&keep(connector, client))).map_err(|failure| failure.said(connector))?,
-    };
-    connector::read_result(&result)
+    let result = shared.lock().map_err(|_| "MCP 连接上一次调用出了错。".to_string())?.ask("tools/call", params);
+    match result {
+        Ok(result) => Ok(result),
+        Err(error) => {
+            disconnect(connector);
+            Err(format!("{} 工具调用未自动重试；写入操作可能已生效，请先核对远端结果。", error.said(connector)))
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_write_keeps_its_original_failure_and_is_not_reconnected_or_replayed() {
+        let (base, served) = crate::tests::serve("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 18\r\n\r\ncommitted-no-reply");
+        let connector = Connector { target: base.clone(), token: "test".into(), ..Default::default() };
+        keep(&connector, Client { next: 1, link: Link::Http(Http { auth: Auth::of(&base, "test").unwrap(), session: None, version: connector::VERSION.into() }) });
+        let error = call(&connector, "create-page", &json!({"content": "one note"})).unwrap_err();
+        // Reconnecting here would replace this error with a connection failure:
+        // this server accepts exactly one connection and then closes.
+        assert!(error.contains("HTTP 503") && error.contains("未自动重试"), "{error}");
+        assert!(served.join().unwrap().contains("create-page"));
+        assert!(kept(&connector).is_none());
+    }
 
     #[cfg(windows)]
     #[test]

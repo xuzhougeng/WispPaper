@@ -348,6 +348,20 @@ impl Workspace {
             .justify_between()
             .child(ui::caption(t("摘要")))
             .child(ui::ghost_button("translate", None, Some(if translating { t("显示原文").into() } else { t("显示译文").into() })).h(text_px(22.)).text_size(text_px(12.)).when(translating, |d| d.text_color(Theme::accent())).on_click(self.on(Cmd::ToggleTranslation, cx)));
+        let notes_head = div()
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .child(div().flex_1().min_w_0().child(ui::caption(t("我的笔记"))))
+            .when_some(lib.note_links.get(&id).cloned(), |d, url| d.child(
+                ui::ghost_button("note-link", Some("link"), Some("Notion".into()))
+                    .h(text_px(22.)).px(px(6.)).text_size(text_px(12.))
+                    .tooltip(|_, cx| cx.new(|_| crate::write_assist::Tip(t("打开 Notion").into())).into())
+                    .on_click(self.on(Cmd::OpenUrl(url), cx)),
+            ))
+            .child(ui::ghost_button("note-export", None, Some(t("保存 / 导出").into()))
+                .h(text_px(22.)).text_size(text_px(12.))
+                .on_click(self.on(Cmd::NoteOpen(None, true), cx)));
         div()
             .id("detail-info")
             .flex()
@@ -399,7 +413,7 @@ impl Workspace {
                 div().text_color(Theme::text_placeholder()).child(t("这个文献库还没有自定义词条。在左下角「自定义词条」里添加，例如物种、研究方法、所属课题。"))
             }))
             .child(div().flex().flex_col().gap(px(6.)).child(abstract_head).child(abstract_body))
-            .child(section(t("我的笔记")).child(ui::field(&lib.notes, window, cx)))
+            .child(div().flex().flex_col().gap(px(6.)).child(notes_head).child(ui::field(&lib.notes, window, cx)))
             .child(section(t("文件")).child(div().flex().flex_col().gap(px(6.)).children(file_rows).child(ui::secondary_button("attach", if files.is_empty() { t("添加 PDF 或附件") } else { t("再添加一个文件") }).on_click(self.on(Cmd::AttachPdf(id.clone()), cx)))))
             .child(div().text_size(text_px(12.)).text_color(Theme::text_placeholder()).child(tf!("来源：{} · 添加于 {}", "Source: {} · Added {}", p.source, time::date_text(&p.added_at))))
             .into_any_element()

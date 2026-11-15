@@ -6,6 +6,8 @@ Wisp Paper is a local-first literature library desktop app (collect papers, orga
 
 ## Commands
 
+Note saving/export: core's notes.rs prepares editable Markdown drafts from personal notes and selected conversation questions, copies images for local export, and keeps publication metadata at the existing year precision. Desktop src/notes.rs and the tools list_note_sources / prepare_note / export_note / save_note_to_notion share that document. net's notes.rs publishes through the existing mcp.rs client and OAuth (no separate client/settings DB). Per-library note_saves reserves writes before sending; an OS lock prevents reconciliation during an active write. Uncertain writes stop and require explicit human reconciliation via resolve_note_save. The generic MCP client never replays tools/call after transport errors. Cache saved links in Library::reload, never query the DB from render. Desktop saving uses a compact destination picker with optional read-only preview; source choices only appear for chat, refresh the document automatically, and preserve edited titles. Debug startup exportnote opens personal-note saving; exportnote:paper or exportnote:library selects chat sources; notedestination:local, notepreview and notepick:<index> exercise the dialog without writing. Live test: cargo run -p wisp_net --example note_smoke -- <explicitly approved parent page ID>, with an isolated WISP_PAPER_HOME already authorized for Notion; it creates synthetic content and leaves its page for inspection.
+
 ```sh
 cargo run --release                     # run the app
 cargo test                              # all four crates (workspace default-members)

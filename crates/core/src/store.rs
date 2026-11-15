@@ -22,6 +22,15 @@ pub const SCHEMA_VERSION: i32 = 1;
 const UNRELEASED_VERSION: i32 = 2;
 
 const SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS note_saves (
+    id TEXT PRIMARY KEY NOT NULL,
+    subject TEXT NOT NULL,
+    parent TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    page TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL CHECK (status IN ('pending', 'saved'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS note_save_pending ON note_saves(subject, parent) WHERE status = 'pending';
 CREATE TABLE IF NOT EXISTS papers (
     id TEXT PRIMARY KEY NOT NULL,
     title TEXT NOT NULL CHECK (length(trim(title)) > 0),

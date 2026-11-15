@@ -25,6 +25,7 @@ mod input;
 mod library;
 mod manuscripts;
 mod markdown;
+mod notes;
 mod pdf;
 mod picture;
 mod revise;
