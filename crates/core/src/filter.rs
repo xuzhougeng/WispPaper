@@ -15,8 +15,6 @@ pub enum View {
     Recent,
     Unread,
     Starred,
-    /// No screening decision yet.
-    Pending,
     /// No stored PDF.
     NoPdf,
 }
@@ -58,7 +56,6 @@ pub fn in_view(p: &Paper, view: View, now_ms: i64) -> bool {
         View::Recent => crate::time::millis(&p.added_at) >= now_ms - WEEK_MS,
         View::Unread => p.reading == "unread",
         View::Starred => p.starred,
-        View::Pending => p.screening == "pending" || p.screening == "uncertain",
         View::NoPdf => !matches!(p.fulltext.as_str(), "stored" | "textless"),
     }
 }

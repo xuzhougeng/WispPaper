@@ -48,13 +48,13 @@ fn view_label(view: View) -> &'static str {
     VIEWS.iter().find(|(_, _, _, other)| *other == view).map_or(t("文献"), |(_, _, label, _)| t(label))
 }
 
-/// The views of a library, as the sidebar lists them: element id, icon, name.
-const VIEWS: [(&str, &str, &str, View); 6] = [
+/// The views of a library, as the sidebar lists them: element id, icon, name. Each is the same list, narrowed.
+/// What waits for a decision is not one of them: that is 筛选, a row of the group below, and the 收录 filter.
+const VIEWS: [(&str, &str, &str, View); 5] = [
     ("view-all", "library", "全部文献", View::All),
-    ("view-recent", "plus", "最近添加", View::Recent),
+    ("view-recent", "history", "最近添加", View::Recent),
     ("view-unread", "eye", "未读", View::Unread),
     ("view-starred", "star", "收藏", View::Starred),
-    ("view-pending", "list-todo", "待判断", View::Pending),
     ("view-nopdf", "file-text", "缺 PDF", View::NoPdf),
 ];
 
@@ -342,7 +342,7 @@ impl Workspace {
                 // 收藏 holds the starred papers and the figure library: both count, and either page is its own.
                 let collected = if view == View::Starred { lib.gallery.items.len() } else { 0 };
                 let active = (on_papers && lib.filters.view == view) || (view == View::Starred && lib.page == Page::Figures);
-                nav(id, icon, t(label), Some(filter::view_count(&lib.papers, view, now) + collected), active, Cmd::SetView(view), self, cx).into_any_element()
+                nav(id, icon, t(label), Some(filter::view_count(&lib.papers, view, now) + collected).filter(|n| *n > 0), active, Cmd::SetView(view), self, cx).into_any_element()
             })
             .collect();
         let tags = filter::tag_counts(&lib.papers);
@@ -401,7 +401,8 @@ impl Workspace {
             )
             .child(ui::primary_button("add-paper", t("添加文献")).w_full().on_click(self.on_menu(MenuKind::Add, cx)))
             .child(div().flex().flex_col().gap(px(1.)).children(view_rows))
-            .child(div().flex().flex_col().gap(px(1.)).child(nav("page-ask", "sparkle", t("助手"), None, lib.page == Page::Ask, Cmd::SetPage(Page::Ask), self, cx)).child(nav("page-sources", "search", t("检索与导入"), (!lib.searches.is_empty()).then_some(lib.searches.len()), matches!(lib.page, Page::Sources | Page::Guide), Cmd::SetPage(Page::Sources), self, cx)).child(nav("page-screen", "list-todo", t("筛选"), Some(lib.papers.iter().filter(|p| p.screening == "pending").count()).filter(|n| *n > 0), lib.page == Page::Screen, Cmd::SetPage(Page::Screen), self, cx)).child(nav("page-write", "pen-line", t("写作"), None, lib.page == Page::Write, Cmd::SetPage(Page::Write), self, cx)))
+            // The assistant, then a review's path in its order: 检索, 筛选, 提取 (the number is how many proposals wait), 写作.
+            .child(div().flex().flex_col().gap(px(1.)).child(nav("page-ask", "sparkle", t("助手"), None, lib.page == Page::Ask, Cmd::SetPage(Page::Ask), self, cx)).child(nav("page-sources", "search", t("检索与导入"), (!lib.searches.is_empty()).then_some(lib.searches.len()), matches!(lib.page, Page::Sources | Page::Guide), Cmd::SetPage(Page::Sources), self, cx)).child(nav("page-screen", "list-todo", t("筛选"), Some(lib.papers.iter().filter(|p| p.screening == "pending").count()).filter(|n| *n > 0), lib.page == Page::Screen, Cmd::SetPage(Page::Screen), self, cx)).child(nav("page-extract", "scan-text", t("提取"), Some(lib.extract_rows().len()).filter(|n| *n > 0), lib.page == Page::Extract, Cmd::SetPage(Page::Extract), self, cx)).child(nav("page-write", "pen-line", t("写作"), None, lib.page == Page::Write, Cmd::SetPage(Page::Write), self, cx)))
             .child(
                 div()
                     .flex()
@@ -427,9 +428,8 @@ impl Workspace {
                     .pt(px(6.))
                     .border_t_1()
                     .border_color(Theme::line())
-                    .child(nav("manage-fields", "list", t("自定义词条"), Some(lib.fields.len()), false, Cmd::ManageFields, self, cx))
-                    // 提取: what the assistant proposes for those fields; the number is how many proposals wait.
-                    .child(nav("page-extract", "scan-text", t("提取"), Some(lib.extract_rows().len()).filter(|n| *n > 0), lib.page == Page::Extract, Cmd::SetPage(Page::Extract), self, cx))
+                    // Under the line: what is managed, not where the work is done.
+                    .child(nav("manage-fields", "list", t("自定义词条"), Some(lib.fields.len()).filter(|n| *n > 0), false, Cmd::ManageFields, self, cx))
                     .child(nav("page-trash", "bin", t("回收站"), (trash_count > 0).then_some(trash_count), lib.page == Page::Trash, Cmd::SetPage(Page::Trash), self, cx))
                     .child(nav("open-settings", "settings-gear", t("设置"), None, false, Cmd::OpenSettings(SettingsPage::General), self, cx)),
             )
