@@ -14,8 +14,10 @@ use wisp_core::time;
 
 /// 「命中 90 篇，取回 5 篇，新增 5 篇，跳过 0 篇」, or why the run failed.
 fn run_summary(batch: &ImportBatch) -> (String, bool) {
-    if !batch.error.is_empty() { return (tf!("失败：{}", "Failed: {}", batch.error), true) }
+    if !batch.error.is_empty() && batch.fetched == 0 { return (tf!("失败：{}", "Failed: {}", batch.error), true) }
     let total = batch.remote_total.map(|n| tf!("命中 {n} 篇，", "{n} results, ")).unwrap_or_default();
+    // Some pages came, then one did not: what came is in the library.
+    if !batch.error.is_empty() { return (tf!("{total}取回 {} 篇后中断，新增 {} 篇，跳过已有的 {} 篇。{}", "{total}stopped after retrieving {}, added {}, skipped {} existing. {}", batch.fetched, batch.added, batch.skipped, batch.error), true) }
     (tf!("{total}取回 {} 篇，新增 {} 篇，跳过已有的 {} 篇", "{total}retrieved {}, added {}, skipped {} existing", batch.fetched, batch.added, batch.skipped), false)
 }
 
@@ -60,7 +62,7 @@ impl Workspace {
                             .child(ui::ghost_button(("remove-search", i), Some("bin"), None).on_click(self.on(Cmd::AskRemoveSearch(search.id.clone()), cx))),
                     )
                     .child(div().px(px(10.)).py(px(8.)).rounded(px(6.)).bg(Theme::bg_sunken()).text_size(text_px(13.)).line_height(text_px(20.)).child(search.query.clone()))
-                    .child(div().flex().items_center().flex_wrap().gap(px(12.)).child(last).child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(tf!("每次取回最新的 {} 篇", "Retrieve the latest {} papers each run", search.max_results))))
+                    .child(div().flex().items_center().flex_wrap().gap(px(12.)).child(last).child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(tf!("每次最多取回最新的 {} 篇", "Retrieve up to the latest {} papers each run", search.max_results))))
                     .children(trial)
                     .into_any_element(),
             );
@@ -83,7 +85,7 @@ impl Workspace {
                     .child(div().flex_none().w(px(84.)).text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(time::short_time(&batch.started_at)))
                     .child(div().flex().flex_col().flex_1().min_w_0().child(div().truncate().text_size(text_px(13.)).child(batch.label.clone())).child(div().truncate().text_size(text_px(12.)).text_color(if failed { Theme::danger() } else { Theme::text_tertiary() }).child(summary)))
                     .when(undone, |d| d.child(ui::chip(t("已撤销"), Theme::text_tertiary(), Theme::bg_sunken())))
-                    .when(!undone && !failed && batch.added > 0, |d| d.child(ui::ghost_button(("undo-import", i), None, Some(t("撤销").into())).on_click(self.on(Cmd::AskUndoImport(batch.id.clone()), cx))))
+                    .when(!undone && batch.added > 0, |d| d.child(ui::ghost_button(("undo-import", i), None, Some(t("撤销").into())).on_click(self.on(Cmd::AskUndoImport(batch.id.clone()), cx))))
                     .into_any_element()
             })
             .collect();

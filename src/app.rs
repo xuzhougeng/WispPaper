@@ -2765,6 +2765,7 @@ impl Workspace {
                     // The run wrote through its own connection, failed runs included.
                     this.change(cx, |_| Ok(()));
                     match result {
+                        Ok(run) if run["stopped"].is_string() => this.fail(tf!("{}：新增 {} 篇。{}", "{}: {} added. {}", run["search"].as_str().unwrap_or(t("检索")), run["added"], run["stopped"].as_str().unwrap_or_default()), cx),
                         Ok(run) => this.say(tf!("{}：新增 {} 篇，跳过已有的 {} 篇", "{}: {} added, {} existing skipped", run["search"].as_str().unwrap_or(t("检索")), run["added"], run["skipped"]), cx),
                         Err(err) => this.fail(err, cx),
                     }
@@ -2858,7 +2859,7 @@ impl Workspace {
                 let mut failure = None;
                 for entry in lib.guide.ideas.iter().filter(|entry| entry.chosen) {
                     // Named after what the search aims at, as far as a name may go.
-                    let mut search = SavedSearch { kind: entry.idea.source.clone(), name: entry.idea.why.chars().take(40).collect(), query: entry.idea.query.clone(), max_results: wisp_core::sources::MAX_RESULTS, enabled: true, ..Default::default() };
+                    let mut search = SavedSearch { kind: entry.idea.source.clone(), name: entry.idea.why.chars().take(40).collect(), query: entry.idea.query.clone(), max_results: wisp_core::sources::broad_limit(&entry.idea.source), enabled: true, ..Default::default() };
                     match lib.store.save_search(&mut search) {
                         Ok(()) => saved.push(search.id),
                         Err(err) => failure = Some(format!("{err:#}")),

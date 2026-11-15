@@ -130,7 +130,7 @@ impl Workspace {
                         .py(px(12.))
                         .border_t_1()
                         .border_color(Theme::line())
-                        .child(div().flex_1().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(tf!("选用的检索式会保存下来并立即运行，每条取回最新的 {} 篇；导入的文献都是「待判断」，可以整批撤销。", "Selected queries are saved and run immediately, retrieving the latest {} papers each. Imported papers await screening; the batch can be undone.", sources::MAX_RESULTS)))
+                        .child(div().flex_1().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(tf!("选用的检索式会保存下来并立即运行，每条最多取回最新的 {} 篇（Crossref {} 篇）；导入的文献都是「待判断」，可以整批撤销。", "Selected queries are saved and run immediately, retrieving up to the latest {} papers each ({} from Crossref). Imported papers await screening; the batch can be undone.", sources::MAX_RESULTS, sources::PAGE)))
                         .child(ui::primary_button("guide-import-chosen", tf!("保存并导入所选的 {chosen} 条", "Save and import {chosen} selected queries")).when(chosen == 0, |d| d.opacity(0.5)).on_click(self.on(Cmd::GuideImport, cx))),
                 )
             })

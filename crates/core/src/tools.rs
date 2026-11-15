@@ -252,7 +252,7 @@ pub fn catalog() -> Vec<ToolDef> {
                 "source": {"type": "string", "enum": sources::KINDS.iter().map(|(key, _)| *key).collect::<Vec<_>>(), "description": "文献数据库。"},
                 "query": {"type": "string", "description": "按该来源的语法写的检索式。"},
                 "name": {"type": "string", "description": "给人看的名称；省略时用来源的名字。"},
-                "maxResults": {"type": "integer", "description": "每次运行取回多少条最新记录，默认 50，最大 200。"},
+                "maxResults": {"type": "integer", "description": format!("每次运行取回多少条最新记录，默认 50，最大 {}。多于 {} 条时分几次向数据库要。", sources::MAX_RESULTS, sources::PAGE)},
                 "enabled": {"type": "boolean", "description": "是否参与「全部运行」和定时更新，默认是。"},
             }),
             &[],
@@ -1255,21 +1255,34 @@ fn save_search(store: &mut Store, args: &Value) -> Result<Value> {
 }
 
 /// Run a saved search and import what it brings back as one batch. A run
-/// that fails is recorded too, so the search shows what went wrong.
+/// that fails is recorded too, so the search shows what went wrong; one
+/// that stopped after some pages imports those and says so (`stopped`).
+/// Once a run has gone through the newest records the search asks for, the
+/// next ones fetch only what the library does not hold (`sources::Known`).
 fn run_search(store: &mut Store, id: &str, fetch: Fetch) -> Result<Value> {
     let search = store.list_searches()?.into_iter().find(|s| s.id == id).ok_or_else(|| anyhow!("检索式不存在：{id}"))?;
     let kind_name = sources::KINDS.iter().find(|(key, _)| *key == search.kind).map_or(search.kind.as_str(), |(_, name)| name);
     let label = format!("{kind_name}：{}", search.query);
-    let found = match sources::search(&search.kind, &search.query, search.max_results, fetch) {
+    // The last run stands for the list as it is in the library when it went this deep with this query and nothing of it was taken back.
+    let since = search.last_run.as_ref().filter(|run| run.error.is_empty() && run.undone_at.is_empty() && run.label == label && run.depth >= search.max_results).map(|run| run.remote_total.unwrap_or(u64::MAX));
+    let holds = |paper: &Paper| {
+        let mut paper = paper.clone();
+        paper.normalize();
+        store.existing_paper(&paper).is_ok_and(|held| held.is_some())
+    };
+    let found = match sources::search_new(&search.kind, &search.query, search.max_results, fetch, Some(&sources::Known { holds: &holds, since })) {
         Ok(found) => found,
         Err(error) => {
             store.record_failed_run(&search.id, &label, &error)?;
             bail!(error)
         }
     };
-    let (batch, result) = store.import_batch(&search.id, &label, found.total, found.papers)?;
+    let stopped = found.stopped.clone();
+    let (batch, result) = store.import_batch(&search.id, &label, found, search.max_results)?;
     let added: Vec<Value> = result.added.iter().take(50).map(|p| json!({"id": p.id, "title": p.title, "year": p.year})).collect();
-    Ok(json!({"batchId": batch.id, "search": search.name, "total": batch.remote_total, "fetched": batch.fetched, "added": batch.added, "skipped": batch.skipped, "addedPapers": added}))
+    let mut run = json!({"batchId": batch.id, "search": search.name, "total": batch.remote_total, "fetched": batch.fetched, "added": batch.added, "skipped": batch.skipped, "addedPapers": added});
+    if let Some(why) = stopped { run["stopped"] = json!(format!("取回 {} 篇后中断，这些已经导入；再运行一次会接着取回其余的。原因：{why}", batch.fetched)) }
+    Ok(run)
 }
 
 fn undo_import(store: &mut Store, args: &Value) -> Result<Value> {
@@ -1322,7 +1335,11 @@ fn sync_searches(root: &Path, args: &Value, fetch: Fetch, now_ms: i64) -> Result
             match run_search(&mut store, &id, fetch) {
                 Ok(run) => {
                     added += run["added"].as_u64().unwrap_or(0);
-                    runs.push(json!({"library": info.name, "libraryId": info.id, "search": run["search"], "added": run["added"], "skipped": run["skipped"], "batchId": run["batchId"]}));
+                    // A run that stopped short counts as failed: it is due again within the hour.
+                    if run["stopped"].is_string() { failed += 1 }
+                    let mut entry = json!({"library": info.name, "libraryId": info.id, "search": run["search"], "added": run["added"], "skipped": run["skipped"], "batchId": run["batchId"]});
+                    if run["stopped"].is_string() { entry["stopped"] = run["stopped"].clone() }
+                    runs.push(entry);
                 }
                 Err(error) => {
                     failed += 1;
@@ -1946,11 +1963,79 @@ pub(crate) mod tests {
 
     fn pubmed(url: &str) -> Result<String, String> {
         if url.contains("esearch") { return Ok(r#"{"esearchresult":{"count":"88","idlist":["1","2"]}}"#.into()) }
-        Ok("<PubmedArticleSet>\
-<PubmedArticle><MedlineCitation><PMID>1</PMID><Article><Journal><JournalIssue><PubDate><Year>2024</Year></PubDate></JournalIssue><Title>Plant Cell</Title></Journal><ArticleTitle>Root stem cell niche.</ArticleTitle></Article></MedlineCitation></PubmedArticle>\
-<PubmedArticle><MedlineCitation><PMID>2</PMID><Article><Journal><JournalIssue><PubDate><Year>2025</Year></PubDate></JournalIssue><Title>Nature Plants</Title></Journal><ArticleTitle>A new root atlas</ArticleTitle><Abstract><AbstractText>Cells of the root.</AbstractText></Abstract></Article></MedlineCitation></PubmedArticle>\
-</PubmedArticleSet>"
-            .into())
+        // Like PubMed, only the records asked for.
+        let asked: Vec<&str> = url.rsplit("id=").next().unwrap_or("").split(',').collect();
+        let records = [
+            ("1", "<PubmedArticle><MedlineCitation><PMID>1</PMID><Article><Journal><JournalIssue><PubDate><Year>2024</Year></PubDate></JournalIssue><Title>Plant Cell</Title></Journal><ArticleTitle>Root stem cell niche.</ArticleTitle></Article></MedlineCitation></PubmedArticle>"),
+            ("2", "<PubmedArticle><MedlineCitation><PMID>2</PMID><Article><Journal><JournalIssue><PubDate><Year>2025</Year></PubDate></JournalIssue><Title>Nature Plants</Title></Journal><ArticleTitle>A new root atlas</ArticleTitle><Abstract><AbstractText>Cells of the root.</AbstractText></Abstract></Article></MedlineCitation></PubmedArticle>"),
+        ];
+        Ok(format!("<PubmedArticleSet>{}</PubmedArticleSet>", records.iter().filter(|(id, _)| asked.contains(id)).map(|(_, record)| *record).collect::<String>()))
+    }
+
+    #[test]
+    fn a_run_that_stops_short_imports_what_came() {
+        let (root, _) = sample();
+        // Crossref sends the first page and fails at the second.
+        let crossref = |url: &str| -> Result<String, String> {
+            if !url.contains("offset=0&") { return Err("网络请求失败".into()) }
+            let items: Vec<String> = (0..sources::PAGE).map(|n| format!(r#"{{"title":["Paper {n}"],"DOI":"10.1000/{n}"}}"#)).collect();
+            Ok(format!(r#"{{"message":{{"total-results":900,"items":[{}]}}}}"#, items.join(",")))
+        };
+        let online = |name: &str, args: Value| super::call(&root, name, &args, &crossref, &no_download);
+        assert!(online("save_search", json!({"source": "crossref", "query": "root", "maxResults": sources::MAX_RESULTS + 1})).is_err());
+        let saved = online("save_search", json!({"source": "crossref", "query": "root", "maxResults": 600})).unwrap();
+        let run = online("run_search", json!({"id": saved["id"]})).unwrap();
+        assert_eq!((run["total"].as_u64(), run["fetched"].as_u64(), run["added"].as_u64()), (Some(900), Some(200), Some(200)));
+        assert!(run["stopped"].as_str().unwrap().contains("网络请求失败"));
+        // The record of the run holds both what came and why no more did, and the batch can be undone.
+        let last = call(&root, "list_searches", &json!({})).unwrap()["searches"][0]["lastRun"].clone();
+        assert_eq!((last["fetched"].as_u64(), last["error"].as_str()), (Some(200), Some("网络请求失败")));
+        assert_eq!(call(&root, "undo_import", &json!({"batchId": run["batchId"]})).unwrap()["removed"], 200);
+        // A scheduled look counts it among the failed, so its turn comes again soon.
+        let synced = online("sync_searches", json!({"force": true})).unwrap();
+        assert_eq!((synced["added"].as_u64(), synced["failed"].as_u64()), (Some(200), Some(1)));
+        assert!(synced["runs"][0]["stopped"].is_string());
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_later_run_fetches_only_what_is_new() {
+        let (root, _) = sample();
+        // Crossref holds `total` records and counts what it is asked. Number 1000 is new and stands at place 300.
+        let (total, requests) = (std::cell::Cell::new(450), std::cell::Cell::new(0));
+        let crossref = |url: &str| -> Result<String, String> {
+            requests.set(requests.get() + 1);
+            let number = |name: &str| -> usize { url.split(['?', '&']).find_map(|part| part.strip_prefix(name)?.strip_prefix('=')?.parse().ok()).unwrap() };
+            let mut list: Vec<usize> = (0..450).collect();
+            if total.get() > 450 { list.insert(300, 1000) }
+            let items: Vec<String> = list.iter().skip(number("offset")).take(number("rows")).map(|n| format!(r#"{{"title":["Paper {n}"],"DOI":"10.1000/{n}"}}"#)).collect();
+            Ok(format!(r#"{{"message":{{"total-results":{},"items":[{}]}}}}"#, total.get(), items.join(",")))
+        };
+        let online = |name: &str, args: Value| {
+            requests.set(0);
+            let result = super::call(&root, name, &args, &crossref, &no_download).unwrap();
+            (result["fetched"].as_u64().unwrap_or(0), result["added"].as_u64().unwrap_or(0), requests.get(), result)
+        };
+        let id = online("save_search", json!({"source": "crossref", "query": "root", "maxResults": 1000})).3["id"].clone();
+        // The first run takes everything, three pages of it.
+        let (fetched, added, asked, first) = online("run_search", json!({"id": id}));
+        assert_eq!((fetched, added, asked), (450, 450, 3));
+        // The next one finds nothing new on the first page and leaves it at that.
+        let (fetched, added, asked, _) = online("run_search", json!({"id": id}));
+        assert_eq!((fetched, added, asked), (200, 0, 1));
+        // A new record further down shows in the count, and is looked for.
+        total.set(451);
+        let (fetched, added, asked, _) = online("run_search", json!({"id": id}));
+        assert_eq!((fetched, added, asked), (451, 1, 3));
+        assert_eq!(online("run_search", json!({"id": id})).2, 1);
+        // Asked for more than any run went through, or after an import was taken back: everything again.
+        online("save_search", json!({"id": id, "maxResults": 1200}));
+        assert_eq!(online("run_search", json!({"id": id})).2, 3);
+        assert_eq!(online("run_search", json!({"id": id})).2, 1);
+        online("undo_import", json!({"batchId": first["batchId"]}));
+        let (fetched, added, asked, _) = online("run_search", json!({"id": id}));
+        assert_eq!((fetched, added, asked), (451, 450, 3));
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]
