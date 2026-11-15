@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deployment.outputs.page_url || steps.again.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - name: Put the page together
@@ -47,5 +47,15 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
+      # deploy-pages sometimes asks for the artifact before GitHub lists it
+      # ("No artifacts named github-pages were found", as after v0.8.0), so a
+      # failed first try is made again once the upload has had time to show.
       - id: deployment
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
+      - name: Wait before deploying again
+        if: steps.deployment.outcome == 'failure'
+        run: sleep 30
+      - id: again
+        if: steps.deployment.outcome == 'failure'
         uses: actions/deploy-pages@v4
