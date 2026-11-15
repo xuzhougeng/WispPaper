@@ -30,6 +30,33 @@ PDF / Zotero 的 JSON 含新增、跳过、附件数量和逐项 `results`。必
 
 ## 命令行
 
+### 笔记保存与导出
+
+桌面「我的笔记」标题右侧的「保存 / 导出」打开保存窗口，选择 Notion 或本地文件后保存；已保存的页面通过同一标题栏上的 Notion 链接打开。问答页的同一入口可勾选历史问题，选后自动更新导出内容。窗口可修改本次保存的标题、展开内容预览；正文直接使用原笔记或所选问答。原文摘录、回答原有链接及提问图片会随笔记保留。
+
+助手、CLI 和 MCP 共用这些工具：
+
+| 工具 | 用途 |
+|---|---|
+| `list_note_sources` | 查询对话 ID、从 1 开始的问题序号、已保存及待确认记录 |
+| `prepare_note` | 预览个人笔记与选定问答的 Markdown、图片文件名 |
+| `export_note` | 写入用户指定的 `.md` 文件，并复制图片到相邻附件目录；不覆盖已有文件 |
+| `save_note_to_notion` | 使用已启用并登录的官方 Notion MCP，保存到用户指定的父页面 |
+| `resolve_note_save` | 用户已检查 Notion 后，确认上一次写入成功或完全未写入 |
+
+省略 `paperId` 表示文献库问答；填写时默认包含「我的笔记」，只导出问答可设 `includeNotes: false`。`conversations` 为 `[{ "id": "实际对话ID", "questions": [1, 3] }]`，省略问题序号表示该对话全部问题。`title` 和 `markdown` 可传入编辑后的草稿；其中图片文件名沿用预览结果。
+
+```sh
+wisp list_note_sources -l L-实际ID --paper-id P-实际ID
+wisp prepare_note -l L-实际ID --paper-id P-实际ID
+wisp export_note -l L-实际ID --paper-id P-实际ID --path "/existing/folder/note.md"
+wisp save_note_to_notion -l L-实际ID --paper-id P-实际ID --parent "用户指定的Notion父页面链接"
+```
+
+Notion 首次保存创建子页面，同一文献及父页面的后续保存只在末尾追加；文献库问答单独一页。完全相同的草稿会跳过，修改后的草稿作为新版本追加，重叠选择的不同批次目前不会逐题去重。结果不确定时不会自动重试；先核对远端内容，再通过窗口或 `resolve_note_save` 处理待确认记录。部分写入应在 Notion 整理后确认，不能标记为完全未写入。运行中的保存不能被其他进程清除记录。
+
+这一阶段使用现有年份，不引入完整出版日期。自动建立文献库目录、可配置标题模板与元数据顺序、问题提炼不在本轮范围。保存按钮不调用模型；Agent 模式会遵循现有写入确认流程。`wisp mcp --read-only` 不提供导出、Notion 写入或保存记录核对工具。
+
 ```sh
 cargo build --release -p wisp_cli       # 生成 target/release/wisp
 

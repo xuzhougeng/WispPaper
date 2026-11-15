@@ -55,6 +55,7 @@ pub mod manuscript;
 pub mod markdown;
 pub mod mcp;
 pub mod model;
+pub mod notes;
 pub mod oauth;
 pub mod openaccess;
 pub mod organise;

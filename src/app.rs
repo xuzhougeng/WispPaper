@@ -211,6 +211,12 @@ pub enum Cmd {
     GoHome,
     RevealFolder,
     OpenUrl(String),
+    NoteOpen(Option<Talk>, bool),
+    NotePick(usize),
+    NoteDestination(bool),
+    NotePreview,
+    NoteSave(bool),
+    NoteResolve(bool),
     // Settings
     OpenSettings(SettingsPage),
     CloseSettings,
@@ -1151,6 +1157,7 @@ pub struct PaperForm {
 }
 
 pub enum Modal {
+    ExportNote(Box<crate::notes::Form>),
     Library { editing: Option<String>, name: Entity<TextInput>, topic: Entity<TextInput>, color: String },
     AddById { input: Entity<TextInput>, busy: bool },
     Paper(Box<PaperForm>),
@@ -1230,6 +1237,7 @@ pub struct Library {
     /// The size of the area the floating conversation keeps within, as last drawn.
     pub float_area: (f32, f32),
     pub notes: Entity<TextInput>,
+    pub note_links: BTreeMap<String, String>,
     pub pdf: Option<Entity<PdfView>>,
     pdf_events: Option<Subscription>,
     /// How large PDF pages are drawn; it stays from paper to paper.
@@ -1662,6 +1670,7 @@ impl Library {
 
     /// Read everything again after a change.
     pub fn reload(&mut self) -> anyhow::Result<()> {
+        self.note_links = self.store.note_links()?;
         self.papers = self.store.list_papers()?;
         self.fields = self.store.list_fields()?;
         self.files = self.store.list_files()?;
@@ -1975,6 +1984,12 @@ impl Workspace {
                 cx.open_with_system(&path);
             }
             Cmd::OpenUrl(url) => cx.open_url(&url),
+            Cmd::NoteOpen(talk, notion) => self.open_note(talk, notion, window, cx),
+            Cmd::NotePick(at) => self.pick_note(at, cx),
+            Cmd::NoteDestination(notion) => self.note_destination(notion, cx),
+            Cmd::NotePreview => self.preview_note(cx),
+            Cmd::NoteSave(notion) => self.save_note(notion, cx),
+            Cmd::NoteResolve(saved) => self.resolve_note(saved, cx),
 
             Cmd::OpenSettings(page) => self.open_settings(page, window, cx),
             Cmd::CloseSettings => self.close_settings(window, cx),
@@ -3116,6 +3131,7 @@ impl Workspace {
             zotero: None,
             fetching: None,
             origins: BTreeMap::new(),
+            note_links: BTreeMap::new(),
             writing,
             citing,
             gallery,
@@ -4185,7 +4201,7 @@ impl Workspace {
     }
 
     /// Keep the conversation in the library's history, as it stands.
-    fn save_chat(&mut self, talk: Talk, cx: &mut Context<Self>) {
+    pub(crate) fn save_chat(&mut self, talk: Talk, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
         // What the conversation is about is what it is kept under: nothing for the library's, the paper, the manuscript.
         let Some(paper_id) = lib.talk_about(talk) else { return };
@@ -4863,7 +4879,7 @@ impl Workspace {
         cx.notify();
         let work = cx.background_executor().spawn(async move {
             let mut store = Store::open(&info.dir).map_err(|e| format!("{e:#}"))?;
-            tools::call_in(&mut store, &info, name, &args, &wisp_net::get_text, &wisp_net::download)
+            tools::call_in_with(&mut store, &info, name, &args, &wisp_net::get_text, &wisp_net::download, Some(&wisp_net::notes::publish))
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
@@ -4882,6 +4898,7 @@ impl Workspace {
         self.modal_error.clear();
         let Some(modal) = self.modal.as_mut() else { return };
         match modal {
+            Modal::ExportNote(_) => {}
             Modal::Confirm { cmd, .. } => {
                 let cmd = cmd.clone();
                 self.run(cmd, window, cx);
@@ -5109,7 +5126,7 @@ fn run_tool(info: &LibraryInfo, sources: &[ai::Source], call: PreparedCall, allo
     let result = call.args.and_then(|args| {
         let mut store = Store::open(&info.dir).map_err(|e| format!("{e:#}"))?;
         // As the tool table has it; what is written into a manuscript cites as the conversation does (`compose::call`).
-        let mut value = wisp_core::compose::call(&mut store, info, &call.name, &args, sources, &wisp_net::get_text, &wisp_net::download)?;
+        let mut value = wisp_core::compose::call_with(&mut store, info, &call.name, &args, sources, &wisp_net::get_text, &wisp_net::download, Some(&wisp_net::notes::publish))?;
         ai::add_labels(&mut value, sources);
         Ok(value)
     });
@@ -5410,6 +5427,10 @@ impl Workspace {
                     let Some(answer) = self.lib.as_ref().and_then(|lib| lib.paper_chat.messages.iter().rev().find_map(|item| if let ChatItem::Answer(text) = item { Some(text.clone()) } else { None })) else { return };
                     Some(Cmd::AnswerToNote("（脚本）".into(), answer))
                 }
+                "exportnote" => Some(Cmd::NoteOpen(match arg { "paper" => Some(Talk::Paper), "library" => Some(Talk::Library), _ => None }, true)),
+                "notepreview" => Some(Cmd::NotePreview),
+                "notedestination" => Some(Cmd::NoteDestination(arg != "local")),
+                "notepick" => arg.parse().ok().map(Cmd::NotePick),
                 "submit" => Some(Cmd::SubmitModal),
                 "reread" | "byeye" => {
                     let Some(file) = self.lib.as_ref().and_then(|lib| lib.selected.as_deref().and_then(|id| lib.pdf_file(id)).map(|file| file.id.clone())) else { return };

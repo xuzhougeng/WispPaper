@@ -631,6 +631,7 @@ impl Workspace {
                             })),
                     )
                     .children(self.render_float_switch(talk, window, cx))
+                    .when(talk != Talk::Write, |d| d.child(ui::ghost_button(SharedString::from(format!("chat-export-{side}")), Some("file-text"), Some(t("保存 / 导出").into())).on_click(self.on(Cmd::NoteOpen(Some(talk), true), cx))))
                     .when(listable, |d| d.child(ui::ghost_button("chat-materials", Some(if chat.materials_open { "chevron-up" } else { "list" }), Some(if chat.materials_open { t("收起").into() } else { t("文献").into() })).on_click(self.on(Cmd::ToggleMaterials, cx))))
                     .child(ui::ghost_button(SharedString::from(format!("chat-history-{side}")), Some(if listing { "arrow-left" } else { "history" }), Some(if listing { t("返回").into() } else { t("历史").into() })).on_click(self.on(Cmd::ToggleHistory(talk), cx)))
                     .when(!chat.messages.is_empty() && !listing, |d| d.child(ui::ghost_button(SharedString::from(format!("chat-new-{side}")), Some("plus"), Some(t("新对话").into())).on_click(self.on(Cmd::NewChat(talk), cx)))),

@@ -39,14 +39,14 @@ pub struct ToolDef {
 }
 
 /// The tools that change the library.
-const WRITING: [&str; 15] = ["create_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "suggest_field", "sync_searches", "find_pdf", "organise_papers", "edit_section", "set_outline"];
+const WRITING: [&str; 18] = ["create_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "suggest_field", "sync_searches", "find_pdf", "organise_papers", "edit_section", "set_outline", "export_note", "save_note_to_notion", "resolve_note_save"];
 /// Of those, the ones the window's assistant runs only with the person's
 /// consent. Saving a search, suggesting a screening decision or proposing
 /// a field's value changes nothing a person has not yet to act on, so they
 /// run as asked. The two that write a manuscript (`MANUSCRIPT`) are asked
 /// about everywhere but in the conversation that writes that manuscript,
 /// where the person has handed the pen over.
-const CONFIRMING: [&str; 10] = ["import_pdf", "import_references", "import_zotero", "run_search", "undo_import", "remove_search", "find_pdf", "organise_papers", "edit_section", "set_outline"];
+const CONFIRMING: [&str; 13] = ["import_pdf", "import_references", "import_zotero", "run_search", "undo_import", "remove_search", "find_pdf", "organise_papers", "edit_section", "set_outline", "export_note", "save_note_to_notion", "resolve_note_save"];
 /// The tools that write a manuscript (`compose`).
 pub const MANUSCRIPT: [&str; 2] = ["edit_section", "set_outline"];
 
@@ -63,6 +63,11 @@ fn keys(table: &[(&'static str, &'static str)]) -> Vec<&'static str> {
 
 pub fn catalog() -> Vec<ToolDef> {
     vec![
+        scoped("list_note_sources", "选择笔记来源", "列出这篇文献的历史对话、问题序号和 Notion 保存记录。paperId 留空列出文献库级对话。先读取它，再选择要导出的问答。", json!({"paperId": {"type": "string"}}), &[]),
+        scoped("prepare_note", "预览笔记", "将个人笔记和选定问答组成 Markdown 草稿。保留原内容和图片，缺失的元数据不补造。只读，不改本地笔记。先用此工具预览，再保存或导出。", crate::notes::properties(None), &[]),
+        scoped("export_note", "导出笔记到本地", "将笔记草稿导出为 Markdown 和相邻图片目录。path 必须是用户指定的 .md 文件路径；不覆盖已有文件。不改原笔记。", crate::notes::properties(Some(("path", "用户指定的本地 .md 文件路径；已有文件不会覆盖。"))), &["path"]),
+        scoped("save_note_to_notion", "保存笔记到 Notion", "通过设置中已启用的 Notion MCP 保存笔记。parent 必须是用户明确指定的父页面链接或 ID，不能猜测。首存创建子页面，后续保存追加到同一文献页面，完全相同的草稿跳过。原笔记不变。结果不确定时停止，不能自动重试或自行清除待确认记录；让用户在 Notion 核对。", crate::notes::properties(Some(("parent", "用户明确指定的 Notion 父页面链接或 ID。"))), &["parent"]),
+        scoped("resolve_note_save", "核对 Notion 保存结果", "仅在用户已检查 Notion 并明确告知保存结果后使用。saved=true 同时给出实际写入的 page 页面链接，或 saved=false 表示用户确认完全没有写入。不要根据网络错误推断。部分写入不能标为未写入。", json!({"id": {"type": "string"}, "saved": {"type": "boolean"}, "page": {"type": "string"}}), &["id", "saved"]),
         ToolDef {
             name: "list_libraries",
             title: "列出文献库",
@@ -490,6 +495,10 @@ pub fn describe_result(result: &Result<Value, String>) -> String {
 /// Run a tool against the data folder `root`. The error is a sentence for
 /// whoever called: a person at a terminal or a model.
 pub fn call(root: &Path, name: &str, args: &Value, fetch: Fetch, download: Download) -> Result<Value, String> {
+    call_with(root, name, args, fetch, download, None)
+}
+
+pub fn call_with(root: &Path, name: &str, args: &Value, fetch: Fetch, download: Download, publish: Option<crate::notes::Publish>) -> Result<Value, String> {
     checked(name, args)?;
     if name == "create_library" { return local::create_library(root, args).map_err(|e| format!("{e:#}")) }
     if name == "sync_searches" { return sync_searches(root, args, fetch, crate::time::now_millis()).map_err(|e| format!("{e:#}")) }
@@ -499,17 +508,33 @@ pub fn call(root: &Path, name: &str, args: &Value, fetch: Fetch, download: Downl
     }
     let info = find_library(root, args["library"].as_str().unwrap_or(""))?;
     let mut store = Store::open(&info.dir).map_err(|e| format!("{e:#}"))?;
-    call_in(&mut store, &info, name, args, fetch, download)
+    call_in_with(&mut store, &info, name, args, fetch, download, publish)
 }
 
 /// Run a library tool on a library that is already open.
 pub fn call_in(store: &mut Store, info: &LibraryInfo, name: &str, args: &Value, fetch: Fetch, download: Download) -> Result<Value, String> {
+    call_in_with(store, info, name, args, fetch, download, None)
+}
+
+pub fn call_in_with(store: &mut Store, info: &LibraryInfo, name: &str, args: &Value, fetch: Fetch, download: Download, publish: Option<crate::notes::Publish>) -> Result<Value, String> {
     checked(name, args)?;
+    if name == "save_note_to_notion" {
+        return publish.ok_or("此运行环境没有提供 Notion MCP；请使用桌面应用或 wisp 命令。")?(store, info, args);
+    }
     dispatch(store, info, name, args, fetch, download).map_err(|e| format!("{e:#}"))
 }
 
 fn dispatch(store: &mut Store, info: &LibraryInfo, name: &str, args: &Value, fetch: Fetch, download: Download) -> Result<Value> {
     match name {
+        "list_note_sources" => crate::notes::sources(store, text(args, "paperId")?),
+        "prepare_note" => Ok(crate::notes::from_args(store, info, args)?.summary()),
+        "export_note" => crate::notes::export(&crate::notes::from_args(store, info, args)?, Path::new(text(args, "path")?)),
+        "resolve_note_save" => {
+            let saved = args["saved"].as_bool().ok_or_else(|| anyhow!("需要 saved=true 或 false。"))?;
+            let page = if saved { Some(text(args, "page")?) } else { None };
+            store.resolve_note(text(args, "id")?, page)?;
+            Ok(json!({"resolved": true}))
+        }
         "import_pdf" => local::import_pdf(store, args),
         "import_references" => local::import_references(store, args),
         "import_zotero" => local::import_zotero(store, args),
@@ -1357,6 +1382,13 @@ fn suggest_screening(store: &mut Store, info: &LibraryInfo, args: &Value) -> Res
 /// Only `organise_papers` has more to say than its arguments already do.
 pub fn preview_call(store: &Store, name: &str, args: &Value) -> Result<Vec<String>, String> {
     match name {
+        "export_note" | "save_note_to_notion" => {
+            let info = std::fs::read_to_string(store.root().join(libraries::INFO_FILE)).ok().and_then(|s| serde_json::from_str::<LibraryInfo>(&s).ok()).unwrap_or_default();
+            let doc = crate::notes::from_args(store, &info, args).map_err(|e| e.to_string())?;
+            let destination = if name == "save_note_to_notion" { format!("Notion 父页面：{}", text(args, "parent").map_err(|e| e.to_string())?) } else { format!("本地文件：{}", text(args, "path").map_err(|e| e.to_string())?) };
+            Ok(vec![destination, format!("标题：{}", doc.title), format!("正文 {} 字，{} 张图片；原始笔记不变。", doc.markdown.chars().count(), doc.used_attachments().count()), doc.markdown.chars().take(2000).collect()])
+        }
+        "resolve_note_save" => Ok(vec![format!("仅在已手动核对 Notion 后确认：{}。", if args["saved"] == true { "笔记已成功写入" } else { "完全没有写入（不是部分写入）" }), format!("记录：{}；页面：{}", args["id"].as_str().unwrap_or(""), args["page"].as_str().unwrap_or(""))]),
         "organise_papers" => organise::preview(store, args),
         "edit_section" | "set_outline" => crate::compose::preview(store, name, args).map_err(|e| format!("{e:#}")),
         _ => Ok(vec![]),
@@ -1585,7 +1617,7 @@ pub(crate) mod tests {
         assert!(call(&root, "list_pdf_annotations", &json!({"kind": "wrong"})).is_err());
         // The same tool is available to the built-in assistant and a read-only MCP client.
         assert!(library_catalog().iter().any(|t| t.name == "list_pdf_annotations" && !t.writes));
-        let server = crate::mcp::Server { fetch: &offline, download: &no_download, read_only: true };
+        let server = crate::mcp::Server { fetch: &offline, download: &no_download, publish: None, read_only: true };
         let response = crate::mcp::handle(&root, &json!({"id": 1, "method": "tools/call", "params": {"name": "list_pdf_annotations", "arguments": {"paperId": paper}}}), &server).unwrap();
         assert_eq!(response["result"]["isError"], false);
         assert_eq!(response["result"]["structuredContent"]["total"], 2);
@@ -2179,7 +2211,7 @@ pub(crate) mod tests {
             // Only a tool that changes the library has anything to ask the person about.
             assert!(tool.writes || !tool.confirm, "{}", tool.name);
         }
-        assert_eq!(library_catalog().iter().filter(|tool| tool.confirm).map(|tool| tool.name).collect::<Vec<_>>().len(), 10);
+        assert_eq!(library_catalog().iter().filter(|tool| tool.confirm).map(|tool| tool.name).collect::<Vec<_>>().len(), 13);
         // The tools that write a manuscript are asked about outside the conversation that writes it.
         assert!(MANUSCRIPT.iter().all(|name| catalog().iter().any(|tool| tool.name == *name && tool.writes && tool.confirm)));
         std::fs::remove_dir_all(root).ok();
