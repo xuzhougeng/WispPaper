@@ -97,7 +97,7 @@ impl Workspace {
             .items_center()
             .gap(px(6.))
             .px(px(16.))
-            .pb(px(12.))
+            .py(px(12.))
             .child(div().pr(px(4.)).text_size(text_px(13.)).text_color(Theme::text_secondary()).child(t("自动更新")))
             .children([(0, t("关闭")), (6, t("每 6 小时")), (24, t("每天")), (168, t("每周"))].into_iter().map(|(value, name)| {
                 let on = hours == value;
@@ -123,24 +123,11 @@ impl Workspace {
             .flex_col()
             .size_full()
             .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .flex_wrap()
+                ui::column_head()
                     .gap(px(8.))
-                    .px(px(16.))
-                    .pt(px(16.))
-                    .pb(px(10.))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .min_w_0()
-                            .child(div().text_size(text_px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("检索与导入")))
-                            .child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(t("为文献数据库保存检索式：先试检索，满意了再运行导入。导入的文献都是「待判断」，已有的会跳过，每次导入可以整批撤销。"))),
-                    )
+                    .child(div().min_w_0().truncate().text_size(text_px(ui::HEAD_TITLE)).font_weight(FontWeight::SEMIBOLD).child(t("检索与导入")))
+                    .child(ui::hint("searches-hint", t("为文献数据库保存检索式：先试检索，满意了再运行导入。导入的文献都是「待判断」，已有的会跳过，每次导入可以整批撤销。")))
+                    .child(div().flex_1())
                     .when(!empty, |d| d.child(ui::secondary_button("run-all-searches", t("全部运行")).on_click(self.on(Cmd::RunAllSearches, cx))))
                     .child(ui::secondary_button("open-guide", t("让助手拟检索式")).on_click(self.on(Cmd::OpenGuide(false), cx)))
                     .child(ui::primary_button("new-search", t("新建检索式")).on_click(self.on(Cmd::NewSearch, cx))),

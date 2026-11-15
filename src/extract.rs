@@ -785,16 +785,21 @@ impl Workspace {
         let papers = plan.iter().map(|line| line.paper_id.as_str()).collect::<HashSet<_>>().len();
 
         let start = if all.is_empty() && !state.running() { ui::primary_button("extract-open", t("让助手填写…")) } else { ui::secondary_button("extract-open", t("让助手填写…")) }.on_click(self.on(Cmd::Extract(Do::Open(None)), cx));
-        let head = div()
+        let head = ui::column_head()
+            .gap(px(8.))
+            .child(div().flex_none().text_size(text_px(ui::HEAD_TITLE)).font_weight(FontWeight::SEMIBOLD).child(t("提取")))
+            .child(ui::hint("extract-hint", t("助手读文献，为自定义词条提出取值，每个取值附一句原文。在这里过目：不对的不勾选，再把勾选的一次写入词条。写入之前什么都不会改动，写入之后也能撤销。")))
+            .child(div().flex_1())
+            .when(!lib.fields.is_empty() && !state.running(), |d| d.child(start));
+        // Under the header's line: the run, an error, what was last done, and (with rows) the parts.
+        let top = div()
             .flex()
             .flex_col()
             .flex_none()
             .gap(px(10.))
             .px(px(16.))
-            .pt(px(16.))
-            .pb(px(12.))
-            .child(div().flex().flex_wrap().items_center().gap(px(10.)).child(div().flex_none().text_size(text_px(16.)).font_weight(FontWeight::SEMIBOLD).child(t("提取"))).child(div().flex_1()).when(!lib.fields.is_empty() && !state.running(), |d| d.child(start)))
-            .child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(t("助手读文献，为自定义词条提出取值，每个取值附一句原文。在这里过目：不对的不勾选，再把勾选的一次写入词条。写入之前什么都不会改动，写入之后也能撤销。")))
+            .pt(px(12.))
+            .pb(px(10.))
             .when(state.total > 0, |d| d.child(self.render_extract_run(cx)))
             .when(!state.error.is_empty(), |d| d.child(ui::error_line(&state.error)));
 
@@ -805,10 +810,10 @@ impl Workspace {
                 Last::Wrote { before, papers, .. } => tf!("已写入 {} 个取值，涉及 {papers} 篇文献。", "Saved {} values for {papers} papers.", before.len()),
                 Last::SetAside(keys) => tf!("已清除 {} 条建议：不再列出，也不会再问。", "Set aside {} proposals: not listed, and not asked again.", keys.len()),
             };
-            div().flex().items_center().gap(px(8.)).mx(px(16.)).mb(px(10.)).px(px(12.)).py(px(8.)).rounded(px(8.)).bg(fill).child(ui::icon("check", 14., color)).child(div().flex_1().min_w_0().text_color(color).child(text)).child(ui::ghost_button("extract-undo", None, Some(t("撤销").into())).h(text_px(24.)).text_size(text_px(12.)).on_click(self.on(Cmd::Extract(Do::Undo), cx)))
+            div().flex().items_center().gap(px(8.)).px(px(12.)).py(px(8.)).rounded(px(8.)).bg(fill).child(ui::icon("check", 14., color)).child(div().flex_1().min_w_0().text_color(color).child(text)).child(ui::ghost_button("extract-undo", None, Some(t("撤销").into())).h(text_px(24.)).text_size(text_px(12.)).on_click(self.on(Cmd::Extract(Do::Undo), cx)))
         });
         if all.is_empty() {
-            return div().flex().flex_col().size_full().child(head).children(done).child(self.render_extract_empty(cx)).into_any_element();
+            return div().flex().flex_col().size_full().child(head).child(top.children(done)).child(self.render_extract_empty(cx)).into_any_element();
         }
 
         // One part per field that has something waiting.
@@ -822,7 +827,7 @@ impl Workspace {
             if count > 0 { bar.push(part(n + 1, &field.id, format!("{} {count}", field.name), self, cx).into_any_element()) }
         }
         let small = |id: &'static str, text: &'static str| ui::ghost_button(id, None, Some(text.into())).h(text_px(26.)).text_size(text_px(12.));
-        let tools = div().flex().items_center().flex_wrap().gap(px(6.)).px(px(16.)).pb(px(10.)).children(bar).child(div().flex_1()).child(small("extract-all", t("全选")).on_click(self.on(Cmd::Extract(Do::TickAll(true)), cx))).child(small("extract-none", t("全不选")).on_click(self.on(Cmd::Extract(Do::TickAll(false)), cx)));
+        let tools = div().flex().items_center().flex_wrap().gap(px(6.)).children(bar).child(div().flex_1()).child(small("extract-all", t("全选")).on_click(self.on(Cmd::Extract(Do::TickAll(true)), cx))).child(small("extract-none", t("全不选")).on_click(self.on(Cmd::Extract(Do::TickAll(false)), cx)));
 
         let list = uniform_list("extract-rows", rows.len(), cx.processor(move |this, range: Range<usize>, _, cx| this.render_extract_rows(range, cx))).track_scroll(state.scroll.clone()).flex_1();
         // The row the keys are on, in full: a row of the list has one line for the value and one for the sentence.
@@ -888,7 +893,8 @@ impl Workspace {
             )
             .child(div().flex().flex_wrap().items_center().gap_x(px(14.)).gap_y(px(6.)).text_size(text_px(11.)).line_height(text_px(18.)).text_color(Theme::text_tertiary()).child(hint("↑↓", t("移动"))).child(hint("Space", t("勾选 / 不勾选"))).child(hint("Enter", t("对照 PDF"))).child(div().flex_1().min_w_0().truncate().text_right().child(t("默认勾选：词条还空着、且找到了原文依据的取值。"))));
 
-        div().id("extract-page").flex().flex_col().size_full().overflow_y_scroll().child(head).children(done).child(tools).child(div().flex().flex_col().flex_1().min_h(px(240.)).border_t_1().border_color(Theme::line()).child(list)).children(cursor).child(foot).into_any_element()
+        // The header stays; what is under it scrolls in a short window.
+        div().flex().flex_col().size_full().child(head).child(div().id("extract-page").flex().flex_col().flex_1().min_h_0().overflow_y_scroll().child(top.children(done).child(tools)).child(div().flex().flex_col().flex_1().min_h(px(240.)).border_t_1().border_color(Theme::line()).child(list)).children(cursor).child(foot)).into_any_element()
     }
 
     /// The run of the assistant, under way or over: how far it got, what came of it, and the papers it is reading.

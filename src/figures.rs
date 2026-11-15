@@ -900,18 +900,15 @@ impl Workspace {
             .flex_col()
             .size_full()
             .child(
-                div()
-                    .flex()
-                    .items_center()
+                ui::column_head()
                     .gap(px(8.))
-                    .px(px(16.))
-                    .pt(px(14.))
                     .child(self.render_collection_switch(cx))
                     .child(div().flex().flex_1().items_center().gap(px(8.)).h(text_px(34.)).px(px(10.)).rounded(px(8.)).bg(Theme::bg_sunken()).border_1().border_color(if focused { Theme::accent() } else { Theme::bg_sunken() }).child(ui::icon("search", 15., Theme::text_tertiary())).child(gallery.search.clone()))
                     .child(ui::ghost_button("figure-draw", Some("sparkle"), Some(t("生成图片").into())).flex_none().h(text_px(34.)).on_click(self.on(Cmd::DrawFigure, cx))),
             )
-            .child(div().id("figure-tags").flex().flex_wrap().items_center().gap(px(6.)).px(px(16.)).py(px(10.)).when(total > 0, |d| d.children(chips)))
-            .child(div().flex().flex_col().flex_1().min_h_0().border_t_1().border_color(Theme::line()).pt(px(GAP)).child(body))
+            // The tags are under the header's line: however many rows they wrap to, the header keeps its height.
+            .when(total > 0, |d| d.child(div().id("figure-tags").flex().flex_wrap().items_center().gap(px(6.)).px(px(16.)).pt(px(10.)).children(chips)))
+            .child(div().flex().flex_col().flex_1().min_h_0().pt(px(GAP)).child(body))
             .child(
                 div()
                     .flex()
