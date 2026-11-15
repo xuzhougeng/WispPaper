@@ -1,0 +1,9 @@
+# CI, releases and the project page
+
+## CI and releases
+
+CI (`.github/workflows/ci.yml`) runs clippy with `-D warnings` and the tests on Windows and macOS, and the three windowless crates on Linux. A release is a pushed tag `v<version>` that matches the version in `Cargo.toml` (`release.yml`; notes from `.github/release-notes/v<version>.md`). It is always signed, the way BiblioCell does it: `scripts/package-macos.sh --arch universal` builds, signs with the Developer ID certificate, notarizes and staples the app and the DMG; `scripts/package-windows.ps1 -Sign` signs both exes through SSL.com eSigner (`scripts/sign-windows-esigner.ps1`); Linux is an unsigned tar.gz. The ten secrets are listed at the top of `release.yml`; with one missing the run stops before building. A pull request touching `scripts/` or the workflow rehearses the packaging unsigned. Locally `CARGO="cargo +stable" scripts/package-macos.sh` gives an ad hoc signed `dist/Wisp Paper.app`.
+
+## `site/`: the project page
+
+https://xuzhougeng.github.io/WispPaper/ is three hand-written files (`index.html`, `style.css`, `site.js`), no generator and nothing loaded from another host (no web fonts: the stacks are system ones). `site/build.sh [folder]` adds the screenshots from `docs/images` and the icon; `python3 -m http.server --directory dist/site` shows the result. `.github/workflows/pages.yml` deploys it on a push to main that touches it and after every published release, writing `release.json` (the latest release's files) next to the page: the download buttons read it, and lead to the release page without it. The page is laid out as a paper (numbered figures, citations that can be clicked); its numbers are those of `docs/TUTORIAL.md`, and its colours are `theme.rs`'s. Keep it out of `scripts/`, whose changes rehearse the packaging.
