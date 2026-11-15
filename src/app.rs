@@ -517,8 +517,8 @@ pub enum Cmd {
     MergeSection(String),
     /// The whole manuscript to read (true), or one section to write.
     WriteReading(bool),
-    /// While writing, the sidebar shows the library's own navigation (true) or the manuscript's outline.
-    WriteNav(bool),
+    /// The top-left arrow of a manuscript: out of 写作, back to the page it was opened from.
+    LeaveWrite,
     ExportManuscript(ManuscriptExport),
     /// The section's earlier versions.
     WriteHistory,
@@ -790,8 +790,6 @@ pub struct Writing {
     pub comments: crate::comments::Commenting,
     /// Where the manuscript's editor is scrolled to.
     pub editor_scroll: ScrollHandle,
-    /// The sidebar shows the library's navigation instead of the manuscript's outline, until 写作 is opened again.
-    pub library_nav: bool,
     /// Which page the panel beside the manuscript shows.
     pub side: Side,
     /// The other mode, where the assistant writes: which manuscript its conversation is about, what it changed, the versions to step through (`write_agent.rs`).
@@ -1230,6 +1228,8 @@ pub struct Library {
     pub split: bool,
     /// The tab the asking was come to from, which leaving it goes back to.
     pub ask_from: Tab,
+    /// The page 写作 was opened from, which leaving a manuscript goes back to (`Library::enter_write`).
+    pub write_from: Page,
     /// Whether the window was last drawn laid out for asking: the list finds its paper again when that changes.
     pub ask_drawn: bool,
     /// The floating conversation's window or button while the pointer holds it (floating.rs).
@@ -1477,6 +1477,12 @@ impl Chat {
 }
 
 impl Library {
+    /// 写作 becomes the page, and the one it was opened from is kept for the way back (`Cmd::LeaveWrite`).
+    pub(crate) fn enter_write(&mut self) {
+        if self.page != Page::Write { self.write_from = self.page }
+        self.page = Page::Write;
+    }
+
     pub fn chat(&self, talk: Talk) -> &Chat {
         match talk {
             Talk::Library => &self.library_chat,
@@ -2205,19 +2211,17 @@ impl Workspace {
                     self.agent_versions(cx);
                 }
                 if let Some(lib) = self.lib.as_mut() {
-                    lib.page = page;
+                    if page == Page::Write { lib.enter_write() } else { lib.page = page }
                     lib.reading = false;
                     if page == Page::Ask { lib.library_chat.input.read(cx).focus(window) }
                     if page == Page::Write {
-                        // Opening 写作, even from its own row in the library's navigation, brings the outline back.
-                        lib.writing.library_nav = false;
                         lib.writing.editor.read(cx).focus(window);
                         lib.writing.structures = lib.store.structures().unwrap_or_default();
                         self.write_texts_changed(cx);
                     }
                 }
             }
-            Cmd::WriteSection(_) | Cmd::WriteManuscript(_) | Cmd::NewManuscript | Cmd::AskRemoveManuscript(_) | Cmd::RemoveManuscript(_) | Cmd::WriteLanguage(_) | Cmd::EditSection(_) | Cmd::PickSectionKind(_) | Cmd::MoveSection(..) | Cmd::AskRemoveSection(_) | Cmd::RemoveSection(_) | Cmd::SplitSection(_) | Cmd::MergeSection(_) | Cmd::WriteReading(_) | Cmd::WriteNav(_) | Cmd::ExportManuscript(_) | Cmd::WriteHistory | Cmd::HistoryPick(_) => self.run_manuscript(cmd, window, cx),
+            Cmd::WriteSection(_) | Cmd::WriteManuscript(_) | Cmd::NewManuscript | Cmd::AskRemoveManuscript(_) | Cmd::RemoveManuscript(_) | Cmd::WriteLanguage(_) | Cmd::EditSection(_) | Cmd::PickSectionKind(_) | Cmd::MoveSection(..) | Cmd::AskRemoveSection(_) | Cmd::RemoveSection(_) | Cmd::SplitSection(_) | Cmd::MergeSection(_) | Cmd::WriteReading(_) | Cmd::LeaveWrite | Cmd::ExportManuscript(_) | Cmd::WriteHistory | Cmd::HistoryPick(_) => self.run_manuscript(cmd, window, cx),
             Cmd::FigureTag(_) | Cmd::OpenFigure(_) | Cmd::FigureSource(_) | Cmd::AskFigure(_) | Cmd::CopyFigure(_) | Cmd::SaveFigure(_) | Cmd::AskRemoveFigure(_) | Cmd::RemoveFigure(_) | Cmd::FigureAddTag(_) | Cmd::FigureInfer(_) | Cmd::DrawFigure | Cmd::FigureDraw | Cmd::FigureShape(_) => self.run_figures(cmd, window, cx),
             Cmd::WriteCiteFrom(id, from) => {
                 self.cite_paper(&id, Some(from), cx);
@@ -3077,7 +3081,7 @@ impl Workspace {
         let (comments, heard) = crate::comments::Commenting::new(store.comments(&manuscript).unwrap_or_default(), store.manuscript_source(&manuscript).ok().flatten(), cx);
         subscriptions.extend(heard);
         let revise = crate::revise::Revising::new(&mut subscriptions, cx);
-        let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new(), assist: Default::default(), revise, comments, editor_scroll: ScrollHandle::new(), library_nav: false, side: Side::default(), agent: Default::default() };
+        let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new(), assist: Default::default(), revise, comments, editor_scroll: ScrollHandle::new(), side: Side::default(), agent: Default::default() };
         let citing = crate::cite::Citing::new(&store, &writing.manuscript, &mut subscriptions, cx);
         let gallery = crate::figures::Gallery::new(&mut subscriptions, cx);
         let filters = Filters { sort: info.sort.clone(), ..Default::default() };
@@ -3098,6 +3102,7 @@ impl Workspace {
             reading: false,
             split: true,
             ask_from: Tab::Info,
+            write_from: Page::Papers,
             ask_drawn: false,
             float_drag: None,
             float_area: (0., 0.),
