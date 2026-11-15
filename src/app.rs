@@ -2179,7 +2179,7 @@ impl Workspace {
             Cmd::ShowTextless => {
                 if matches!(self.modal, Some(Modal::ImportReport)) { self.run(Cmd::CloseModal, window, cx) }
                 if let Some(lib) = self.lib.as_mut() {
-                    lib.filters = Filters { fulltext: "textless".into(), ..Default::default() };
+                    lib.filters = Filters { fulltext: "textless".into(), sort: lib.info.sort.clone(), ..Default::default() };
                     lib.search.update(cx, |input, cx| input.set_text("", cx));
                     lib.page = Page::Papers;
                     lib.refilter();
@@ -2292,10 +2292,11 @@ impl Workspace {
                 }
             }
             Cmd::SetSort(sort) => {
-                if let Some(lib) = self.lib.as_mut() {
-                    lib.filters.sort = sort;
-                    lib.refilter();
-                }
+                let Some(lib) = self.lib.as_mut() else { return };
+                lib.filters.sort = sort.clone();
+                lib.refilter();
+                lib.info.sort = sort;
+                if let Err(err) = libraries::save(&lib.info) { self.fail(format!("{err:#}"), cx) }
             }
             Cmd::Select(id) => self.select(Some(id), window, cx),
             Cmd::AskPapers(_) | Cmd::StarPapers(..) | Cmd::ReadPapers(..) | Cmd::TagPapers(_) | Cmd::FindPdfsOf(_) | Cmd::AskTrashPapers(_) | Cmd::TrashPapers(_) => self.run_batch(cmd, window, cx),
@@ -3078,6 +3079,7 @@ impl Workspace {
         let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new(), assist: Default::default(), revise, comments, editor_scroll: ScrollHandle::new(), library_nav: false, side: Side::default(), agent: Default::default() };
         let citing = crate::cite::Citing::new(&store, &writing.manuscript, &mut subscriptions, cx);
         let gallery = crate::figures::Gallery::new(&mut subscriptions, cx);
+        let filters = Filters { sort: info.sort.clone(), ..Default::default() };
         let mut lib = Library {
             info,
             store,
@@ -3085,7 +3087,7 @@ impl Workspace {
             fields: vec![],
             files: vec![],
             trash: vec![],
-            filters: Filters::default(),
+            filters,
             shown: vec![],
             search,
             page: Page::Papers,
