@@ -113,7 +113,7 @@ pub fn catalog() -> Vec<ToolDef> {
         scoped(
             "list_pdf_annotations",
             "读取 PDF 标注",
-            "读取用户在 PDF 上保存的下划线、高亮及笔记。quote 是选中的原文，note 是用户的笔记，不是论文结论。返回文献和附件 ID、1-based 页码、每行的 boxes（从页面左上角起的 PDF 点坐标 [left, top, right, bottom]）、类型和时间。回收站中的文献不返回。",
+            "读取用户在 PDF 上保存的下划线、高亮及笔记。quote 是选中的原文，note 是用户的笔记，不是论文结论。返回文献和附件 ID、1-based 页码、每行的 boxes（从页面左上角起的 PDF 点坐标 [left, top, right, bottom]）、类型、高亮的颜色（color：yellow、green、blue、pink、purple，是用户自己的分类；下划线为空）和时间。回收站中的文献不返回。",
             json!({
                 "paperId": {"type": "string", "description": "只返回这篇文献的标注。"},
                 "resourceId": {"type": "string", "description": "只返回这个 PDF 附件的标注，附件 ID 见 get_paper 的 files。"},
@@ -1625,7 +1625,11 @@ pub(crate) mod tests {
         assert_eq!(found["annotations"][0]["note"], "Compare WOX5 expression");
         assert_eq!(found["annotations"][0]["quote"], "Root growth");
         assert_eq!(found["annotations"][0]["boxes"], json!([[10., 20., 100., 30.]]));
-        assert_eq!(call(&root, "list_pdf_annotations", &json!({"kind": "highlight", "page": 2})).unwrap()["total"], 1);
+        assert_eq!(found["annotations"][0]["color"], "");
+        let highlight = store.pdf_annotations(&paper, &file.id).unwrap().into_iter().find(|a| a.kind == Kind::Highlight).unwrap();
+        store.recolor_pdf_annotation(&file.id, &highlight.id, "blue").unwrap();
+        let highlights = call(&root, "list_pdf_annotations", &json!({"kind": "highlight", "page": 2})).unwrap();
+        assert_eq!((&highlights["total"], &highlights["annotations"][0]["color"]), (&json!(1), &json!("blue")));
         assert_eq!(call(&root, "list_pdf_annotations", &json!({"offset": 1, "limit": 1})).unwrap()["annotations"][0]["page"], 2);
         for args in [json!({"paperId": "missing"}), json!({"resourceId": "missing"}), json!({"page": 3})] {
             assert_eq!(call(&root, "list_pdf_annotations", &args).unwrap()["total"], 0);

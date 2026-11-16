@@ -162,10 +162,27 @@ impl Theme {
     pub fn note_strong() -> Hsla { if dark() { hsla(0.11, 0.85, 0.6, 0.38) } else { hsla(0.11, 0.95, 0.55, 0.36) } }
     pub fn note_line() -> Hsla { pick(0xE0A100, 0xE8B92E) }
     pub fn selection() -> Hsla { Self::accent().opacity(if dark() { 0.36 } else { 0.22 }) }
+    /// A highlight on a PDF page, by a key of `annotation::COLORS` (anything else as the first): the page is white in either set, so the same in both.
+    pub fn highlight(key: &str) -> Hsla { let (h, s, l) = highlight_hue(key); hsla(h / 360., s, l, 0.32) }
+    /// The same colour as a swatch to choose it by, solid on the menu's own background.
+    pub fn highlight_swatch(key: &str) -> Hsla { let (h, s, l) = highlight_hue(key); hsla(h / 360., s, l + if dark() { 0.04 } else { 0. }, 1.) }
+    /// An underline on a PDF page.
+    pub fn underline_mark() -> Hsla { hsla(215. / 360., 0.85, 0.48, 0.9) }
     /// The off state of a switch and the groove of a segmented control.
     pub fn groove() -> Hsla { if dark() { hsla(0., 0., 1., 0.12) } else { hsla(0., 0., 0., 0.07) } }
     /// The chosen segment of a segmented control, lighter than its groove.
     pub fn segment() -> Hsla { pick(0xFFFFFF, 0x5A5C63) }
+}
+
+/// Hue (degrees), saturation and lightness of each highlight colour.
+fn highlight_hue(key: &str) -> (f32, f32, f32) {
+    match key {
+        "green" => (135., 0.55, 0.5),
+        "blue" => (205., 0.85, 0.55),
+        "pink" => (335., 0.85, 0.62),
+        "purple" => (270., 0.6, 0.62),
+        _ => (48., 1., 0.5),
+    }
 }
 
 /// The tile a model provider's mark is drawn on (设置 › AI): the service's

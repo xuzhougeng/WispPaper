@@ -10,7 +10,7 @@ use crate::theme::{Theme, text_px};
 use crate::ui;
 use crate::input::TextInput;
 use gpui::{prelude::FluentBuilder, *};
-use wisp_core::annotation::{Annotation, Kind};
+use wisp_core::annotation::{Annotation, COLORS, Kind};
 use wisp_core::pdftext::{self, Mark};
 
 actions!(pdf, [CopySelection]);
@@ -31,7 +31,21 @@ pub enum PdfEvent {
     /// Reading metadata, saved by the owner before the viewer redraws it.
     Annotate { paper: String, resource: String, page: usize, kind: Kind, quote: String, boxes: Vec<[f32; 4]> },
     AnnotationNote { resource: String, id: String, note: String },
+    /// A highlight takes another colour, a key of `annotation::COLORS`; its range stays.
+    RecolorAnnotation { resource: String, id: String, color: &'static str },
     RemoveAnnotation { resource: String, id: String },
+}
+
+/// The names of the highlight colours, in the order of `annotation::COLORS`.
+const COLOR_NAMES: [&str; 5] = ["黄色", "绿色", "蓝色", "粉色", "紫色"];
+
+/// A highlight that was clicked, and the menu beside it: the highlight's id, its 0-based page, and in that page's points
+/// where the click was across and the top and bottom of the line clicked.
+struct MarkMenu {
+    id: String,
+    page: usize,
+    x: f32,
+    line: (f32, f32),
 }
 
 /// A piece cut out of a page, for the figure library.
@@ -469,6 +483,10 @@ pub struct PdfView {
     annotations_open: bool,
     annotation_edit: Option<String>,
     annotation_note: Entity<TextInput>,
+    /// The highlight the pointer went down on, and where in the window: a release close by is a click on it.
+    pressed_mark: Option<(MarkMenu, Point<Pixels>)>,
+    /// The menu of a highlight clicked: its colours and 删除高亮.
+    mark_menu: Option<MarkMenu>,
     focus: FocusHandle,
 }
 
@@ -523,6 +541,8 @@ impl PdfView {
             annotations_open: false,
             annotation_edit: None,
             annotation_note: cx.new(|cx| TextInput::new("写下这段原文的笔记…", cx).multiline(3)),
+            pressed_mark: None,
+            mark_menu: None,
             focus: cx.focus_handle(),
         }
     }
@@ -537,6 +557,7 @@ impl PdfView {
         self.annotations = annotations;
         self.selection = None;
         self.annotation_edit = None;
+        self.mark_menu = None;
         cx.notify();
     }
 
@@ -763,12 +784,13 @@ impl PdfView {
         let cutting = self.cutting;
         // Metadata is painted over the current raster at the same scale as
         // the glyphs, independently of both selection and citation marks.
+        // A highlight can be clicked for its menu, so the pointer says so over it.
         let annotations: Vec<Div> = self.annotations.iter().filter(|a| a.page == index + 1).flat_map(|a| a.boxes.iter().map(move |line| {
             let (top, height, color) = match a.kind {
-                Kind::Underline => (line[3] * scale - (1.3 * scale).max(1.), (1.3 * scale).max(1.), hsla(215. / 360., 0.85, 0.48, 0.9)),
-                Kind::Highlight => (line[1] * scale, (line[3] - line[1]) * scale, hsla(48. / 360., 1., 0.5, 0.3)),
+                Kind::Underline => (line[3] * scale - (1.3 * scale).max(1.), (1.3 * scale).max(1.), Theme::underline_mark()),
+                Kind::Highlight => (line[1] * scale, (line[3] - line[1]) * scale, Theme::highlight(&a.color)),
             };
-            div().absolute().left(px(line[0] * scale)).top(px(top)).w(px((line[2] - line[0]) * scale)).h(px(height)).bg(color)
+            div().absolute().left(px(line[0] * scale)).top(px(top)).w(px((line[2] - line[0]) * scale)).h(px(height)).bg(color).when(a.kind == Kind::Highlight && !cutting, |d| d.cursor_pointer())
         })).collect();
         // The quotation on this page: a translucent marker over each of its lines.
         let cited = self.citation.index(self.sizes.len()) == Some(index);
@@ -789,11 +811,16 @@ impl PdfView {
         div().w_full().flex().pb(px(PAGE_GAP)).child(sheet).into_any_element()
     }
 
+    /// Where a page stands in the window. The list leaves out its own top padding from what it says, though it draws every item below it.
+    fn item_bounds(&self, index: usize) -> Option<Bounds<Pixels>> {
+        self.list.bounds_for_item(index).map(|bounds| Bounds { origin: point(bounds.origin.x, bounds.origin.y + px(PAGE_GAP)), size: bounds.size })
+    }
+
     /// The page under a point of the window, and the point in that page's own points.
     fn locate(&self, position: Point<Pixels>) -> Option<(usize, f32, f32)> {
         let top = self.list.logical_scroll_top().item_ix;
         (top..self.sizes.len().min(top + 8)).find_map(|index| {
-            let bounds = self.list.bounds_for_item(index)?;
+            let bounds = self.item_bounds(index)?;
             if position.y < bounds.top() || position.y >= bounds.bottom() { return None }
             let scale = self.scale_of(index);
             let left = f32::from(bounds.left()) + self.sheet_left(self.sizes[index].0 * scale);
@@ -804,24 +831,35 @@ impl PdfView {
     /// The pointer went down on a page: a selection starts at the glyph under it.
     fn press(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus);
-        (self.selection, self.selecting, self.translation) = (None, false, None);
+        (self.selection, self.selecting, self.translation, self.mark_menu, self.pressed_mark) = (None, false, None, None, None);
         if self.cutting {
             // A piece of the page is cut out from here.
             self.cut = self.locate(event.position).map(|(page, x, y)| (page, [x, y, x, y]));
             self.selecting = self.cut.is_some();
             return cx.notify();
         }
-        if let Some((page, x, y)) = self.locate(event.position) && let Some(at) = self.marks.get(&page).and_then(|marks| pdftext::mark_at(marks, x, y)) {
+        let Some((page, x, y)) = self.locate(event.position) else { return cx.notify() };
+        self.pressed_mark = self.highlight_at(page, x, y).map(|(id, line)| (MarkMenu { id, page, x, line }, event.position));
+        if let Some(at) = self.marks.get(&page).and_then(|marks| pdftext::mark_at(marks, x, y)) {
             self.selection = Some(Selection { page, anchor: at, focus: at });
             self.selecting = true;
         }
         cx.notify();
     }
 
+    /// The highlight under a point of a 0-based page, and the top and bottom of its line there. Where
+    /// highlights overlap it is the one drawn on top, the one made last.
+    fn highlight_at(&self, page: usize, x: f32, y: f32) -> Option<(String, (f32, f32))> {
+        self.annotations.iter().rev().filter(|a| a.kind == Kind::Highlight && a.page == page + 1).find_map(|a| {
+            let line = a.boxes.iter().find(|b| x >= b[0] - 1. && x <= b[2] + 1. && y >= b[1] - 1. && y <= b[3] + 1.)?;
+            Some((a.id.clone(), (line[1], line[3])))
+        })
+    }
+
     /// The pointer moved with the button held: the selection reaches to the glyph under it, on the page it began on.
     fn drag(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
         if !self.selecting { return }
-        if event.pressed_button != Some(MouseButton::Left) { return self.release(cx) }
+        if event.pressed_button != Some(MouseButton::Left) { return self.release(None, cx) }
         let Some((page, x, y)) = self.locate(event.position) else { return };
         if let Some((cut_page, corners)) = self.cut.as_mut() {
             if *cut_page == page {
@@ -837,12 +875,33 @@ impl PdfView {
         }
     }
 
-    /// The button came up: a pointer that never left its glyph selected nothing.
-    fn release(&mut self, cx: &mut Context<Self>) {
-        if !std::mem::take(&mut self.selecting) { return }
+    /// The button came up, at `at` in the window when it is known: a pointer that never left its glyph
+    /// selected nothing, and one that went down on a highlight and came up close by clicked it.
+    fn release(&mut self, at: Option<Point<Pixels>>, cx: &mut Context<Self>) {
+        let pressed = self.pressed_mark.take();
+        if !std::mem::take(&mut self.selecting) && pressed.is_none() { return }
         if self.selection.is_some_and(|selection| selection.anchor == selection.focus) { self.selection = None }
         // A piece too small to show anything was a slip of the hand.
         if self.cut.is_some_and(|(_, [x0, y0, x1, y1])| (x1 - x0).abs() < 8. || (y1 - y0).abs() < 8.) { self.cut = None }
+        if let (Some((menu, from)), Some(at)) = (pressed, at) && self.selection.is_none() && self.cut.is_none() && f32::from((at.x - from.x).abs()).max(f32::from((at.y - from.y).abs())) <= 4. {
+            self.mark_menu = Some(menu);
+        }
+        cx.notify();
+    }
+
+    /// The highlight of the menu takes another colour.
+    fn recolor(&mut self, color: &'static str, cx: &mut Context<Self>) {
+        let Some(menu) = self.mark_menu.take() else { return };
+        if self.annotations.iter().any(|a| a.id == menu.id && a.color != color) {
+            cx.emit(PdfEvent::RecolorAnnotation { resource: self.resource_id.clone(), id: menu.id, color });
+        }
+        cx.notify();
+    }
+
+    /// The highlight of the menu goes, and only that one.
+    fn remove_mark(&mut self, cx: &mut Context<Self>) {
+        let Some(menu) = self.mark_menu.take() else { return };
+        cx.emit(PdfEvent::RemoveAnnotation { resource: self.resource_id.clone(), id: menu.id });
         cx.notify();
     }
 
@@ -974,7 +1033,7 @@ impl PdfView {
         let selection = card.selection;
         let boxes = pdftext::mark_boxes(self.marks.get(&selection.page)?.get(selection.anchor.min(selection.focus)..=selection.anchor.max(selection.focus))?);
         let (first, last) = (boxes.first()?, boxes.last()?);
-        let (item, view) = (self.list.bounds_for_item(selection.page)?, self.list.viewport_bounds());
+        let (item, view) = (self.item_bounds(selection.page)?, self.list.viewport_bounds());
         let scale = self.scale_of(selection.page);
         let (x, y) = (f32::from(item.left() - view.left()) + self.sheet_left(self.sizes.get(selection.page)?.0 * scale), f32::from(item.top() - view.top()));
         let (left, right) = boxes.iter().fold((f32::MAX, f32::MIN), |(l, r), line| (l.min(line[0]), r.max(line[2])));
@@ -1111,7 +1170,7 @@ impl PdfView {
             }
             (None, None) => return None,
         };
-        let (item, view) = (self.list.bounds_for_item(page)?, self.list.viewport_bounds());
+        let (item, view) = (self.item_bounds(page)?, self.list.viewport_bounds());
         let scale = self.scale_of(page);
         // Under the last line of the selection, kept inside the viewer.
         let left = f32::from(item.left() - view.left()) + self.sheet_left(self.sizes.get(page)?.0 * scale) + last[0] * scale;
@@ -1154,6 +1213,60 @@ impl PdfView {
         )
     }
 
+    /// What can be done with a highlight clicked, under the line clicked (over it at the viewer's foot):
+    /// its colours, the one it has ringed, and 删除高亮. The same small bar as the selection's.
+    fn mark_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let menu = self.mark_menu.as_ref()?;
+        let mark = self.annotations.iter().find(|a| a.id == menu.id)?;
+        let (item, view) = (self.item_bounds(menu.page)?, self.list.viewport_bounds());
+        let scale = self.scale_of(menu.page);
+        let (x, y) = (f32::from(item.left() - view.left()) + self.sheet_left(self.sizes.get(menu.page)?.0 * scale), f32::from(item.top() - view.top()));
+        const HEIGHT: f32 = 34.;
+        let below = y + menu.line.1 * scale + 6.;
+        let top = if below + HEIGHT + 8. <= self.height { below } else { y + menu.line.0 * scale - 6. - HEIGHT };
+        let swatches = COLORS.iter().zip(COLOR_NAMES).map(|(&key, name)| {
+            div()
+                .id(SharedString::from(format!("pdf-mark-{key}")))
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .size(px(26.))
+                .rounded_full()
+                .cursor_pointer()
+                .hover(|s| s.bg(Theme::hover()))
+                .when(mark.color == key, |d| d.border_2().border_color(Theme::text_secondary()))
+                .child(div().size(px(14.)).rounded_full().bg(Theme::highlight_swatch(key)))
+                .tooltip(ui::tip(t(name)))
+                .on_click(cx.listener(move |this, _, _, cx| this.recolor(key, cx)))
+        });
+        Some(
+            div()
+                .id("pdf-mark-menu")
+                .absolute()
+                .left(px((x + menu.x * scale - 16.).clamp(8., (self.width - 240.).max(8.))))
+                .top(px(top.clamp(8., (self.height - HEIGHT - 8.).max(8.))))
+                .flex()
+                .items_center()
+                .gap(px(1.))
+                .p(px(3.))
+                .rounded(px(8.))
+                .bg(Theme::bg_body())
+                .border_1()
+                .border_color(Theme::line_strong())
+                .shadow(crate::theme::shadow_card())
+                .text_size(text_px(12.))
+                .occlude()
+                // A press on the menu is not a press on the page; one anywhere else puts it away.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| if this.mark_menu.take().is_some() { cx.notify() }))
+                .children(swatches)
+                .child(div().flex_none().w(px(1.)).h(px(16.)).mx(px(4.)).bg(Theme::line()))
+                .child(div().id("pdf-mark-remove").flex().flex_none().items_center().h(text_px(26.)).px(px(9.)).rounded(px(6.)).cursor_pointer().text_color(Theme::danger()).hover(|s| s.bg(Theme::hover())).child(t("删除高亮")).on_click(cx.listener(|this, _, _, cx| this.remove_mark(cx))))
+                .into_any_element(),
+        )
+    }
+
     /// A bounded, scrollable list also lets a mark be found after reopening
     /// the file, without depending on a hit target over the PDF text.
     fn annotation_panel(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
@@ -1168,6 +1281,7 @@ impl PdfView {
                 let kind = match annotation.kind { Kind::Underline => t("下划线"), Kind::Highlight => t("高亮") };
                 div().id(SharedString::from(id)).p(px(10.)).border_b_1().border_color(Theme::line()).flex().flex_col().gap(px(7.))
                     .child(div().flex().flex_wrap().items_center().gap(px(4.))
+                        .children((annotation.kind == Kind::Highlight).then(|| div().flex_none().size(px(8.)).mr(px(2.)).rounded_full().bg(Theme::highlight_swatch(&annotation.color))))
                         .child(div().flex_1().text_color(Theme::text_secondary()).child(tf!("第 {page} 页 · {kind}", "Page {page} · {kind}")))
                         .child(button("annotation-locate", t("定位")).on_click(cx.listener(move |this, _, _, cx| this.go_to_place(page, top, cx))))
                         .child(button("annotation-edit", t("笔记")).on_click(cx.listener(move |this, _, _, cx| {
@@ -1225,6 +1339,7 @@ impl Render for PdfView {
         if self.translation.as_ref().is_some_and(|t| Some(t.selection) != self.selection) { self.translation = None }
         let bar = self.selection_bar(cx);
         let card = self.translation_card(cx);
+        let mark_menu = self.mark_menu(cx);
         let notice = match self.citation.status {
             CitationStatus::PageOnly => Some(t("此引用仅提供页码，已标出引用页。")),
             CitationStatus::Searching => Some(t("正在定位引用原文…")),
@@ -1242,7 +1357,9 @@ impl Render for PdfView {
             .on_action(cx.listener(|this, _: &CopySelection, _, cx| this.copy(cx)))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::press))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| this.drag(event, cx)))
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.release(cx)))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, event: &MouseUpEvent, _, cx| this.release(Some(event.position), cx)))
+            // Esc puts a highlight's menu away before it does anything else.
+            .on_action(cx.listener(|this, _: &crate::shortcuts::Dismiss, _, cx| if this.mark_menu.take().is_some() { cx.notify() } else { cx.propagate() }))
             // Under the pages: it learns the viewer's height, and hears the wheel before the list does.
             .child(
                 canvas(
@@ -1262,6 +1379,7 @@ impl Render for PdfView {
             // Explain whether the citation names a page or a passage within it.
             .children(bar)
             .children(card)
+            .children(mark_menu)
             .children(notice.map(|notice| div().absolute().top(px(8.)).left_0().w_full().px(px(8.)).flex().justify_center().child(div().px(px(10.)).py(px(5.)).rounded(px(6.)).bg(Theme::bg_body()).border_1().border_color(Theme::line()).text_size(text_px(12.)).text_color(Theme::text_secondary()).child(notice))))
             .child(self.annotation_panel(window, cx))
             .into_any_element()
