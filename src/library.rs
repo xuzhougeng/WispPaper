@@ -50,7 +50,7 @@ fn view_label(view: View) -> &'static str {
 
 /// The views of a library, as the sidebar lists them: element id, icon, name. Each is the same list, narrowed.
 /// What waits for a decision is not one of them: that is 筛选, a row of the group below, and the 收录 filter.
-const VIEWS: [(&str, &str, &str, View); 5] = [
+pub(crate) const VIEWS: [(&str, &str, &str, View); 5] = [
     ("view-all", "library", "全部文献", View::All),
     ("view-recent", "history", "最近添加", View::Recent),
     ("view-unread", "eye", "未读", View::Unread),

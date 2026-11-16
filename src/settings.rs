@@ -8,7 +8,7 @@
 //! cards, the title on the left and the control on the right.
 
 use crate::i18n::t;
-use crate::app::{Cmd, MenuKind, Workspace, default_root};
+use crate::app::{Cmd, MenuKind, Modal, Workspace, default_root};
 use crate::input::{InputEvent, TextInput};
 use crate::shortcuts::{self, GROUPS, SHORTCUTS};
 use crate::theme::{self, Theme, text_px};
@@ -46,9 +46,9 @@ pub enum SettingsPage {
 }
 
 impl SettingsPage {
-    const ALL: [SettingsPage; 7] = [SettingsPage::General, SettingsPage::Appearance, SettingsPage::Shortcuts, SettingsPage::Ai, SettingsPage::Customize, SettingsPage::Network, SettingsPage::About];
+    pub(crate) const ALL: [SettingsPage; 7] = [SettingsPage::General, SettingsPage::Appearance, SettingsPage::Shortcuts, SettingsPage::Ai, SettingsPage::Customize, SettingsPage::Network, SettingsPage::About];
 
-    fn title(self) -> &'static str {
+    pub(crate) fn title(self) -> &'static str {
         match self {
             SettingsPage::General => t("通用"),
             SettingsPage::Appearance => t("外观"),
@@ -60,7 +60,7 @@ impl SettingsPage {
         }
     }
 
-    fn icon(self) -> &'static str {
+    pub(crate) fn icon(self) -> &'static str {
         match self {
             SettingsPage::General => "sliders",
             SettingsPage::Appearance => "palette",
@@ -221,7 +221,11 @@ pub enum UpdateState {
     Idle,
     Checking,
     Current,
-    Available(Release),
+    /// A newer release, and what it would replace (`updater::target`): `None` when this app cannot replace itself where it is.
+    Available(Release, Option<PathBuf>),
+    Downloading(Release),
+    /// Fetched, checked and unpacked beside the app: the release, the new app, what it replaces.
+    Ready(Release, PathBuf, PathBuf),
     Failed(String),
 }
 
@@ -440,6 +444,8 @@ impl Workspace {
     pub fn watch_updates(&mut self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_secs(10)).await;
+            // By now the app an update replaced has quit, and what it left can go.
+            cx.background_executor().spawn(async { crate::updater::tidy() }).await;
             loop {
                 let alive = this.update(cx, |this, cx| {
                     if this.settings.auto_update { this.check_update(false, cx) }
@@ -453,9 +459,9 @@ impl Workspace {
 
     /// Ask which release is the newest. `manual` (检查更新) also reports a
     /// failure; the automatic check stays silent except for one toast per
-    /// new version.
+    /// new version, or the question once that version is downloaded.
     pub fn check_update(&mut self, manual: bool, cx: &mut Context<Self>) {
-        if self.update == UpdateState::Checking { return }
+        if matches!(self.update, UpdateState::Checking | UpdateState::Downloading(_)) { return }
         if manual {
             self.update = UpdateState::Checking;
             cx.notify();
@@ -466,12 +472,18 @@ impl Workspace {
             let found = cx.background_executor().spawn(async move { wisp_net::latest_release(&url) }).await;
             this.update(cx, |this, cx| {
                 match found {
+                    // The version already downloaded waits for its answer.
+                    Ok(Some(release)) if matches!(&this.update, UpdateState::Ready(ready, ..) if ready.version == release.version) => {}
                     Ok(Some(release)) if update::newer(&release.version, env!("CARGO_PKG_VERSION")) => {
+                        let target = crate::updater::target().filter(|_| crate::updater::asset(&release.version).is_some());
+                        if this.settings.auto_download && let Some(target) = target {
+                            return this.download_update(release, target, manual, cx);
+                        }
                         if !manual && this.update_told.as_ref() != Some(&release.version) {
-                            this.say(tf!("Wisp Paper {} 已发布，可在「设置 › 关于」前往下载。", "Wisp Paper {} is available. Download it from Settings › About.", release.version), cx);
+                            this.say(tf!("Wisp Paper {} 已发布，可在「设置 › 关于」查看。", "Wisp Paper {} is available. See Settings › About.", release.version), cx);
                         }
                         this.update_told = Some(release.version.clone());
-                        this.update = UpdateState::Available(release);
+                        this.update = UpdateState::Available(release, target);
                     }
                     Ok(_) => this.update = UpdateState::Current,
                     Err(err) if manual => this.update = UpdateState::Failed(err),
@@ -485,6 +497,61 @@ impl Workspace {
         .detach();
     }
 
+    /// Fetch the release's package in the background, check it and unpack it beside the app
+    /// (`updater::stage`); then ask whether to restart into it. Nothing of the running app changes before that answer.
+    pub fn download_update(&mut self, release: Release, target: PathBuf, manual: bool, cx: &mut Context<Self>) {
+        let Some(name) = crate::updater::asset(&release.version) else { return };
+        // WISP_PAPER_UPDATE_FILES: the folder the package and its SHA256SUMS come from, elsewhere (testing).
+        let base = std::env::var("WISP_PAPER_UPDATE_FILES").ok().filter(|u| !u.trim().is_empty()).unwrap_or_else(|| update::files_url(&release));
+        self.update = UpdateState::Downloading(release.clone());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let place = target.clone();
+            let staged = cx.background_executor().spawn(async move { wisp_net::download_release(&base, &name).and_then(|package| crate::updater::stage(&package, &place)) }).await;
+            this.update(cx, |this, cx| {
+                match staged {
+                    Ok(staged) => {
+                        this.update = UpdateState::Ready(release, staged, target);
+                        this.offer_update(cx);
+                    }
+                    // The row offers the download again; the automatic one is tried at the next check.
+                    Err(err) => {
+                        if manual { this.fail(tf!("新版本没有下载好：{err}", "The new version was not downloaded: {err}"), cx) }
+                        this.update = UpdateState::Available(release, Some(target));
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The downloaded version is ready: ask once whether to restart into it. A dialog already open is not pushed aside.
+    fn offer_update(&mut self, cx: &mut Context<Self>) {
+        let UpdateState::Ready(release, ..) = &self.update else { return };
+        let title = tf!("Wisp Paper {} 已下载好", "Wisp Paper {} is ready", release.version);
+        if self.modal.is_some() { return self.say(tf!("{title}，可在「设置 › 关于」重启并更新。", "{title}. Restart to update in Settings › About."), cx) }
+        let back = if self.settings.restore_session { t("重新打开后回到现在的界面。") } else { "" };
+        self.modal_error.clear();
+        self.modal = Some(Modal::Confirm { title, message: tf!("现在重启就换成新版本，文献库和设置不受影响；正在进行的对话、筛选或导入会中断。{back}也可以先取消，稍后在「设置 › 关于」重启并更新。", "Restart now to switch to the new version. Libraries and settings are kept; a conversation, screening or import under way is interrupted. {back}Or cancel and restart to update later in Settings › About."), action: t("重启并更新").into(), cmd: Cmd::InstallUpdate });
+    }
+
+    /// 重启并更新: the new app takes this one's place and is started as this one quits. Where the
+    /// window is has been kept all along (`keep_session`), so the new one opens there.
+    pub fn install_update(&mut self, cx: &mut Context<Self>) {
+        let UpdateState::Ready(release, staged, target) = self.update.clone() else { return };
+        self.modal = None;
+        self.write_snapshot("leave");
+        match crate::updater::install(&staged, &target) {
+            Ok(()) => cx.quit(),
+            Err(err) => {
+                self.update = UpdateState::Available(release, Some(target));
+                self.fail(tf!("新版本没有装上：{err}", "The new version was not installed: {err}"), cx);
+            }
+        }
+    }
+
     /// Where the check stands and the one next step.
     fn update_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let current = tf!("当前版本 {}", "Current version {}", env!("CARGO_PKG_VERSION"));
@@ -493,7 +560,10 @@ impl Workspace {
             UpdateState::Idle => (t("软件更新").into(), Some(current), check(self, cx)),
             UpdateState::Checking => (t("正在检查更新…").into(), Some(current), None),
             UpdateState::Current => (t("已是最新版本").into(), Some(current), check(self, cx)),
-            UpdateState::Available(release) => (tf!("新版本 {} 可用", "Version {} available", release.version), Some(tf!("{current}。在发布页下载新版本后覆盖安装，文献库和设置不受影响。", "{current}. Download and install the new version from the releases page. Libraries and settings are kept.")), Some(button("update-open", t("前往下载")).on_click(self.on(Cmd::OpenUrl(release.url.clone()), cx)))),
+            UpdateState::Available(release, None) => (tf!("新版本 {} 可用", "Version {} available", release.version), Some(tf!("{current}。在发布页下载新版本后覆盖安装，文献库和设置不受影响。", "{current}. Download and install the new version from the releases page. Libraries and settings are kept.")), Some(button("update-open", t("前往下载")).on_click(self.on(Cmd::OpenUrl(release.url.clone()), cx)))),
+            UpdateState::Available(release, Some(_)) => (tf!("新版本 {} 可用", "Version {} available", release.version), Some(tf!("{current}。下载好后重启即可更新，文献库和设置不受影响。", "{current}. Once downloaded, a restart updates the app. Libraries and settings are kept.")), Some(button("update-download", t("下载更新")).on_click(self.on(Cmd::DownloadUpdate, cx)))),
+            UpdateState::Downloading(release) => (tf!("正在下载新版本 {}…", "Downloading version {}…", release.version), Some(current), None),
+            UpdateState::Ready(release, ..) => (tf!("新版本 {} 已下载好", "Version {} is ready", release.version), Some(tf!("{current}。重启后换成新版本，文献库和设置不受影响。", "{current}. A restart switches to the new version. Libraries and settings are kept.")), Some(button("update-install", t("重启并更新")).on_click(self.on(Cmd::InstallUpdate, cx)))),
             UpdateState::Failed(err) => (t("检查更新失败").into(), Some(err.clone()), check(self, cx)),
         };
         row(title, detail.map(Into::into), div().children(control)).into_any_element()
@@ -942,16 +1012,22 @@ impl Workspace {
                     .child(note(t("所有文献库都在这个文件夹下，每个文献库是其中的一个子文件夹。改到别的目录后，首页显示那个目录里的文献库；原目录里的文献库不会被移动。"))),
             )
             .children(self.settings_view.as_ref().map(|view| group(Some(t("写作")), vec![row(t("署名"), Some(t("导出到 Word 的批注和修订用这个名字；留空用这台电脑的用户名。").into()), div().w(px(INPUT_W)).child(ui::field(&view.author, window, cx))).into_any_element()])))
+            .child(group(Some(t("启动")), vec![row(t("回到上次的界面"), Some(t("打开应用时回到上次离开的文献库、页面和文献；关闭后总是从首页开始。").into()), switch("restore-session", self.settings.restore_session).on_click(self.on(Cmd::ToggleRestoreSession, cx))).into_any_element()]))
             .when(crate::background::SUPPORTED, |d| {
                 let detail = if cfg!(target_os = "macos") { t("关闭窗口后应用留在程序坞中，检索同步、筛选和导入照常进行；点程序坞图标回到窗口，⌘Q 退出。") } else { t("关闭窗口后应用留在通知区域，检索同步、筛选和导入照常进行；点托盘图标回到窗口，在它的菜单里退出。") };
                 d.child(group(Some(t("后台")), vec![row(t("关闭窗口后在后台运行"), Some(detail.into()), switch("keep-running", self.settings.keep_running).on_click(self.on(Cmd::ToggleKeepRunning, cx))).into_any_element()]))
             })
             .child(group(
                 Some(t("更新")),
-                vec![
-                    row(t("自动检查更新"), Some(t("只读取一份版本信息，不发送任何数据；新版本由你决定何时下载安装。").into()), switch("auto-update", self.settings.auto_update).on_click(self.on(Cmd::ToggleAutoUpdate, cx))).into_any_element(),
-                    self.update_row(cx),
-                ],
+                [
+                    Some(row(t("自动检查更新"), Some(t("只读取一份版本信息，不发送任何数据；新版本由你决定何时安装。").into()), switch("auto-update", self.settings.auto_update).on_click(self.on(Cmd::ToggleAutoUpdate, cx))).into_any_element()),
+                    // Only where the app can replace itself (`updater`); elsewhere a release is announced and no more.
+                    crate::updater::SUPPORTED.then(|| row(t("自动下载更新"), Some(t("发现新版本后在后台下载并核对校验值，下载好了再问你是否重启更新；关闭后只提示有新版本。").into()), switch("auto-download", self.settings.auto_download).on_click(self.on(Cmd::ToggleAutoDownload, cx))).into_any_element()),
+                    Some(self.update_row(cx)),
+                ]
+                .into_iter()
+                .flatten()
+                .collect(),
             ))
             .into_any_element()
     }

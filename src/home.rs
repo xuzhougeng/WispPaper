@@ -5,7 +5,7 @@ use crate::i18n::t;
 use crate::app::{Cmd, Edge, MenuKind, Workspace};
 use crate::context::Nav;
 use crate::settings::{SettingsPage, UpdateState};
-use crate::shortcuts::{AskAssistant, DecideIncluded, DecideIrrelevant, DecidePending, DecideRelated, DecideUncertain, StarScreened, TakeSuggestion, TickSuggestion, TranslateScreened, UndoDecision, MarkAll, MarkDown, MarkUp, MoveDown, MoveFirst, MoveLast, MoveLeft, MovePageDown, MovePageUp, MoveRight, MoveUp, OpenSelected, TrashSelected, AddPaper, AskLibrary, FocusSearch, ImportPdf, NewLibrary, ShowHome, ShowSettings, CopyPicked, FindCandidates, ToggleDetail, ToggleReading, ToggleSidebar, ZoomFit, ZoomIn, ZoomOut};
+use crate::shortcuts::{AskAssistant, DecideIncluded, DecideIrrelevant, DecidePending, DecideRelated, DecideUncertain, StarScreened, TakeSuggestion, TickSuggestion, TranslateScreened, UndoDecision, MarkAll, MarkDown, MarkUp, MoveDown, MoveFirst, MoveLast, MoveLeft, MovePageDown, MovePageUp, MoveRight, MoveUp, OpenSelected, TrashSelected, AddPaper, AskLibrary, FocusSearch, ImportPdf, NewLibrary, ShowHome, ShowPalette, ShowSettings, CopyPicked, FindCandidates, ToggleDetail, ToggleReading, ToggleSidebar, ZoomFit, ZoomIn, ZoomOut};
 use crate::theme::{self, Theme, text_px};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
@@ -37,6 +37,7 @@ impl Render for Workspace {
             // Only while 设置 › 快捷键 waits for a new key.
             .on_key_down(cx.listener(Self::record_key))
             .on_action(cx.listener(Self::dismiss))
+            .on_action(cx.listener(|this, _: &ShowPalette, window, cx| this.shortcut("palette", window, cx)))
             .on_action(cx.listener(|this, _: &ShowSettings, window, cx| this.shortcut("settings", window, cx)))
             .on_action(cx.listener(|this, _: &ShowHome, window, cx| this.shortcut("home", window, cx)))
             .on_action(cx.listener(|this, _: &NewLibrary, window, cx| this.shortcut("new-library", window, cx)))
@@ -81,6 +82,7 @@ impl Render for Workspace {
 
             .child(page)
             .children(self.render_modal(window, cx))
+            .children(self.render_palette(cx))
             .children(self.render_menu(cx))
             .children(self.render_toast())
             // While an edge is held (the sidebar's, the detail panel's, the one between a conversation and its PDF), a layer over everything hears the pointer
@@ -265,7 +267,7 @@ impl Workspace {
             .child(t("新建文献库"));
         let empty = self.libraries.is_empty();
         let new_version = match &self.update {
-            UpdateState::Available(release) => Some(release.version.clone()),
+            UpdateState::Available(release, _) | UpdateState::Downloading(release) | UpdateState::Ready(release, ..) => Some(release.version.clone()),
             _ => None,
         };
         let page = div()

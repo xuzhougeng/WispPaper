@@ -744,7 +744,15 @@
   "所有文献库都在这个文件夹下，每个文献库是其中的一个子文件夹。改到别的目录后，首页显示那个目录里的文献库；原目录里的文献库不会被移动。": "Each library is a subfolder here. Changing this folder shows libraries in the new location; existing libraries are not moved.",
   "更新": "Updates",
   "自动检查更新": "Automatically check for updates",
-  "只读取一份版本信息，不发送任何数据；新版本由你决定何时下载安装。": "Only release information is read; no data is sent. You choose when to download and install updates.",
+  "只读取一份版本信息，不发送任何数据；新版本由你决定何时安装。": "Only release information is read; no data is sent. You choose when to install updates.",
+  "自动下载更新": "Download updates automatically",
+  "发现新版本后在后台下载并核对校验值，下载好了再问你是否重启更新；关闭后只提示有新版本。": "A new version is downloaded in the background and checked against its checksum, then you are asked whether to restart and update. When off, a new version is only announced.",
+  "下载更新": "Download update",
+  "重启并更新": "Restart and update",
+  "重新打开后回到现在的界面。": "The app reopens where you are now. ",
+  "启动": "Startup",
+  "回到上次的界面": "Reopen where you left off",
+  "打开应用时回到上次离开的文献库、页面和文献；关闭后总是从首页开始。": "Opens the library, page and paper you last had open. When off, the app always starts at home.",
   "跟随系统时，随系统的浅色 / 深色模式切换。": "Follow the system's light or dark appearance.",
   "跟随系统": "System",
   "浅色": "Light",
@@ -1394,5 +1402,9 @@
   "这一节的各个版本：助手每次动笔前、你停笔或离开时都会留一版。翻到早先的一版可以看，也可以恢复": "The versions of this section: one is kept before each change by the assistant and when you pause or leave. Step back to look at an earlier one, or restore it",
   "回到现在": "Back to now",
   "让助手来写": "Let the assistant write",
-  "交代要写什么、改什么，助手会查文献库、读全文，直接写进右边的稿件，并说明依据。每次动笔前，那一节的文字都会留一个版本，随时可以换回去；稿件你也可以随时亲手改。": "Say what to write or change. The assistant searches the library, reads full texts, writes straight into the manuscript at the right and says what it relied on. A version of the section is kept before each change, so you can always go back; you can also edit the manuscript by hand at any time."
+  "交代要写什么、改什么，助手会查文献库、读全文，直接写进右边的稿件，并说明依据。每次动笔前，那一节的文字都会留一个版本，随时可以换回去；稿件你也可以随时亲手改。": "Say what to write or change. The assistant searches the library, reads full texts, writes straight into the manuscript at the right and says what it relied on. A version of the section is kept before each change, so you can always go back; you can also edit the manuscript by hand at any time.",
+  "命令面板": "Command palette",
+  "图片库": "Figures",
+  "输入命令，或搜索文献的题目、作者、标签…": "Type a command, or search papers by title, author, tag…",
+  "没有匹配的命令或文献": "No matching commands or papers"
 }

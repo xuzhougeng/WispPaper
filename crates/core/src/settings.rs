@@ -89,6 +89,10 @@ pub struct Settings {
     pub skills_off: Vec<String>,
     /// Look for a newer release after launch and twice a day.
     pub auto_update: bool,
+    /// Fetch a newer release in the background once it is found, and ask to restart when it is ready.
+    pub auto_download: bool,
+    /// Start where the window was left: the library, its page and the paper on show (`Session`).
+    pub restore_session: bool,
     /// "light" or "dark"; empty follows the system.
     pub appearance: String,
     /// Stronger text and separators in both light and dark themes.
@@ -135,7 +139,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         let providers = provider::DEFAULT_PRESETS.iter().filter_map(|key| provider::preset(key)).map(Provider::from_preset).collect();
-        let mut settings = Settings { data_dir: String::new(), providers, legacy_profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translate_workers: 4, translation_prompt: String::new(), commands: vec![], connectors: vec![], skills_off: vec![], auto_update: true, appearance: String::new(), high_contrast: false, language: Language::default(), density: String::new(), font_family: String::new(), cjk_font_family: String::new(), font_size: DEFAULT_FONT_SIZE, reading_appearance: ReadingAppearance::default(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., floating: Default::default(), keep_running: true, agent_writing: false, agent_manuscript_width: 0., author: String::new() };
+        let mut settings = Settings { data_dir: String::new(), providers, legacy_profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translate_workers: 4, translation_prompt: String::new(), commands: vec![], connectors: vec![], skills_off: vec![], auto_update: true, auto_download: true, restore_session: true, appearance: String::new(), high_contrast: false, language: Language::default(), density: String::new(), font_family: String::new(), cjk_font_family: String::new(), font_size: DEFAULT_FONT_SIZE, reading_appearance: ReadingAppearance::default(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., floating: Default::default(), keep_running: true, agent_writing: false, agent_manuscript_width: 0., author: String::new() };
         settings.tidy();
         settings
     }
@@ -249,6 +253,41 @@ pub fn settings_file() -> PathBuf {
     match home_override() {
         Some(home) => home.join("settings.json"),
         None => dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("WispPaper").join("settings.json"),
+    }
+}
+
+/// Where the window was when it was last seen, kept beside the settings as
+/// `session.json` and written whenever it changes, so that the next start
+/// (after quitting, an update or a crash) can be the same place. Empty words
+/// are "none": no library is the home page.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Session {
+    /// The open library's id.
+    pub library: String,
+    /// Its page, by the app's word for it (`Page::key`).
+    pub page: String,
+    /// The paper on show, and which tab of it.
+    pub paper: String,
+    pub tab: String,
+    /// The paper takes most of the window, or all of it (reading mode).
+    pub wide: bool,
+    pub reading: bool,
+}
+
+pub fn session_file() -> PathBuf {
+    settings_file().with_file_name("session.json")
+}
+
+impl Session {
+    /// What was kept; nothing, or something unreadable, is the home page.
+    pub fn load(path: &Path) -> Session {
+        std::fs::read_to_string(path).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+    }
+
+    pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        if let Some(dir) = path.parent() { std::fs::create_dir_all(dir)? }
+        std::fs::write(path, serde_json::to_string(self)?)
     }
 }
 
@@ -615,10 +654,15 @@ mod tests {
         assert_eq!(Settings::load(&path).unwrap(), s);
         std::fs::write(&path, "{broken").unwrap();
         assert!(Settings::load(&path).is_err());
+        // Where the window was is kept beside it; a file that cannot be read is the home page.
+        let session = Session { library: "L1".into(), page: "write".into(), paper: "P1".into(), tab: "pdf".into(), wide: true, reading: false };
+        session.save(&dir.join("session.json")).unwrap();
+        assert_eq!(Session::load(&dir.join("session.json")), session);
+        assert_eq!((Session::load(&path), Session::load(&dir.join("none.json"))), (Session::default(), Session::default()));
         // A file from before a setting existed takes that setting's default.
         std::fs::write(&path, r#"{"dataDir":"/x","shortcuts":{"search":""}}"#).unwrap();
         let old = Settings::load(&path).unwrap();
-        assert!(old.auto_update && old.appearance.is_empty() && old.keep_running);
+        assert!(old.auto_update && old.auto_download && old.restore_session && old.appearance.is_empty() && old.keep_running);
         assert_eq!((old.data_dir.as_str(), old.shortcuts.get("search").map(String::as_str)), ("/x", Some("")));
         assert_eq!(s.data_root(Path::new("/d")), PathBuf::from("/d"));
         assert!(old.proxy.is_empty() && old.commands.is_empty());

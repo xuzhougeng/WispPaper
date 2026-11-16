@@ -21,7 +21,7 @@ use wisp_core::lookup::{self, Identifier};
 use wisp_core::model::*;
 pub(crate) use wisp_core::settings::default_root;
 use wisp_core::screening::{Before, Confirming, Round};
-use wisp_core::settings::{Language, Settings, Task, settings_file};
+use wisp_core::settings::{Language, Session, Settings, Task, session_file, settings_file};
 use wisp_core::store::{Conversation, ConversationInfo, ImportBatch, SavedSearch, Store, StructureInfo, Suggestion, TrashEntry};
 use wisp_core::manuscript::{Manuscript, Snapshot};
 use wisp_core::{complete, export, fulltext, import, pdftext, structure, time, tools, zotero};
@@ -46,6 +46,28 @@ pub enum Page {
     Figures,
     /// 提取: what the assistant proposes for the custom fields, looked over and written together (`src/extract.rs`).
     Extract,
+}
+
+impl Page {
+    /// The word a page goes by where it is written down: `session.json`, a `page:` step of a scripted start.
+    pub fn key(self) -> &'static str {
+        match self {
+            Page::Papers => "papers",
+            Page::Ask => "ask",
+            Page::Trash => "trash",
+            Page::Screen => "screen",
+            Page::Guide => "guide",
+            Page::Sources => "sources",
+            Page::Write => "write",
+            Page::Figures => "figures",
+            Page::Extract => "extract",
+        }
+    }
+
+    /// The page of that word; the papers for any other.
+    pub fn from_key(key: &str) -> Page {
+        [Page::Ask, Page::Trash, Page::Screen, Page::Guide, Page::Sources, Page::Write, Page::Figures, Page::Extract].into_iter().find(|page| page.key() == key).unwrap_or(Page::Papers)
+    }
 }
 
 /// An edge between two columns of a library that the pointer can hold and move.
@@ -99,6 +121,21 @@ pub enum Tab {
     Ask,
 }
 
+impl Tab {
+    /// As `Page::key`.
+    pub fn key(self) -> &'static str {
+        match self {
+            Tab::Info => "info",
+            Tab::Pdf => "pdf",
+            Tab::Ask => "ask",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Tab {
+        [Tab::Pdf, Tab::Ask].into_iter().find(|tab| tab.key() == key).unwrap_or(Tab::Info)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum FilterKey {
     Tag,
@@ -130,6 +167,8 @@ pub enum MenuKind {
     InsertInto(Option<String>),
     /// Which model a task uses (设置 › AI).
     TaskModel(Task),
+    /// 提取: the model to read what the last run left with.
+    ExtractRetry,
     /// The services a provider can be added from (设置 › AI › 模型).
     AddProvider,
     /// How hard the n-th model of the provider on show thinks.
@@ -224,8 +263,12 @@ pub enum Cmd {
     ResetDataDir,
     RevealDataDir,
     ToggleAutoUpdate,
+    ToggleAutoDownload,
+    ToggleRestoreSession,
     ToggleKeepRunning,
     CheckUpdate,
+    DownloadUpdate,
+    InstallUpdate,
     SetAppearance(String),
     SetLanguage(Language),
     SetDensity(String),
@@ -1303,10 +1346,14 @@ pub struct Workspace {
     pub update: UpdateState,
     /// The version the automatic check last announced, so it says it once.
     pub update_told: Option<String>,
+    /// Where the window is, as last written to `session.json` (`keep_session`).
+    session: Session,
     pub modal: Option<Modal>,
     pub modal_error: String,
     pub modal_subscriptions: Vec<Subscription>,
     pub menu: Option<Menu>,
+    /// The command palette, while it is open (`palette.rs`).
+    pub palette: Option<crate::palette::Palette>,
     pub toast: Option<Toast>,
     pub home_scroll: ScrollHandle,
     /// The edge being dragged: the sidebar's, the detail panel's, or the one between a paper's conversation and its PDF.
@@ -1729,7 +1776,7 @@ impl Workspace {
         theme::set_accent("blue");
         shortcuts::rebuild(&settings.shortcuts, cx);
         let libraries = libraries::list(&root);
-        let mut this = Workspace { focus, settings, settings_path, root, libraries, lib: None, settings_view: None, connections: vec![], skills: vec![], update: UpdateState::Idle, update_told: None, modal: None, modal_error: String::new(), modal_subscriptions: vec![], menu: None, toast, home_scroll: ScrollHandle::new(), resizing: None, picked: None, pinning: false, filters_over: [false; 2], filters_drawn: false };
+        let mut this = Workspace { focus, settings, settings_path, root, libraries, lib: None, settings_view: None, connections: vec![], skills: vec![], update: UpdateState::Idle, update_told: None, session: Session::default(), modal: None, modal_error: String::new(), modal_subscriptions: vec![], menu: None, palette: None, toast, home_scroll: ScrollHandle::new(), resizing: None, picked: None, pinning: false, filters_over: [false; 2], filters_drawn: false };
         this.apply_appearance(window);
         this.apply_typography(window, cx);
         cx.observe_window_appearance(window, |this, window, _| this.apply_appearance(window)).detach();
@@ -1738,6 +1785,39 @@ impl Workspace {
         this.load_skills();
         this.connect_all(cx);
         this
+    }
+
+    /// Once the window is there: go back to where it was last (回到上次的界面), and from now on keep where it is.
+    pub fn start_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A scripted debug start says itself where it begins (its `restore` step is this).
+        if self.settings.restore_session && std::env::var_os("WISP_PAPER_DEV").is_none() { self.restore_session(window, cx) }
+        cx.observe_self(|this, _| this.keep_session()).detach();
+    }
+
+    /// Write down where the window is whenever that changed, so the next start (after quitting,
+    /// an update or a crash) can be the same place: the library, its page, the paper on show.
+    // ponytail: the window's size, the scroll positions and the PDF's page are not kept; fields of `Session` when they are missed.
+    fn keep_session(&mut self) {
+        if !self.settings.restore_session { return }
+        let now = self.lib.as_ref().map(|lib| Session { library: lib.info.id.clone(), page: lib.page.key().into(), paper: lib.selected.clone().unwrap_or_default(), tab: lib.tab.key().into(), wide: lib.wide, reading: lib.reading }).unwrap_or_default();
+        if now != self.session {
+            let _ = now.save(&session_file());
+            self.session = now;
+        }
+    }
+
+    /// Go back to where `session.json` says the window was. A library or a paper that is gone since is simply not opened.
+    fn restore_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let session = Session::load(&session_file());
+        if session.library.is_empty() { return }
+        self.open_library(&session.library, window, cx);
+        if self.lib.as_ref().is_none_or(|lib| lib.info.id != session.library) { return }
+        self.run(Cmd::SetPage(Page::from_key(&session.page)), window, cx);
+        if self.lib.as_ref().is_some_and(|lib| lib.paper(&session.paper).is_some()) {
+            self.select(Some(session.paper.clone()), window, cx);
+            self.run(Cmd::SetTab(Tab::from_key(&session.tab)), window, cx);
+            if let Some(lib) = self.lib.as_mut() { (lib.wide, lib.reading) = (session.wide, session.reading) }
+        }
     }
 
     pub fn on(&self, cmd: Cmd, cx: &mut Context<Self>) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
@@ -1796,6 +1876,21 @@ impl Workspace {
     }
 
     // ---- menus
+
+    /// The rows of a menu of models: each provider's models that `fits`, in its group; one without a key says so beside it.
+    fn model_items(&self, fits: impl Fn(&wisp_core::provider::Model) -> bool, chosen: &str, cmd: impl Fn(String) -> Cmd, items: &mut Vec<MenuItem>, breaks: &mut Vec<usize>) {
+        let fits = |m: &wisp_core::provider::Model| !m.model.trim().is_empty() && fits(m);
+        let mut providers = self.settings.providers.iter().filter(|p| p.models.iter().any(fits)).peekable();
+        while let Some(provider) = providers.next() {
+            let note: SharedString = if provider.key().is_empty() { tf!("{} · 缺 API Key", "{} · no API key", provider.title()).into() } else { provider.title().into() };
+            for model in provider.models.iter().filter(|m| fits(m)) {
+                // A model that judges is no model like the others in the list: it says so.
+                let note = if model.judges() { tf!("{note} · 判断模型", "{note} · judging model").into() } else { note.clone() };
+                items.push(MenuItem { label: model.model.trim().to_string().into(), checked: chosen == model.id, note: Some(note), cmd: cmd(model.id.clone()) });
+            }
+            if providers.peek().is_some() { breaks.push(items.len()) }
+        }
+    }
 
     pub(crate) fn open_menu(&mut self, kind: MenuKind, at: Point<Pixels>, cx: &mut Context<Self>) {
         let item = |label: &str, cmd: Cmd| MenuItem { label: label.to_string().into(), checked: false, note: None, cmd };
@@ -1897,18 +1992,12 @@ impl Workspace {
                     items.push(MenuItem { label: t("与助手相同").into(), checked: chosen.is_empty(), note: None, cmd: Cmd::SetTaskModel(task, String::new()) });
                     breaks.push(items.len());
                 }
-                // Each provider's models of the task's kind, in its group; one without a key says so beside it.
-                let fits = |m: &wisp_core::provider::Model| !m.model.trim().is_empty() && task.takes(m);
-                let mut providers = self.settings.providers.iter().filter(|p| p.models.iter().any(fits)).peekable();
-                while let Some(provider) = providers.next() {
-                    let note: SharedString = if provider.key().is_empty() { tf!("{} · 缺 API Key", "{} · no API key", provider.title()).into() } else { provider.title().into() };
-                    for model in provider.models.iter().filter(|m| fits(m)) {
-                        // A model that judges is no model like the others in the list: it says so.
-                        let note = if model.judges() { tf!("{note} · 判断模型", "{note} · judging model").into() } else { note.clone() };
-                        items.push(MenuItem { label: model.model.trim().to_string().into(), checked: chosen == model.id, note: Some(note), cmd: Cmd::SetTaskModel(task, model.id.clone()) });
-                    }
-                    if providers.peek().is_some() { breaks.push(items.len()) }
-                }
+                self.model_items(|m| task.takes(m), &chosen, |id| Cmd::SetTaskModel(task, id), &mut items, &mut breaks);
+            }
+            MenuKind::ExtractRetry => {
+                let Some(lib) = self.lib.as_ref() else { return };
+                // 提取 writes values out: a model that only judges cannot.
+                self.model_items(|m| m.speaks(), &self.extract_profile(&lib.extract.with).id, |id| Cmd::Extract(crate::extract::Do::Retry(id)), &mut items, &mut breaks);
             }
             MenuKind::Screening(id) => {
                 let Some(current) = self.lib.as_ref().and_then(|l| l.paper(&id)).map(|p| p.screening.clone()) else { return };
@@ -2008,11 +2097,28 @@ impl Workspace {
                 self.save_settings(cx);
                 if self.settings.auto_update { self.check_update(false, cx) }
             }
+            Cmd::ToggleAutoDownload => {
+                self.settings.auto_download = !self.settings.auto_download;
+                self.save_settings(cx);
+                // A release already found is fetched now rather than at the next check.
+                if self.settings.auto_download && let UpdateState::Available(release, Some(target)) = self.update.clone() { self.download_update(release, target, false, cx) }
+            }
+            Cmd::ToggleRestoreSession => {
+                self.settings.restore_session = !self.settings.restore_session;
+                self.save_settings(cx);
+                // Off: nothing is kept. On: `keep_session` writes where the window is now.
+                let _ = std::fs::remove_file(session_file());
+                self.session = Session::default();
+            }
             Cmd::ToggleKeepRunning => {
                 self.settings.keep_running = !self.settings.keep_running;
                 self.save_settings(cx);
             }
             Cmd::CheckUpdate => self.check_update(true, cx),
+            Cmd::DownloadUpdate => {
+                if let UpdateState::Available(release, Some(target)) = self.update.clone() { self.download_update(release, target, true, cx) }
+            }
+            Cmd::InstallUpdate => self.install_update(cx),
             Cmd::SetAppearance(value) => {
                 self.settings.appearance = value;
                 self.save_settings(cx);
@@ -2931,6 +3037,8 @@ impl Workspace {
 
     pub fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
         if self.menu.take().is_some() {
+        } else if self.palette.is_some() {
+            self.close_palette(window, cx);
         } else if self.modal.is_some() {
             self.run(Cmd::CloseModal, window, cx);
         } else if self.dismiss_font_picker(window, cx) {
@@ -2964,6 +3072,9 @@ impl Workspace {
     pub fn shortcut(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         // A dialog keeps the keyboard to itself.
         if self.modal.is_some() { return }
+        if id == "palette" { return self.toggle_palette(window, cx) }
+        // So does the palette: its own key puts it away, the others wait.
+        if self.palette.is_some() { return }
         let in_settings = self.settings_view.is_some();
         let cmd = match id {
             "settings" if !in_settings => Cmd::OpenSettings(SettingsPage::General),
@@ -5208,8 +5319,13 @@ impl Workspace {
                 },
                 "open" => self.libraries.get(arg.parse::<usize>().unwrap_or(0)).map(|l| Cmd::OpenLibrary(l.id.clone())),
                 "select" => self.lib.as_ref().and_then(|l| l.shown.get(arg.parse::<usize>().unwrap_or(0)).map(|&i| Cmd::Select(l.papers[i].id.clone()))),
-                "tab" => Some(Cmd::SetTab(match arg { "pdf" => Tab::Pdf, "ask" => Tab::Ask, _ => Tab::Info })),
-                "page" => Some(Cmd::SetPage(match arg { "ask" => Page::Ask, "trash" => Page::Trash, "sources" => Page::Sources, "screen" => Page::Screen, "write" => Page::Write, "figures" => Page::Figures, "extract" => Page::Extract, _ => Page::Papers })),
+                "tab" => Some(Cmd::SetTab(Tab::from_key(arg))),
+                "page" => Some(Cmd::SetPage(Page::from_key(arg))),
+                // `restore` goes back to where `session.json` says the window was, as a start that is not scripted does.
+                "restore" => {
+                    self.restore_session(window, cx);
+                    return;
+                }
                 // `write:methods` shows another part of the manuscript; `draft:<text>` leaves text in it, as if typed.
                 "write" => Some(Cmd::WriteSection(arg.to_string())),
                 // `manuscript:new` makes another manuscript, `manuscript:<title>` gives the current one its title;
@@ -5661,9 +5777,16 @@ impl Workspace {
                 "translate" => Some(Cmd::ToggleTranslation),
                 // `profile:1` shows the second provider on 设置 › AI › 模型.
                 "profile" => Some(Cmd::SelectProvider(arg.parse().unwrap_or(0))),
+                // `palette` opens the command palette; `palette:<text>` with that typed into it.
+                "palette" => {
+                    if self.palette.is_none() { self.toggle_palette(window, cx) }
+                    if let Some(input) = self.palette.as_ref().map(|palette| palette.input.clone()) { input.update(cx, |input, cx| input.set_text(arg, cx)) }
+                    self.palette_event(InputEvent::Changed, window, cx);
+                    return;
+                }
                 "menu" => {
-                    let kind = match arg { "sort" => MenuKind::Sort, "year" => MenuKind::Filter(FilterKey::Year), "zoom" => MenuKind::PdfZoom, "fulltext" => MenuKind::Filter(FilterKey::Fulltext), "manuscripts" => MenuKind::Manuscripts, "export" => MenuKind::ManuscriptExport, _ => MenuKind::Add };
-                    self.open_menu(kind, point(px(if matches!(arg, "zoom" | "manuscripts" | "export") { 900. } else { 20. }), px(120.)), cx);
+                    let kind = match arg { "sort" => MenuKind::Sort, "year" => MenuKind::Filter(FilterKey::Year), "zoom" => MenuKind::PdfZoom, "fulltext" => MenuKind::Filter(FilterKey::Fulltext), "manuscripts" => MenuKind::Manuscripts, "export" => MenuKind::ManuscriptExport, "retry" => MenuKind::ExtractRetry, _ => MenuKind::Add };
+                    self.open_menu(kind, point(px(if matches!(arg, "zoom" | "manuscripts" | "export" | "retry") { 900. } else { 20. }), px(120.)), cx);
                     return;
                 }
                 "search" => {

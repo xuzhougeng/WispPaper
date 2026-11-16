@@ -26,6 +26,7 @@ mod library;
 mod manuscripts;
 mod markdown;
 mod notes;
+mod palette;
 mod pdf;
 mod picture;
 mod revise;
@@ -39,6 +40,7 @@ mod shortcuts;
 mod theme;
 mod translate;
 mod ui;
+mod updater;
 mod write;
 mod write_find;
 mod write_agent;
@@ -70,10 +72,11 @@ fn main() {
             |window, cx| cx.new(|cx| app::Workspace::new(window, cx)),
         )
         .expect("open window")
-        .update(cx, |_workspace, window, cx| {
+        .update(cx, |workspace, window, cx| {
             background::watch(cx.entity(), window, cx);
+            workspace.start_session(window, cx);
             #[cfg(debug_assertions)]
-            _workspace.dev_start(window, cx);
+            workspace.dev_start(window, cx);
         })
         .ok();
         cx.on_window_closed(|cx| {

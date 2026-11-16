@@ -11,7 +11,7 @@
 //! the field for 采纳, and stays there afterwards as the sentence the value
 //! rests on.
 
-use crate::app::{Cmd, Library, Modal, Page, Tab, Workspace};
+use crate::app::{Cmd, Library, MenuKind, Modal, Page, Tab, Workspace};
 use crate::context::Nav;
 use crate::i18n::t;
 use crate::theme::{Theme, text_px};
@@ -41,6 +41,10 @@ pub enum Do {
     Again,
     AddSummary,
     Stop,
+    /// Read what the last run left, with this model.
+    Retry(String),
+    /// Fold the run's box up to its one line, or open it again.
+    Fold,
     /// On the page: tick a row, pick an option for it, show one field's rows, tick them all or none, move to a row.
     Tick(Key),
     Choose(Key, String),
@@ -97,6 +101,12 @@ pub struct Extract {
     streak: usize,
     /// The model the run was started with.
     pub model: String,
+    /// The id of the model a retry picked for this run; none is the one of 设置 › AI.
+    pub(crate) with: String,
+    /// What this run did not get an answer for, in reading order: asked without a usable answer, on its way, or never reached. A retry reads these.
+    pub left: Vec<(String, Vec<String>)>,
+    /// The run's box shows its one line only.
+    pub folded: bool,
     pub error: String,
     /// Bumped when a run starts or stops, so answers to an earlier one are dropped.
     run: u64,
@@ -112,12 +122,18 @@ pub struct Extract {
 
 impl Extract {
     pub fn new() -> Extract {
-        Extract { proposals: Proposals::default(), todo: vec![], reading: vec![], total: 0, done: 0, failed: 0, unread: 0, found: 0, streak: 0, model: String::new(), error: String::new(), run: 0, asked: vec![], review: Reviewing::default(), last: None, scroll: UniformListScrollHandle::new(), asking: HashSet::new(), ask_errors: HashMap::new() }
+        Extract { proposals: Proposals::default(), todo: vec![], reading: vec![], total: 0, done: 0, failed: 0, unread: 0, found: 0, streak: 0, model: String::new(), with: String::new(), left: vec![], folded: false, error: String::new(), run: 0, asked: vec![], review: Reviewing::default(), last: None, scroll: UniformListScrollHandle::new(), asking: HashSet::new(), ask_errors: HashMap::new() }
     }
 
     /// Whether the assistant is working through the papers right now.
     pub fn running(&self) -> bool {
         !self.reading.is_empty() || !self.todo.is_empty()
+    }
+
+    /// Start no more papers: the ones not reached are left for a retry.
+    fn halt(&mut self) {
+        let rest = std::mem::take(&mut self.todo);
+        self.left.extend(rest.into_iter().rev());
     }
 }
 
@@ -229,9 +245,16 @@ impl Workspace {
                 if let Some(lib) = self.lib.as_mut() {
                     // Answers still on their way belong to a run that is over.
                     lib.extract.run += 1;
-                    lib.extract.todo.clear();
+                    lib.extract.halt();
                     lib.extract.reading.clear();
                 }
+            }
+            Do::Retry(model) => {
+                let Some(left) = self.lib.as_ref().map(|lib| lib.extract.left.clone()) else { return };
+                if let Err(err) = self.extract_begin(left, model, cx) { self.fail(err, cx) }
+            }
+            Do::Fold => {
+                if let Some(lib) = self.lib.as_mut() { lib.extract.folded = !lib.extract.folded }
             }
             Do::Tick(key) => {
                 let Some(lib) = self.lib.as_mut() else { return };
@@ -329,30 +352,46 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Start asking the assistant about `fields` for `papers`, several
-    /// papers at a time (设置 › AI says how many; the model is the one that
-    /// screens). What it says is kept as proposals; no field is written.
+    /// Start asking the assistant about `fields` for `papers`. What it says
+    /// is kept as proposals; no field is written.
     fn extract_start(&mut self, papers: Vec<String>, fields: Vec<String>, again: bool, cx: &mut Context<Self>) -> Result<(), String> {
-        let profile = self.settings.speaking_profile_for(Task::Screen);
-        let workers = self.settings.screen_workers;
-        let Some(lib) = self.lib.as_mut() else { return Ok(()) };
-        if lib.extract.running() { return Err(t("助手还在读上一轮，等它结束或先停止。").into()) }
-        // The key and address are checked once here, not once per paper.
-        ai::plain_request(&profile, "s", "p")?;
-        let mut todo = lib.extract_plan(&papers, &fields, again);
-        if todo.is_empty() {
+        let Some(lib) = self.lib.as_ref() else { return Ok(()) };
+        let todo = lib.extract_plan(&papers, &fields, again);
+        if todo.is_empty() && !lib.extract.running() {
             let nothing = !papers.iter().filter_map(|id| lib.paper(id)).any(readable);
             return Err(if nothing { t("这些文献没有摘要，也没有保存全文，助手没有可读的内容。") } else { t("没有要读的：这些文献的这些词条都已经填好，或已经问过。勾选「重新提取」可以再问一遍。") }.into());
         }
+        self.extract_begin(todo, String::new(), cx)?;
+        if let Some(lib) = self.lib.as_mut() { lib.extract.asked = fields }
+        Ok(())
+    }
+
+    /// The model a run reads with: the one a retry picked (`with` its id), else the one that screens.
+    pub(crate) fn extract_profile(&self, with: &str) -> ai::Profile {
+        self.settings.profile(with).filter(|profile| !profile.judges()).unwrap_or_else(|| self.settings.speaking_profile_for(Task::Screen))
+    }
+
+    /// Read `todo` (in reading order), several papers at a time (设置 › AI
+    /// says how many). The model is `with`, the one a retry picked, else
+    /// the one that screens.
+    fn extract_begin(&mut self, mut todo: Vec<(String, Vec<String>)>, with: String, cx: &mut Context<Self>) -> Result<(), String> {
+        let profile = self.extract_profile(&with);
+        let workers = self.settings.screen_workers;
+        let Some(lib) = self.lib.as_mut() else { return Ok(()) };
+        if lib.extract.running() { return Err(t("助手还在读上一轮，等它结束或先停止。").into()) }
+        if todo.is_empty() { return Ok(()) }
+        // The key and address are checked once here, not once per paper.
+        ai::plain_request(&profile, "s", "p")?;
         todo.reverse();
         let state = &mut lib.extract;
         state.run += 1;
         (state.total, state.done, state.failed, state.unread, state.found, state.streak, state.todo) = (todo.len(), 0, 0, 0, 0, 0, todo);
         state.reading.clear();
+        state.left.clear();
         state.error.clear();
         state.last = None;
-        state.asked = fields;
         state.model = profile.labelled();
+        state.with = with;
         let run = state.run;
         for _ in 0..workers {
             self.extract_next(run, cx);
@@ -364,8 +403,9 @@ impl Workspace {
     /// the answer is in. A paper without a usable answer is counted and
     /// left for another run; several of them in a row end this one.
     fn extract_next(&mut self, run: u64, cx: &mut Context<Self>) {
-        let profile = self.settings.speaking_profile_for(Task::Screen);
-        let Some(lib) = self.lib.as_mut().filter(|l| l.extract.run == run) else { return };
+        let Some(lib) = self.lib.as_ref().filter(|l| l.extract.run == run) else { return };
+        let profile = self.extract_profile(&lib.extract.with);
+        let Some(lib) = self.lib.as_mut() else { return };
         let Some((id, wanted)) = lib.extract.todo.pop() else { return };
         // A paper that left the library meanwhile is done with, so the run still ends at its total.
         let Some(paper) = lib.paper(&id).cloned() else {
@@ -382,11 +422,13 @@ impl Workspace {
             if !fields.is_empty() { lib.extract.unread += 1 }
             return self.extract_next(run, cx);
         }
+        // Left for a retry until its answer is kept.
+        lib.extract.left.push((id.clone(), wanted));
         let request = match ai::plain_request(&profile, &system, &prompt) {
             Ok(request) => request,
             Err(err) => {
                 lib.extract.error = err;
-                lib.extract.todo.clear();
+                lib.extract.halt();
                 return;
             }
         };
@@ -415,6 +457,7 @@ impl Workspace {
                     Ok(found) => {
                         lib.extract.streak = 0;
                         lib.extract.found += found;
+                        lib.extract.left.retain(|(id, _)| *id != paper.id);
                         this.extract_next(run, cx);
                     }
                     Err(err) => {
@@ -422,7 +465,7 @@ impl Workspace {
                         lib.extract.streak += 1;
                         if lib.extract.streak >= GIVE_UP {
                             lib.extract.error = tf!("连续 {GIVE_UP} 篇没有得到可用的回答，已停止。最后一篇「{}」：{err}", "Stopped after {GIVE_UP} consecutive unusable responses. Last paper “{}”: {err}", paper.title);
-                            lib.extract.todo.clear();
+                            lib.extract.halt();
                         } else {
                             lib.extract.error = tf!("「{}」没有读成，留待下一轮：{err}", "Could not read “{}”; left for the next run: {err}", paper.title);
                             this.extract_next(run, cx);
@@ -573,6 +616,9 @@ impl Workspace {
             "again" => Do::Again,
             "summary" => Do::AddSummary,
             "stop" => Do::Stop,
+            // The n-th model that answers in words, as the menu lists them.
+            "retry" => Do::Retry(self.settings.profiles().get(n)?.id.clone()),
+            "fold" => Do::Fold,
             "tick" => Do::Tick(row()?),
             "cursor" => Do::Cursor(row()?),
             "choose" => Do::Choose(row()?, second.to_string()),
@@ -918,16 +964,20 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap(px(8.))
+                    // Folded, the papers being read are put away and the one line stays.
+                    .when(running, |d| d.child(div().id("extract-fold").flex().flex_none().items_center().cursor_pointer().child(ui::icon(if state.folded { "chevron-right" } else { "chevron-down" }, 14., Theme::text_secondary())).on_click(self.on(Cmd::Extract(Do::Fold), cx))))
                     .child(div().flex_none().font_weight(FontWeight::MEDIUM).child(heading))
                     .child(div().flex_none().text_size(text_px(12.)).text_color(Theme::text_secondary()).child(format!("{} / {}", state.done, state.total)))
                     .when(state.found > 0, |d| d.child(div().flex_none().text_size(text_px(12.)).text_color(Theme::text_secondary()).child(tf!("提出 {} 个取值", "{} values proposed", state.found))))
                     .when(state.unread > 0, |d| d.child(ui::chip(tf!("没有可读的内容 {}", "{} with nothing to read", state.unread), Theme::warning(), Theme::groove())))
                     .when(state.failed > 0, |d| d.child(ui::chip(tf!("没读成 {}", "{} could not be read", state.failed), Theme::danger(), Theme::danger_soft())))
                     .child(div().flex_1().min_w_0().truncate().text_right().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(tf!("{} · 同时 {} 篇", "{} · {} papers at a time", state.model, self.settings.screen_workers)))
-                    .when(running, |d| d.child(ui::secondary_button("extract-stop", t("停止")).h(text_px(26.)).text_size(text_px(12.)).on_click(self.on(Cmd::Extract(Do::Stop), cx)))),
+                    .when(running, |d| d.child(ui::secondary_button("extract-stop", t("停止")).h(text_px(26.)).text_size(text_px(12.)).on_click(self.on(Cmd::Extract(Do::Stop), cx))))
+                    // What the run left can be read again, with the same model or another.
+                    .when(!running && !state.left.is_empty(), |d| d.child(ui::secondary_button("extract-retry", tf!("选模型重试 {} 篇", "Retry {} with…", state.left.len())).h(text_px(26.)).text_size(text_px(12.)).child(ui::icon("chevron-down", 12., Theme::text_secondary())).on_click(self.on_menu(MenuKind::ExtractRetry, cx)))),
             )
             .child(crate::screen::progress_bar(state.done, state.total))
-            .when(running, |d| {
+            .when(running && !state.folded, |d| {
                 d.children(titles.into_iter().enumerate().map(|(n, title)| {
                     let line = div().flex().items_center().gap(px(6.)).text_size(text_px(12.)).text_color(Theme::text_secondary()).child(ui::spinner(("extract-reading", n), 12., Theme::accent())).child(div().flex_1().min_w_0().truncate().child(title.clone()));
                     // Keyed by the title, so a line that takes another paper's place appears anew.
@@ -1039,5 +1089,22 @@ impl Workspace {
                 )
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Extract;
+
+    #[test]
+    fn a_halted_run_leaves_what_it_did_not_read_in_reading_order() {
+        let mut state = Extract::new();
+        // Last first: "a" is read next. "x" was asked about and got no answer.
+        state.todo = vec![("b".into(), vec![]), ("a".into(), vec![])];
+        state.left = vec![("x".into(), vec![])];
+        state.halt();
+        assert!(!state.running());
+        let ids: Vec<&str> = state.left.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, ["x", "a", "b"]);
     }
 }
