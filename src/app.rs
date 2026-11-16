@@ -391,6 +391,8 @@ pub enum Cmd {
     PdfCut,
     /// Show the paper's PDF to the right of its conversation, or put it away.
     BesidePdf(bool),
+    /// The paper's PDF and its conversation change places (`Settings::pdf_first`).
+    SwapPanes,
     /// Out of the layout for asking about a paper: the tab it was come to from, with the library around it.
     LeaveAsk,
     /// The paper's conversation floats over its PDF, or stands beside it (`Settings::floating`).
@@ -2517,6 +2519,11 @@ impl Workspace {
                 // Beside the conversation the window is laid out for the two (`asking`); put away, the library is back around it.
                 if let Some(lib) = self.lib.as_mut() { lib.split = show }
                 self.ensure_pdf(cx);
+            }
+            Cmd::SwapPanes => {
+                // Only the order is drawn anew: the PDF, the conversation and the question being typed stay as they are.
+                self.settings.pdf_first = !self.settings.pdf_first;
+                self.save_settings(cx);
             }
             Cmd::FloatChat(on) => self.float_chat(on, window, cx),
             Cmd::FoldChat(fold) => self.fold_chat(fold, window, cx),
@@ -5757,6 +5764,8 @@ impl Workspace {
                     return;
                 }
                 "beside" => Some(Cmd::BesidePdf(arg != "off")),
+                // `swap` puts the paper's PDF and its conversation at each other's side.
+                "swap" => Some(Cmd::SwapPanes),
                 // `float` / `float:off`: the paper's conversation over its PDF, or beside it; `fold` / `fold:off` folds it up or opens it.
                 "float" => Some(Cmd::FloatChat(arg != "off")),
                 "fold" => Some(Cmd::FoldChat(arg != "off")),

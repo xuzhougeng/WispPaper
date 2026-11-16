@@ -125,6 +125,8 @@ impl Workspace {
                 ("panel-left", "显示 / 收起侧边栏", "sidebar", Cmd::ToggleSidebar),
             ]);
             if lib.selected.is_some() { fixed.extend([("expand", "展开 / 收起文献详情", "detail", Cmd::ToggleWide), ("eye", "进入 / 退出阅读模式", "reading", Cmd::ToggleReading)]) }
+            // A paper asked about with its PDF beside: the two change places.
+            if lib.selected.is_some() && lib.tab == crate::app::Tab::Ask && lib.split && !self.settings.floating.on { fixed.push(("arrow-left-right", "交换 PDF 与提问的位置", "", Cmd::SwapPanes)) }
             fixed.push(("arrow-left", "回到所有文献库", "home", Cmd::GoHome));
         } else {
             fixed.push(("plus", "新建文献库", "new-library", Cmd::NewLibrary));
