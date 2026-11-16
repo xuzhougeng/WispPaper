@@ -128,6 +128,8 @@ pub struct Settings {
     pub column_widths: BTreeMap<String, f32>,
     /// The columns of the paper table the reader put away (a custom field's column is its own `in_table`).
     pub columns_hidden: Vec<String>,
+    /// A paper's PDF at the left of its conversation and the conversation at the right; false is the order it comes with.
+    pub pdf_first: bool,
     /// The paper's conversation over its PDF instead of beside it, and where its window was left.
     pub floating: crate::floating::Floating,
     /// Closing the window keeps the app running in the background (macOS: the Dock, Windows: the tray) instead of quitting.
@@ -143,7 +145,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         let providers = provider::DEFAULT_PRESETS.iter().filter_map(|key| provider::preset(key)).map(Provider::from_preset).collect();
-        let mut settings = Settings { data_dir: String::new(), providers, legacy_profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translate_workers: 4, translation_prompt: String::new(), commands: vec![], connectors: vec![], skills_off: vec![], auto_update: true, auto_download: true, restore_session: true, appearance: String::new(), high_contrast: false, language: Language::default(), density: String::new(), font_family: String::new(), cjk_font_family: String::new(), font_size: DEFAULT_FONT_SIZE, reading_appearance: ReadingAppearance::default(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., column_widths: BTreeMap::new(), columns_hidden: vec![], floating: Default::default(), keep_running: true, agent_writing: false, agent_manuscript_width: 0., author: String::new() };
+        let mut settings = Settings { data_dir: String::new(), providers, legacy_profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translate_workers: 4, translation_prompt: String::new(), commands: vec![], connectors: vec![], skills_off: vec![], auto_update: true, auto_download: true, restore_session: true, appearance: String::new(), high_contrast: false, language: Language::default(), density: String::new(), font_family: String::new(), cjk_font_family: String::new(), font_size: DEFAULT_FONT_SIZE, reading_appearance: ReadingAppearance::default(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., pdf_first: false, column_widths: BTreeMap::new(), columns_hidden: vec![], floating: Default::default(), keep_running: true, agent_writing: false, agent_manuscript_width: 0., author: String::new() };
         settings.tidy();
         settings
     }
@@ -633,6 +635,18 @@ mod tests {
         assert_eq!(font_size(f32::NAN), DEFAULT_FONT_SIZE);
         assert_eq!(font_size(f32::INFINITY), DEFAULT_FONT_SIZE);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn pane_order_is_remembered_and_old_settings_keep_the_conversation_first() {
+        let old: Settings = serde_json::from_str(r#"{"chatWidth":420}"#).unwrap();
+        assert!(!old.pdf_first);
+        let swapped = Settings { pdf_first: true, ..old };
+        let saved = serde_json::to_string(&swapped).unwrap();
+        assert!(saved.contains(r#""pdfFirst":true"#));
+        let loaded: Settings = serde_json::from_str(&saved).unwrap();
+        assert!(loaded.pdf_first);
+        assert_eq!(loaded.chat_width, 420.);
     }
 
     #[test]

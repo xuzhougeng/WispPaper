@@ -407,6 +407,8 @@ pub enum Cmd {
     PdfCut,
     /// Show the paper's PDF to the right of its conversation, or put it away.
     BesidePdf(bool),
+    /// The paper's PDF and its conversation change places (`Settings::pdf_first`).
+    SwapPanes,
     /// Out of the layout for asking about a paper: the tab it was come to from, with the library around it.
     LeaveAsk,
     /// The paper's conversation floats over its PDF, or stands beside it (`Settings::floating`).
@@ -1174,6 +1176,9 @@ pub struct Chat {
     pub review_mark: usize,
     /// What is selected in an answer: the answer's place among the messages, the two ends in order of selecting, and whether the pointer is still held.
     pub picked: Option<(usize, crate::markdown::Place, crate::markdown::Place, bool)>,
+    /// Where that selection was last drawn, and how big the bar of actions beside it came out (`chat::Spot`).
+    pub spot: Option<crate::chat::Spot>,
+    pub bar_size: Option<Size<Pixels>>,
     /// The quotations of the answers looked up in the papers they name, by label, page and quotation.
     pub checks: HashMap<(String, Option<usize>, String), ai::Quoted>,
     /// When the question being answered was asked.
@@ -1306,7 +1311,7 @@ pub struct Library {
     pub note_links: BTreeMap<String, String>,
     pub pdf: Option<Entity<PdfView>>,
     pdf_events: Option<Subscription>,
-    /// How large PDF pages are drawn; it stays from paper to paper.
+    /// The fit PDF pages are drawn at (`Zoom::carried`): it stays from paper to paper, a percentage does not.
     pub zoom: Zoom,
     pub library_chat: Chat,
     pub paper_chat: Chat,
@@ -1433,6 +1438,8 @@ impl Chat {
             review_open: false,
             review_mark: 0,
             picked: None,
+            spot: None,
+            bar_size: None,
             checks: HashMap::new(),
             started: None,
         }
@@ -1540,6 +1547,7 @@ impl Chat {
         self.review_open = false;
         self.review_mark = 0;
         self.picked = None;
+        self.spot = None;
         self.checks.clear();
         self.started = None;
         self.input.update(cx, |input, cx| {
@@ -1566,6 +1574,20 @@ impl Library {
 
     pub(crate) fn chat_mut(&mut self, talk: Talk) -> &mut Chat {
         chat_of!(self, talk)
+    }
+
+    /// Ends the selection made in an answer, in whichever conversation it is; says whether there was one.
+    /// One the pointer still holds is being made, and stays.
+    pub(crate) fn unpick(&mut self) -> bool {
+        let mut ended = false;
+        for talk in [Talk::Library, Talk::Paper, Talk::Write] {
+            let chat = self.chat_mut(talk);
+            if chat.picked.is_some_and(|(.., held)| !held) {
+                chat.picked = None;
+                ended = true;
+            }
+        }
+        ended
     }
 
     /// What a conversation of this kind is about, which is what it is kept under in the library's history
@@ -1952,8 +1974,10 @@ impl Workspace {
                 let Some(current) = self.lib.as_ref().and_then(|lib| lib.pdf.as_ref()).map(|pdf| pdf.read(cx).zoom()) else { return };
                 let fits = [(t("适应宽度"), Zoom::FitWidth), (t("适应整页"), Zoom::FitPage)].map(|(label, zoom)| (label.to_string(), zoom));
                 let sizes = [50., 75., 100., 125., 150., 200., 300., 400.].map(|percent| (if percent == 100. { t("100%（实际大小）").to_string() } else { format!("{percent}%") }, Zoom::Percent(percent)));
+                let key = crate::shortcuts::key_of("zoom-fit", &self.settings.shortcuts);
                 for (label, zoom) in fits.into_iter().chain(sizes) {
-                    items.push(MenuItem { label: label.into(), checked: current == zoom, note: None, cmd: Cmd::PdfZoom(ZoomTo::Set(zoom)) });
+                    let note = (zoom == Zoom::FitWidth && !key.is_empty()).then(|| crate::shortcuts::pretty(&key).into());
+                    items.push(MenuItem { label: label.into(), checked: current == zoom, note, cmd: Cmd::PdfZoom(ZoomTo::Set(zoom)) });
                 }
             }
             MenuKind::Columns => {
@@ -2556,10 +2580,22 @@ impl Workspace {
                 if let Some(lib) = self.lib.as_mut() { lib.split = show }
                 self.ensure_pdf(cx);
             }
+            Cmd::SwapPanes => {
+                // Only the order is drawn anew: the PDF, the conversation and the question being typed stay as they are.
+                self.settings.pdf_first = !self.settings.pdf_first;
+                self.save_settings(cx);
+            }
             Cmd::FloatChat(on) => self.float_chat(on, window, cx),
             Cmd::FoldChat(fold) => self.fold_chat(fold, window, cx),
             Cmd::PdfZoom(to) => {
-                if let Some(pdf) = self.lib.as_ref().filter(|lib| lib.tab == Tab::Pdf || lib.split).and_then(|lib| lib.pdf.clone()) { pdf.update(cx, |pdf, cx| pdf.zoom_to(to, cx)) }
+                if let Some(lib) = self.lib.as_mut().filter(|lib| lib.tab == Tab::Pdf || lib.split) && let Some(pdf) = lib.pdf.clone() {
+                    // A fit chosen is the one the next paper opens at; a percentage stays with this paper.
+                    lib.zoom = pdf.update(cx, |pdf, cx| {
+                        pdf.zoom_to(to, cx);
+                        pdf.zoom()
+                    })
+                    .carried(lib.zoom);
+                }
             }
             Cmd::ToggleTranslation => {
                 if let Some(lib) = self.lib.as_mut() { lib.show_translation = !lib.show_translation }
@@ -2824,7 +2860,7 @@ impl Workspace {
                 }
                 let chat = lib.chat_mut(paper);
                 match (pointer, chat.picked.as_mut()) {
-                    (Pointer::Down, _) => chat.picked = Some((at, place, place, true)),
+                    (Pointer::Down, _) => (chat.picked, chat.spot) = (Some((at, place, place, true)), None),
                     (Pointer::Drag, Some((answer, _, to, true))) if *answer == at => *to = place,
                     (Pointer::Up, Some((_, from, to, held))) if *held => {
                         *held = false;
@@ -3094,7 +3130,7 @@ impl Workspace {
         } else if self.dismiss_font_picker(window, cx) {
         } else if self.settings_view.is_some() {
             self.close_settings(window, cx);
-        } else if self.picked.take().is_some() {
+        } else if self.picked.take().is_some() || self.lib.as_mut().is_some_and(Library::unpick) {
         } else if self.lib.as_ref().is_some_and(|l| l.materials_shown()) {
             // The panel floating over the conversation is put away first; what it searched for stays.
             if let Some(lib) = self.lib.as_mut() {
@@ -3401,6 +3437,7 @@ impl Workspace {
             PdfEvent::Figure(piece) => self.collect_piece(piece, cx),
             PdfEvent::Annotate { paper, resource, page, kind, quote, boxes } => self.change_pdf_annotation(resource, |store| store.add_pdf_annotation(paper, resource, *page, *kind, quote, boxes).map(|_| ()), cx),
             PdfEvent::AnnotationNote { resource, id, note } => self.change_pdf_annotation(resource, |store| store.update_pdf_annotation_note(resource, id, note), cx),
+            PdfEvent::RecolorAnnotation { resource, id, color } => self.change_pdf_annotation(resource, |store| store.recolor_pdf_annotation(resource, id, color), cx),
             PdfEvent::RemoveAnnotation { resource, id } => self.change_pdf_annotation(resource, |store| store.remove_pdf_annotation(resource, id), cx),
             PdfEvent::Picture(png, to_library) => {
                 self.attach_images(if *to_library { Talk::Library } else { Talk::Paper }, vec![Picture::Bytes(png.clone())], cx);
@@ -5814,6 +5851,8 @@ impl Workspace {
                     return;
                 }
                 "beside" => Some(Cmd::BesidePdf(arg != "off")),
+                // `swap` puts the paper's PDF and its conversation at each other's side.
+                "swap" => Some(Cmd::SwapPanes),
                 // `float` / `float:off`: the paper's conversation over its PDF, or beside it; `fold` / `fold:off` folds it up or opens it.
                 "float" => Some(Cmd::FloatChat(arg != "off")),
                 "fold" => Some(Cmd::FoldChat(arg != "off")),

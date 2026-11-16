@@ -24,12 +24,25 @@ pub enum Pointer {
     Up,
 }
 
-/// Selecting in an answer: the stretch selected (from, to, in order), and
-/// who is told where the pointer goes.
+/// Where a selection was drawn, in the window: the top left of its first
+/// character, the top left of the place it ends and the height of that
+/// line, and the top left of the whole text.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Drawn {
+    pub start: Point<Pixels>,
+    pub end: Point<Pixels>,
+    pub line: Pixels,
+    pub origin: Point<Pixels>,
+}
+
+/// Selecting in an answer: the stretch selected (from, to, in order), who
+/// is told where the pointer goes, and who is told where the stretch was
+/// drawn (each frame, once it is laid out).
 #[derive(Clone)]
 pub struct Selecting {
     pub selected: Option<(Place, Place)>,
     pub pointer: Rc<dyn Fn(Pointer, Place, &mut Window, &mut App)>,
+    pub drawn: Rc<dyn Fn(Drawn, &mut Window, &mut App)>,
 }
 
 /// What is drawn with: an id that keeps the links of this text apart from
@@ -49,26 +62,48 @@ pub fn render(id: &str, text: &str, cite: Option<OnCite>, selecting: Option<Sele
     let drawn = div().flex().flex_col().gap(theme::paragraph_gap(10.)).children(blocks(&parse(text), &mut draw));
     let Some(selecting) = selecting else { return drawn };
     // Where the pointer is among the pieces: in the one it is over, else at the near end of the one nearest above or below.
+    // The cells of a table's row stand side by side: of pieces as near up and down, the one nearest across.
     let layouts = Rc::new(draw.layouts);
+    let drawn_layouts = layouts.clone();
     let place = move |position: Point<Pixels>| -> Option<Place> {
-        let mut nearest: Option<(Pixels, Place)> = None;
+        let mut nearest: Option<((Pixels, Pixels), Place)> = None;
         for (at, layout) in layouts.iter().enumerate() {
             // A piece not laid out in this frame has no place to be found in.
             let Ok(bounds) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| layout.bounds())) else { continue };
-            let (away, index) = if position.y < bounds.top() {
+            let (down, index) = if position.y < bounds.top() {
                 (bounds.top() - position.y, 0)
             } else if position.y >= bounds.bottom() {
                 (position.y - bounds.bottom(), layout.len())
             } else {
                 (px(0.), layout.index_for_position(position).unwrap_or_else(|index| index))
             };
-            if nearest.is_none_or(|(best, _)| away < best) { nearest = Some((away, (at, index))) }
+            let across = (bounds.left() - position.x).max(position.x - bounds.right()).max(px(0.));
+            if nearest.is_none_or(|(best, _)| (down, across) < best) { nearest = Some(((down, across), (at, index))) }
         }
         nearest.map(|(_, place)| place)
     };
+    // Where the selection came to be drawn, worked out after the text is laid out: the bar beside it goes by this.
+    let measure = selecting.selected.map(|(from, to)| {
+        let (layouts, told) = (drawn_layouts, selecting.drawn.clone());
+        canvas(
+            move |bounds, window, cx| {
+                let at = |(piece, byte): Place| -> Option<(Point<Pixels>, Pixels)> {
+                    let layout = layouts.get(piece)?;
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| layout.position_for_index(byte.min(layout.len())).map(|point| (point, layout.line_height())))).ok().flatten()
+                };
+                if let (Some((start, _)), Some((end, line))) = (at(from), at(to)) { told(Drawn { start, end, line, origin: bounds.origin }, window, cx) }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+    });
     let (down, drag, up) = (selecting.pointer.clone(), selecting.pointer.clone(), selecting.pointer);
     let (place_down, place_drag, place_up) = (place.clone(), place.clone(), place);
     drawn
+        .children(measure)
         .cursor_text()
         .on_mouse_down(MouseButton::Left, move |event, window, cx| {
             if let Some(place) = place_down(event.position) { down(Pointer::Down, place, window, cx) }

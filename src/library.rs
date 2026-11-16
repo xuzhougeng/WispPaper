@@ -31,6 +31,13 @@ fn split_chat_width(own: f32, width: f32) -> f32 {
     wished.min(width - SPLIT_PDF_MIN).max(SPLIT_CHAT_MIN)
 }
 
+/// How far the conversation reaches with the pointer at `x` on the edge between it and the PDF, in a panel
+/// from `left` to `right`: from the panel's left edge to the pointer, or from the pointer to its right edge
+/// when the PDF is first. The same limits (`split_chat_width`) hold in both orders.
+fn split_chat_reach(x: f32, left: f32, right: f32, pdf_first: bool) -> f32 {
+    if pdf_first { right - x } else { x - left }
+}
+
 /// The list of papers beside a paper that is asked about: the width it comes with, and how narrow and how wide it is dragged.
 const ASK_LIST_W: f32 = 280.;
 const ASK_LIST_MIN: f32 = 200.;
@@ -254,13 +261,14 @@ impl Workspace {
     }
 
     /// The edge between a paper's conversation and its PDF is being dragged:
-    /// the conversation reaches from the panel's left edge to the pointer.
+    /// the conversation reaches from the panel's left edge to the pointer, or,
+    /// with the PDF at its left (`Settings::pdf_first`), from the pointer to the panel's right edge.
     pub fn drag_split(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.resizing != Some(Edge::Split) { return }
         if event.pressed_button != Some(MouseButton::Left) { return self.end_drag(cx) }
         let panel = self.detail_width(window);
-        let left = f32::from(window.viewport_size().width) - panel;
-        let width = split_chat_width(f32::from(event.position.x) - left, panel);
+        let right = f32::from(window.viewport_size().width);
+        let width = split_chat_width(split_chat_reach(f32::from(event.position.x), right - panel, right, self.settings.pdf_first), panel);
         if (width - self.settings.chat_width).abs() < 0.5 { return }
         self.settings.chat_width = width;
         cx.notify();
@@ -1183,7 +1191,7 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that would bring in gpui's own `test` attribute.
-    use super::{ASK_LIST_MAX, ASK_LIST_MIN, ASK_LIST_W, COLUMN_MAX, COLUMN_MIN, SPLIT_CHAT_MIN, SPLIT_PDF_MIN, ask_list_width, dragged, split_chat_width};
+    use super::{ASK_LIST_MAX, ASK_LIST_MIN, ASK_LIST_W, COLUMN_MAX, COLUMN_MIN, SPLIT_CHAT_MIN, SPLIT_PDF_MIN, ask_list_width, dragged, split_chat_reach, split_chat_width};
     use crate::app::ColumnDrag;
     use crate::detail::SPLIT_MIN;
 
@@ -1224,5 +1232,17 @@ mod tests {
         assert_eq!(dragged(&drag(Some(150.), 60., 0.), 900.), (Some(150. + 60. - COLUMN_MIN), COLUMN_MIN));
         assert_eq!(dragged(&drag(Some(150.), 60., 0.), 0.), (Some(COLUMN_MIN), 60. + 150. - COLUMN_MIN));
         assert_eq!(dragged(&drag(Some(150.), COLUMN_MAX - 20., 0.), 0.), (Some(130.), COLUMN_MAX));
+    }
+
+    #[test]
+    fn edge_between_swapped_panes() {
+        // A panel from 280 to 1360: the edge at 680 gives the conversation 400 on the left, or 680 on the right.
+        assert_eq!(split_chat_reach(680., 280., 1360., false), 400.);
+        assert_eq!(split_chat_reach(680., 280., 1360., true), 680.);
+        // Dragged towards the conversation's own side, it narrows to its least in either order; the PDF keeps its least.
+        assert_eq!(split_chat_width(split_chat_reach(300., 280., 1360., false), 1080.), SPLIT_CHAT_MIN);
+        assert_eq!(split_chat_width(split_chat_reach(1340., 280., 1360., true), 1080.), SPLIT_CHAT_MIN);
+        assert_eq!(split_chat_width(split_chat_reach(1340., 280., 1360., false), 1080.), 1080. - SPLIT_PDF_MIN);
+        assert_eq!(split_chat_width(split_chat_reach(300., 280., 1360., true), 1080.), 1080. - SPLIT_PDF_MIN);
     }
 }

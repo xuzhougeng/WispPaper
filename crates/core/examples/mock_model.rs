@@ -16,7 +16,8 @@
 //! asked to translate, it hands the text back marked as translated. In a chat, asked a question, it calls `list_papers` and
 //! `library_status`; given their results, it answers and cites the first
 //! paper the search returned, saying how many pictures came with the
-//! conversation. A question containing 「试试撤销」 makes it call
+//! conversation (a question containing 「试试长回答」 adds a dozen
+//! paragraphs, a list and a table). A question containing 「试试撤销」 makes it call
 //! `undo_import` instead, a tool the window asks the person about first;
 //! one containing 「试试连接器」 makes it call the first tool of a connector
 //! (a name with `__`) that the request offers;
@@ -381,6 +382,14 @@ fn answer(mut stream: TcpStream, delay: u64) {
             let seen = if pictures > 0 { format!("收到 {pictures} 张图片。") } else { String::new() };
             for piece in ["（假模型）我查了文献库的概况和匹配的文献。", &seen, &format!("最相关的一篇是 [{label}]。"), "这段话只用来演示工具调用的显示和引用的跳转。"] {
                 events.push_str(&event(&format!(r#"{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"{piece}"}}}}"#)));
+            }
+            // A long answer, for what is done with a part of one: paragraphs, a list and a table, longer than a window.
+            if request.contains("试试长回答") {
+                let mut long = String::from("\n\n## 分段说明\n\n");
+                for n in 1..=8 { long.push_str(&format!("第 {n} 段。根尖分生组织的单细胞图谱把细胞按发育轨迹排开，干细胞微环境里的静止中心细胞表达 WOX5，周围的初始细胞按层分化；这一段只是用来把回答拉长，好看清选中一句之后旁边出现的操作。\n\n")); }
+                long.push_str("- 第一条：表皮与根毛细胞\n- 第二条：皮层与内皮层\n- 第三条：中柱与维管\n\n| 细胞类型 | 标记基因 | 平台 |\n|---|---|---|\n| 静止中心 | WOX5 | 10x |\n| 根毛 | COBL9 | Drop-seq |\n\n");
+                for n in 9..=12 { long.push_str(&format!("第 {n} 段。最后几段同样只为长度：一段回答读到这里，回答下面的按钮早已在可见区域之外。\n\n")); }
+                events.push_str(&event(&format!(r#"{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":{}}}}}"#, quoted(&long).replace('\n', "\\n"))));
             }
             events.push_str(&event(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#));
         } else if let Some(note) = request.rfind("【写作模式】").filter(|at| request.rfind("\"role\":\"user\"").is_some_and(|user| user < *at)) {

@@ -28,6 +28,19 @@ impl Workspace {
         let in_strip = asking && edged && ui::custom_titlebar();
         let has_pdf = lib.pdf_file(&p.id).is_some();
         let title = if lib.show_translation && let Some(Translated::Done(text)) = lib.translations.get(&translation_key(&p.title, ai::translation_prompt(&self.settings.translation_prompt))) { text } else { &p.title };
+        // Asking about a paper: the conversation, and the paper's PDF to its right where the panel has room for both
+        // (to its left once the reader swapped them, `Settings::pdf_first`).
+        // A paper without one keeps the layout it is asked about in, with the ways to get its PDF in the PDF's place.
+        let split = lib.split && tab == Tab::Ask && (has_pdf || asking) && width >= SPLIT_MIN;
+        let pdf_first = self.settings.pdf_first;
+        // Two panes side by side can change places; a conversation floating over the PDF has no side.
+        // The button stays where it is whichever side each pane is on: a second click undoes the first. An id of
+        // each order: the tooltip under the pointer is made anew after the click, saying what the next click does.
+        let swap = (split && !(has_pdf && self.settings.floating.on)).then(|| {
+            ui::ghost_button(if pdf_first { "split-swap-back" } else { "split-swap" }, Some("arrow-left-right"), None).h(text_px(26.)).min_w(text_px(26.)).occlude()
+                .tooltip(ui::tip(if pdf_first { t("把 PDF 移回右边") } else { t("把 PDF 移到左边") }))
+                .on_click(self.on(Cmd::SwapPanes, cx))
+        });
         let tab_button = |id: &'static str, label: &'static str, value: Tab, this: &Self, cx: &mut Context<Self>| {
             let active = tab == value;
             div()
@@ -59,6 +72,7 @@ impl Workspace {
                 .child(tab_button("tab-pdf", if has_pdf { "PDF" } else { t("PDF（无）") }, Tab::Pdf, self, cx))
                 .child(tab_button("tab-ask", t("提问"), Tab::Ask, self, cx))
                 .when(tab == Tab::Ask && has_pdf && !(lib.split && width >= SPLIT_MIN), |d| d.child(ui::ghost_button("beside-pdf", Some("file-text"), Some(t("对照 PDF").into())).h(text_px(26.)).text_size(text_px(12.)).occlude().on_click(self.on(Cmd::BesidePdf(true), cx))))
+                .when_some(swap, |d, swap| d.child(swap))
                 .child(if reading {
                     ui::ghost_button("reading-leave", Some("x"), Some(tf!("退出阅读 {}", "Leave reading {}", crate::shortcuts::pretty("escape")).into())).h(text_px(26.)).text_size(text_px(12.)).occlude().on_click(self.on(Cmd::ToggleReading, cx))
                 } else {
@@ -111,14 +125,13 @@ impl Workspace {
                     .child(tab_button("tab-pdf", if has_pdf { "PDF" } else { t("PDF（无）") }, Tab::Pdf, self, cx))
                     .child(tab_button("tab-ask", t("提问"), Tab::Ask, self, cx))
                     // Asking with the PDF put away, or in a panel too narrow for both: one click brings it beside the conversation.
-                    .when(tab == Tab::Ask && has_pdf && !(lib.split && width >= SPLIT_MIN), |d| d.child(div().flex_1()).child(ui::ghost_button("beside-pdf", Some("file-text"), Some(t("对照 PDF").into())).h(text_px(26.)).text_size(text_px(12.)).occlude().on_click(self.on(Cmd::BesidePdf(true), cx)))),
+                    .when(tab == Tab::Ask && has_pdf && !(lib.split && width >= SPLIT_MIN), |d| d.child(div().flex_1()).child(ui::ghost_button("beside-pdf", Some("file-text"), Some(t("对照 PDF").into())).h(text_px(26.)).text_size(text_px(12.)).occlude().on_click(self.on(Cmd::BesidePdf(true), cx))))
+                    .when_some(swap, |d, swap| d.child(div().flex_1()).child(swap)),
             ) };
-        // Asking about a paper: the conversation, and the paper's PDF to its right where the panel has room for both.
-        // A paper without one keeps the layout it is asked about in, with the ways to get its PDF at the right.
-        let split = lib.split && tab == Tab::Ask && (has_pdf || asking) && width >= SPLIT_MIN;
         let body = match tab {
             Tab::Ask if split && has_pdf && self.settings.floating.on => self.render_floating(width, window, cx),
             Tab::Ask if split => {
+                // The conversation keeps its width on either side; the PDF has the rest.
                 let chat_width = self.chat_width(width);
                 let chat = self.render_chat(Talk::Paper, window, cx);
                 let pdf = self.render_pdf_tab(width - chat_width, cx);
@@ -129,7 +142,7 @@ impl Workspace {
                     .group("split-edge")
                     .absolute()
                     .top_0()
-                    .left(px(chat_width - 5.))
+                    .left(px(if pdf_first { width - chat_width } else { chat_width } - 5.))
                     .w(px(9.))
                     .h_full()
                     .flex()
@@ -148,7 +161,10 @@ impl Workspace {
                     }))
                     .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_drag(cx)))
                     .child(div().w(px(2.)).h_full().when(held, |d| d.bg(Theme::accent())).when(!held, |d| d.group_hover("split-edge", |s| s.bg(Theme::accent().opacity(0.5)))));
-                div().relative().flex().size_full().child(div().flex_none().w(px(chat_width)).h_full().border_r_1().border_color(Theme::line()).child(chat)).child(div().flex_1().min_w_0().h_full().child(pdf)).child(between).into_any_element()
+                // Swapped, only the order changes: the PDF and the conversation are the same entities, drawn at the other side.
+                let chat = div().flex_none().w(px(chat_width)).h_full().border_color(Theme::line()).map(|d| if pdf_first { d.border_l_1() } else { d.border_r_1() }).child(chat);
+                let pdf = div().flex_1().min_w_0().h_full().child(pdf);
+                div().relative().flex().size_full().map(|d| if pdf_first { d.child(pdf).child(chat) } else { d.child(chat).child(pdf) }).child(between).into_any_element()
             }
             Tab::Info => self.render_info(window, cx),
             Tab::Pdf => self.render_pdf_tab(width, cx),
@@ -445,13 +461,9 @@ impl Workspace {
             let view = pdf.read(cx);
             (view.current_page(), view.page_count(), view.percent(), view.zoom(), view.cutting())
         };
-        // The size chosen here is the one the next paper opens at.
-        if let Some(lib) = self.lib.as_mut() { lib.zoom = zoom }
-        let fit = match zoom {
-            Zoom::FitWidth => t("适应宽度"),
-            Zoom::FitPage => t("适应整页"),
-            Zoom::Percent(_) => "",
-        };
+        // The fit the reader reads at, which a zoom by hand goes back to.
+        let fit = lib.zoom;
+        let fit_label = |zoom: Zoom| if zoom == Zoom::FitPage { t("适应整页") } else { t("适应宽度") };
         let tool = |id: &'static str, icon: &'static str| ui::ghost_button(id, Some(icon), None).h(text_px(24.)).min_w(px(24.));
         div()
             .flex()
@@ -481,8 +493,10 @@ impl Workspace {
                                 .flex_none()
                                 .items_center()
                                 .child(tool("pdf-zoom-out", "minus").on_click(self.on(Cmd::PdfZoom(ZoomTo::Out), cx)))
-                                .child(ui::ghost_button("pdf-zoom", None, Some(if fit.is_empty() { format!("{}%", percent.round()).into() } else { format!("{fit} · {}%", percent.round()).into() })).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).on_click(self.on_menu(MenuKind::PdfZoom, cx)))
-                                .child(tool("pdf-zoom-in", "plus").on_click(self.on(Cmd::PdfZoom(ZoomTo::In), cx))),
+                                .child(ui::ghost_button("pdf-zoom", None, Some(if zoom.fits() { format!("{} · {}%", fit_label(zoom), percent.round()).into() } else { format!("{}%", percent.round()).into() })).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).on_click(self.on_menu(MenuKind::PdfZoom, cx)))
+                                .child(tool("pdf-zoom-in", "plus").on_click(self.on(Cmd::PdfZoom(ZoomTo::In), cx)))
+                                // Zoomed by hand: one click back to the fit the reader reads at, offered only then.
+                                .when(!zoom.fits(), |d| d.child(ui::ghost_button("pdf-zoom-fit", None, Some(fit_label(fit).into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).on_click(self.on(Cmd::PdfZoom(ZoomTo::Set(fit)), cx)))),
                         )
                     })
                     // Cut a piece out of a page (a figure, a table): to keep in the figure library, or as a picture for the next question.

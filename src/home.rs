@@ -36,6 +36,10 @@ impl Render for Workspace {
             .text_color(Theme::text())
             // Only while 设置 › 快捷键 waits for a new key.
             .on_key_down(cx.listener(Self::record_key))
+            // A press anywhere else ends the selection in an answer, and the bar beside it goes with it (one in an answer is begun before this hears of it).
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                if this.lib.as_mut().is_some_and(crate::app::Library::unpick) { cx.notify() }
+            }))
             .on_action(cx.listener(Self::dismiss))
             .on_action(cx.listener(|this, _: &ShowPalette, window, cx| this.shortcut("palette", window, cx)))
             .on_action(cx.listener(|this, _: &ShowSettings, window, cx| this.shortcut("settings", window, cx)))
