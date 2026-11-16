@@ -21,7 +21,7 @@ use wisp_core::lookup::{self, Identifier};
 use wisp_core::model::*;
 pub(crate) use wisp_core::settings::default_root;
 use wisp_core::screening::{Before, Confirming, Round};
-use wisp_core::settings::{Language, Settings, Task, settings_file};
+use wisp_core::settings::{Language, Session, Settings, Task, session_file, settings_file};
 use wisp_core::store::{Conversation, ConversationInfo, ImportBatch, SavedSearch, Store, StructureInfo, Suggestion, TrashEntry};
 use wisp_core::manuscript::{Manuscript, Snapshot};
 use wisp_core::{complete, export, fulltext, import, pdftext, structure, time, tools, zotero};
@@ -46,6 +46,28 @@ pub enum Page {
     Figures,
     /// 提取: what the assistant proposes for the custom fields, looked over and written together (`src/extract.rs`).
     Extract,
+}
+
+impl Page {
+    /// The word a page goes by where it is written down: `session.json`, a `page:` step of a scripted start.
+    pub fn key(self) -> &'static str {
+        match self {
+            Page::Papers => "papers",
+            Page::Ask => "ask",
+            Page::Trash => "trash",
+            Page::Screen => "screen",
+            Page::Guide => "guide",
+            Page::Sources => "sources",
+            Page::Write => "write",
+            Page::Figures => "figures",
+            Page::Extract => "extract",
+        }
+    }
+
+    /// The page of that word; the papers for any other.
+    pub fn from_key(key: &str) -> Page {
+        [Page::Ask, Page::Trash, Page::Screen, Page::Guide, Page::Sources, Page::Write, Page::Figures, Page::Extract].into_iter().find(|page| page.key() == key).unwrap_or(Page::Papers)
+    }
 }
 
 /// An edge between two columns of a library that the pointer can hold and move.
@@ -97,6 +119,21 @@ pub enum Tab {
     Info,
     Pdf,
     Ask,
+}
+
+impl Tab {
+    /// As `Page::key`.
+    pub fn key(self) -> &'static str {
+        match self {
+            Tab::Info => "info",
+            Tab::Pdf => "pdf",
+            Tab::Ask => "ask",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Tab {
+        [Tab::Pdf, Tab::Ask].into_iter().find(|tab| tab.key() == key).unwrap_or(Tab::Info)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -224,8 +261,12 @@ pub enum Cmd {
     ResetDataDir,
     RevealDataDir,
     ToggleAutoUpdate,
+    ToggleAutoDownload,
+    ToggleRestoreSession,
     ToggleKeepRunning,
     CheckUpdate,
+    DownloadUpdate,
+    InstallUpdate,
     SetAppearance(String),
     SetLanguage(Language),
     SetDensity(String),
@@ -1302,6 +1343,8 @@ pub struct Workspace {
     pub update: UpdateState,
     /// The version the automatic check last announced, so it says it once.
     pub update_told: Option<String>,
+    /// Where the window is, as last written to `session.json` (`keep_session`).
+    session: Session,
     pub modal: Option<Modal>,
     pub modal_error: String,
     pub modal_subscriptions: Vec<Subscription>,
@@ -1730,7 +1773,7 @@ impl Workspace {
         theme::set_accent("blue");
         shortcuts::rebuild(&settings.shortcuts, cx);
         let libraries = libraries::list(&root);
-        let mut this = Workspace { focus, settings, settings_path, root, libraries, lib: None, settings_view: None, connections: vec![], skills: vec![], update: UpdateState::Idle, update_told: None, modal: None, modal_error: String::new(), modal_subscriptions: vec![], menu: None, palette: None, toast, home_scroll: ScrollHandle::new(), resizing: None, picked: None, pinning: false, filters_over: [false; 2], filters_drawn: false };
+        let mut this = Workspace { focus, settings, settings_path, root, libraries, lib: None, settings_view: None, connections: vec![], skills: vec![], update: UpdateState::Idle, update_told: None, session: Session::default(), modal: None, modal_error: String::new(), modal_subscriptions: vec![], menu: None, palette: None, toast, home_scroll: ScrollHandle::new(), resizing: None, picked: None, pinning: false, filters_over: [false; 2], filters_drawn: false };
         this.apply_appearance(window);
         this.apply_typography(window, cx);
         cx.observe_window_appearance(window, |this, window, _| this.apply_appearance(window)).detach();
@@ -1739,6 +1782,39 @@ impl Workspace {
         this.load_skills();
         this.connect_all(cx);
         this
+    }
+
+    /// Once the window is there: go back to where it was last (回到上次的界面), and from now on keep where it is.
+    pub fn start_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A scripted debug start says itself where it begins (its `restore` step is this).
+        if self.settings.restore_session && std::env::var_os("WISP_PAPER_DEV").is_none() { self.restore_session(window, cx) }
+        cx.observe_self(|this, _| this.keep_session()).detach();
+    }
+
+    /// Write down where the window is whenever that changed, so the next start (after quitting,
+    /// an update or a crash) can be the same place: the library, its page, the paper on show.
+    // ponytail: the window's size, the scroll positions and the PDF's page are not kept; fields of `Session` when they are missed.
+    fn keep_session(&mut self) {
+        if !self.settings.restore_session { return }
+        let now = self.lib.as_ref().map(|lib| Session { library: lib.info.id.clone(), page: lib.page.key().into(), paper: lib.selected.clone().unwrap_or_default(), tab: lib.tab.key().into(), wide: lib.wide, reading: lib.reading }).unwrap_or_default();
+        if now != self.session {
+            let _ = now.save(&session_file());
+            self.session = now;
+        }
+    }
+
+    /// Go back to where `session.json` says the window was. A library or a paper that is gone since is simply not opened.
+    fn restore_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let session = Session::load(&session_file());
+        if session.library.is_empty() { return }
+        self.open_library(&session.library, window, cx);
+        if self.lib.as_ref().is_none_or(|lib| lib.info.id != session.library) { return }
+        self.run(Cmd::SetPage(Page::from_key(&session.page)), window, cx);
+        if self.lib.as_ref().is_some_and(|lib| lib.paper(&session.paper).is_some()) {
+            self.select(Some(session.paper.clone()), window, cx);
+            self.run(Cmd::SetTab(Tab::from_key(&session.tab)), window, cx);
+            if let Some(lib) = self.lib.as_mut() { (lib.wide, lib.reading) = (session.wide, session.reading) }
+        }
     }
 
     pub fn on(&self, cmd: Cmd, cx: &mut Context<Self>) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
@@ -2009,11 +2085,28 @@ impl Workspace {
                 self.save_settings(cx);
                 if self.settings.auto_update { self.check_update(false, cx) }
             }
+            Cmd::ToggleAutoDownload => {
+                self.settings.auto_download = !self.settings.auto_download;
+                self.save_settings(cx);
+                // A release already found is fetched now rather than at the next check.
+                if self.settings.auto_download && let UpdateState::Available(release, Some(target)) = self.update.clone() { self.download_update(release, target, false, cx) }
+            }
+            Cmd::ToggleRestoreSession => {
+                self.settings.restore_session = !self.settings.restore_session;
+                self.save_settings(cx);
+                // Off: nothing is kept. On: `keep_session` writes where the window is now.
+                let _ = std::fs::remove_file(session_file());
+                self.session = Session::default();
+            }
             Cmd::ToggleKeepRunning => {
                 self.settings.keep_running = !self.settings.keep_running;
                 self.save_settings(cx);
             }
             Cmd::CheckUpdate => self.check_update(true, cx),
+            Cmd::DownloadUpdate => {
+                if let UpdateState::Available(release, Some(target)) = self.update.clone() { self.download_update(release, target, true, cx) }
+            }
+            Cmd::InstallUpdate => self.install_update(cx),
             Cmd::SetAppearance(value) => {
                 self.settings.appearance = value;
                 self.save_settings(cx);
@@ -5213,8 +5306,13 @@ impl Workspace {
                 },
                 "open" => self.libraries.get(arg.parse::<usize>().unwrap_or(0)).map(|l| Cmd::OpenLibrary(l.id.clone())),
                 "select" => self.lib.as_ref().and_then(|l| l.shown.get(arg.parse::<usize>().unwrap_or(0)).map(|&i| Cmd::Select(l.papers[i].id.clone()))),
-                "tab" => Some(Cmd::SetTab(match arg { "pdf" => Tab::Pdf, "ask" => Tab::Ask, _ => Tab::Info })),
-                "page" => Some(Cmd::SetPage(match arg { "ask" => Page::Ask, "trash" => Page::Trash, "sources" => Page::Sources, "screen" => Page::Screen, "write" => Page::Write, "figures" => Page::Figures, "extract" => Page::Extract, _ => Page::Papers })),
+                "tab" => Some(Cmd::SetTab(Tab::from_key(arg))),
+                "page" => Some(Cmd::SetPage(Page::from_key(arg))),
+                // `restore` goes back to where `session.json` says the window was, as a start that is not scripted does.
+                "restore" => {
+                    self.restore_session(window, cx);
+                    return;
+                }
                 // `write:methods` shows another part of the manuscript; `draft:<text>` leaves text in it, as if typed.
                 "write" => Some(Cmd::WriteSection(arg.to_string())),
                 // `manuscript:new` makes another manuscript, `manuscript:<title>` gives the current one its title;
