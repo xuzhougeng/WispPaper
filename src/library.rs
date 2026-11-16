@@ -526,7 +526,7 @@ impl Workspace {
         // The filters stay one row. Where they do not all fit, the row is folded: those that are set come first,
         // then as many as there is room for and how many more there are; under the pointer a card shows them all.
         const GAP: f32 = 6.;
-        let face = font(theme::ui_font());
+        let face = theme::ui_font();
         let wide = |text: &str| {
             let run = TextRun { len: text.len(), font: face.clone(), color: Theme::text(), background_color: None, underline: None, strikethrough: None };
             f32::from(window.text_system().shape_line(text.to_string().into(), text_px(12.), &[run], None).width)

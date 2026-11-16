@@ -48,7 +48,7 @@ impl Render for PaperDrag {
                 .border_color(Theme::accent())
                 .bg(Theme::bg_body())
                 .shadow(theme::shadow_panel())
-                .font_family(theme::ui_font())
+                .font(theme::ui_font())
                 .text_size(text_px(12.))
                 .text_color(Theme::text())
                 .child(ui::icon("file-text", 13., Theme::accent()))

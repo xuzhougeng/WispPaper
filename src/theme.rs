@@ -2,7 +2,7 @@
 //! come in a light and a dark set; the accent follows the open library, so
 //! each library looks like itself.
 
-use gpui::{BoxShadow, Hsla, Pixels, SharedString, hsla, point, px, rgb};
+use gpui::{BoxShadow, Font, FontFallbacks, Hsla, Pixels, SharedString, hsla, point, px, rgb};
 use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use wisp_core::settings::{self, DEFAULT_FONT_SIZE, ReadingAppearance};
@@ -13,15 +13,20 @@ pub const MONO_FONT: &str = if cfg!(target_os = "macos") { "Menlo" } else if cfg
 
 thread_local! {
     static READING: Cell<ReadingAppearance> = Cell::new(ReadingAppearance::default());
-    static TYPOGRAPHY: RefCell<(SharedString, f32)> = RefCell::new((UI_FONT.into(), 1.));
+    static TYPOGRAPHY: RefCell<(Font, f32)> = RefCell::new((gpui::font(UI_FONT), 1.));
 }
 
 /// Applied on the UI thread before refreshing the whole window, including cached child views.
-pub fn set_typography(family: &str, size: f32) {
-    TYPOGRAPHY.with(|value| *value.borrow_mut() = (if family.is_empty() { UI_FONT.into() } else { family.to_string().into() }, settings::font_size(size) / DEFAULT_FONT_SIZE));
+/// `family` draws Latin letters, digits and symbols; `cjk` is its fallback, so it draws what
+/// `family` has no glyph for (Chinese). Empty is the platform's own choice for either.
+pub fn set_typography(family: &str, cjk: &str, size: f32) {
+    let mut font = gpui::font(if family.is_empty() { SharedString::from(UI_FONT) } else { family.to_string().into() });
+    if !cjk.is_empty() { font.fallbacks = Some(FontFallbacks::from_fonts(vec![cjk.to_string()])) }
+    TYPOGRAPHY.with(|value| *value.borrow_mut() = (font, settings::font_size(size) / DEFAULT_FONT_SIZE));
 }
 
-pub fn ui_font() -> SharedString {
+/// The interface font with its Chinese fallback; set with `.font(…)` on a root element.
+pub fn ui_font() -> Font {
     TYPOGRAPHY.with(|value| value.borrow().0.clone())
 }
 

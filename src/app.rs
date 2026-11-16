@@ -272,7 +272,8 @@ pub enum Cmd {
     SetAppearance(String),
     SetLanguage(Language),
     SetDensity(String),
-    SetFontFamily(String),
+    /// The Latin or the Chinese interface font; empty is the platform's own.
+    SetFontFamily(crate::settings::FontSlot, String),
     SetFontSize(f32),
     ResetTypography,
     SetLineSpacing(wisp_core::settings::Spacing),
@@ -2123,7 +2124,7 @@ impl Workspace {
                 self.save_settings(cx);
                 self.apply_appearance(window);
             }
-            Cmd::SetFontFamily(value) => self.set_font_family(value, window, cx),
+            Cmd::SetFontFamily(slot, value) => self.set_font_family(slot, value, window, cx),
             Cmd::SetFontSize(value) => {
                 self.settings.font_size = wisp_core::settings::font_size(value);
                 self.save_settings(cx);
@@ -2131,6 +2132,7 @@ impl Workspace {
             }
             Cmd::ResetTypography => {
                 self.settings.font_family.clear();
+                self.settings.cjk_font_family.clear();
                 self.settings.font_size = wisp_core::settings::DEFAULT_FONT_SIZE;
                 self.save_settings(cx);
                 self.apply_typography(window, cx);
@@ -5863,15 +5865,17 @@ impl Workspace {
                 "theme" => Some(Cmd::SetAppearance(arg.to_string())),
                 // Typography is saved just as through the appearance controls.
                 "fontsize" => arg.parse().ok().map(Cmd::SetFontSize),
+                // `fontpicker:cjk` opens the Chinese font's picker, anything else the Latin one's.
                 "fontpicker" => {
-                    self.toggle_font_picker(window, cx);
+                    self.toggle_font_picker(if arg == "cjk" { crate::settings::FontSlot::Cjk } else { crate::settings::FontSlot::Latin }, window, cx);
                     return;
                 }
                 "fontsearch" => {
                     self.search_settings_fonts(arg, cx);
                     return;
                 }
-                "fontfamily" => Some(Cmd::SetFontFamily(arg.to_string())),
+                "fontfamily" => Some(Cmd::SetFontFamily(crate::settings::FontSlot::Latin, arg.to_string())),
+                "cjkfont" => Some(Cmd::SetFontFamily(crate::settings::FontSlot::Cjk, arg.to_string())),
                 "fontreset" => Some(Cmd::ResetTypography),
                 "linespacing" => Some(Cmd::SetLineSpacing(match arg { "compact" => wisp_core::settings::Spacing::Compact, "relaxed" => wisp_core::settings::Spacing::Relaxed, _ => wisp_core::settings::Spacing::Standard })),
                 "paragraphspacing" => Some(Cmd::SetParagraphSpacing(match arg { "compact" => wisp_core::settings::Spacing::Compact, "relaxed" => wisp_core::settings::Spacing::Relaxed, _ => wisp_core::settings::Spacing::Standard })),

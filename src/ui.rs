@@ -227,7 +227,7 @@ pub fn popover() -> Div {
         .border_1()
         .border_color(Theme::line())
         .shadow(theme::shadow_panel())
-        .font_family(theme::ui_font())
+        .font(theme::ui_font())
         .text_size(text_px(13.))
         .text_color(Theme::text())
 }
@@ -260,7 +260,7 @@ pub fn dialog(width: f32) -> Div {
         .rounded(px(14.))
         .bg(Theme::bg_body())
         .shadow(theme::shadow_panel())
-        .font_family(theme::ui_font())
+        .font(theme::ui_font())
         .text_color(Theme::text())
         .text_size(text_px(13.))
 }
