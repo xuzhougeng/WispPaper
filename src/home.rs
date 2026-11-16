@@ -101,6 +101,7 @@ impl Render for Workspace {
                         Edge::Detail => this.drag_detail(event, window, cx),
                         Edge::Split => this.drag_split(event, window, cx),
                         Edge::Manuscript => this.drag_manuscript(event, window, cx),
+                        Edge::Column => this.drag_column(event, cx),
                     }))
                     .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_drag(cx)))
             }))

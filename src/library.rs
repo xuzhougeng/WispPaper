@@ -2,7 +2,7 @@
 //! its search and filters, and the trash.
 
 use crate::i18n::{label, t};
-use crate::app::{Cmd, Edge, FilterKey, Library, MenuKind, Page, Tab, Translated, Workspace};
+use crate::app::{Cmd, ColumnDrag, Edge, FilterKey, Library, MenuKind, Page, Tab, Translated, Workspace};
 use crate::settings::SettingsPage;
 use crate::theme::{self, Theme, text_px};
 use crate::ui;
@@ -58,10 +58,23 @@ pub(crate) const VIEWS: [(&str, &str, &str, View); 5] = [
     ("view-nopdf", "file-text", "缺 PDF", View::NoPdf),
 ];
 
+/// The columns of the paper table a right click on their names can put away, by the key they are kept under
+/// (`Settings::columns_hidden`, `Settings::column_widths`) and in the order they stand in. A custom field's
+/// column is `field:<id>`, on show while the field is `in_table`.
+pub const COLUMNS: [(&str, &str); 5] = [("journal", "期刊"), ("year", "年份"), ("fulltext", "全文"), ("reading", "阅读"), ("screening", "收录")];
+/// How narrow and how wide a column can be dragged, and what the title keeps.
+const COLUMN_MIN: f32 = 44.;
+const COLUMN_MAX: f32 = 640.;
+const TITLE_MIN: f32 = 300.;
+
 /// A column of the paper table: fixed width, or the flexible title column.
 struct Column {
     label: String,
     width: Option<f32>,
+    /// The key its width is kept under.
+    key: String,
+    /// Narrower than it comes: what its cells show may be cut.
+    narrowed: bool,
     sort: Option<&'static str>,
     /// What the cells show.
     kind: ColumnKind,
@@ -83,6 +96,58 @@ impl ColumnKind {
     /// A short value or a chip: its name and its cells stand centred, so the two line up whatever the chip's padding.
     fn centred(&self) -> bool {
         matches!(self, ColumnKind::Year | ColumnKind::Fulltext | ColumnKind::Reading | ColumnKind::Screening)
+    }
+
+    fn key(&self) -> String {
+        match self {
+            ColumnKind::Star => "star".into(),
+            ColumnKind::Title => "title".into(),
+            ColumnKind::Journal => "journal".into(),
+            ColumnKind::Year => "year".into(),
+            ColumnKind::Field(id) => format!("field:{id}"),
+            ColumnKind::Fulltext => "fulltext".into(),
+            ColumnKind::Reading => "reading".into(),
+            ColumnKind::Screening => "screening".into(),
+        }
+    }
+}
+
+/// The widths of the two columns at an edge that was taken at `drag.x` and is now at `x`: what one gains the
+/// other gives, the title (no width of its own) down to what it can spare, a column between `COLUMN_MIN` and `COLUMN_MAX`.
+fn dragged(drag: &ColumnDrag, x: f32) -> (Option<f32>, f32) {
+    let right = drag.right.1;
+    let (give, take) = match &drag.left {
+        Some((_, left)) => ((left - COLUMN_MIN).max(0.), (COLUMN_MAX - left).max(0.)),
+        None => (drag.spare.max(0.), f32::MAX),
+    };
+    let by = (x - drag.x).clamp(-give.min((COLUMN_MAX - right).max(0.)), take.min((right - COLUMN_MIN).max(0.)));
+    (drag.left.as_ref().map(|(_, left)| left + by), right - by)
+}
+
+/// What a row of the paper table says in full, over a row that had to cut it.
+struct PaperTip {
+    title: String,
+    meta: String,
+    tags: Vec<String>,
+}
+
+impl Render for PaperTip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            // Blocks, not a flex column: a title that wraps is given its second line's height.
+            .w(px(440.))
+            .px(px(10.))
+            .py(px(7.))
+            .rounded(px(6.))
+            .border_1()
+            .border_color(Theme::line())
+            .bg(Theme::bg_body())
+            .text_size(text_px(12.))
+            .line_height(text_px(18.))
+            .text_color(Theme::text_secondary())
+            .child(div().text_size(text_px(13.)).line_height(text_px(19.)).text_color(Theme::text()).child(self.title.clone()))
+            .when(!self.meta.is_empty(), |d| d.child(div().mt(px(3.)).child(self.meta.clone())))
+            .when(!self.tags.is_empty(), |d| d.child(div().mt(px(3.)).flex().flex_wrap().gap_x(px(6.)).text_color(Theme::accent()).children(self.tags.iter().map(|tag| format!("#{tag}")))))
     }
 }
 
@@ -203,8 +268,21 @@ impl Workspace {
 
     /// The edge was let go: the width is kept for the next time.
     pub fn end_drag(&mut self, cx: &mut Context<Self>) {
+        self.column_drag = None;
         if self.resizing.take().is_none() { return }
         self.save_settings(cx);
+        cx.notify();
+    }
+
+    /// The edge between two columns of the paper table is being dragged: it follows the pointer.
+    pub fn drag_column(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        if self.resizing != Some(Edge::Column) { return }
+        if event.pressed_button != Some(MouseButton::Left) { return self.end_drag(cx) }
+        let Some(drag) = &self.column_drag else { return self.end_drag(cx) };
+        let (left, right) = dragged(drag, f32::from(event.position.x));
+        let widths = &mut self.settings.column_widths;
+        if let (Some((key, _)), Some(left)) = (&drag.left, left) { widths.insert(key.clone(), left); }
+        widths.insert(drag.right.0.clone(), right);
         cx.notify();
     }
 
@@ -445,16 +523,23 @@ impl Workspace {
         px(14. + 20.) + text_px(34.) + text_px(26.)
     }
 
-    fn columns(lib: &Library, width: f32) -> Vec<Column> {
-        let column = |label: &str, width: f32, sort: Option<&'static str>, kind: ColumnKind| Column { label: label.to_string(), width: Some(width), sort, kind };
-        let mut columns = vec![column("", 34., None, ColumnKind::Star), Column { label: t("文献").into(), width: None, sort: Some("title"), kind: ColumnKind::Title }];
-        // The title keeps at least 300px; optional columns join while there is room, in this order.
-        let mut room = width - 34. - 300. - 32.;
+    /// The columns of the table in a list `width` wide: the star and the title, then those the reader left on
+    /// show, at the widths the reader gave them, as far as the title keeps `TITLE_MIN`.
+    fn columns(settings: &wisp_core::settings::Settings, lib: &Library, width: f32) -> Vec<Column> {
+        let column = |label: &str, own: f32, sort: Option<&'static str>, kind: ColumnKind| {
+            let key = kind.key();
+            let width = settings.column_widths.get(&key).map_or(own, |w| w.clamp(COLUMN_MIN, COLUMN_MAX));
+            Column { label: label.to_string(), width: Some(width), key, narrowed: width < own, sort, kind }
+        };
+        let mut columns = vec![Column { label: String::new(), width: Some(34.), key: "star".into(), narrowed: false, sort: None, kind: ColumnKind::Star }, Column { label: t("文献").into(), width: None, key: "title".into(), narrowed: false, sort: Some("title"), kind: ColumnKind::Title }];
+        // Optional columns join while there is room, in this order.
+        let mut room = width - 34. - TITLE_MIN - 32.;
         let english = crate::i18n::is_english();
         let mut optional = vec![column(t("阅读"), if english { 112. } else { 76. }, None, ColumnKind::Reading), column(t("年份"), 60., Some("year"), ColumnKind::Year), column(t("全文"), if english { 144. } else { 84. }, None, ColumnKind::Fulltext)];
         optional.extend(lib.fields.iter().filter(|f| f.in_table).map(|f| column(&f.name, 132., None, ColumnKind::Field(f.id.clone()))));
         optional.push(column(t("期刊"), 150., Some("journal"), ColumnKind::Journal));
         optional.push(column(t("收录"), if english { 176. } else { 84. }, None, ColumnKind::Screening));
+        optional.retain(|c| !settings.columns_hidden.contains(&c.key));
         let mut chosen = vec![];
         for c in optional {
             let w = c.width.unwrap_or(0.);
@@ -476,6 +561,11 @@ impl Workspace {
         chosen.sort_by_key(rank);
         columns.extend(chosen);
         columns
+    }
+
+    /// What is left for the title's words in a row `width` wide: the row's padding, the other columns and the cell's padding off.
+    fn title_room(columns: &[Column], width: f32) -> f32 {
+        width - 16. - columns.iter().filter_map(|c| c.width).sum::<f32>() - 16.
     }
 
     fn render_papers(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -589,15 +679,54 @@ impl Workspace {
                 .with_animation("filters-card", Animation::new(std::time::Duration::from_millis(240)), |card, shown| card.opacity(((shown - 0.4) / 0.6).max(0.)))
         });
 
-        let columns = Self::columns(lib, width);
+        let columns = Self::columns(&self.settings, lib, width);
         let (sort_key, sort_desc) = filter::sort_parts(&f.sort);
+        let spare = (Self::title_room(&columns, width) - TITLE_MIN).max(0.);
         let header: Vec<AnyElement> = columns
             .iter()
             .enumerate()
             .map(|(i, c)| {
                 let active = c.sort == Some(sort_key);
+                // The edge at a column's left is held and moved for other widths: the column gives to the one before it or
+                // takes from it (the title has what the others leave). Clicked twice, the column has its own width again.
+                let edge = (i >= 2).then(|| {
+                    let left = columns[i - 1].width.map(|w| (columns[i - 1].key.clone(), w));
+                    let right = (c.key.clone(), c.width.unwrap_or(0.));
+                    let held = self.resizing == Some(Edge::Column) && self.column_drag.as_ref().is_some_and(|drag| drag.right.0 == c.key);
+                    let group = SharedString::from(format!("th-edge-{i}"));
+                    div()
+                        .id(("th-edge", i))
+                        .group(group.clone())
+                        .absolute()
+                        .top_0()
+                        .left(px(-5.))
+                        .w(px(9.))
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_col_resize()
+                        .occlude()
+                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            if event.click_count >= 2 {
+                                this.resizing = None;
+                                this.column_drag = None;
+                                this.settings.column_widths.remove(&right.0);
+                                this.save_settings(cx);
+                            } else {
+                                this.resizing = Some(Edge::Column);
+                                this.column_drag = Some(ColumnDrag { x: f32::from(event.position.x), left: left.clone(), right: right.clone(), spare });
+                            }
+                            cx.notify();
+                        }))
+                        // A tap is over before the layer that follows the pointer is drawn: the edge hears the end of it itself.
+                        .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_drag(cx)))
+                        .child(div().w(px(1.)).h(text_px(14.)).when(held, |d| d.w(px(2.)).h_full().bg(Theme::accent())).when(!held, |d| d.bg(Theme::line_strong()).group_hover(group, |s| s.bg(Theme::accent()))))
+                });
                 div()
                     .id(("th", i))
+                    .relative()
                     .flex()
                     .items_center()
                     .gap(px(3.))
@@ -610,7 +739,8 @@ impl Workspace {
                     .when(c.kind.centred(), |d| d.justify_center())
                     .when_some(c.sort, |d, key| d.cursor_pointer().hover(|s| s.text_color(Theme::text())).on_click(self.on(Cmd::SetSort(filter::toggle_sort(&f.sort, key)), cx)))
                     .when(active, |d| d.text_color(Theme::text()))
-                    .child(c.label.clone())
+                    .child(div().min_w_0().truncate().child(c.label.clone()))
+                    .children(edge)
                     .when(active, |d| d.child(ui::icon("chevron-down", 12., Theme::text()).when(!sort_desc, |s| s.with_transformation(Transformation::rotate(percentage(0.5))))))
                     .into_any_element()
             })
@@ -691,7 +821,13 @@ impl Workspace {
                     cx.notify();
                 }))
             }).children(row))
-            .child(div().flex().flex_none().h(text_px(32.)).px(px(8.)).border_t_1().border_b_1().border_color(Theme::line()).bg(Theme::bg_sunken()).text_size(text_px(12.)).text_color(Theme::text_tertiary()).children(header))
+            .child(div().flex().flex_none().h(text_px(32.)).px(px(8.)).border_t_1().border_b_1().border_color(Theme::line()).bg(Theme::bg_sunken()).text_size(text_px(12.)).text_color(Theme::text_tertiary())
+                // A right click on the names: which columns are on show.
+                .on_mouse_down(MouseButton::Right, cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.open_menu(MenuKind::Columns, event.position, cx);
+                }))
+                .children(header))
             // The papers without a PDF: the open ones among them can be fetched in one go.
             .when(lib.filters.view == View::NoPdf && lookable > 0 && lib.fetching.as_ref().is_none_or(|run| !run.running()), |d| {
                 d.child(
@@ -731,9 +867,18 @@ impl Workspace {
             .into_any_element()
     }
 
-    fn render_rows(&mut self, range: Range<usize>, width: f32, _: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    fn render_rows(&mut self, range: Range<usize>, width: f32, window: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let Some(lib) = &self.lib else { return vec![] };
-        let columns = Self::columns(lib, width);
+        let columns = Self::columns(&self.settings, lib, width);
+        let title_room = Self::title_room(&columns, width);
+        // How wide words come out, to know which a cell cuts: those are said in full under the pointer.
+        let style = window.text_style();
+        let (base, small) = (style.font_size.to_pixels(window.rem_size()), text_px(12.));
+        let wide = |text: &str, size: Pixels, weight: FontWeight| {
+            let text = text.replace('\n', " ");
+            let run = TextRun { len: text.len(), font: Font { weight, ..style.font() }, color: Theme::text(), background_color: None, underline: None, strikethrough: None };
+            f32::from(window.text_system().shape_line(text.into(), size, &[run], None).width)
+        };
         let row_height = self.row_height(false);
         let muted = |text: &str| div().text_color(Theme::text_placeholder()).child(text.to_string());
         range
@@ -749,6 +894,13 @@ impl Workspace {
                             Some(w) => d.w(px(w)).flex_none(),
                             None => d.flex_1().min_w_0(),
                         }).when(c.kind.centred(), |d| d.justify_center());
+                        // A cell that cuts what it shows says it in full under the pointer.
+                        let room = c.width.unwrap_or(0.) - 16.;
+                        let tipped = |cell: Div, tip: Option<String>| match tip {
+                            Some(tip) => cell.id(ElementId::NamedInteger(c.key.clone().into(), row as u64)).tooltip(ui::tip(tip)).into_any_element(),
+                            None => cell.into_any_element(),
+                        };
+                        let chip = |cell: Div, key: &str, name: &str| tipped(cell.child(ui::status_chip(key, name)), c.narrowed.then(|| name.to_string()));
                         match &c.kind {
                             ColumnKind::Star => cell
                                 .px(px(4.))
@@ -779,13 +931,22 @@ impl Workspace {
                                 if !authors.is_empty() { meta.push(authors) }
                                 if let Some(year) = p.year { meta.push(year.to_string()) }
                                 if !p.journal.is_empty() { meta.push(p.journal.clone()) }
-                                cell.child(
+                                let meta = meta.join(" · ");
+                                let weight = if p.reading == "unread" { FontWeight::MEDIUM } else { FontWeight::NORMAL };
+                                let preprint = p.publication_status == "preprint";
+                                let beside = p.tags.iter().take(2).map(|tag| 6. + wide(&format!("#{tag}"), small, FontWeight::NORMAL)).sum::<f32>() + if preprint { 6. + wide(t("预印本"), small, FontWeight::NORMAL) } else { 0. };
+                                let cut = p.tags.len() > 2 || wide(title, base, weight) > title_room + 0.5 || wide(&meta, small, FontWeight::NORMAL) + beside > title_room + 0.5;
+                                let tip = cut.then(|| {
+                                    let (title, meta, tags) = (title.clone(), meta.clone(), p.tags.clone());
+                                    move |_: &mut Window, cx: &mut App| AnyView::from(cx.new(|_| PaperTip { title: title.clone(), meta: meta.clone(), tags: tags.clone() }))
+                                });
+                                cell.id(("title", row)).when_some(tip, |d, tip| d.tooltip(tip)).child(
                                     div()
                                         .flex()
                                         .flex_col()
                                         .min_w_0()
                                         .w_full()
-                                        .child(div().truncate().font_weight(if p.reading == "unread" { FontWeight::MEDIUM } else { FontWeight::NORMAL }).text_color(if p.reading == "unread" { Theme::text() } else { Theme::text_secondary() }).child(title.clone()))
+                                        .child(div().truncate().font_weight(weight).text_color(if p.reading == "unread" { Theme::text() } else { Theme::text_secondary() }).child(title.clone()))
                                         .child(
                                             div()
                                                 .flex()
@@ -794,28 +955,30 @@ impl Workspace {
                                                 .text_size(text_px(12.))
                                                 .line_height(text_px(18.))
                                                 .text_color(Theme::text_tertiary())
-                                                .child(div().min_w_0().truncate().child(if meta.is_empty() { t("作者、年份待补").to_string() } else { meta.join(" · ") }))
-                                                .when(p.publication_status == "preprint", |d| d.child(div().flex_none().text_color(theme::status_colors("preprint").0).child(t("预印本"))))
+                                                .child(div().min_w_0().truncate().child(if meta.is_empty() { t("作者、年份待补").to_string() } else { meta.clone() }))
+                                                .when(preprint, |d| d.child(div().flex_none().text_color(theme::status_colors("preprint").0).child(t("预印本"))))
                                                 .children(p.tags.iter().take(2).map(|t| div().flex_none().text_color(Theme::accent()).child(format!("#{t}")))),
                                         ),
                                 )
                                 .into_any_element()
                             }
-                            ColumnKind::Journal => cell.child(if p.journal.is_empty() { muted("—") } else { div().truncate().text_color(Theme::text_secondary()).child(p.journal.clone()) }).into_any_element(),
+                            ColumnKind::Journal => tipped(cell.child(if p.journal.is_empty() { muted("—") } else { div().truncate().text_color(Theme::text_secondary()).child(p.journal.clone()) }), (wide(&p.journal, base, FontWeight::NORMAL) > room + 0.5).then(|| p.journal.clone())),
                             ColumnKind::Year => cell.child(match p.year {
                                 Some(year) => div().text_color(Theme::text_secondary()).child(year.to_string()),
                                 None => muted("—"),
                             })
                             .into_any_element(),
-                            ColumnKind::Field(id) => cell
-                                .child(match p.fields.get(id) {
-                                    Some(values) => div().truncate().text_color(Theme::text_secondary()).child(values.join("、")),
+                            ColumnKind::Field(id) => {
+                                let said = p.fields.get(id).map(|values| values.join("、"));
+                                let tip = said.clone().filter(|said| wide(said, base, FontWeight::NORMAL) > room + 0.5);
+                                tipped(cell.child(match said {
+                                    Some(said) => div().truncate().text_color(Theme::text_secondary()).child(said),
                                     None => muted("—"),
-                                })
-                                .into_any_element(),
-                            ColumnKind::Fulltext => cell.child(ui::status_chip(&p.fulltext, label(&FULLTEXTS, &p.fulltext))).into_any_element(),
-                            ColumnKind::Reading => cell.child(ui::status_chip(&p.reading, label(&READINGS, &p.reading))).into_any_element(),
-                            ColumnKind::Screening => cell.child(ui::status_chip(&p.screening, label(&SCREENINGS, &p.screening))).into_any_element(),
+                                }), tip)
+                            }
+                            ColumnKind::Fulltext => chip(cell, &p.fulltext, label(&FULLTEXTS, &p.fulltext)),
+                            ColumnKind::Reading => chip(cell, &p.reading, label(&READINGS, &p.reading)),
+                            ColumnKind::Screening => chip(cell, &p.screening, label(&SCREENINGS, &p.screening)),
                         }
                     })
                     .collect();
@@ -1020,7 +1183,8 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that would bring in gpui's own `test` attribute.
-    use super::{ASK_LIST_MAX, ASK_LIST_MIN, ASK_LIST_W, SPLIT_CHAT_MIN, SPLIT_PDF_MIN, ask_list_width, split_chat_width};
+    use super::{ASK_LIST_MAX, ASK_LIST_MIN, ASK_LIST_W, COLUMN_MAX, COLUMN_MIN, SPLIT_CHAT_MIN, SPLIT_PDF_MIN, ask_list_width, dragged, split_chat_width};
+    use crate::app::ColumnDrag;
     use crate::detail::SPLIT_MIN;
 
     #[test]
@@ -1045,5 +1209,20 @@ mod tests {
         assert_eq!(split_chat_width(40., 1000.), SPLIT_CHAT_MIN);
         // The narrowest panel that shows both gives each its least.
         assert!(split_chat_width(2000., crate::detail::SPLIT_MIN) >= SPLIT_CHAT_MIN);
+    }
+
+    #[test]
+    fn edge_between_two_columns() {
+        let drag = |left: Option<f32>, right: f32, spare: f32| ColumnDrag { x: 500., left: left.map(|w| ("journal".to_string(), w)), right: ("year".to_string(), right), spare };
+        // Beside the title, the column takes what the edge is moved by, as far as the title can spare.
+        assert_eq!(dragged(&drag(None, 150., 200.), 440.), (None, 210.));
+        assert_eq!(dragged(&drag(None, 150., 200.), 100.), (None, 350.));
+        // To the right it narrows, down to the least a column has.
+        assert_eq!(dragged(&drag(None, 150., 200.), 900.), (None, COLUMN_MIN));
+        // Between two columns one gains what the other gives; neither goes under the least or over the most.
+        assert_eq!(dragged(&drag(Some(150.), 60., 0.), 510.), (Some(160.), 50.));
+        assert_eq!(dragged(&drag(Some(150.), 60., 0.), 900.), (Some(150. + 60. - COLUMN_MIN), COLUMN_MIN));
+        assert_eq!(dragged(&drag(Some(150.), 60., 0.), 0.), (Some(COLUMN_MIN), 60. + 150. - COLUMN_MIN));
+        assert_eq!(dragged(&drag(Some(150.), COLUMN_MAX - 20., 0.), 0.), (Some(130.), COLUMN_MAX));
     }
 }

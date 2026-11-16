@@ -124,6 +124,10 @@ pub struct Settings {
     pub chat_width: f32,
     /// How wide the reader made the list of papers beside a paper that is asked about; 0 is the width it comes with.
     pub ask_list_width: f32,
+    /// The widths the reader gave the columns of the paper table, by column (`journal`, `year`, `field:<id>`, …); one not here has the width it comes with.
+    pub column_widths: BTreeMap<String, f32>,
+    /// The columns of the paper table the reader put away (a custom field's column is its own `in_table`).
+    pub columns_hidden: Vec<String>,
     /// The paper's conversation over its PDF instead of beside it, and where its window was left.
     pub floating: crate::floating::Floating,
     /// Closing the window keeps the app running in the background (macOS: the Dock, Windows: the tray) instead of quitting.
@@ -139,7 +143,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         let providers = provider::DEFAULT_PRESETS.iter().filter_map(|key| provider::preset(key)).map(Provider::from_preset).collect();
-        let mut settings = Settings { data_dir: String::new(), providers, legacy_profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translate_workers: 4, translation_prompt: String::new(), commands: vec![], connectors: vec![], skills_off: vec![], auto_update: true, auto_download: true, restore_session: true, appearance: String::new(), high_contrast: false, language: Language::default(), density: String::new(), font_family: String::new(), cjk_font_family: String::new(), font_size: DEFAULT_FONT_SIZE, reading_appearance: ReadingAppearance::default(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., floating: Default::default(), keep_running: true, agent_writing: false, agent_manuscript_width: 0., author: String::new() };
+        let mut settings = Settings { data_dir: String::new(), providers, legacy_profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translate_workers: 4, translation_prompt: String::new(), commands: vec![], connectors: vec![], skills_off: vec![], auto_update: true, auto_download: true, restore_session: true, appearance: String::new(), high_contrast: false, language: Language::default(), density: String::new(), font_family: String::new(), cjk_font_family: String::new(), font_size: DEFAULT_FONT_SIZE, reading_appearance: ReadingAppearance::default(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., column_widths: BTreeMap::new(), columns_hidden: vec![], floating: Default::default(), keep_running: true, agent_writing: false, agent_manuscript_width: 0., author: String::new() };
         settings.tidy();
         settings
     }
@@ -425,6 +429,7 @@ impl Settings {
         if !self.sidebar_width.is_finite() || self.sidebar_width < 0. { self.sidebar_width = 0. }
         if !self.chat_width.is_finite() || self.chat_width < 0. { self.chat_width = 0. }
         if !self.ask_list_width.is_finite() || self.ask_list_width < 0. { self.ask_list_width = 0. }
+        self.column_widths.retain(|_, width| width.is_finite() && *width > 0.);
     }
 
     /// The first of `m1`, `m2`, … no model has yet.
