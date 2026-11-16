@@ -84,7 +84,7 @@ impl Workspace {
                         _ => (0..text.len(), false),
                     };
                     // One selection in the window: an answer's goes. The keyboard goes to the window, so that copying finds this one and not a text box.
-                    if let Some(lib) = this.lib.as_mut() { (lib.paper_chat.picked, lib.library_chat.picked) = (None, None) }
+                    if let Some(lib) = this.lib.as_mut() { lib.unpick(); }
                     window.focus(&this.focus);
                     let link = url.clone().filter(|_| held).map(|url| (url, event.position));
                     this.picked = Some(Picked { key: key.clone(), text: text.clone(), anchor: range.start, head: range.end, held, layout: layout.clone(), link });

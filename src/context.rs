@@ -231,8 +231,8 @@ impl Workspace {
             }
             MenuKind::Answer(paper, text) => {
                 if lib.chat(*paper).picked_text().is_some_and(|picked| !picked.is_empty()) {
-                    items.push(MenuItem { label: t("复制所选").into(), checked: false, note: Some(crate::shortcuts::pretty("secondary-c").into()), cmd: Cmd::CopyPicked(*paper) });
-                    items.push(item(t("引用到输入框"), Cmd::QuotePicked(*paper)));
+                    items.push(item(t("引用追问"), Cmd::QuotePicked(*paper)));
+                    items.push(MenuItem { label: t("复制").into(), checked: false, note: Some(crate::shortcuts::pretty("secondary-c").into()), cmd: Cmd::CopyPicked(*paper) });
                     breaks.push(items.len());
                 }
                 items.push(item(t("复制整段回答"), Cmd::CopyText(text.clone())));
