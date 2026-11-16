@@ -26,6 +26,7 @@ mod library;
 mod manuscripts;
 mod markdown;
 mod notes;
+mod palette;
 mod pdf;
 mod picture;
 mod revise;

@@ -46,9 +46,9 @@ pub enum SettingsPage {
 }
 
 impl SettingsPage {
-    const ALL: [SettingsPage; 7] = [SettingsPage::General, SettingsPage::Appearance, SettingsPage::Shortcuts, SettingsPage::Ai, SettingsPage::Customize, SettingsPage::Network, SettingsPage::About];
+    pub(crate) const ALL: [SettingsPage; 7] = [SettingsPage::General, SettingsPage::Appearance, SettingsPage::Shortcuts, SettingsPage::Ai, SettingsPage::Customize, SettingsPage::Network, SettingsPage::About];
 
-    fn title(self) -> &'static str {
+    pub(crate) fn title(self) -> &'static str {
         match self {
             SettingsPage::General => t("通用"),
             SettingsPage::Appearance => t("外观"),
@@ -60,7 +60,7 @@ impl SettingsPage {
         }
     }
 
-    fn icon(self) -> &'static str {
+    pub(crate) fn icon(self) -> &'static str {
         match self {
             SettingsPage::General => "sliders",
             SettingsPage::Appearance => "palette",

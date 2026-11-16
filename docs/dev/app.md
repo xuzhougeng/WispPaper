@@ -98,6 +98,10 @@ Text that is not an answer or a field is selected through `Workspace::selectable
 
 Selecting in an answer: `markdown::render` takes a `Selecting`, keeps the `TextLayout` of every piece it draws and reports where the pointer is as a `Place` (piece, byte); the selection is `Chat::picked`, its text `markdown::text_between`.
 
+## The command palette (`palette.rs`)
+
+`Workspace::palette` is the palette while it is open (⌘K / Ctrl+K, the shortcut `palette`; the same key or Esc puts it away): a layer over the window like a dialog's, drawn by `render_palette` between the dialogs and the menus. Its text field is `choosing`, so the arrow keys, Enter and Esc come to `palette_event` as `InputEvent`s and never reach the list under it; while it is open the other shortcuts wait (`Workspace::shortcut`), and it does not open over a dialog. `palette_rows` makes the rows anew with every change of the text, never in a frame: the commands on offer where the window is (the views and pages of the open library, what 添加文献 offers, export, the other libraries, the appearance, the pages of 设置), then, once something is typed, up to 50 papers of the open library that `filter::says` holds the words (what the list's search box looks through, whatever the filters). A fixed label is found in both languages (`t(label)` and the key); a label put together passes its words in the other language as `also`. Every row ends in a `Cmd` carried out by `palette_take` (a paper is `Cmd::OpenImported`: it opens beside the page in view), so a new command is one more tuple there and nothing else; from 设置, anything but a page or a choice of the settings closes them first.
+
 ## Layout: panels, sidebar, list head, reading mode
 
 The detail panel's width is `Settings::detail_width` (0 is `DETAIL_W`), dragged by its left edge (`detail.rs`). An element only hears the pointer moving over itself, so while an edge is held (`Workspace::resizing`, an `Edge`) a layer over the whole window takes the moves (`home.rs`); do the same for any other drag. A tap is over before that layer is drawn, so each edge also hears its own mouse-up.
