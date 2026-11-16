@@ -22,6 +22,52 @@ const SOURCES_SHOWN: usize = 8;
 /// The papers the first question is kept to that are named over the question box; the rest are counted.
 const PINNED_SHOWN: usize = 8;
 
+/// Where the selection in an answer was drawn, in terms that scrolling
+/// leaves alone: its ends from the answer's top left (`start` the top left
+/// of its first character, `end` the top left of where it ends, on a line
+/// `line` high), the answer's top left in the scrolled content, and the
+/// size of the visible conversation. The bar beside the selection is placed
+/// from it with the scroll offset of the moment it is drawn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Spot {
+    start: Point<Pixels>,
+    end: Point<Pixels>,
+    line: Pixels,
+    answer: Point<Pixels>,
+    view: Size<Pixels>,
+}
+
+impl Spot {
+    /// Where the bar goes from the answer's top left, scrolled by `offset`;
+    /// none while none of the selection is in view.
+    fn bar_at(&self, offset: Point<Pixels>, bar: Size<Pixels>) -> Option<Point<Pixels>> {
+        let shift = self.answer + offset;
+        let (start, end) = (self.start + shift, self.end + shift);
+        let (x, y) = beside_selection((self.view.width.into(), self.view.height.into()), (start.x.into(), start.y.into()), (end.x.into(), end.y.into()), self.line.into(), (bar.width.into(), bar.height.into()))?;
+        Some(point(px(x), px(y)) - shift)
+    }
+}
+
+/// Where the bar of actions on a selection goes in the visible part of a
+/// conversation (`view` wide and high, its top left at 0, 0), for a
+/// selection whose first character has its top left at `start` and which
+/// ends at `end` on a line `line` high, and a bar `bar` in size. Under the
+/// line it ends on, where the eye is when the pointer is let go; else, when
+/// that is too near the bottom, over its first line; and where the selection
+/// fills the view, at the view's foot. Never outside the view; none while
+/// none of the selection is in it.
+pub fn beside_selection(view: (f32, f32), start: (f32, f32), end: (f32, f32), line: f32, bar: (f32, f32)) -> Option<(f32, f32)> {
+    const GAP: f32 = 6.;
+    const EDGE: f32 = 6.;
+    let ((width, height), (bar_width, bar_height)) = (view, bar);
+    let bottom = end.1 + line;
+    if bottom <= 0. || start.1 >= height { return None }
+    let left = |x: f32| (x - 4.).min(width - bar_width - EDGE).max(EDGE);
+    if bottom + GAP + bar_height <= height - EDGE { return Some((left(end.0), bottom + GAP)) }
+    if start.1 - GAP - bar_height >= EDGE { return Some((left(start.0), start.1 - GAP - bar_height)) }
+    Some((left(end.0.min(start.0)), (height - EDGE - bar_height).max(EDGE)))
+}
+
 /// A paper's row of the scope panel on its way into the conversation: what
 /// is held, and the card drawn under the pointer meanwhile.
 #[derive(Clone)]
@@ -927,6 +973,8 @@ impl Workspace {
             workspace.update(cx, |this, cx| this.run(Cmd::GotoCited(talk, citation.label.clone(), citation.page, citation.quote.clone()), window, cx)).ok();
         });
         let picker = cx.entity().downgrade();
+        // The bar by a selection is drawn over everything after it: it gives way to what floats over the conversation, the right-click menu (which holds the same actions) among them.
+        let covered = self.menu.is_some() || self.modal.is_some() || self.palette.is_some() || (talk == Talk::Library && chat.materials_open);
         let mut i = 0;
         while i < chat.messages.len() {
             let content = match &chat.messages[i] {
@@ -987,7 +1035,29 @@ impl Workspace {
                     })
                     .ok();
                 }),
+                drawn: {
+                    let (scroll, measured) = (chat.scroll.clone(), picker.clone());
+                    std::rc::Rc::new(move |drawn, window, cx| {
+                        // In terms scrolling leaves alone: from the answer, and the answer in the scrolled content.
+                        let (view, offset) = (scroll.bounds(), scroll.offset());
+                        let spot = Spot { start: drawn.start - drawn.origin, end: drawn.end - drawn.origin, line: drawn.line, answer: drawn.origin - view.origin - offset, view: view.size };
+                        let measured = measured.clone();
+                        window.defer(cx, move |_, cx| {
+                            measured.update(cx, |this, cx| {
+                                let Some(chat) = this.lib.as_mut().map(|lib| lib.chat_mut(talk)) else { return };
+                                if chat.spot != Some(spot) {
+                                    chat.spot = Some(spot);
+                                    cx.notify();
+                                }
+                            })
+                            .ok();
+                        });
+                    })
+                },
             };
+            // Where the bar of what can be done with the selection goes, once it is made and drawn, and how wide it may be.
+            // Its size is known from the frame before; the first time, that of the bar with its two buttons.
+            let bar = chat.spot.filter(|_| picked.is_some() && !holding && !covered).and_then(|spot| Some((spot.bar_at(chat.scroll.offset(), chat.bar_size.unwrap_or(size(px(156.), px(30.))))?, spot.view.width - px(12.))));
             // Each cited label, once, in the order the answer uses it.
             let cited: Vec<(&ai::Source, Option<usize>, String)> = ai::citations(content).into_iter().filter_map(|cited| chat.sources().iter().find(|s| s.label == cited.label).map(|s| (s, cited.page, cited.quote))).collect();
             // An answer that surveys the library cites dozens of papers: the first few are shown, the rest on request.
@@ -1041,15 +1111,45 @@ impl Workspace {
                     .flex_col()
                     .gap(px(8.))
                     .child(crate::markdown::render(&format!("answer-{side}-{i}"), content, Some(cite.clone()), Some(selecting)).on_mouse_down(MouseButton::Right, self.on_context(MenuKind::Answer(talk, content.to_string()), cx)))
-                    // What is selected in this answer: copied, or taken into the box as a quotation to ask about.
-                    .when(picked.is_some() && !holding, |d| {
-                        d.child(
+                    // What is selected in this answer, in a bar by the selection: taken into the box to ask on, copied, or kept.
+                    .when_some(bar, |d, (at, widest)| {
+                        let measured = picker.clone();
+                        d.relative().child(deferred(
                             div()
+                                .id(SharedString::from(format!("picked-bar-{side}")))
+                                .absolute()
+                                .left(at.x)
+                                .top(at.y)
+                                .max_w(widest)
+                                .flex_wrap()
+                                .p(px(3.))
+                                .rounded(px(8.))
+                                .bg(Theme::bg_body())
+                                .border_1()
+                                .border_color(Theme::line_strong())
+                                .shadow(crate::theme::shadow_card())
+                                .block_mouse_except_scroll()
+                                // A press on the bar is not a press elsewhere, which would end the selection.
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                // How big the bar came out: where it goes next frame, near an edge, goes by it.
+                                .child(canvas(move |bounds, window, cx| {
+                                    let size = bounds.size;
+                                    window.defer(cx, move |_, cx| {
+                                        measured.update(cx, |this, cx| {
+                                            let Some(chat) = this.lib.as_mut().map(|lib| lib.chat_mut(talk)) else { return };
+                                            if chat.bar_size != Some(size) {
+                                                chat.bar_size = Some(size);
+                                                cx.notify();
+                                            }
+                                        })
+                                        .ok();
+                                    });
+                                }, |_, _, _, _| {}).absolute().top_0().left_0().size_full())
                                 .flex()
                                 .items_center()
                                 .gap(px(2.))
-                                .child(ui::ghost_button(SharedString::from(format!("picked-copy-{side}-{i}")), Some("copy"), Some(t("复制所选").into())).h(text_px(24.)).text_size(text_px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::CopyPicked(talk), cx)))
-                                .child(ui::ghost_button(SharedString::from(format!("picked-quote-{side}-{i}")), Some("pen-line"), Some(t("引用到输入框").into())).h(text_px(24.)).text_size(text_px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::QuotePicked(talk), cx)))
+                                .child(ui::ghost_button(SharedString::from(format!("picked-quote-{side}-{i}")), Some("message-square"), Some(t("引用追问").into())).h(text_px(24.)).text_size(text_px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::QuotePicked(talk), cx)))
+                                .child(ui::ghost_button(SharedString::from(format!("picked-copy-{side}-{i}")), Some("copy"), Some(t("复制").into())).h(text_px(24.)).text_size(text_px(12.)).on_click(self.on(Cmd::CopyPicked(talk), cx)))
                                 .when(talk == Talk::Library && review.is_none() && has_manuscript, |d| d.child(ui::ghost_button(SharedString::from(format!("picked-insert-{side}-{i}")), Some("plus"), Some(t("所选插入稿件").into())).h(text_px(24.)).text_size(text_px(12.)).text_color(Theme::accent()).on_click(self.on_menu(MenuKind::InsertInto(None), cx))))
                                 // In a review's conversation, the part selected can be kept in place of the whole answer.
                                 .when_some(review, |d, review| {
@@ -1058,7 +1158,7 @@ impl Workspace {
                                     d.child(ui::ghost_button(SharedString::from(format!("picked-review-{side}-{i}")), Some("check"), Some(label.into())).h(text_px(24.)).text_size(text_px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::Review(what, text.clone()), cx)))
                                         .when(review.step() == 4, |d| d.child(ui::ghost_button(SharedString::from(format!("picked-evidence-{side}-{i}")), Some("plus"), Some(t("记为论断").into())).h(text_px(24.)).text_size(text_px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::EditReviewEvidence(None, text), cx))))
                                 }),
-                        )
+                        ).with_priority(1))
                     })
                     .when(!chips.is_empty(), |d| d.child(div().flex().flex_wrap().gap(px(6.)).children(chips)))
                     .when_some(whole, |d, (question, whole)| {
@@ -1442,7 +1542,30 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that would bring in gpui's own `test` attribute.
-    use super::tools_summary;
+    use super::{beside_selection, tools_summary};
+
+    #[test]
+    fn the_bar_stands_by_the_selection_and_inside_the_view() {
+        // A view 400 by 600, a bar 160 by 30, lines 22 high.
+        let (view, bar, line) = ((400., 600.), (160., 30.), 22.);
+        // Under the line the selection ends on, from where it ends.
+        assert_eq!(beside_selection(view, (40., 100.), (120., 144.), line, bar), Some((116., 172.)));
+        // Near the right edge it is moved in, never out of the view.
+        assert_eq!(beside_selection(view, (40., 100.), (390., 144.), line, bar), Some((234., 172.)));
+        // Too near the foot for the bar under it: over the first line, clear of the words.
+        assert_eq!(beside_selection(view, (40., 300.), (120., 560.), line, bar), Some((36., 264.)));
+        // An end below the view, the start in it: over the start.
+        assert_eq!(beside_selection(view, (40., 300.), (120., 900.), line, bar), Some((36., 264.)));
+        // A start above the view and the end in it: under the end, at the top as need be.
+        assert_eq!(beside_selection(view, (40., -500.), (120., 10.), line, bar), Some((116., 38.)));
+        // The selection fills the view: at its foot.
+        assert_eq!(beside_selection(view, (40., -500.), (120., 900.), line, bar), Some((36., 564.)));
+        // None of it in view, above or below: no bar.
+        assert_eq!(beside_selection(view, (40., -300.), (120., -40.), line, bar), None);
+        assert_eq!(beside_selection(view, (40., 620.), (120., 700.), line, bar), None);
+        // A view narrower than the bar: at its left edge, where it wraps.
+        assert_eq!(beside_selection((120., 600.), (40., 100.), (100., 144.), line, bar), Some((6., 172.)));
+    }
 
     #[test]
     fn a_kept_answer_names_its_section() {

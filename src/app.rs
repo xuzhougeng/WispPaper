@@ -1152,6 +1152,9 @@ pub struct Chat {
     pub review_open: bool,
     /// What is selected in an answer: the answer's place among the messages, the two ends in order of selecting, and whether the pointer is still held.
     pub picked: Option<(usize, crate::markdown::Place, crate::markdown::Place, bool)>,
+    /// Where that selection was last drawn, and how big the bar of actions beside it came out (`chat::Spot`).
+    pub spot: Option<crate::chat::Spot>,
+    pub bar_size: Option<Size<Pixels>>,
     /// The quotations of the answers looked up in the papers they name, by label, page and quotation.
     pub checks: HashMap<(String, Option<usize>, String), ai::Quoted>,
     /// When the question being answered was asked.
@@ -1409,6 +1412,8 @@ impl Chat {
             review_checks: HashMap::new(),
             review_open: false,
             picked: None,
+            spot: None,
+            bar_size: None,
             checks: HashMap::new(),
             started: None,
         }
@@ -1515,6 +1520,7 @@ impl Chat {
         self.review_checks.clear();
         self.review_open = false;
         self.picked = None;
+        self.spot = None;
         self.checks.clear();
         self.started = None;
         self.input.update(cx, |input, cx| {
@@ -1541,6 +1547,20 @@ impl Library {
 
     pub(crate) fn chat_mut(&mut self, talk: Talk) -> &mut Chat {
         chat_of!(self, talk)
+    }
+
+    /// Ends the selection made in an answer, in whichever conversation it is; says whether there was one.
+    /// One the pointer still holds is being made, and stays.
+    pub(crate) fn unpick(&mut self) -> bool {
+        let mut ended = false;
+        for talk in [Talk::Library, Talk::Paper, Talk::Write] {
+            let chat = self.chat_mut(talk);
+            if chat.picked.is_some_and(|(.., held)| !held) {
+                chat.picked = None;
+                ended = true;
+            }
+        }
+        ended
     }
 
     /// What a conversation of this kind is about, which is what it is kept under in the library's history
@@ -2774,7 +2794,7 @@ impl Workspace {
                 }
                 let chat = lib.chat_mut(paper);
                 match (pointer, chat.picked.as_mut()) {
-                    (Pointer::Down, _) => chat.picked = Some((at, place, place, true)),
+                    (Pointer::Down, _) => (chat.picked, chat.spot) = (Some((at, place, place, true)), None),
                     (Pointer::Drag, Some((answer, _, to, true))) if *answer == at => *to = place,
                     (Pointer::Up, Some((_, from, to, held))) if *held => {
                         *held = false;
@@ -3044,7 +3064,7 @@ impl Workspace {
         } else if self.dismiss_font_picker(window, cx) {
         } else if self.settings_view.is_some() {
             self.close_settings(window, cx);
-        } else if self.picked.take().is_some() {
+        } else if self.picked.take().is_some() || self.lib.as_mut().is_some_and(Library::unpick) {
         } else if self.lib.as_ref().is_some_and(|l| l.materials_shown()) {
             // The panel floating over the conversation is put away first; what it searched for stays.
             if let Some(lib) = self.lib.as_mut() {
