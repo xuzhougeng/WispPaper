@@ -94,6 +94,12 @@ pub fn hand_over() -> bool {
     tray::hand_over()
 }
 
+/// Windows: this instance is about to quit for another to start (an update): the next launch is not handed over to it.
+#[cfg(target_os = "windows")]
+pub fn forget() {
+    tray::forget()
+}
+
 #[cfg(target_os = "windows")]
 mod tray {
     use super::show;
@@ -192,6 +198,10 @@ mod tray {
         let mut hasher = std::hash::DefaultHasher::new();
         wisp_core::settings::settings_file().hash(&mut hasher);
         std::env::temp_dir().join(format!("wisp-paper-{:016x}.window", hasher.finish()))
+    }
+
+    pub fn forget() {
+        std::fs::remove_file(marker()).ok();
     }
 
     pub fn hand_over() -> bool {

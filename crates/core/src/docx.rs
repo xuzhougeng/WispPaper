@@ -40,6 +40,7 @@ struct Entry {
 }
 
 /// A zip archive: read whole, its entries kept as they are packed, so one that is not changed is written back unchanged.
+#[derive(Default)]
 pub struct Zip {
     entries: Vec<Entry>,
 }
@@ -75,7 +76,6 @@ impl Zip {
         self.entries.iter().any(|entry| entry.name == name)
     }
 
-    #[cfg(test)]
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.entries.iter().map(|entry| entry.name.as_str())
     }

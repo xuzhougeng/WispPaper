@@ -265,7 +265,7 @@ impl Workspace {
             .child(t("新建文献库"));
         let empty = self.libraries.is_empty();
         let new_version = match &self.update {
-            UpdateState::Available(release) => Some(release.version.clone()),
+            UpdateState::Available(release, _) | UpdateState::Downloading(release) | UpdateState::Ready(release, ..) => Some(release.version.clone()),
             _ => None,
         };
         let page = div()

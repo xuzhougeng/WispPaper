@@ -160,6 +160,25 @@ pub fn latest_release(url: &str) -> Result<Option<Release>, String> {
     }
 }
 
+/// The most a release's package may be; they are some tens of megabytes.
+const MAX_PACKAGE: u64 = 512 << 20;
+
+/// A release's package, checked: the file `name` of the folder `base`
+/// (`update::files_url`), held against its line in that folder's
+/// `SHA256SUMS`. A package that does not match is not handed on.
+pub fn download_release(base: &str, name: &str) -> Result<Vec<u8>, String> {
+    let base = base.trim_end_matches('/');
+    let sums = get_text(&format!("{base}/SHA256SUMS"))?;
+    let expected = update::checksum(&sums, name).ok_or_else(|| format!("发布的校验文件里没有 {name}。"))?;
+    // GitHub can be slow to reach: the package gets half an hour.
+    let mut response = agent(Some(Duration::from_secs(1800)), "")?.get(format!("{base}/{name}")).call().map_err(network_error)?;
+    let status = response.status().as_u16();
+    if !(200..300).contains(&status) { return Err(format!("更新服务器返回 HTTP {status}")) }
+    let bytes = response.body_mut().with_config().limit(MAX_PACKAGE).read_to_vec().map_err(|e| format!("更新包没有下载完：{e}"))?;
+    if update::sha256(&bytes) != expected { return Err("下载的更新包与发布的校验值不一致，已丢弃。".into()) }
+    Ok(bytes)
+}
+
 /// How long to wait before each further try of a request the service could
 /// not take: two more tries, as the model SDKs make.
 const RETRY_WAITS: [u64; 2] = if cfg!(test) { [10, 10] } else { [1000, 3000] };
@@ -692,6 +711,26 @@ event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{
         assert_eq!(latest_release(&base), Err("更新服务器返回 HTTP 503".into()));
         server.join().unwrap();
         assert!(latest_release("http://127.0.0.1:9").unwrap_err().starts_with("网络请求失败"));
+    }
+
+    #[test]
+    fn a_release_package_is_held_against_its_checksum() {
+        let ok = |body: &str| -> &'static str { format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len()).leak() };
+        let sums = ok(&format!("{}  other.zip\n{}  a.dmg\n", "0".repeat(64), update::sha256(b"package")));
+        let (base, server) = serve_in_turn(vec![sums, ok("package")]);
+        assert_eq!(download_release(&format!("{base}/download/v9/"), "a.dmg").as_deref(), Ok(&b"package"[..]));
+        assert!(server.join().unwrap().starts_with("GET /download/v9/a.dmg "));
+
+        // Another content than the one published, a file the release does not list, a release without the file.
+        let (base, server) = serve_in_turn(vec![sums, ok("tampered")]);
+        assert_eq!(download_release(&base, "a.dmg"), Err("下载的更新包与发布的校验值不一致，已丢弃。".into()));
+        server.join().unwrap();
+        let (base, server) = serve(sums);
+        assert_eq!(download_release(&base, "b.dmg"), Err("发布的校验文件里没有 b.dmg。".into()));
+        server.join().unwrap();
+        let (base, server) = serve_in_turn(vec![sums, "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"]);
+        assert_eq!(download_release(&base, "a.dmg"), Err("更新服务器返回 HTTP 404".into()));
+        server.join().unwrap();
     }
 
     /// Talks to Crossref and Europe PMC: `cargo test -- --ignored lookup`.
