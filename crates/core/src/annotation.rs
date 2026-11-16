@@ -36,6 +36,10 @@ impl Kind {
     }
 }
 
+/// The colours a highlight can have, stored by these keys; the first is what a new one gets.
+/// A highlight of a build from before colours reads as the first.
+pub const COLORS: &[&str] = &["yellow", "green", "blue", "pink", "purple"];
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Annotation {
@@ -50,6 +54,8 @@ pub struct Annotation {
     /// One rectangle per selected line: [left, top, right, bottom] in points.
     pub boxes: Vec<[f32; 4]>,
     pub note: String,
+    /// A key of `COLORS` for a highlight; empty for an underline.
+    pub color: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -59,7 +65,7 @@ impl Store {
     /// library; trashed papers retain their marks but are not exposed here.
     pub fn pdf_annotations(&self, paper: &str, resource: &str) -> Result<Vec<Annotation>> {
         let mut stmt = self.db.prepare(
-            "SELECT id, paper_id, resource_id, page, kind, quote, boxes_json, note, created_at, updated_at
+            "SELECT id, paper_id, resource_id, page, kind, quote, boxes_json, note, created_at, updated_at, color
              FROM pdf_annotations WHERE (?1 = '' OR paper_id = ?1) AND (?2 = '' OR resource_id = ?2)
              AND paper_id NOT IN (SELECT paper_id FROM trashed_papers)
              ORDER BY paper_id, resource_id, page, created_at, id",
@@ -67,12 +73,14 @@ impl Store {
         let rows = stmt.query_map(params![paper, resource], |r| {
             let kind: String = r.get(4)?;
             let boxes: String = r.get(6)?;
+            let color: String = r.get(10)?;
             let invalid = |i, e| rusqlite::Error::FromSqlConversionFailure(i, rusqlite::types::Type::Text, Box::new(e));
+            let kind: Kind = serde_json::from_value(serde_json::Value::String(kind)).map_err(|e| invalid(4, e))?;
+            let color = match kind { Kind::Underline => String::new(), Kind::Highlight if COLORS.contains(&color.as_str()) => color, Kind::Highlight => COLORS[0].into() };
             Ok(Annotation {
-                id: r.get(0)?, paper_id: r.get(1)?, resource_id: r.get(2)?, page: r.get::<_, i64>(3)? as usize,
-                kind: serde_json::from_value(serde_json::Value::String(kind)).map_err(|e| invalid(4, e))?,
+                id: r.get(0)?, paper_id: r.get(1)?, resource_id: r.get(2)?, page: r.get::<_, i64>(3)? as usize, kind,
                 quote: r.get(5)?, boxes: serde_json::from_str(&boxes).map_err(|e| invalid(6, e))?,
-                note: r.get(7)?, created_at: r.get(8)?, updated_at: r.get(9)?,
+                note: r.get(7)?, color, created_at: r.get(8)?, updated_at: r.get(9)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -90,11 +98,12 @@ impl Store {
         // A repeated click on the same action must not create duplicate marks.
         if let Some(existing) = self.pdf_annotations(paper, resource)?.into_iter().find(|a| a.page == page && a.kind == kind && a.quote == quote && a.boxes == boxes) { return Ok(existing) }
         let now = now_iso();
-        let annotation = Annotation { id: new_id("A"), paper_id: paper.into(), resource_id: resource.into(), page, kind, quote: quote.into(), boxes: boxes.to_vec(), note: String::new(), created_at: now.clone(), updated_at: now };
+        let color = match kind { Kind::Underline => "", Kind::Highlight => COLORS[0] };
+        let annotation = Annotation { id: new_id("A"), paper_id: paper.into(), resource_id: resource.into(), page, kind, quote: quote.into(), boxes: boxes.to_vec(), note: String::new(), color: color.into(), created_at: now.clone(), updated_at: now };
         self.db.execute(
-            "INSERT INTO pdf_annotations (id, paper_id, resource_id, page, kind, quote, boxes_json, note, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, '', ?8, ?8)",
-            params![annotation.id, paper, resource, page as i64, kind.key(), quote, serde_json::to_string(boxes)?, annotation.created_at],
+            "INSERT INTO pdf_annotations (id, paper_id, resource_id, page, kind, quote, boxes_json, note, color, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, '', ?8, ?9, ?9)",
+            params![annotation.id, paper, resource, page as i64, kind.key(), quote, serde_json::to_string(boxes)?, color, annotation.created_at],
         )?;
         Ok(annotation)
     }
@@ -103,6 +112,13 @@ impl Store {
     pub fn update_pdf_annotation_note(&mut self, resource: &str, id: &str, note: &str) -> Result<()> {
         if note.len() > 100_000 { bail!("标注笔记过长。") }
         if self.db.execute("UPDATE pdf_annotations SET note = ?1, updated_at = ?2 WHERE id = ?3 AND resource_id = ?4", params![note.trim(), now_iso(), id, resource])? == 0 { bail!("PDF 标注不存在。") }
+        Ok(())
+    }
+
+    /// A highlight takes another colour; its text and place stay as they were.
+    pub fn recolor_pdf_annotation(&mut self, resource: &str, id: &str, color: &str) -> Result<()> {
+        if !COLORS.contains(&color) { bail!("不支持的高亮颜色：{color}") }
+        if self.db.execute("UPDATE pdf_annotations SET color = ?1, updated_at = ?2 WHERE id = ?3 AND resource_id = ?4 AND kind = 'highlight'", params![color, now_iso(), id, resource])? == 0 { bail!("这条高亮不存在。") }
         Ok(())
     }
 
@@ -154,6 +170,42 @@ mod tests {
         store.add_pdf_annotation(&other.id, &other_file.id, 1, Kind::Underline, "Leaf", &boxes).unwrap();
         store.delete_paper(&other.id).unwrap();
         assert!(store.pdf_annotations("", "").unwrap().is_empty());
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_highlight_changes_colour_in_place_and_only_the_one_removed_goes() {
+        let root = std::env::temp_dir().join(new_id("wisp-annotation-colour"));
+        let source = root.join("source.pdf");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(&source, b"%PDF-1.4 test source").unwrap();
+        let mut store = Store::in_memory(&root).unwrap();
+        let paper = store.add_paper(Paper { title: "Roots".into(), ..Default::default() }).unwrap();
+        let file = store.import_file(&paper.id, &source, "fulltext").unwrap();
+        let boxes = vec![[10., 20., 80., 30.]];
+        let first = store.add_pdf_annotation(&paper.id, &file.id, 1, Kind::Highlight, "Root growth", &boxes).unwrap();
+        let second = store.add_pdf_annotation(&paper.id, &file.id, 1, Kind::Highlight, "growth", &[[40., 20., 80., 30.]]).unwrap();
+        let line = store.add_pdf_annotation(&paper.id, &file.id, 1, Kind::Underline, "Root", &[[10., 20., 30., 30.]]).unwrap();
+        assert_eq!((first.color.as_str(), line.color.as_str()), (COLORS[0], ""));
+        store.update_pdf_annotation_note(&file.id, &first.id, "Compare").unwrap();
+        store.recolor_pdf_annotation(&file.id, &first.id, "green").unwrap();
+        let saved = store.pdf_annotations("", &file.id).unwrap();
+        let recoloured = saved.iter().find(|a| a.id == first.id).unwrap();
+        assert_eq!((recoloured.color.as_str(), &recoloured.boxes, recoloured.quote.as_str(), recoloured.note.as_str()), ("green", &boxes, "Root growth", "Compare"));
+        assert_eq!(saved.iter().find(|a| a.id == second.id).unwrap().color, COLORS[0]);
+        assert!(store.recolor_pdf_annotation(&file.id, &first.id, "black").is_err());
+        assert!(store.recolor_pdf_annotation(&file.id, &line.id, "green").is_err());
+        assert!(store.recolor_pdf_annotation("other", &first.id, "blue").is_err());
+        // A highlight of a build from before colours reads as the first colour.
+        store.db.execute("UPDATE pdf_annotations SET color = '' WHERE id = ?1", [&second.id]).unwrap();
+        assert_eq!(store.pdf_annotations("", &file.id).unwrap().iter().find(|a| a.id == second.id).unwrap().color, COLORS[0]);
+        store.remove_pdf_annotation(&file.id, &second.id).unwrap();
+        let mut left: Vec<_> = store.pdf_annotations("", &file.id).unwrap().into_iter().map(|a| (a.id, a.color)).collect();
+        left.sort();
+        let mut kept = vec![(first.id, "green".to_string()), (line.id, String::new())];
+        kept.sort();
+        assert_eq!(left, kept);
         drop(store);
         std::fs::remove_dir_all(root).unwrap();
     }
