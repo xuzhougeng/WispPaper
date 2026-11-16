@@ -130,6 +130,8 @@ pub enum MenuKind {
     InsertInto(Option<String>),
     /// Which model a task uses (设置 › AI).
     TaskModel(Task),
+    /// 提取: the model to read what the last run left with.
+    ExtractRetry,
     /// The services a provider can be added from (设置 › AI › 模型).
     AddProvider,
     /// How hard the n-th model of the provider on show thinks.
@@ -1798,6 +1800,21 @@ impl Workspace {
 
     // ---- menus
 
+    /// The rows of a menu of models: each provider's models that `fits`, in its group; one without a key says so beside it.
+    fn model_items(&self, fits: impl Fn(&wisp_core::provider::Model) -> bool, chosen: &str, cmd: impl Fn(String) -> Cmd, items: &mut Vec<MenuItem>, breaks: &mut Vec<usize>) {
+        let fits = |m: &wisp_core::provider::Model| !m.model.trim().is_empty() && fits(m);
+        let mut providers = self.settings.providers.iter().filter(|p| p.models.iter().any(fits)).peekable();
+        while let Some(provider) = providers.next() {
+            let note: SharedString = if provider.key().is_empty() { tf!("{} · 缺 API Key", "{} · no API key", provider.title()).into() } else { provider.title().into() };
+            for model in provider.models.iter().filter(|m| fits(m)) {
+                // A model that judges is no model like the others in the list: it says so.
+                let note = if model.judges() { tf!("{note} · 判断模型", "{note} · judging model").into() } else { note.clone() };
+                items.push(MenuItem { label: model.model.trim().to_string().into(), checked: chosen == model.id, note: Some(note), cmd: cmd(model.id.clone()) });
+            }
+            if providers.peek().is_some() { breaks.push(items.len()) }
+        }
+    }
+
     pub(crate) fn open_menu(&mut self, kind: MenuKind, at: Point<Pixels>, cx: &mut Context<Self>) {
         let item = |label: &str, cmd: Cmd| MenuItem { label: label.to_string().into(), checked: false, note: None, cmd };
         let mut items = vec![];
@@ -1898,18 +1915,12 @@ impl Workspace {
                     items.push(MenuItem { label: t("与助手相同").into(), checked: chosen.is_empty(), note: None, cmd: Cmd::SetTaskModel(task, String::new()) });
                     breaks.push(items.len());
                 }
-                // Each provider's models of the task's kind, in its group; one without a key says so beside it.
-                let fits = |m: &wisp_core::provider::Model| !m.model.trim().is_empty() && task.takes(m);
-                let mut providers = self.settings.providers.iter().filter(|p| p.models.iter().any(fits)).peekable();
-                while let Some(provider) = providers.next() {
-                    let note: SharedString = if provider.key().is_empty() { tf!("{} · 缺 API Key", "{} · no API key", provider.title()).into() } else { provider.title().into() };
-                    for model in provider.models.iter().filter(|m| fits(m)) {
-                        // A model that judges is no model like the others in the list: it says so.
-                        let note = if model.judges() { tf!("{note} · 判断模型", "{note} · judging model").into() } else { note.clone() };
-                        items.push(MenuItem { label: model.model.trim().to_string().into(), checked: chosen == model.id, note: Some(note), cmd: Cmd::SetTaskModel(task, model.id.clone()) });
-                    }
-                    if providers.peek().is_some() { breaks.push(items.len()) }
-                }
+                self.model_items(|m| task.takes(m), &chosen, |id| Cmd::SetTaskModel(task, id), &mut items, &mut breaks);
+            }
+            MenuKind::ExtractRetry => {
+                let Some(lib) = self.lib.as_ref() else { return };
+                // 提取 writes values out: a model that only judges cannot.
+                self.model_items(|m| m.speaks(), &self.extract_profile(&lib.extract.with).id, |id| Cmd::Extract(crate::extract::Do::Retry(id)), &mut items, &mut breaks);
             }
             MenuKind::Screening(id) => {
                 let Some(current) = self.lib.as_ref().and_then(|l| l.paper(&id)).map(|p| p.screening.clone()) else { return };
@@ -5674,8 +5685,8 @@ impl Workspace {
                     return;
                 }
                 "menu" => {
-                    let kind = match arg { "sort" => MenuKind::Sort, "year" => MenuKind::Filter(FilterKey::Year), "zoom" => MenuKind::PdfZoom, "fulltext" => MenuKind::Filter(FilterKey::Fulltext), "manuscripts" => MenuKind::Manuscripts, "export" => MenuKind::ManuscriptExport, _ => MenuKind::Add };
-                    self.open_menu(kind, point(px(if matches!(arg, "zoom" | "manuscripts" | "export") { 900. } else { 20. }), px(120.)), cx);
+                    let kind = match arg { "sort" => MenuKind::Sort, "year" => MenuKind::Filter(FilterKey::Year), "zoom" => MenuKind::PdfZoom, "fulltext" => MenuKind::Filter(FilterKey::Fulltext), "manuscripts" => MenuKind::Manuscripts, "export" => MenuKind::ManuscriptExport, "retry" => MenuKind::ExtractRetry, _ => MenuKind::Add };
+                    self.open_menu(kind, point(px(if matches!(arg, "zoom" | "manuscripts" | "export" | "retry") { 900. } else { 20. }), px(120.)), cx);
                     return;
                 }
                 "search" => {
