@@ -188,6 +188,7 @@
   "只看": "Only",
   "不含": "Exclude",
   "清空筛选": "Clear filters",
+  "恢复默认列宽": "Reset column widths",
   "这个文献库还是空的": "This library is empty",
   "点击左侧「添加文献」：粘贴 DOI 或 PMID、导入 BibTeX / RIS，或者直接把 PDF 或整个文件夹拖进窗口（子文件夹的名字会成为标签）。": "Click “Add papers” to paste a DOI or PMID or import BibTeX / RIS. You can also drop PDFs or a folder into the window; subfolder names become tags.",
   "没有匹配的文献": "No matching papers",

@@ -81,6 +81,20 @@ pub enum Edge {
     Split,
     /// Between the conversation that writes and its manuscript (`write_agent.rs`).
     Manuscript,
+    /// Between two columns of the paper table (`Workspace::column_drag` says which).
+    Column,
+}
+
+/// The edge between two columns of the paper table, as it was when the pointer took it.
+pub struct ColumnDrag {
+    /// Where the pointer was.
+    pub x: f32,
+    /// The column at the edge's left with its width, unless that is the title, which has what the others leave.
+    pub left: Option<(String, f32)>,
+    /// The column at its right.
+    pub right: (String, f32),
+    /// How much the title can still give up.
+    pub spare: f32,
 }
 
 /// Which of a library's conversations: the one with the library (助手), the one about the selected paper,
@@ -159,6 +173,8 @@ pub enum MenuKind {
     Add,
     Filter(FilterKey),
     Sort,
+    /// The columns of the paper table: which are on show (a right click on their names).
+    Columns,
     Export,
     Reading(String),
     Screening(String),
@@ -411,6 +427,10 @@ pub enum Cmd {
     DeleteField(String),
     MoveField(String, i32),
     ToggleFieldInTable(String),
+    /// Show or put away a column of the paper table that is not a custom field's.
+    ToggleColumn(String),
+    /// The columns of the paper table get back the widths they come with.
+    ResetColumnWidths,
     AddPreset,
     // Questions
     Ask(Talk),
@@ -1365,6 +1385,7 @@ pub struct Workspace {
     pub home_scroll: ScrollHandle,
     /// The edge being dragged: the sidebar's, the detail panel's, or the one between a paper's conversation and its PDF.
     pub resizing: Option<Edge>,
+    pub column_drag: Option<ColumnDrag>,
     /// What is selected in a text of the window that is not an answer or a text field.
     pub picked: Option<crate::select::Picked>,
     /// A paper of the scope panel is held and on its way into the conversation (`chat::PaperDrag`).
@@ -1802,7 +1823,7 @@ impl Workspace {
         theme::set_accent("blue");
         shortcuts::rebuild(&settings.shortcuts, cx);
         let libraries = libraries::list(&root);
-        let mut this = Workspace { focus, settings, settings_path, root, libraries, lib: None, settings_view: None, connections: vec![], skills: vec![], update: UpdateState::Idle, update_told: None, session: Session::default(), modal: None, modal_error: String::new(), modal_subscriptions: vec![], menu: None, palette: None, toast, home_scroll: ScrollHandle::new(), resizing: None, picked: None, pinning: false, filters_over: [false; 2], filters_drawn: false };
+        let mut this = Workspace { focus, settings, settings_path, root, libraries, lib: None, settings_view: None, connections: vec![], skills: vec![], update: UpdateState::Idle, update_told: None, session: Session::default(), modal: None, modal_error: String::new(), modal_subscriptions: vec![], menu: None, palette: None, toast, home_scroll: ScrollHandle::new(), resizing: None, column_drag: None, picked: None, pinning: false, filters_over: [false; 2], filters_drawn: false };
         this.apply_appearance(window);
         this.apply_typography(window, cx);
         cx.observe_window_appearance(window, |this, window, _| this.apply_appearance(window)).detach();
@@ -1957,6 +1978,19 @@ impl Workspace {
                 for (label, zoom) in fits.into_iter().chain(sizes) {
                     let note = (zoom == Zoom::FitWidth && !key.is_empty()).then(|| crate::shortcuts::pretty(&key).into());
                     items.push(MenuItem { label: label.into(), checked: current == zoom, note, cmd: Cmd::PdfZoom(ZoomTo::Set(zoom)) });
+                }
+            }
+            MenuKind::Columns => {
+                let Some(lib) = &self.lib else { return };
+                for (key, name) in crate::library::COLUMNS {
+                    items.push(MenuItem { label: t(name).into(), checked: !self.settings.columns_hidden.iter().any(|k| k == key), note: None, cmd: Cmd::ToggleColumn(key.into()) });
+                }
+                for field in &lib.fields {
+                    items.push(MenuItem { label: field.name.clone().into(), checked: field.in_table, note: None, cmd: Cmd::ToggleFieldInTable(field.id.clone()) });
+                }
+                if !self.settings.column_widths.is_empty() {
+                    breaks.push(items.len());
+                    items.push(item(t("恢复默认列宽"), Cmd::ResetColumnWidths));
                 }
             }
             MenuKind::Sort => {
@@ -2593,6 +2627,18 @@ impl Workspace {
                     field.in_table = !field.in_table;
                     lib.store.save_field(&mut field)
                 });
+            }
+            Cmd::ToggleColumn(key) => {
+                let hidden = &mut self.settings.columns_hidden;
+                match hidden.iter().position(|k| *k == key) {
+                    Some(i) => drop(hidden.remove(i)),
+                    None => hidden.push(key),
+                }
+                self.save_settings(cx);
+            }
+            Cmd::ResetColumnWidths => {
+                self.settings.column_widths.clear();
+                self.save_settings(cx);
             }
             Cmd::AddPreset => {
                 self.change(cx, |lib| {
@@ -5475,7 +5521,7 @@ impl Workspace {
                     if let Ok(stroke) = Keystroke::parse(arg) { window.defer(cx, move |window, cx| { window.dispatch_keystroke(stroke, cx); }) }
                     return;
                 }
-                "press" | "move" | "release" | "click" | "click2" | "click3" | "rclick" | "wheel" => {
+                "press" | "move" | "hover" | "release" | "click" | "click2" | "click3" | "rclick" | "wheel" => {
                     let mut numbers = arg.split(';');
                     let mut number = || numbers.next().and_then(|n| n.parse::<f32>().ok()).unwrap_or(0.);
                     let position = point(px(number()), px(number()));
@@ -5486,6 +5532,7 @@ impl Workspace {
                     let events = match name {
                         "press" => vec![PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Left, position, modifiers, click_count: 1, first_mouse: false })],
                         "move" => vec![PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: Some(MouseButton::Left), modifiers })],
+                        "hover" => vec![PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: None, modifiers })],
                         "release" => vec![PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Left, position, modifiers, click_count: 1 })],
                         "rclick" => vec![PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: None, modifiers }), PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Right, position, modifiers, click_count: 1, first_mouse: false }), PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Right, position, modifiers, click_count: 1 })],
                         "wheel" => vec![PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: None, modifiers }), PlatformInput::ScrollWheel(ScrollWheelEvent { position, delta: ScrollDelta::Pixels(point(px(0.), px(turned))), modifiers, touch_phase: TouchPhase::Moved })],
@@ -5618,6 +5665,12 @@ impl Workspace {
                 // `asklist:240` is the width of the list beside a paper that is asked about (`tab:ask`).
                 "asklist" => {
                     self.settings.ask_list_width = arg.parse().unwrap_or(0.);
+                    cx.notify();
+                    return;
+                }
+                // `column:journal=240` gives a column of the paper table a width (`year`, `fulltext`, `reading`, `screening`, `field:<id>`).
+                "column" => {
+                    if let Some((key, width)) = arg.split_once('=') { self.settings.column_widths.insert(key.into(), width.parse().unwrap_or(0.)); }
                     cx.notify();
                     return;
                 }
@@ -5828,7 +5881,7 @@ impl Workspace {
                     return;
                 }
                 "menu" => {
-                    let kind = match arg { "sort" => MenuKind::Sort, "year" => MenuKind::Filter(FilterKey::Year), "zoom" => MenuKind::PdfZoom, "fulltext" => MenuKind::Filter(FilterKey::Fulltext), "manuscripts" => MenuKind::Manuscripts, "export" => MenuKind::ManuscriptExport, "retry" => MenuKind::ExtractRetry, _ => MenuKind::Add };
+                    let kind = match arg { "sort" => MenuKind::Sort, "columns" => MenuKind::Columns, "year" => MenuKind::Filter(FilterKey::Year), "zoom" => MenuKind::PdfZoom, "fulltext" => MenuKind::Filter(FilterKey::Fulltext), "manuscripts" => MenuKind::Manuscripts, "export" => MenuKind::ManuscriptExport, "retry" => MenuKind::ExtractRetry, _ => MenuKind::Add };
                     self.open_menu(kind, point(px(if matches!(arg, "zoom" | "manuscripts" | "export" | "retry") { 900. } else { 20. }), px(120.)), cx);
                     return;
                 }
