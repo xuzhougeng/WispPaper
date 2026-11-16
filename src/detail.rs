@@ -445,13 +445,9 @@ impl Workspace {
             let view = pdf.read(cx);
             (view.current_page(), view.page_count(), view.percent(), view.zoom(), view.cutting())
         };
-        // The size chosen here is the one the next paper opens at.
-        if let Some(lib) = self.lib.as_mut() { lib.zoom = zoom }
-        let fit = match zoom {
-            Zoom::FitWidth => t("适应宽度"),
-            Zoom::FitPage => t("适应整页"),
-            Zoom::Percent(_) => "",
-        };
+        // The fit the reader reads at, which a zoom by hand goes back to.
+        let fit = lib.zoom;
+        let fit_label = |zoom: Zoom| if zoom == Zoom::FitPage { t("适应整页") } else { t("适应宽度") };
         let tool = |id: &'static str, icon: &'static str| ui::ghost_button(id, Some(icon), None).h(text_px(24.)).min_w(px(24.));
         div()
             .flex()
@@ -481,8 +477,10 @@ impl Workspace {
                                 .flex_none()
                                 .items_center()
                                 .child(tool("pdf-zoom-out", "minus").on_click(self.on(Cmd::PdfZoom(ZoomTo::Out), cx)))
-                                .child(ui::ghost_button("pdf-zoom", None, Some(if fit.is_empty() { format!("{}%", percent.round()).into() } else { format!("{fit} · {}%", percent.round()).into() })).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).on_click(self.on_menu(MenuKind::PdfZoom, cx)))
-                                .child(tool("pdf-zoom-in", "plus").on_click(self.on(Cmd::PdfZoom(ZoomTo::In), cx))),
+                                .child(ui::ghost_button("pdf-zoom", None, Some(if zoom.fits() { format!("{} · {}%", fit_label(zoom), percent.round()).into() } else { format!("{}%", percent.round()).into() })).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).on_click(self.on_menu(MenuKind::PdfZoom, cx)))
+                                .child(tool("pdf-zoom-in", "plus").on_click(self.on(Cmd::PdfZoom(ZoomTo::In), cx)))
+                                // Zoomed by hand: one click back to the fit the reader reads at, offered only then.
+                                .when(!zoom.fits(), |d| d.child(ui::ghost_button("pdf-zoom-fit", None, Some(fit_label(fit).into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).on_click(self.on(Cmd::PdfZoom(ZoomTo::Set(fit)), cx)))),
                         )
                     })
                     // Cut a piece out of a page (a figure, a table): to keep in the figure library, or as a picture for the next question.
