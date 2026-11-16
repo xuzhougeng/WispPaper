@@ -1288,7 +1288,7 @@ pub struct Library {
     pub note_links: BTreeMap<String, String>,
     pub pdf: Option<Entity<PdfView>>,
     pdf_events: Option<Subscription>,
-    /// How large PDF pages are drawn; it stays from paper to paper.
+    /// The fit PDF pages are drawn at (`Zoom::carried`): it stays from paper to paper, a percentage does not.
     pub zoom: Zoom,
     pub library_chat: Chat,
     pub paper_chat: Chat,
@@ -1933,8 +1933,10 @@ impl Workspace {
                 let Some(current) = self.lib.as_ref().and_then(|lib| lib.pdf.as_ref()).map(|pdf| pdf.read(cx).zoom()) else { return };
                 let fits = [(t("适应宽度"), Zoom::FitWidth), (t("适应整页"), Zoom::FitPage)].map(|(label, zoom)| (label.to_string(), zoom));
                 let sizes = [50., 75., 100., 125., 150., 200., 300., 400.].map(|percent| (if percent == 100. { t("100%（实际大小）").to_string() } else { format!("{percent}%") }, Zoom::Percent(percent)));
+                let key = crate::shortcuts::key_of("zoom-fit", &self.settings.shortcuts);
                 for (label, zoom) in fits.into_iter().chain(sizes) {
-                    items.push(MenuItem { label: label.into(), checked: current == zoom, note: None, cmd: Cmd::PdfZoom(ZoomTo::Set(zoom)) });
+                    let note = (zoom == Zoom::FitWidth && !key.is_empty()).then(|| crate::shortcuts::pretty(&key).into());
+                    items.push(MenuItem { label: label.into(), checked: current == zoom, note, cmd: Cmd::PdfZoom(ZoomTo::Set(zoom)) });
                 }
             }
             MenuKind::Sort => {
@@ -2532,7 +2534,14 @@ impl Workspace {
             Cmd::FloatChat(on) => self.float_chat(on, window, cx),
             Cmd::FoldChat(fold) => self.fold_chat(fold, window, cx),
             Cmd::PdfZoom(to) => {
-                if let Some(pdf) = self.lib.as_ref().filter(|lib| lib.tab == Tab::Pdf || lib.split).and_then(|lib| lib.pdf.clone()) { pdf.update(cx, |pdf, cx| pdf.zoom_to(to, cx)) }
+                if let Some(lib) = self.lib.as_mut().filter(|lib| lib.tab == Tab::Pdf || lib.split) && let Some(pdf) = lib.pdf.clone() {
+                    // A fit chosen is the one the next paper opens at; a percentage stays with this paper.
+                    lib.zoom = pdf.update(cx, |pdf, cx| {
+                        pdf.zoom_to(to, cx);
+                        pdf.zoom()
+                    })
+                    .carried(lib.zoom);
+                }
             }
             Cmd::ToggleTranslation => {
                 if let Some(lib) = self.lib.as_mut() { lib.show_translation = !lib.show_translation }

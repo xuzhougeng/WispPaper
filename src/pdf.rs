@@ -155,6 +155,20 @@ pub enum Zoom {
     Percent(f32),
 }
 
+impl Zoom {
+    /// Whether the pages follow the viewer's size.
+    pub fn fits(self) -> bool {
+        !matches!(self, Zoom::Percent(_))
+    }
+
+    /// What the next paper opens at, this one being left at `self` and
+    /// `kept` the fit before: a fit is how the reader reads and stays; a
+    /// percentage was for a figure of this paper, and the fit comes back.
+    pub fn carried(self, kept: Zoom) -> Zoom {
+        if self.fits() { self } else { kept }
+    }
+}
+
 /// A change of zoom asked for from the toolbar, the menu or the keyboard.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ZoomTo {
@@ -182,6 +196,15 @@ fn render_scale(page: (f32, f32), wanted: f32) -> f32 {
     let step = [2., 3., 4., 6., 8., 12., 16.].into_iter().find(|step| *step >= wanted - 0.01).unwrap_or(16.);
     // Pixmaps are at most 65535 px a side; huge posters render smaller.
     step.min((MAX_PAGE_PIXELS / (page.0 * page.1).max(1.)).sqrt()).min(8000. / page.0.max(page.1).max(1.))
+}
+
+/// Whether a picture rendered at `at` device pixels per point still serves
+/// a page that wants `wanted` (its `render_scale`) and is shown at `shown`:
+/// never softer, and up to half again sharper, so that a viewer made a
+/// little narrower (a panel dragged, the window resized) does not render
+/// its pages again, while one zoomed far out lets the large pictures go.
+fn picture_serves(at: f32, wanted: f32, shown: f32) -> bool {
+    at >= wanted - 0.01 && at <= wanted.max(shown * 1.5) + 0.01
 }
 
 /// The next size up or down from this one, in percent.
@@ -761,7 +784,7 @@ impl PdfView {
         // The picture this size wants. One made for another size is shown, stretched, until its own arrives.
         let wanted = render_scale((w, h), scale * self.device_scale);
         let image = self.images.get(&index).map(|(image, at, _)| (image.clone(), *at));
-        let stale = image.as_ref().is_none_or(|(_, at)| (at - wanted).abs() > 0.01);
+        let stale = image.as_ref().is_none_or(|(_, at)| !picture_serves(*at, wanted, scale * self.device_scale));
         if image.is_some() { self.touch(index) }
         if stale && !self.broken.contains(&index) && self.pending.insert(index) {
             // A page not drawn yet comes quickly and coarse first, then at the size it is shown at.
@@ -1389,7 +1412,7 @@ impl Render for PdfView {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that would bring in gpui's own `test` attribute.
-    use super::{CARD_EDGE, CardPlace, CitationFocus, CitationStatus, MARGIN, POINT_PX, Zoom, card_place, page_scale, render_scale, zoom_step};
+    use super::{CARD_EDGE, CardPlace, CitationFocus, CitationStatus, MARGIN, POINT_PX, Zoom, card_place, page_scale, picture_serves, render_scale, zoom_step};
 
     #[test]
     fn page_only_citation_marks_its_page_before_or_after_pdf_opens() {
@@ -1497,5 +1520,33 @@ mod tests {
         assert!(capped < 7. && capped * capped * 595. * 842. <= 24_000_001.);
         // A poster stays under the longest side a pixmap can have.
         assert!(render_scale((10_000., 4_000.), 2.) * 10_000. <= 8000.5);
+    }
+
+    #[test]
+    fn a_fit_follows_the_viewer_and_the_reader() {
+        let a4 = (595., 842.);
+        // At a fit the page grows and shrinks with the reading area; a percentage does not.
+        assert!(page_scale(Zoom::FitWidth, a4, (1400., 900.)) > page_scale(Zoom::FitWidth, a4, (700., 900.)));
+        assert_eq!(page_scale(Zoom::Percent(150.), a4, (1400., 900.)), page_scale(Zoom::Percent(150.), a4, (700., 900.)));
+        // The next paper opens at the fit the reader chose; a percentage was for one figure.
+        assert_eq!(Zoom::FitWidth.carried(Zoom::FitWidth), Zoom::FitWidth);
+        assert_eq!(Zoom::FitPage.carried(Zoom::FitWidth), Zoom::FitPage);
+        assert_eq!(Zoom::Percent(150.).carried(Zoom::FitWidth), Zoom::FitWidth);
+        assert_eq!(Zoom::Percent(150.).carried(Zoom::FitPage), Zoom::FitPage);
+        assert!(Zoom::FitPage.fits() && !Zoom::Percent(100.).fits());
+    }
+
+    #[test]
+    fn a_narrower_viewer_keeps_its_pictures() {
+        let a4 = (595., 842.);
+        // A page shown at 3.2 device pixels a point wants a picture at 4; at 2.9 it would want 3, and the 4 serves.
+        let (wide, narrow) = (render_scale(a4, 3.2), render_scale(a4, 2.9));
+        assert_eq!((wide, narrow), (4., 3.));
+        assert!(picture_serves(wide, narrow, 2.9));
+        // Wider again, a softer picture does not.
+        assert!(!picture_serves(narrow, wide, 3.2));
+        // Zoomed far out, a large picture is let go of.
+        assert!(!picture_serves(12., render_scale(a4, 2.), 2.));
+        assert!(picture_serves(3., 3., 2.6));
     }
 }
