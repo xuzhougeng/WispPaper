@@ -97,8 +97,11 @@ pub struct Settings {
     pub language: Language,
     /// "compact" or "comfortable" changes the paper rows; empty is standard.
     pub density: String,
-    /// Interface font family; empty uses the platform default.
+    /// Interface font family for Latin letters, digits and symbols; empty uses the platform default.
     pub font_family: String,
+    /// Font family for Chinese characters, a fallback of `font_family` (only what that font cannot
+    /// draw is drawn in it); empty leaves Chinese to the platform's fallback.
+    pub cjk_font_family: String,
     /// Base interface size in logical pixels; other text sizes follow its ratio.
     pub font_size: f32,
     pub reading_appearance: ReadingAppearance,
@@ -132,7 +135,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         let providers = provider::DEFAULT_PRESETS.iter().filter_map(|key| provider::preset(key)).map(Provider::from_preset).collect();
-        let mut settings = Settings { data_dir: String::new(), providers, legacy_profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translate_workers: 4, translation_prompt: String::new(), commands: vec![], connectors: vec![], skills_off: vec![], auto_update: true, appearance: String::new(), high_contrast: false, language: Language::default(), density: String::new(), font_family: String::new(), font_size: DEFAULT_FONT_SIZE, reading_appearance: ReadingAppearance::default(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., floating: Default::default(), keep_running: true, agent_writing: false, agent_manuscript_width: 0., author: String::new() };
+        let mut settings = Settings { data_dir: String::new(), providers, legacy_profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translate_workers: 4, translation_prompt: String::new(), commands: vec![], connectors: vec![], skills_off: vec![], auto_update: true, appearance: String::new(), high_contrast: false, language: Language::default(), density: String::new(), font_family: String::new(), cjk_font_family: String::new(), font_size: DEFAULT_FONT_SIZE, reading_appearance: ReadingAppearance::default(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., floating: Default::default(), keep_running: true, agent_writing: false, agent_manuscript_width: 0., author: String::new() };
         settings.tidy();
         settings
     }
@@ -333,6 +336,7 @@ impl Settings {
         self.high_contrast = false;
         self.density.clear();
         self.font_family.clear();
+        self.cjk_font_family.clear();
         self.font_size = DEFAULT_FONT_SIZE;
         self.reading_appearance = ReadingAppearance::default();
     }
@@ -351,6 +355,7 @@ impl Settings {
         }
         self.font_size = font_size(self.font_size);
         self.font_family = self.font_family.trim().to_string();
+        self.cjk_font_family = self.cjk_font_family.trim().to_string();
         let mut seen = std::collections::HashSet::new();
         for p in 0..self.providers.len() {
             let id = self.providers[p].id.trim().to_string();
@@ -533,6 +538,7 @@ mod tests {
         settings.appearance = "dark".into();
         settings.density = "comfortable".into();
         settings.font_family = "Example Sans".into();
+        settings.cjk_font_family = "Example Song".into();
         settings.font_size = 18.;
         settings.language = Language::En;
         settings.sidebar_width = 280.;
@@ -543,7 +549,7 @@ mod tests {
         reset.reset_appearance();
         assert_eq!(reset.reading_appearance, ReadingAppearance::default());
         assert!(!reset.high_contrast);
-        assert!(reset.appearance.is_empty() && reset.density.is_empty() && reset.font_family.is_empty());
+        assert!(reset.appearance.is_empty() && reset.density.is_empty() && reset.font_family.is_empty() && reset.cjk_font_family.is_empty());
         assert_eq!(reset.font_size, DEFAULT_FONT_SIZE);
         assert_eq!(reset.providers, settings.providers);
         assert_eq!(reset.tasks, settings.tasks);
@@ -563,19 +569,22 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("wisp-fonts-{}", crate::model::new_id("T")));
         let path = dir.join("settings.json");
         let mut settings: Settings = serde_json::from_str("{}").unwrap();
-        assert!(settings.font_family.is_empty());
+        assert!(settings.font_family.is_empty() && settings.cjk_font_family.is_empty());
         assert_eq!(settings.font_size, DEFAULT_FONT_SIZE);
         settings.font_family = "Example Sans".into();
+        settings.cjk_font_family = "Example Song".into();
         settings.font_size = 17.;
         settings.save(&path).unwrap();
         let loaded = Settings::load(&path).unwrap();
         assert_eq!(loaded.font_family, "Example Sans");
+        assert_eq!(loaded.cjk_font_family, "Example Song");
         assert_eq!(loaded.font_size, 17.);
         for (size, expected) in [(-10., MIN_FONT_SIZE), (1000., MAX_FONT_SIZE), (14.5, 14.5)] {
-            std::fs::write(&path, format!(r#"{{"fontSize":{size},"fontFamily":"  Example Sans  "}}"#)).unwrap();
+            std::fs::write(&path, format!(r#"{{"fontSize":{size},"fontFamily":"  Example Sans  ","cjkFontFamily":" Example Song "}}"#)).unwrap();
             let loaded = Settings::load(&path).unwrap();
             assert_eq!(loaded.font_size, expected);
             assert_eq!(loaded.font_family, "Example Sans");
+            assert_eq!(loaded.cjk_font_family, "Example Song");
         }
         assert_eq!(font_size(f32::NAN), DEFAULT_FONT_SIZE);
         assert_eq!(font_size(f32::INFINITY), DEFAULT_FONT_SIZE);

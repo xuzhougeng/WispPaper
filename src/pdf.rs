@@ -1083,7 +1083,7 @@ impl PdfView {
                 .border_1()
                 .border_color(Theme::line_strong())
                 .shadow(crate::theme::shadow_card())
-                .font_family(crate::theme::ui_font())
+                .font(crate::theme::ui_font())
                 .text_size(text_px(13.))
                 .line_height(text_px(20.))
                 .occlude()

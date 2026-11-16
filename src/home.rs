@@ -30,7 +30,7 @@ impl Render for Workspace {
             .relative()
             .size_full()
             .bg(Theme::bg_window())
-            .font_family(theme::ui_font())
+            .font(theme::ui_font())
             .text_size(text_px(13.))
             .line_height(text_px(20.))
             .text_color(Theme::text())

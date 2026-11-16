@@ -74,6 +74,15 @@ impl SettingsPage {
 }
 
 /// The tabs of 设置 › AI.
+/// Which of the two interface fonts a picker on 外观 sets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FontSlot {
+    /// Latin letters, digits and symbols: the font text is set in.
+    Latin,
+    /// Chinese characters: the fallback for what the Latin font cannot draw.
+    Cjk,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AiTab {
     #[default]
@@ -99,7 +108,8 @@ pub struct SettingsView {
     translation_prompt: Entity<TextInput>,
     font_search: Entity<TextInput>,
     font_names: Vec<String>,
-    font_picker: bool,
+    /// The font whose picker is open under its row.
+    font_picker: Option<FontSlot>,
     font_scroll: ScrollHandle,
     /// The command of the person's own whose fields 命令 shows, as an index into `Settings::commands`.
     command: Option<(usize, CommandFields)>,
@@ -356,7 +366,8 @@ impl Workspace {
                         } else if *event == InputEvent::Submit {
                             let query = input.read(cx).text().trim().to_lowercase();
                             let found = this.settings_view.as_ref().and_then(|view| view.font_names.iter().find(|name| name.to_lowercase().contains(&query))).cloned();
-                            if !query.is_empty() && let Some(family) = found { this.set_font_family(family, window, cx) }
+                            let slot = this.settings_view.as_ref().and_then(|view| view.font_picker);
+                            if !query.is_empty() && let Some(family) = found && let Some(slot) = slot { this.set_font_family(slot, family, window, cx) }
                         }
                     }),
                     cx.subscribe(&proxy, |this, _, event: &InputEvent, cx| {
@@ -376,7 +387,7 @@ impl Workspace {
                         }
                     }),
                 ];
-                self.settings_view = Some(SettingsView { page, ai_tab: AiTab::default(), custom_tab: crate::custom::Tab::default(), scroll: ScrollHandle::new(), provider: index, protocol: shown.protocol, fields, proxy, author, translation_prompt, font_search, font_names, font_picker: false, font_scroll: ScrollHandle::new(), command: None, connector: None, recording: None, shortcut_error: None, _subscriptions: subscriptions });
+                self.settings_view = Some(SettingsView { page, ai_tab: AiTab::default(), custom_tab: crate::custom::Tab::default(), scroll: ScrollHandle::new(), provider: index, protocol: shown.protocol, fields, proxy, author, translation_prompt, font_search, font_names, font_picker: None, font_scroll: ScrollHandle::new(), command: None, connector: None, recording: None, shortcut_error: None, _subscriptions: subscriptions });
             }
         }
         window.focus(&self.focus);
@@ -491,25 +502,31 @@ impl Workspace {
     // ---- 外观
 
     pub fn apply_typography(&self, window: &mut Window, cx: &App) {
-        let family = &self.settings.font_family;
-        let available = family.is_empty() || cx.text_system().all_font_names().contains(family);
-        theme::set_typography(if available { family } else { "" }, self.settings.font_size);
+        let names = cx.text_system().all_font_names();
+        // A font that is not installed (any more) falls back to the platform's choice.
+        let installed = |family: &String| if family.is_empty() || names.contains(family) { family.clone() } else { String::new() };
+        theme::set_typography(&installed(&self.settings.font_family), &installed(&self.settings.cjk_font_family), self.settings.font_size);
         theme::set_reading(self.settings.reading_appearance);
         window.refresh();
     }
 
-    pub fn set_font_family(&mut self, family: String, window: &mut Window, cx: &mut Context<Self>) {
-        self.settings.font_family = family;
-        if let Some(view) = self.settings_view.as_mut() { view.font_picker = false }
+    pub fn set_font_family(&mut self, slot: FontSlot, family: String, window: &mut Window, cx: &mut Context<Self>) {
+        match slot {
+            FontSlot::Latin => self.settings.font_family = family,
+            FontSlot::Cjk => self.settings.cjk_font_family = family,
+        }
+        if let Some(view) = self.settings_view.as_mut() { view.font_picker = None }
         self.save_settings(cx);
         self.apply_typography(window, cx);
         window.focus(&self.focus);
     }
 
-    pub(crate) fn toggle_font_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Open the picker of `slot` (closing the other one), or close it when it is the one open.
+    pub(crate) fn toggle_font_picker(&mut self, slot: FontSlot, window: &mut Window, cx: &mut Context<Self>) {
         let Some(view) = self.settings_view.as_mut() else { return };
-        view.font_picker = !view.font_picker;
-        if view.font_picker {
+        view.font_picker = if view.font_picker == Some(slot) { None } else { Some(slot) };
+        if view.font_picker.is_some() {
+            view.font_scroll = ScrollHandle::new();
             view.font_search.update(cx, |input, cx| input.set_text("", cx));
             view.font_search.read(cx).focus_handle(cx).focus(window);
         } else {
@@ -524,11 +541,22 @@ impl Workspace {
     }
 
     pub fn dismiss_font_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let Some(view) = self.settings_view.as_mut().filter(|view| view.font_picker && view.page == SettingsPage::Appearance) else { return false };
-        view.font_picker = false;
+        let Some(view) = self.settings_view.as_mut().filter(|view| view.font_picker.is_some() && view.page == SettingsPage::Appearance) else { return false };
+        view.font_picker = None;
         window.focus(&self.focus);
         cx.notify();
         true
+    }
+
+    /// Whether `family` has a glyph of its own for Chinese, so that a Chinese fallback is never reached.
+    /// A character the font lacks is shaped in another font, which shows as another font id on the run.
+    fn draws_chinese(family: &str, window: &Window) -> bool {
+        let font = gpui::font(family.to_string());
+        let system = window.text_system();
+        let own = system.resolve_font(&font);
+        let run = TextRun { len: "文".len(), font, color: Theme::text(), background_color: None, underline: None, strikethrough: None };
+        let line = system.shape_line("文".into(), px(16.), &[run], None);
+        line.runs.iter().all(|run| run.font_id == own) && !line.runs.is_empty()
     }
 
     /// Use the light or the dark colours: the chosen one, else the system's.
@@ -947,15 +975,16 @@ impl Workspace {
         )
         .child(note(t("标识色属于文献库：在文献库的「编辑名称与主题」里选择，打开文献库后界面随之变色。")));
         let Some(view) = &self.settings_view else { return appearance.into_any_element() };
-        let family = &self.settings.font_family;
         let size = self.settings.font_size;
-        let family_label = if family.is_empty() { t("系统默认").to_string() } else { family.clone() };
-        let unavailable = !family.is_empty() && !view.font_names.contains(family);
-        // The picker is set in the system's font whatever is chosen: a font that draws letters as
-        // pictures (Webdings) or has none would otherwise hide its own name and what is typed to find another.
-        let choose = button("font-family", family_label).font_family(theme::UI_FONT).max_w(px(280.)).overflow_hidden()
-            .child(ui::icon(if view.font_picker { "chevron-up" } else { "chevron-down" }, 14., Theme::text_secondary()))
-            .on_click(cx.listener(|this, _, window, cx| this.toggle_font_picker(window, cx)));
+        let latin = &self.settings.font_family;
+        let cjk = &self.settings.cjk_font_family;
+        let missing = |family: &String| !family.is_empty() && !view.font_names.contains(family);
+        // A Latin font with Chinese glyphs of its own draws Chinese itself: the fallback is never asked.
+        let shadowed = !cjk.is_empty() && !latin.is_empty() && !missing(latin) && Self::draws_chinese(latin, window);
+        let latin_note = t(if missing(latin) { "此字体未安装，当前使用系统默认字体。" } else { "用于英文字母、数字和符号。" }).to_string();
+        let cjk_note = if missing(cjk) { t("此字体未安装，当前使用系统默认中文字体。").to_string() }
+            else if shadowed { tf!("「{}」自带中文字形，汉字仍由它显示。要换中文字体，先把西文字体换成不含中文的字体。", "“{}” has Chinese glyphs of its own and still draws Chinese. To use a Chinese font here, choose a Western font without Chinese.", latin) }
+            else { t("用于汉字和中文标点，西文字体里没有的字都由它显示。").to_string() };
         let step = |id, label, delta, enabled: bool, cx: &mut Context<Self>| button(id, label).min_w(px(32.))
             .when(!enabled, |d| d.opacity(0.35).cursor_default())
             .when(enabled, |d| d.on_click(self.on(Cmd::SetFontSize(size + delta), cx)));
@@ -963,21 +992,32 @@ impl Workspace {
             .child(step("font-smaller", "−", -1., size > wisp_core::settings::MIN_FONT_SIZE, cx))
             .child(div().min_w(px(52.)).text_center().child(format!("{size} px")))
             .child(step("font-larger", "+", 1., size < wisp_core::settings::MAX_FONT_SIZE, cx));
-        let mut rows = vec![row(t("界面字体"), Some(t(if unavailable { "此字体未安装，当前使用系统默认字体。" } else { "选择本机已安装的字体，立即生效。" }).into()), choose).into_any_element()];
-        if view.font_picker {
+        let mut rows = Vec::new();
+        for (slot, family, title, note_text) in [(FontSlot::Latin, latin, t("西文字体"), latin_note), (FontSlot::Cjk, cjk, t("中文字体"), cjk_note)] {
+            let open = view.font_picker == Some(slot);
+            let label = if family.is_empty() { t("系统默认").to_string() } else { family.clone() };
+            // The picker is set in the system's font whatever is chosen: a font that draws letters as
+            // pictures (Webdings) or has none would otherwise hide its own name and what is typed to find another.
+            let choose = button(if slot == FontSlot::Latin { "font-family" } else { "font-family-cjk" }, label).font_family(theme::UI_FONT).max_w(px(280.)).overflow_hidden()
+                .child(ui::icon(if open { "chevron-up" } else { "chevron-down" }, 14., Theme::text_secondary()))
+                .on_click(cx.listener(move |this, _, window, cx| this.toggle_font_picker(slot, window, cx)));
+            rows.push(row(title, Some(note_text.into()), choose).into_any_element());
+            if !open { continue }
             let query = view.font_search.read(cx).text().trim().to_lowercase();
             let fonts: Vec<_> = view.font_names.iter().filter(|name| name.to_lowercase().contains(&query)).collect();
             let empty = fonts.is_empty();
             let height = text_px(30. * fonts.len().clamp(1, 6) as f32).min(px(200.));
+            // What each font looks like for the text it is picked for.
+            let sample = if slot == FontSlot::Latin { "Aa Bb 123" } else { "文献阅读" };
             let choices = fonts.into_iter().enumerate().map(|(i, name)| {
                 // The name is always readable; what the font looks like is the sample beside it.
                 ui::menu_row(("font-choice", i), name.clone(), name == family, None)
-                    .child(div().flex_none().max_w(px(160.)).overflow_hidden().whitespace_nowrap().font_family(name.clone()).text_color(Theme::text_secondary()).child("Aa 文献 123"))
-                    .on_click(self.on(Cmd::SetFontFamily(name.clone()), cx)).into_any_element()
+                    .child(div().flex_none().max_w(px(160.)).overflow_hidden().whitespace_nowrap().font_family(name.clone()).text_color(Theme::text_secondary()).child(sample))
+                    .on_click(self.on(Cmd::SetFontFamily(slot, name.clone()), cx)).into_any_element()
             }).collect::<Vec<_>>();
             rows.push(div().flex().flex_col().gap(px(8.)).px(px(16.)).py(px(12.)).font_family(theme::UI_FONT)
                 .child(ui::field(&view.font_search, window, cx))
-                .child(ui::menu_row("font-default", t("系统默认"), family.is_empty(), None).on_click(self.on(Cmd::SetFontFamily(String::new()), cx)))
+                .child(ui::menu_row("font-default", t("系统默认"), family.is_empty(), None).on_click(self.on(Cmd::SetFontFamily(slot, String::new()), cx)))
                 .child(div().id("font-choices").h(height).overflow_y_scroll().track_scroll(&view.font_scroll).children(choices)
                     .when(empty, |d| d.child(note(t("没有匹配的字体")))))
                 .into_any_element());
