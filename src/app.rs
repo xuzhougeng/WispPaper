@@ -1306,6 +1306,8 @@ pub struct Workspace {
     pub modal_error: String,
     pub modal_subscriptions: Vec<Subscription>,
     pub menu: Option<Menu>,
+    /// The command palette, while it is open (`palette.rs`).
+    pub palette: Option<crate::palette::Palette>,
     pub toast: Option<Toast>,
     pub home_scroll: ScrollHandle,
     /// The edge being dragged: the sidebar's, the detail panel's, or the one between a paper's conversation and its PDF.
@@ -1728,7 +1730,7 @@ impl Workspace {
         theme::set_accent("blue");
         shortcuts::rebuild(&settings.shortcuts, cx);
         let libraries = libraries::list(&root);
-        let mut this = Workspace { focus, settings, settings_path, root, libraries, lib: None, settings_view: None, connections: vec![], skills: vec![], update: UpdateState::Idle, update_told: None, modal: None, modal_error: String::new(), modal_subscriptions: vec![], menu: None, toast, home_scroll: ScrollHandle::new(), resizing: None, picked: None, pinning: false, filters_over: [false; 2], filters_drawn: false };
+        let mut this = Workspace { focus, settings, settings_path, root, libraries, lib: None, settings_view: None, connections: vec![], skills: vec![], update: UpdateState::Idle, update_told: None, modal: None, modal_error: String::new(), modal_subscriptions: vec![], menu: None, palette: None, toast, home_scroll: ScrollHandle::new(), resizing: None, picked: None, pinning: false, filters_over: [false; 2], filters_drawn: false };
         this.apply_appearance(window);
         this.apply_typography(window, cx);
         cx.observe_window_appearance(window, |this, window, _| this.apply_appearance(window)).detach();
@@ -2929,6 +2931,8 @@ impl Workspace {
 
     pub fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
         if self.menu.take().is_some() {
+        } else if self.palette.is_some() {
+            self.close_palette(window, cx);
         } else if self.modal.is_some() {
             self.run(Cmd::CloseModal, window, cx);
         } else if self.dismiss_font_picker(window, cx) {
@@ -2962,6 +2966,9 @@ impl Workspace {
     pub fn shortcut(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         // A dialog keeps the keyboard to itself.
         if self.modal.is_some() { return }
+        if id == "palette" { return self.toggle_palette(window, cx) }
+        // So does the palette: its own key puts it away, the others wait.
+        if self.palette.is_some() { return }
         let in_settings = self.settings_view.is_some();
         let cmd = match id {
             "settings" if !in_settings => Cmd::OpenSettings(SettingsPage::General),
@@ -5659,6 +5666,13 @@ impl Workspace {
                 "translate" => Some(Cmd::ToggleTranslation),
                 // `profile:1` shows the second provider on 设置 › AI › 模型.
                 "profile" => Some(Cmd::SelectProvider(arg.parse().unwrap_or(0))),
+                // `palette` opens the command palette; `palette:<text>` with that typed into it.
+                "palette" => {
+                    if self.palette.is_none() { self.toggle_palette(window, cx) }
+                    if let Some(input) = self.palette.as_ref().map(|palette| palette.input.clone()) { input.update(cx, |input, cx| input.set_text(arg, cx)) }
+                    self.palette_event(InputEvent::Changed, window, cx);
+                    return;
+                }
                 "menu" => {
                     let kind = match arg { "sort" => MenuKind::Sort, "year" => MenuKind::Filter(FilterKey::Year), "zoom" => MenuKind::PdfZoom, "fulltext" => MenuKind::Filter(FilterKey::Fulltext), "manuscripts" => MenuKind::Manuscripts, "export" => MenuKind::ManuscriptExport, _ => MenuKind::Add };
                     self.open_menu(kind, point(px(if matches!(arg, "zoom" | "manuscripts" | "export") { 900. } else { 20. }), px(120.)), cx);

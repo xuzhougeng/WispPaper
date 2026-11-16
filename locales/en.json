@@ -1391,5 +1391,9 @@
   "这一节的各个版本：助手每次动笔前、你停笔或离开时都会留一版。翻到早先的一版可以看，也可以恢复": "The versions of this section: one is kept before each change by the assistant and when you pause or leave. Step back to look at an earlier one, or restore it",
   "回到现在": "Back to now",
   "让助手来写": "Let the assistant write",
-  "交代要写什么、改什么，助手会查文献库、读全文，直接写进右边的稿件，并说明依据。每次动笔前，那一节的文字都会留一个版本，随时可以换回去；稿件你也可以随时亲手改。": "Say what to write or change. The assistant searches the library, reads full texts, writes straight into the manuscript at the right and says what it relied on. A version of the section is kept before each change, so you can always go back; you can also edit the manuscript by hand at any time."
+  "交代要写什么、改什么，助手会查文献库、读全文，直接写进右边的稿件，并说明依据。每次动笔前，那一节的文字都会留一个版本，随时可以换回去；稿件你也可以随时亲手改。": "Say what to write or change. The assistant searches the library, reads full texts, writes straight into the manuscript at the right and says what it relied on. A version of the section is kept before each change, so you can always go back; you can also edit the manuscript by hand at any time.",
+  "命令面板": "Command palette",
+  "图片库": "Figures",
+  "输入命令，或搜索文献的题目、作者、标签…": "Type a command, or search papers by title, author, tag…",
+  "没有匹配的命令或文献": "No matching commands or papers"
 }

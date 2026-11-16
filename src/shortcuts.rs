@@ -6,7 +6,7 @@ use crate::i18n::t;
 use gpui::*;
 use std::collections::BTreeMap;
 
-actions!(workspace, [Dismiss, FocusSearch, AddPaper, ImportPdf, AskLibrary, ToggleDetail, ToggleSidebar, ToggleReading, ShowSettings, ShowHome, NewLibrary, ZoomIn, ZoomOut, ZoomFit, CopyPicked, FindCandidates, MoveUp, MoveDown, MoveLeft, MoveRight, MovePageUp, MovePageDown, MoveFirst, MoveLast, OpenSelected, TrashSelected, MarkUp, MarkDown, MarkAll, DecideIncluded, DecideRelated, DecideUncertain, DecideIrrelevant, DecidePending, TakeSuggestion, StarScreened, TranslateScreened, UndoDecision, AskAssistant, TickSuggestion]);
+actions!(workspace, [Dismiss, ShowPalette, FocusSearch, AddPaper, ImportPdf, AskLibrary, ToggleDetail, ToggleSidebar, ToggleReading, ShowSettings, ShowHome, NewLibrary, ZoomIn, ZoomOut, ZoomFit, CopyPicked, FindCandidates, MoveUp, MoveDown, MoveLeft, MoveRight, MovePageUp, MovePageDown, MoveFirst, MoveLast, OpenSelected, TrashSelected, MarkUp, MarkDown, MarkAll, DecideIncluded, DecideRelated, DecideUncertain, DecideIrrelevant, DecidePending, TakeSuggestion, StarScreened, TranslateScreened, UndoDecision, AskAssistant, TickSuggestion]);
 
 /// The keys of 筛选, fixed like the arrow keys: what each does is in `Workspace::screen_key`. Bare letters
 /// and digits, so they are heard only while no text field has the keyboard.
@@ -24,7 +24,8 @@ pub struct Shortcut {
 pub const GROUPS: [&str; 2] = ["应用", "文献库"];
 
 /// What each one does is in `Workspace::shortcut` (app.rs).
-pub const SHORTCUTS: [Shortcut; 14] = [
+pub const SHORTCUTS: [Shortcut; 15] = [
+    Shortcut { id: "palette", label: "命令面板", group: 0, default: "secondary-k" },
     Shortcut { id: "settings", label: "打开设置", group: 0, default: "secondary-," },
     Shortcut { id: "home", label: "回到所有文献库", group: 0, default: "secondary-shift-h" },
     Shortcut { id: "new-library", label: "新建文献库", group: 0, default: "secondary-shift-n" },
@@ -119,6 +120,7 @@ pub fn rebuild(custom: &BTreeMap<String, String>, cx: &mut App) {
         // A key from a hand-edited settings.json may not parse; `KeyBinding::new` would panic on it.
         if key.is_empty() || Keystroke::parse(&key).is_err() { continue }
         bindings.push(match shortcut.id {
+            "palette" => KeyBinding::new(&key, ShowPalette, context),
             "settings" => KeyBinding::new(&key, ShowSettings, context),
             "home" => KeyBinding::new(&key, ShowHome, context),
             "new-library" => KeyBinding::new(&key, NewLibrary, context),
