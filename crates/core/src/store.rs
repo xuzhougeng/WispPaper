@@ -456,6 +456,7 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("structures", "page_count", "INTEGER NOT NULL DEFAULT 0"),
     ("manuscript_sections", "bare", "INTEGER NOT NULL DEFAULT 0"),
     ("import_batches", "depth", "INTEGER NOT NULL DEFAULT 0"),
+    ("pdf_annotations", "color", "TEXT NOT NULL DEFAULT ''"),
 ];
 
 /// Add the columns added to a table after it was first made: `CREATE TABLE IF NOT
