@@ -94,29 +94,50 @@ fn quote_verdict(check: Option<&ai::Quoted>) -> Option<(&'static str, String, Hs
     })
 }
 
-/// Where a review stands, in a line.
-fn review_step(review: &wisp_core::review::Review) -> &'static str {
-    match review.step() {
-        1 if review.requirements.is_empty() => t("第 1 步 · 把写作要求记下来"),
-        1 => t("第 1 步 · 确认写作要求"),
-        2 if review.framework.is_empty() => t("第 2 步 · 读已有综述，把初步框架记下来"),
-        2 => t("第 2 步 · 确认初步框架"),
-        3 if review.outline.is_empty() && review.framework.is_empty() => t("第 3 步 · 把大纲记下来"),
-        3 if review.outline.is_empty() => t("第 3 步 · 对照初步框架重建大纲，记下来"),
-        3 => t("第 3 步 · 确认大纲"),
-        _ if review.completed => t("综述已标为完成"),
-        _ => t("第 4 步 · 分节写作与核对"),
+/// The steps of a review in order, as the line over its conversation names them.
+const REVIEW_STEPS: [&str; 4] = ["写作要求", "初步框架", "大纲", "分节写作"];
+
+/// The button that takes an answer for the step in hand: the same words under the conversation, under an earlier answer, and in what the model is told.
+fn review_take(step: usize) -> &'static str {
+    match step {
+        1 => "采用为写作要求",
+        2 => "采用为初步框架",
+        3 => "采用为大纲",
+        _ => "保存正文",
     }
+}
+
+/// The answer the conversation ends with, whole (the pieces between its tool calls included, as its copy button gives it),
+/// when the step in hand could take it: it came after the review's last step (`mark`, the messages there were then)
+/// and the record does not hold it already. A conversation opened again has no mark, and is told by what the record holds.
+pub(crate) fn review_offer(messages: &[ChatItem], mark: usize, review: &wisp_core::review::Review) -> Option<String> {
+    let Some(ChatItem::Answer(last)) = messages.last() else { return None };
+    // A text of the record that waits to be confirmed comes first; a review marked complete takes nothing more by itself.
+    if match review.step() { 1 => !review.requirements.is_empty(), 2 => !review.framework.is_empty(), 3 => !review.outline.is_empty(), _ => review.completed } { return None }
+    // Nothing said since the last step. (A mark past the end is not this conversation's.)
+    if last.trim().is_empty() || mark == messages.len() { return None }
+    let from = messages.iter().rposition(|item| matches!(item, ChatItem::User { .. })).map_or(0, |at| at + 1);
+    let whole = messages[from..].iter().filter_map(|item| if let ChatItem::Answer(text) = item { Some(text.as_str()) } else { None }).collect::<Vec<_>>().join("\n\n");
+    (!review_holds(review, &whole)).then_some(whole)
+}
+
+/// The record holds this answer already: taken whole for a step, or saved as a section (whose text is the answer under its heading).
+fn review_holds(review: &wisp_core::review::Review, whole: &str) -> bool {
+    let same = |kept: &str| !kept.trim().is_empty() && kept.trim() == whole.trim();
+    same(&review.requirements) || same(&review.framework) || same(&review.outline) || same(&review.checks) || review.sections.iter().any(|section| !section.body.trim().is_empty() && whole.contains(section.body.trim()))
 }
 
 /// What a question of a review's conversation tells the model about the record: where it stands and what was agreed.
 pub(crate) fn review_note(review: &wisp_core::review::Review) -> String {
-    let stage = match review.step() {
-        1 => "写作要求尚未确认。先整理并请用户在界面确认，不要写大纲或正文。",
-        2 => "写作要求已确认，初步框架尚未确认。这一步先读已有综述：找出这个主题已发表的综述（文献库里的，和 search_online 能查到的），逐篇比较它们问的核心问题、实际的章节结构、长处和盲点，标明各读到全文、摘要还是仅有题录；再综合出初步框架，写明每章要回答的问题和暂定答案。不要照搬某一篇的目录，也不要凭记忆补一份；找不到相关综述时照实说明，用户可以在界面跳过这一步。等待用户在界面确认，不要定大纲或写正文。",
-        3 if !review.framework.is_empty() => "初步框架已由用户确认，大纲尚未确认。初步框架来自已有综述，还没有被证据检验：按它的每一章去读文献库里的原始研究，对照着重建大纲，逐章说明是保留、改写、合并、拆分、删去还是新增，以及是哪些文献让你这样改；文献库的证据撑不住的地方和已有综述没讲到的地方各单独列出。可检索、提出和调整大纲，等待用户在界面确认，不要写正文。",
-        3 => "用户选择不参照已有综述，大纲尚未确认。可检索、提出和调整大纲，等待用户在界面确认，不要写正文。",
-        _ => "要求和大纲已由用户确认。围绕大纲补充证据、按节写作或检查；每次只写用户要的那一节，以「## 节名」开头，不加寒暄。如用户要改变要求或大纲，请提示在界面修改并重新确认。",
+    let step = review.step();
+    // What the person's click keeps is the model's last answer as it stands, so the answer has to be the whole text each time, and the model has to know which button it is.
+    let take = format!("每次回答（用户要调整时也一样）都给出完整的一份，不要只答改动的那一处，前后不加与它无关的话：用户点对话末尾的「{}」时，记下并确认的是你最近这条回答的全文。只有那个按钮算确认；用户在对话里说同意时，把还标着建议或待定的内容定下来，给出定稿，并请用户点它。", t(review_take(step)));
+    let stage = match step {
+        1 => format!("写作要求尚未确认。先整理要求：用户已定的照记，没有给出的提出建议并标明是建议。{take}不要写大纲或正文。"),
+        2 => format!("写作要求已确认，初步框架尚未确认。这一步先读已有综述：找出这个主题已发表的综述（文献库里的，和 search_online 能查到的），逐篇比较它们问的核心问题、实际的章节结构、长处和盲点，标明各读到全文、摘要还是仅有题录；再综合出初步框架，写明每章要回答的问题和暂定答案。不要照搬某一篇的目录，也不要凭记忆补一份；找不到相关综述时照实说明，用户可以在界面跳过这一步。{take}用户要改已确认的写作要求时，请他在「查看记录」里修改并重新确认。等待用户在界面确认，不要定大纲或写正文。"),
+        3 if !review.framework.is_empty() => format!("初步框架已由用户确认，大纲尚未确认。初步框架来自已有综述，还没有被证据检验：按它的每一章去读文献库里的原始研究，对照着重建大纲，逐章说明是保留、改写、合并、拆分、删去还是新增，以及是哪些文献让你这样改；文献库的证据撑不住的地方和已有综述没讲到的地方各单独列出。可检索、提出和调整大纲。{take}等待用户在界面确认，不要写正文。"),
+        3 => format!("用户选择不参照已有综述，大纲尚未确认。可检索、提出和调整大纲。{take}等待用户在界面确认，不要写正文。"),
+        _ => format!("要求和大纲已由用户确认。围绕大纲补充证据、按节写作或检查；每次只写用户要的那一节，以「## 节名」开头，不加寒暄：用户点「{}」时，保存的是你最近这条回答的全文。如用户要改变要求或大纲，请提示在「查看记录」里修改并重新确认。", t(review_take(step))),
     };
     let mut note = format!("[当前综述记录]\n{stage}");
     if !review.requirements.is_empty() { note.push_str(&format!("\n写作要求：\n{}", review.requirements)) }
@@ -329,31 +350,34 @@ impl Workspace {
         }
     }
 
-    /// A step of the review taken from the conversation: an answer (or what is selected in one) kept in the record, or a confirmation.
+    /// A step of the review taken from the conversation: an answer (or what is selected in one) taken for the step in hand, a text of the record confirmed, a section kept.
     pub(crate) fn review_do(&mut self, what: crate::app::ReviewDo, text: String, cx: &mut Context<Self>) {
         use crate::app::ReviewDo;
         use wisp_core::review::ReviewAction;
         let Some(lib) = self.lib.as_ref() else { return };
         if lib.library_chat.busy { return self.fail(t("请先等回答结束。"), cx) }
         let Some(review) = lib.library_chat.review.as_ref() else { return self.fail(t("这次对话还没有综述记录。"), cx) };
-        let (action, done) = match what {
-            ReviewDo::Requirements => (ReviewAction::SetRequirements(text.trim().to_string()), t("已记为写作要求。看一遍，需要的话在「查看记录」里修改，然后确认。").to_string()),
-            ReviewDo::ConfirmRequirements => (ReviewAction::ConfirmRequirements, t("写作要求已确认。下一步读已有综述，得出初步框架。").to_string()),
-            ReviewDo::Framework => (ReviewAction::SetFramework(text.trim().to_string()), t("已记为初步框架。看一遍，需要的话在「查看记录」里修改，然后确认。").to_string()),
-            ReviewDo::ConfirmFramework => (ReviewAction::ConfirmFramework, t("初步框架已确认。下一步对照它，按文献库的证据重建大纲。").to_string()),
-            ReviewDo::SkipFramework => (ReviewAction::SkipFramework, t("不参照已有综述。下一步按文献库提出大纲。").to_string()),
-            ReviewDo::Outline => (ReviewAction::SetOutline(text.trim().to_string()), t("已记为大纲。看一遍，需要的话在「查看记录」里修改，然后确认。").to_string()),
-            ReviewDo::ConfirmOutline => (ReviewAction::ConfirmOutline, t("大纲已确认。可以让助手按节写正文了。").to_string()),
+        // Taking an answer is the person's decision already: it is recorded, then confirmed, in one click. A text changed in the record afterwards asks for its confirmation again.
+        let (first, action, done) = match what {
+            ReviewDo::Requirements => (Some(ReviewAction::SetRequirements(text.trim().to_string())), ReviewAction::ConfirmRequirements, t("已采用为写作要求").to_string()),
+            ReviewDo::ConfirmRequirements => (None, ReviewAction::ConfirmRequirements, t("写作要求已确认").to_string()),
+            ReviewDo::Framework => (Some(ReviewAction::SetFramework(text.trim().to_string())), ReviewAction::ConfirmFramework, t("已采用为初步框架").to_string()),
+            ReviewDo::ConfirmFramework => (None, ReviewAction::ConfirmFramework, t("初步框架已确认").to_string()),
+            ReviewDo::SkipFramework => (None, ReviewAction::SkipFramework, t("不参照已有综述").to_string()),
+            ReviewDo::Outline => (Some(ReviewAction::SetOutline(text.trim().to_string())), ReviewAction::ConfirmOutline, t("已采用为大纲").to_string()),
+            ReviewDo::ConfirmOutline => (None, ReviewAction::ConfirmOutline, t("大纲已确认").to_string()),
             ReviewDo::Section => {
                 let (name, body) = section_of(&text, review);
                 let cited = wisp_core::review::cited_evidence(&name, &body, lib.library_chat.sources());
                 let found = cited.len();
-                (ReviewAction::SaveSection { name: name.clone(), body, cited }, if found > 0 { tf!("「{name}」已保存，它的引用带来 {found} 条证据，等你判断", "“{name}” saved with {found} citation evidence records awaiting your judgment") } else { tf!("「{name}」已保存", "“{name}” saved") })
+                (None, ReviewAction::SaveSection { name: name.clone(), body, cited }, if found > 0 { tf!("「{name}」已保存，它的引用带来 {found} 条证据，等你判断", "“{name}” saved with {found} citation evidence records awaiting your judgment") } else { tf!("「{name}」已保存", "“{name}” saved") })
             }
-            ReviewDo::Checks => (ReviewAction::SetChecks(text.trim().to_string()), t("已记为检查记录").to_string()),
-            ReviewDo::Complete => (ReviewAction::Complete, t("综述已标为完成").to_string()),
+            ReviewDo::Checks => (None, ReviewAction::SetChecks(text.trim().to_string()), t("已记为检查记录").to_string()),
+            ReviewDo::Complete => (None, ReviewAction::Complete, t("综述已标为完成").to_string()),
         };
-        self.review_apply(action, &done, cx);
+        if first.is_some_and(|set| !self.review_apply(set, "", cx)) { return }
+        // What the conversation ends with has been dealt with: it is not offered to the step that follows.
+        if self.review_apply(action, &done, cx) && let Some(lib) = self.lib.as_mut() { lib.library_chat.review_mark = lib.library_chat.messages.len() }
     }
 
     pub(crate) fn render_review_evidence_dialog(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<Div> {
@@ -458,10 +482,13 @@ impl Workspace {
 
     /// The review's record in place of the conversation: what was agreed, each section with the evidence its citations gave, and the checks.
     fn render_review_record(&self, chat: &Chat, review: &wisp_core::review::Review, cx: &mut Context<Self>) -> AnyElement {
-        use crate::app::ReviewText;
-        let heading = |title: String, state: Option<(&'static str, Hsla)>, what: ReviewText, has: bool, cx: &mut Context<Self>| div().flex().items_center().gap(px(8.))
+        use crate::app::{ReviewDo, ReviewText};
+        let step = review.step();
+        // A text that waits to be confirmed is confirmed where it stands: the record is on show in place of the conversation and its card.
+        let heading = |title: String, state: Option<(&'static str, Hsla)>, what: ReviewText, has: bool, confirm: Option<ReviewDo>, cx: &mut Context<Self>| div().flex().items_center().gap(px(8.))
             .child(div().text_size(text_px(14.)).font_weight(FontWeight::SEMIBOLD).child(title.clone()))
             .when_some(state, |d, (label, color)| d.child(div().text_size(text_px(12.)).text_color(color).child(label)))
+            .when_some(confirm.filter(|_| !chat.busy), |d, confirm| d.child(ui::primary_button(SharedString::from(format!("review-confirm-{title}")), t("确认")).h(text_px(24.)).text_size(text_px(12.)).on_click(self.on(Cmd::Review(confirm, String::new()), cx))))
             .child(div().flex_1())
             .child(ui::ghost_button(SharedString::from(format!("review-edit-{title}")), Some("pen-line"), Some(if has { t("编辑").into() } else { t("填写").into() })).h(text_px(24.)).text_size(text_px(12.)).on_click(self.on(Cmd::EditReviewText(what), cx)));
         let text = |id: &str, text: &str, empty: &'static str| if text.is_empty() { div().text_size(text_px(13.)).text_color(Theme::text_tertiary()).child(empty) } else { crate::markdown::render(id, text, None, None) };
@@ -472,19 +499,19 @@ impl Workspace {
         let loose: Vec<_> = review.evidence_rows.iter().filter(|row| row.section_detached || !review.sections.iter().any(|section| section.name == row.section)).collect();
         div().id("review-record").flex().flex_col().flex_1().min_h_0().overflow_y_scroll().px(px(16.)).py(px(14.)).gap(px(22.))
             .child(block()
-                .child(heading(t("写作要求").into(), confirmed(review.requirements_confirmed, !review.requirements.is_empty()), ReviewText::Requirements, !review.requirements.is_empty(), cx))
-                .child(text("review-requirements", &review.requirements, t("还没有记下。让助手整理出要求后，点回答下面的「记为要求」，或者自己填写。"))))
+                .child(heading(t("写作要求").into(), confirmed(review.requirements_confirmed, !review.requirements.is_empty()), ReviewText::Requirements, !review.requirements.is_empty(), (step == 1 && !review.requirements.is_empty()).then_some(ReviewDo::ConfirmRequirements), cx))
+                .child(text("review-requirements", &review.requirements, t("还没有记下。让助手整理出要求后，点对话末尾的「采用为写作要求」，或者自己填写。"))))
             // The framework is shown once it is its turn, and stays out of the way where the review went on without one.
             .when(review.requirements_confirmed && (!review.framework.is_empty() || review.step() == 2), |d| d.child(block()
-                .child(heading(t("初步框架").into(), confirmed(review.framework_confirmed, !review.framework.is_empty()), ReviewText::Framework, !review.framework.is_empty(), cx))
+                .child(heading(t("初步框架").into(), confirmed(review.framework_confirmed, !review.framework.is_empty()), ReviewText::Framework, !review.framework.is_empty(), (step == 2 && !review.framework.is_empty()).then_some(ReviewDo::ConfirmFramework), cx))
                 .child(div().text_size(text_px(12.)).line_height(text_px(19.)).text_color(Theme::text_tertiary()).child(t("从已有综述得来：它们各问什么、怎么组织、哪里没讲到。它只是起点，大纲要对照它、按文献库里的研究重建。")))
-                .child(text("review-framework", &review.framework, t("还没有记下。让助手读已有综述、提出初步框架后，点回答下面的「记为初步框架」；没有可参照的综述，就点上方的「跳过」。")))))
+                .child(text("review-framework", &review.framework, t("还没有记下。让助手读已有综述、提出初步框架后，点对话末尾的「采用为初步框架」；没有可参照的综述，就在那里点「跳过」。")))))
             .when(review.requirements_confirmed && review.framework_settled(), |d| d.child(block()
-                .child(heading(t("大纲").into(), confirmed(review.outline_confirmed, !review.outline.is_empty()), ReviewText::Outline, !review.outline.is_empty(), cx))
+                .child(heading(t("大纲").into(), confirmed(review.outline_confirmed, !review.outline.is_empty()), ReviewText::Outline, !review.outline.is_empty(), (step == 3 && !review.outline.is_empty()).then_some(ReviewDo::ConfirmOutline), cx))
                 .when(review.framework.is_empty(), |d| d.child(div().flex().items_center().gap(px(4.)).text_size(text_px(12.)).text_color(Theme::text_tertiary())
                     .child(t("没有参照已有综述。"))
                     .child(ui::ghost_button("review-add-framework", None, Some(t("补上初步框架").into())).h(text_px(22.)).text_size(text_px(12.)).on_click(self.on(Cmd::EditReviewText(ReviewText::Framework), cx)))))
-                .child(text("review-outline", &review.outline, if review.framework.is_empty() { t("还没有记下。让助手提出大纲后，点回答下面的「记为大纲」。") } else { t("还没有记下。让助手对照初步框架重建大纲后，点回答下面的「记为大纲」。") }))))
+                .child(text("review-outline", &review.outline, if review.framework.is_empty() { t("还没有记下。让助手提出大纲后，点对话末尾的「采用为大纲」。") } else { t("还没有记下。让助手对照初步框架重建大纲后，点对话末尾的「采用为大纲」。") }))))
             .when(review.outline_confirmed, |d| d
                 .child(block()
                     .child(div().flex().items_center().gap(px(8.))
@@ -493,7 +520,7 @@ impl Workspace {
                         .child(div().flex_1())
                         .child(ui::ghost_button("evidence-add", Some("plus"), Some(t("添加证据").into())).h(text_px(24.)).text_size(text_px(12.)).on_click(self.on(Cmd::EditReviewEvidence(None, String::new()), cx))))
                     .child(div().text_size(text_px(12.)).line_height(text_px(19.)).text_color(Theme::text_tertiary()).child(t("保存一节正文时，它的每处引用成为一条证据：论断是引用所在的那句话，摘录已和文献的文字比对。来源是否支持论断，由你对照原文判断。")))
-                    .when(review.sections.is_empty(), |d| d.child(div().text_size(text_px(13.)).text_color(Theme::text_tertiary()).child(t("还没有保存正文。让助手按大纲写一节，点回答下面的「保存正文」。")))))
+                    .when(review.sections.is_empty(), |d| d.child(div().text_size(text_px(13.)).text_color(Theme::text_tertiary()).child(t("还没有保存正文。让助手按大纲写一节，点对话末尾的「保存正文」。")))))
                 .children(review.sections.iter().enumerate().map(|(n, section)| {
                     let rows: Vec<_> = review.evidence_rows.iter().filter(|row| !row.section_detached && row.section == section.name).collect();
                     block()
@@ -509,11 +536,11 @@ impl Workspace {
                     .child(div().font_weight(FontWeight::MEDIUM).child(t("不在任何一节里的证据")))
                     .children(loose.iter().map(|row| self.render_evidence(review, row, &chat.review_checks, cx)))))
                 .child(block()
-                    .child(heading(t("证据笔记").into(), None, ReviewText::Notes, !review.evidence.is_empty(), cx))
+                    .child(heading(t("证据笔记").into(), None, ReviewText::Notes, !review.evidence.is_empty(), None, cx))
                     .child(text("review-notes", &review.evidence, t("自由记下证据的情况：哪些文献只读到摘要，哪里还缺证据。"))))
                 .when(!review.sections.is_empty(), |d| d.child(block()
-                    .child(heading(t("检查记录").into(), (!review.checks.is_empty()).then_some(if review.checks_current { (t("对当前内容"), Theme::success()) } else { (t("之后内容又变了"), Theme::warning()) }), ReviewText::Checks, !review.checks.is_empty(), cx))
-                    .child(text("review-checks", &review.checks, t("写完后让助手按 /verify 逐条核对，点回答下面的「记录检查」；检查是否属实仍要你过目。"))))))
+                    .child(heading(t("检查记录").into(), (!review.checks.is_empty()).then_some(if review.checks_current { (t("对当前内容"), Theme::success()) } else { (t("之后内容又变了"), Theme::warning()) }), ReviewText::Checks, !review.checks.is_empty(), None, cx))
+                    .child(text("review-checks", &review.checks, t("写完后让助手逐条核对（对话末尾的「核对全文」，或 /verify），再点「记录检查」；检查是否属实仍要你过目。"))))))
             .into_any_element()
     }
 
@@ -645,30 +672,27 @@ impl Workspace {
                 if let Some(lib) = this.lib.as_mut() { lib.library_chat.materials_open = false }
                 cx.notify();
             })))
-            // A review's conversation says where the review stands, and offers the step that is the person's to take.
+            // A review's conversation says where the review stands among its steps. The step that is the person's to take is under the conversation (`render_review_next`), where the answer it is about ends.
             .when_some(review, |d, review| {
-                use crate::app::ReviewDo;
-                let sections = if review.sections.is_empty() { String::new() } else { tf!(" · 正文 {} 节", " · {} sections", review.sections.len()) };
+                let sections = if review.sections.is_empty() { String::new() } else { tf!("正文 {} 节", "{} sections", review.sections.len()) };
                 let open = review.evidence_rows.iter().filter(|row| row.judgment == wisp_core::review::EvidenceJudgment::Unreviewed || !row.source_current || !review.linked(row)).count();
-                let evidence = if open > 0 { tf!(" · {open} 条证据待判断", " · {open} evidence records awaiting judgment") } else { String::new() };
-                let step = |id: &'static str, label: &'static str, what: ReviewDo, cx: &mut Context<Self>| ui::primary_button(id, label).h(text_px(26.)).on_click(self.on(Cmd::Review(what, String::new()), cx));
-                let ask = |id: &'static str, label: &'static str, request: &'static str, cx: &mut Context<Self>| ui::secondary_button(id, label).h(text_px(26.)).on_click(self.on(Cmd::Suggest(Talk::Library, request.to_string()), cx));
+                let evidence = if open > 0 { tf!("{open} 条证据待判断", "{open} evidence records awaiting judgment") } else { String::new() };
+                let counts = [sections, evidence].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" · ");
+                let at = if review.completed { 5 } else { review.step() };
+                let steps = REVIEW_STEPS.iter().enumerate().flat_map(|(n, name)| {
+                    let n = n + 1;
+                    // The framework a review went on without is neither done nor to come.
+                    let skipped = n == 2 && at > 2 && review.framework.is_empty();
+                    let color = if n == at { Theme::text() } else if n < at && !skipped { Theme::text_secondary() } else { Theme::text_tertiary() };
+                    let step = div().flex().flex_none().items_center().gap(px(4.)).text_color(color)
+                        .when(n == at, |d| d.font_weight(FontWeight::MEDIUM))
+                        .child(if skipped { ui::icon("minus", 12., color).into_any_element() } else if n < at { ui::icon("check", 12., Theme::success()).into_any_element() } else { div().child(format!("{n}")).into_any_element() })
+                        .child(t(name));
+                    [(n > 1).then(|| ui::icon("chevron-right", 11., Theme::text_placeholder()).into_any_element()), Some(step.into_any_element())].into_iter().flatten()
+                }).collect::<Vec<_>>();
                 d.child(div().flex().flex_none().flex_wrap().items_center().gap(px(6.)).px(px(16.)).py(px(6.)).border_b_1().border_color(Theme::line()).bg(Theme::bg_sunken()).text_size(text_px(12.))
-                    .child(div().flex_1().min_w_0().text_color(Theme::text_secondary()).child(format!("{}{sections}{evidence}", review_step(review))))
-                    .when(review.step() == 1 && !review.requirements.is_empty(), |d| d.child(step("review-confirm-requirements", t("确认要求"), ReviewDo::ConfirmRequirements, cx)))
-                    // Where the step's text is still to come, the request that asks for it is one click; keeping the answer is the person's.
-                    .when(review.step() == 2 && review.framework.is_empty(), |d| d
-                        .when(!chat.busy && !chat.review_open, |d| d.child(ask("review-ask-framework", t("提出初步框架"), t("请找出这个主题已发表的综述，逐篇比较，再提出初步框架。"), cx)))
-                        .child(ui::secondary_button("review-skip-framework", t("跳过")).h(text_px(26.)).tooltip(|_, cx| cx.new(|_| crate::write_assist::Tip(t("没有可参照的综述时，直接按文献库拟大纲").to_string())).into()).on_click(self.on(Cmd::Review(ReviewDo::SkipFramework, String::new()), cx))))
-                    .when(review.step() == 2 && !review.framework.is_empty(), |d| d.child(step("review-confirm-framework", t("确认框架"), ReviewDo::ConfirmFramework, cx)))
-                    .when(review.step() == 3 && review.outline.is_empty() && !chat.busy && !chat.review_open, |d| d.child(if review.framework.is_empty() {
-                        ask("review-ask-outline", t("提出大纲"), t("请按文献库里的文献提出大纲。"), cx)
-                    } else {
-                        ask("review-ask-outline", t("重建大纲"), t("请对照初步框架，按文献库里的研究重建大纲。"), cx)
-                    }))
-                    .when(review.step() == 3 && !review.outline.is_empty(), |d| d.child(step("review-confirm-outline", t("确认大纲"), ReviewDo::ConfirmOutline, cx)))
-                    .when(review.step() == 4 && !review.sections.is_empty() && review.checks_current && !review.completed, |d| d.child(ui::secondary_button("review-complete", t("标为完成")).h(text_px(26.)).on_click(self.on(Cmd::Review(ReviewDo::Complete, String::new()), cx))))
-                    .when(review.step() == 4 && !review.sections.is_empty(), |d| d.child(ui::secondary_button("review-manuscript", t("存为新稿件")).h(text_px(26.)).on_click(self.on(Cmd::ReviewToManuscript, cx))))
+                    .children(steps)
+                    .child(div().flex_1().min_w_0().pl(px(8.)).truncate().text_color(Theme::text_tertiary()).child(counts))
                     .child(ui::secondary_button("review-toggle", if chat.review_open { t("返回对话") } else { t("查看记录") }).h(text_px(26.)).on_click(self.on(Cmd::ToggleReview, cx))))
             })
             .child(body)
@@ -927,6 +951,8 @@ impl Workspace {
             workspace.update(cx, |this, cx| this.run(Cmd::GotoCited(talk, citation.label.clone(), citation.page, citation.quote.clone()), window, cx)).ok();
         });
         let picker = cx.entity().downgrade();
+        // The review's card under the conversation offers to take the last answer.
+        let offered = review.is_some_and(|review| !chat.busy && chat.pending.is_none() && review_offer(&chat.messages, chat.review_mark, review).is_some());
         let mut i = 0;
         while i < chat.messages.len() {
             let content = match &chat.messages[i] {
@@ -1054,7 +1080,7 @@ impl Workspace {
                                 // In a review's conversation, the part selected can be kept in place of the whole answer.
                                 .when_some(review, |d, review| {
                                     let text = chat.picked_text().unwrap_or_default();
-                                    let (label, what) = match review.step() { 1 => (t("所选记为要求"), crate::app::ReviewDo::Requirements), 2 => (t("所选记为初步框架"), crate::app::ReviewDo::Framework), 3 => (t("所选记为大纲"), crate::app::ReviewDo::Outline), _ => (t("所选存为正文"), crate::app::ReviewDo::Section) };
+                                    let (label, what) = match review.step() { 1 => (t("所选采用为写作要求"), crate::app::ReviewDo::Requirements), 2 => (t("所选采用为初步框架"), crate::app::ReviewDo::Framework), 3 => (t("所选采用为大纲"), crate::app::ReviewDo::Outline), _ => (t("所选存为正文"), crate::app::ReviewDo::Section) };
                                     d.child(ui::ghost_button(SharedString::from(format!("picked-review-{side}-{i}")), Some("check"), Some(label.into())).h(text_px(24.)).text_size(text_px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::Review(what, text.clone()), cx)))
                                         .when(review.step() == 4, |d| d.child(ui::ghost_button(SharedString::from(format!("picked-evidence-{side}-{i}")), Some("plus"), Some(t("记为论断").into())).h(text_px(24.)).text_size(text_px(12.)).text_color(Theme::accent()).on_click(self.on(Cmd::EditReviewEvidence(None, text), cx))))
                                 }),
@@ -1072,15 +1098,16 @@ impl Workspace {
                                 // A review's answers go to its record, step by step; any other answer about the library can become a manuscript as it is.
                                 .when(talk == Talk::Library && review.is_none() && !whole.trim().is_empty(), |d| d.child(ui::ghost_button(SharedString::from(format!("manuscript-{side}-{i}")), Some("pen-line"), Some(t("保存为新稿件").into())).h(text_px(24.)).text_size(text_px(12.)).opacity(0.7).on_click(self.on(Cmd::AnswerToManuscript(question.clone(), whole.clone()), cx))))
                                 .when(talk == Talk::Library && review.is_none() && has_manuscript && !whole.trim().is_empty(), |d| d.child(ui::ghost_button(SharedString::from(format!("insert-{side}-{i}")), Some("plus"), Some(t("插入到稿件").into())).h(text_px(24.)).text_size(text_px(12.)).opacity(0.7).on_click(self.on_menu(MenuKind::InsertInto(Some(whole.clone())), cx))))
-                                .when_some(review, |d, review| {
+                                // The answer the conversation ends with has its button in the review's card just under it, said once; an answer the record holds already is not offered to another step.
+                                .when_some(review.filter(|review| !(last && offered) && !review_holds(review, &whole)), |d, review| {
                                     use crate::app::ReviewDo;
                                     let mut button = |key: &'static str, label: &'static str, what: ReviewDo| ui::ghost_button(SharedString::from(format!("review-{key}-{side}-{i}")), Some("check"), Some(label.into())).h(text_px(24.)).text_size(text_px(12.)).opacity(0.7).on_click(self.on(Cmd::Review(what, whole.clone()), cx));
                                     // Only what the step in hand takes: the rest is changed in the record.
                                     match review.step() {
-                                        1 => d.child(button("requirements", t("记为要求"), ReviewDo::Requirements)),
-                                        2 => d.child(button("framework", t("记为初步框架"), ReviewDo::Framework)),
-                                        3 => d.child(button("outline", t("记为大纲"), ReviewDo::Outline)),
-                                        _ => d.child(button("section", t("保存正文"), ReviewDo::Section)).when(!review.sections.is_empty(), |d| d.child(button("checks", t("记录检查"), ReviewDo::Checks))),
+                                        1 => d.child(button("requirements", t(review_take(1)), ReviewDo::Requirements)),
+                                        2 => d.child(button("framework", t(review_take(2)), ReviewDo::Framework)),
+                                        3 => d.child(button("outline", t(review_take(3)), ReviewDo::Outline)),
+                                        _ => d.child(button("section", t(review_take(4)), ReviewDo::Section)).when(!review.sections.is_empty(), |d| d.child(button("checks", t("记录检查"), ReviewDo::Checks))),
                                     }
                                 })
                                 // An answer about one paper can join that paper's notes; one about the library names many.
@@ -1142,7 +1169,58 @@ impl Workspace {
         if !chat.error.is_empty() {
             items.push(ui::error_line(&chat.error).into_any_element());
         }
+        // A review's next move comes last: it is about the answer just read. Not while an answer is arriving or a tool waits for a yes.
+        if let Some(review) = review.filter(|_| !chat.busy && chat.pending.is_none()) { items.push(self.render_review_next(chat, review, cx)) }
         items
+    }
+
+    /// The review's next move, under the conversation, where the answer it is about ends: taking that answer for the step in hand,
+    /// confirming a text written in the record, or the request that asks for the step's text. Every step's move is in this one place.
+    fn render_review_next(&self, chat: &Chat, review: &wisp_core::review::Review, cx: &mut Context<Self>) -> AnyElement {
+        use crate::app::ReviewDo;
+        let offer = review_offer(&chat.messages, chat.review_mark, review);
+        let step = review.step();
+        let primary = |id: &'static str, label: &'static str, cmd: Cmd, cx: &mut Context<Self>| ui::primary_button(id, label).h(text_px(28.)).on_click(self.on(cmd, cx)).into_any_element();
+        let secondary = |id: &'static str, label: &'static str, cmd: Cmd, cx: &mut Context<Self>| ui::secondary_button(id, label).h(text_px(28.)).on_click(self.on(cmd, cx)).into_any_element();
+        let take = |what: ReviewDo| Cmd::Review(what, offer.clone().unwrap_or_default());
+        let ask = |request: &str| Cmd::Suggest(Talk::Library, request.to_string());
+        let skip = |cx: &mut Context<Self>| ui::secondary_button("review-next-skip", t("跳过")).h(text_px(28.)).tooltip(ui::tip(t("没有可参照的综述时，直接按文献库拟大纲"))).on_click(self.on(Cmd::Review(ReviewDo::SkipFramework, String::new()), cx)).into_any_element();
+        let record = |cx: &mut Context<Self>| secondary("review-next-record", t("查看记录"), Cmd::ToggleReview, cx);
+        // An answer to /verify is a check of what was written, not a section.
+        let checking = chat.messages.iter().rev().find_map(|item| if let ChatItem::User { text, .. } = item { Some(text.trim_start().starts_with("/verify")) } else { None }).unwrap_or(false);
+        let (words, buttons): (String, Vec<AnyElement>) = match step {
+            1 if !review.requirements.is_empty() => (t("写作要求已记下，还没有确认。").into(), vec![primary("review-next-confirm", t("确认要求"), Cmd::Review(ReviewDo::ConfirmRequirements, String::new()), cx), record(cx)]),
+            1 if offer.is_some() => (t("这条回答可以作为写作要求吗？还要调整就接着说，助手会给出新的一份。").into(), vec![primary("review-next-take", t(review_take(1)), take(ReviewDo::Requirements), cx)]),
+            1 => (t("先定写作要求：让助手整理，或在记录里自己填写。").into(), vec![primary("review-next-ask", t("整理写作要求"), ask(t("请整理这篇综述的写作要求。")), cx), record(cx)]),
+            2 if !review.framework.is_empty() => (t("初步框架已记下，还没有确认。").into(), vec![primary("review-next-confirm", t("确认框架"), Cmd::Review(ReviewDo::ConfirmFramework, String::new()), cx), record(cx)]),
+            2 if offer.is_some() => (t("这条回答可以作为初步框架吗？它只是从已有综述得来的起点；还要调整就接着说。").into(), vec![primary("review-next-take", t(review_take(2)), take(ReviewDo::Framework), cx), skip(cx)]),
+            2 => (t("写作要求已确认。下一步读已有综述，得出初步框架；没有可参照的综述就跳过。").into(), vec![primary("review-next-ask", t("提出初步框架"), ask(t("请找出这个主题已发表的综述，逐篇比较，再提出初步框架。")), cx), skip(cx)]),
+            3 if !review.outline.is_empty() => (t("大纲已记下，还没有确认。").into(), vec![primary("review-next-confirm", t("确认大纲"), Cmd::Review(ReviewDo::ConfirmOutline, String::new()), cx), record(cx)]),
+            3 if offer.is_some() => (t("这条回答可以作为大纲吗？采用后按它一节一节地写；还要调整就接着说。").into(), vec![primary("review-next-take", t(review_take(3)), take(ReviewDo::Outline), cx)]),
+            3 if review.framework.is_empty() => (t("不参照已有综述。下一步按文献库里的文献提出大纲。").into(), vec![primary("review-next-ask", t("提出大纲"), ask(t("请按文献库里的文献提出大纲。")), cx)]),
+            3 => (t("初步框架已确认。下一步对照它，按文献库里的研究重建大纲。").into(), vec![primary("review-next-ask", t("重建大纲"), ask(t("请对照初步框架，按文献库里的研究重建大纲。")), cx)]),
+            _ if review.completed => (t("综述已标为完成。").into(), vec![secondary("review-next-manuscript", t("存为新稿件"), Cmd::ReviewToManuscript, cx)]),
+            _ if offer.is_some() && checking && !review.sections.is_empty() => (t("核对的结果可以记为检查记录；它是否属实仍要你过目。").into(), vec![primary("review-next-checks", t("记录检查"), take(ReviewDo::Checks), cx)]),
+            _ if offer.is_some() => {
+                let mut buttons = vec![primary("review-next-take", t(review_take(4)), take(ReviewDo::Section), cx)];
+                if !review.sections.is_empty() { buttons.push(secondary("review-next-checks", t("记录检查"), take(ReviewDo::Checks), cx)) }
+                (t("这一节写好了就保存；还要改就接着说。").into(), buttons)
+            }
+            _ if review.sections.is_empty() => (t("大纲已确认。让助手按大纲一节一节地写，写好一节保存一节。").into(), vec![primary("review-next-ask", t("写第一节"), ask(t("请按大纲写第一节。")), cx)]),
+            _ => {
+                let mut buttons = vec![primary("review-next-ask", t("写下一节"), ask(t("请按大纲写下一节：接着已保存的章节往下写；各节都已保存时照实说明。")), cx)];
+                if review.checks_current { buttons.push(secondary("review-next-complete", t("标为完成"), Cmd::Review(ReviewDo::Complete, String::new()), cx)) } else { buttons.push(secondary("review-next-verify", t("核对全文"), ask(t("/verify 已保存的各节正文")), cx)) }
+                buttons.push(secondary("review-next-manuscript", t("存为新稿件"), Cmd::ReviewToManuscript, cx));
+                (if review.checks_current { tf!("已保存 {} 节，检查已记录。", "{} sections saved, checks recorded.", review.sections.len()) } else { tf!("已保存 {} 节。全部写完后让助手逐条核对，再存为稿件。", "{} sections saved. When all are written, have the assistant verify them, then save as a manuscript.", review.sections.len()) }, buttons)
+            }
+        };
+        let label = if review.completed { t("综述").to_string() } else { tf!("第 {step} 步 · {}", "Step {step} · {}", t(REVIEW_STEPS[step - 1])) };
+        div().flex().flex_wrap().items_center().gap(px(10.)).px(px(14.)).py(px(10.)).rounded(px(12.)).border_1().border_color(Theme::line_strong()).bg(Theme::bg_sunken())
+            .child(div().flex().flex_col().flex_1().min_w(px(240.)).gap(px(2.))
+                .child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(label))
+                .child(div().line_height(theme::body_line(21.)).child(words)))
+            .child(div().flex().flex_none().flex_wrap().items_center().gap(px(8.)).children(buttons))
+            .into_any_element()
     }
 
     /// A run of tool calls: those done as one line that unfolds, those
@@ -1469,6 +1547,51 @@ mod tests {
         review.sections.push(ReviewSection { name: "一、引言".into(), body: "很长的正文".into() });
         let note = super::review_note(&review);
         assert!(note.contains("已由用户确认") && note.contains("已保存的章节：一、引言") && !note.contains("很长的正文"));
+    }
+
+    #[test]
+    fn the_last_answer_is_offered_to_the_step_once() {
+        use crate::app::ChatItem;
+        use wisp_core::review::{Review, ReviewSection};
+        let asked = |text: &str| ChatItem::User { text: text.into(), images: vec![], prompt: String::new() };
+        let said = |text: &str| ChatItem::Answer(text.into());
+        let mut review = Review::default();
+        // The whole answer, the piece before its tool call included; nothing while the question is the last thing said.
+        let mut messages = vec![asked("/review 根"), said("先查一下。"), ChatItem::Tool { call: "查看概况".into(), result: None }, said("要求如下。")];
+        assert_eq!(super::review_offer(&messages, 0, &review).as_deref(), Some("先查一下。\n\n要求如下。"));
+        assert_eq!(super::review_offer(&messages[..1], 0, &review), None);
+        // Taken, it is not offered to the step after: by the mark in this session, by what the record holds in a conversation opened again.
+        review.requirements = "先查一下。\n\n要求如下。".into();
+        review.requirements_confirmed = true;
+        assert_eq!(super::review_offer(&messages, messages.len(), &review), None);
+        assert_eq!(super::review_offer(&messages, 0, &review), None);
+        // What is said next is the next step's; a mark left by a longer conversation says nothing.
+        messages.extend([asked("提出初步框架"), said("框架如下。")]);
+        assert_eq!(super::review_offer(&messages, 4, &review).as_deref(), Some("框架如下。"));
+        assert_eq!(super::review_offer(&messages, 40, &review).as_deref(), Some("框架如下。"));
+        // A text written in the record that waits to be confirmed comes before any answer.
+        review.framework = "自己写的框架".into();
+        assert_eq!(super::review_offer(&messages, 4, &review), None);
+        // A section saved is told by its text, under whatever name.
+        review = Review { framework_confirmed: true, outline: "一、引言".into(), outline_confirmed: true, ..review };
+        messages.extend([asked("写第一节"), said("## 一、引言\n\n正文一段。")]);
+        assert!(super::review_offer(&messages, 6, &review).is_some());
+        review.sections.push(ReviewSection { name: "一、引言".into(), body: "正文一段。".into() });
+        assert_eq!(super::review_offer(&messages, 0, &review), None);
+    }
+
+    #[test]
+    fn the_model_is_told_which_button_takes_its_answer() {
+        use wisp_core::review::Review;
+        let mut review = Review::default();
+        assert!(super::review_note(&review).contains("「采用为写作要求」") && super::review_note(&review).contains("完整的一份"));
+        review.requirements = "中文".into();
+        review.requirements_confirmed = true;
+        assert!(super::review_note(&review).contains("「采用为初步框架」"));
+        review.framework_confirmed = true;
+        assert!(super::review_note(&review).contains("「采用为大纲」"));
+        review.outline_confirmed = true;
+        assert!(super::review_note(&review).contains("「保存正文」"));
     }
 
     #[test]

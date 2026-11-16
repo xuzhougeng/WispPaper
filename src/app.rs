@@ -1152,6 +1152,8 @@ pub struct Chat {
     pub review_checks: HashMap<String, ai::Quoted>,
     /// The review's record is on show in place of the conversation.
     pub review_open: bool,
+    /// How many messages there were when the review last took a step: an answer from before it is not offered to the next step.
+    pub review_mark: usize,
     /// What is selected in an answer: the answer's place among the messages, the two ends in order of selecting, and whether the pointer is still held.
     pub picked: Option<(usize, crate::markdown::Place, crate::markdown::Place, bool)>,
     /// The quotations of the answers looked up in the papers they name, by label, page and quotation.
@@ -1410,6 +1412,7 @@ impl Chat {
             review: None,
             review_checks: HashMap::new(),
             review_open: false,
+            review_mark: 0,
             picked: None,
             checks: HashMap::new(),
             started: None,
@@ -1516,6 +1519,7 @@ impl Chat {
         self.review = None;
         self.review_checks.clear();
         self.review_open = false;
+        self.review_mark = 0;
         self.picked = None;
         self.checks.clear();
         self.started = None;
