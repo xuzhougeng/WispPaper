@@ -7,8 +7,9 @@
 //! once this one has quit. The next start clears the folder (`tidy`).
 //!
 //! macOS replaces the `.app` bundle from the DMG; Windows the files of the
-//! portable folder from the zip (a running program can be renamed, not
-//! written over). Elsewhere, and for a build run from `target/`, there is
+//! app's folder from the zip (a running program can be renamed, not written
+//! over), whether the folder was unpacked by hand or made by the setup, which
+//! installs into a folder of the person's own (`scripts/wisp-paper.iss`). Elsewhere, and for a build run from `target/`, there is
 //! nothing to replace: the release is only announced.
 
 use std::path::{Path, PathBuf};
@@ -50,6 +51,8 @@ pub fn install(staged: &Path, target: &Path) -> Result<(), String> {
 /// Clear what the last update left beside the app: the app it replaced, or a package never installed.
 pub fn tidy() {
     if let Some(target) = std::env::current_exe().ok().and_then(|exe| imp::place(&exe)) {
+        #[cfg(target_os = "windows")]
+        imp::updated(&target);
         let _ = std::fs::remove_dir_all(imp::work(&target));
     }
 }
@@ -153,6 +156,20 @@ mod imp {
         }
         if !staged.join(APP).is_file() { return Err(tf!("更新包里没有 {APP}", "The package holds no {APP}")) }
         Ok(staged)
+    }
+
+    /// A copy the setup installed (`scripts/wisp-paper.iss`) is listed among the system's apps with
+    /// its version. Right after an update (the app set aside is still in `old`) the entry is made
+    /// to say this one's. A portable folder has no entry, and none is made for it.
+    pub fn updated(target: &Path) {
+        use std::os::windows::process::CommandExt;
+        const ENTRY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\WispPaper_is1";
+        if !work(target).join("old").is_dir() || !target.join("unins000.exe").is_file() { return }
+        // `reg` is a console program: CREATE_NO_WINDOW keeps its window away.
+        let reg = |args: &[&str]| std::process::Command::new("reg").args(args).creation_flags(0x0800_0000).output().is_ok_and(|output| output.status.success());
+        std::thread::spawn(move || {
+            if reg(&["query", ENTRY]) { reg(&["add", ENTRY, "/v", "DisplayVersion", "/d", env!("CARGO_PKG_VERSION"), "/f"]); }
+        });
     }
 
     pub fn install(staged: &Path, target: &Path, work: &Path) -> Result<(), String> {

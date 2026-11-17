@@ -103,8 +103,10 @@ GPUI 应用。
 scripts/package-macos.sh                    # dist/Wisp Paper.app 和 DMG，本机架构，ad hoc 签名
 scripts/package-macos.sh --arch universal   # Apple 芯片 + Intel（需要两个 rustup target）
 scripts/package-macos.sh --arch arm64       # 只有 Apple 芯片；--arch x64 只有 Intel（发布时这两个各出一个 DMG）
-pwsh -File scripts/package-windows.ps1      # dist/WispPaper-v<版本>-windows-x64.zip，不签名
+pwsh -File scripts/package-windows.ps1      # dist/WispPaper-v<版本>-windows-x64.zip（便携版）和 …-setup.exe（安装版），不签名
 ```
+
+Windows 的安装版由 [Inno Setup 6](https://jrsoftware.org/isinfo.php) 按 `scripts/wisp-paper.iss` 生成（`winget install JRSoftware.InnoSetup`）；没装时加 `-NoInstaller` 只出便携版。
 
 没有签名身份时，macOS 的包只能在本机运行，不适合分发。本机 `cargo` 用不了固定的工具链时，用 `CARGO="cargo +stable"` 指定；Xcode 没装 Metal Toolchain 时脚本会自己改用 `gpui/runtime_shaders`。
 

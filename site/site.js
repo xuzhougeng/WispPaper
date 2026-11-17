@@ -86,7 +86,7 @@
 
   // release.json is written when the site is deployed (see .github/workflows/pages.yml).
   // Earlier releases had one universal DMG; both Mac buttons lead to it there.
-  const WANTED = { mac: [/macos.*arm64/, /macos-universal/], 'mac-intel': [/macos.*x64/, /macos-universal/], win: [/windows/], linux: [/linux/] };
+  const WANTED = { mac: [/macos.*arm64/, /macos-universal/], 'mac-intel': [/macos.*x64/, /macos-universal/], win: [/windows.*\.zip$/], 'win-setup': [/windows.*setup\.exe$/], linux: [/linux/] };
   fetch('release.json').then(response => response.ok ? response.json() : null).then(release => {
     if (!release || !release.tag || !Array.isArray(release.assets)) return;
     const version = $('[data-version]');
@@ -102,8 +102,12 @@
     line.append(notes, '。');
     for (const [key, patterns] of Object.entries(WANTED)) {
       const asset = patterns.map(pattern => release.assets.find(a => pattern.test(a.name))).find(Boolean);
-      if (!asset) continue;
-      const kind = (asset.name.match(/\.(dmg|zip|tar\.gz)$/) || [])[1];
+      if (!asset) {
+        // A release from before there was a setup: nothing is offered that it does not have.
+        if (key === 'win-setup') $$(`[data-asset="${key}"], [data-file="${key}"], [data-with="${key}"]`).forEach(el => el.remove());
+        continue;
+      }
+      const kind = (asset.name.match(/\.(dmg|zip|tar\.gz|exe)$/) || [])[1];
       const button = $(`[data-asset="${key}"]`);
       button.href = asset.url;
       const label = button.dataset.label ? button.dataset.label + ' ' : '';

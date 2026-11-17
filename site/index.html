@@ -408,9 +408,13 @@
       <article class="dl" data-os="win">
         <h3>Windows</h3>
         <p class="dl-req">Windows 10 / 11，x64</p>
-        <a class="btn primary" data-asset="win" href="https://github.com/xuzhougeng/WispPaper/releases/latest">去发布页下载</a>
+        <div class="dl-pick">
+          <a class="btn primary" data-asset="win-setup" data-label="安装版" href="https://github.com/xuzhougeng/WispPaper/releases/latest">安装版</a>
+          <a class="btn" data-asset="win" data-label="便携版" href="https://github.com/xuzhougeng/WispPaper/releases/latest">便携版</a>
+        </div>
+        <p class="dl-file" data-file="win-setup">WispPaper-v<i>版本</i>-windows-x64-setup.exe</p>
         <p class="dl-file" data-file="win">WispPaper-v<i>版本</i>-windows-x64.zip</p>
-        <p class="dl-note">解压后运行 <code>WispPaper.exe</code>。两个 exe 都带 Authenticode 签名。</p>
+        <p class="dl-note"><span data-with="win-setup">安装版装在当前用户名下，不需要管理员权限，开始菜单里有它。</span>便携版解压后运行 <code>WispPaper.exe</code>，不写注册表。都带 Authenticode 签名，都能自动更新。</p>
       </article>
       <article class="dl" data-os="linux">
         <h3>Linux</h3>
@@ -425,7 +429,7 @@
       <div>
         <h3>装好之后</h3>
         <ul>
-          <li>命令行工具 <code>wisp</code> 随包附带：Windows 和 Linux 在主程序旁边，macOS 在 <code>Wisp Paper.app/Contents/MacOS/wisp</code>。</li>
+          <li>命令行工具 <code>wisp</code> 随包附带：Windows 和 Linux 在主程序旁边（安装版在 <code>%LOCALAPPDATA%\Programs\Wisp Paper</code>），macOS 在 <code>Wisp Paper.app/Contents/MacOS/wisp</code>。</li>
           <li>收集、整理、PDF 和导出不需要模型。提问、建库向导、筛选和翻译需要在「设置 › AI」里配置你自己的模型服务。</li>
           <li>发布页里的 <code>SHA256SUMS</code> 是各个文件的校验和。</li>
         </ul>
