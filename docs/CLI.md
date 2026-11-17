@@ -20,7 +20,7 @@ wisp import_pdf -l L-实际ID --path "PDF collection"
 wisp import_zotero -l L-实际ID --path /path/to/Zotero/zotero.sqlite
 ```
 
-`import_pdf` 支持递归导入文件夹，子文件夹名称转为标签；`--paper-id` 可将单个 PDF 附到已有文献。离线提取 DOI 和全文，未补全的题目用文件名，不自动联网查询元数据。已有记录保留，回收站条目跳过，相同条目的相同附件内容只保存一次。
+`import_pdf` 支持递归导入文件夹，子文件夹名称转为标签；`--paper-id` 可将单个 PDF 附到已有文献。离线提取 DOI 和全文，未补全的题目用文件名，不自动联网查询元数据。已有记录保留，回收站条目跳过，相同条目的相同附件内容只保存一次；内容完全相同的文件换了名字再导入，算作已持有它的那篇文献，不新建记录。
 
 `import_references` 按内容识别 BibTeX / RIS，不自动携带 PDF。`import_zotero` 复用桌面的只读迁移流程，复制可访问的本地 PDF；建议先退出 Zotero，详见 [Zotero 导入](ZOTERO.md)。这些本地导入不联网、不移动源文件。
 
@@ -95,8 +95,8 @@ wisp search_fulltext --help             # 一个工具的参数
 | `find_metadata` | 为缺 DOI 或题目的文献按题目到 Crossref、Europe PMC 和 arXiv 查找可能对应的记录，不写入；返回各来源的情况和候选（相似度、一致与不一致之处、是否已是库里的另一篇）。`--paper-id` 必填，`--title`、`--author`、`--year` 可选。写入由人在窗口里核对后确认 |
 | `list_searches` / `save_search` / `remove_search` | 查看、保存、删除检索式（后两个会改动文献库） |
 | `run_search` | 运行一个保存的检索式并导入，已有的文献跳过，返回批次号（会改动文献库） |
-| `list_imports` / `undo_import` | 导入记录；整批撤销一次导入，处理过的文献保留（撤销会改动文献库） |
-| `sync_searches` | 运行到期的检索式（所有开启了自动更新的文献库，或指定的一个）；`--force` 不看间隔（会改动文献库） |
+| `list_imports` / `undo_import` | 导入记录；整批撤销一次导入：处理过的文献保留，没动过的移出文献库（不进回收站，以后的检索还能再导入），它们的记录另存为文献库文件夹里的 `removed/undone-import-<批次号>.bib`，路径在结果的 `setAside` 里（撤销会改动文献库） |
+| `sync_searches` | 运行到期的检索式（所有开启了自动更新的文献库，或指定的一个）。「自动更新」关着的文献库不会运行，用 `-l` 指定它也一样，结果里 `runs` 为空；`--force` 不看间隔，也不看这个开关，运行所有已启用的检索式（会改动文献库） |
 | `suggest_screening` | 为一篇文献提出收录建议（结论、理由、逐字引文、把握）；不改变收录判断，由用户在筛选页确认 |
 | `suggest_field` | 为一篇文献的一个自定义词条提出取值（附逐字引文）；不改动词条，由用户在提取页确认。单选词条只接受它的选项 |
 | `organise_papers` | 整理已有的文献：`changes` 是一个 JSON 数组，每项给出文献 `id` 和要改的方面（`addTags`、`removeTags`、`starred`、`reading`、`note`）；全部写入或全部不写。不能改收录判断和自定义词条 |
@@ -104,7 +104,7 @@ wisp search_fulltext --help             # 一个工具的参数
 | `read_manuscript` | 读取一份稿件的正文，可以只读一节；只读 |
 | `edit_section` | 写或修改稿件的一节：`--edits` 是一个 JSON 数组，每项是 `old`（从这一节逐字摘出的原文，留空表示加在末尾）和 `new`（改成的文字，留空表示删去）；或用 `--text` 给出这一节的全部新正文。引用写作 `[@Key]` 或 `[@文献ID]`。改动前的文字留作这一节的一个历史版本（会改动稿件） |
 | `set_outline` | 设定一份稿件的大纲：`--sections` 是一个 JSON 数组，按顺序列出各节（保留的节带 `id`，可以改名、改类型、换位置；不带的是新加的），可同时给 `--title`、`--language`。没列出的节，没写过内容的去掉，写过的保留在最后（会改动稿件） |
-| `find_pdf` | 为没有 PDF 的文献查找开放获取的全文（arXiv、OpenAlex 和 Europe PMC 列出的开放获取文件、部分出版商的开放获取文章），下载后附到原条目并读出文字；`--paper-id` 只处理一篇，`--limit` 一次最多几篇，`--look-only` 只列出候选地址不下载。不绕过付费墙或登录；会把 DOI 或 PMID 发给这些服务（会改动文献库） |
+| `find_pdf` | 为没有 PDF 的文献查找开放获取的全文（arXiv、OpenAlex 和 Europe PMC 列出的开放获取文件、部分出版商的开放获取文章），下载后附到原条目并读出文字；取回的文件是论文的补充材料（开头几页只有附图、附表）时不保存，接着试下一个地址；`--paper-id` 只处理一篇，`--limit` 一次最多几篇，`--look-only` 只列出候选地址不下载。不绕过付费墙或登录；会把 DOI 或 PMID 发给这些服务（会改动文献库） |
 
 全文检索第一次用到某个 PDF 时会提取它的文字并缓存到库里，同时按标题把它分成导言、方法、结果、讨论并切成句子，之后即时返回。
 
@@ -112,7 +112,7 @@ wisp search_fulltext --help             # 一个工具的参数
 
 ## MCP
 
-把 `wisp mcp` 配置给 AI 客户端，它就能通过 MCP（标准输入输出）使用同一组工具；`wisp mcp --read-only` 不提供会改动文献库的工具：
+把 `wisp mcp` 配置给 AI 客户端，它就能通过 MCP（标准输入输出）使用同一组工具；`wisp mcp --read-only` 不提供会改动文献库的工具。提建议的两个工具 `suggest_screening` 和 `suggest_field` 也在其中：建议虽然不改变收录判断和词条，却要写进文献库，只读时同样不提供。配置如下：
 
 ```json
 {
@@ -124,4 +124,4 @@ wisp search_fulltext --help             # 一个工具的参数
 
 ## 定时同步
 
-不开窗口时，可以让系统的计划任务（cron、launchd、Windows 任务计划程序）定期执行 `wisp sync_searches`，它只运行已经到期的检索式。
+不开窗口时，可以让系统的计划任务（cron、launchd、Windows 任务计划程序）定期执行 `wisp sync_searches`，它只运行已经到期的检索式，并且只处理「自动更新」开着的文献库；开关关着时这条命令什么都不做，要用 `--force`。

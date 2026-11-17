@@ -539,6 +539,15 @@ impl Run {
     }
 }
 
+/// How many bytes of text these items hold.
+fn width(items: &[Item]) -> usize {
+    let mut bytes = 0;
+    leaves(items, &mut |leaf| {
+        if let Leaf::Text(text) = leaf { bytes += text.len() }
+    });
+    bytes
+}
+
 /// Put `xml` at byte `at` of the text these items hold, cutting a run where it falls inside one. Whether it found the place.
 fn place(items: &mut Vec<Item>, pos: &mut usize, at: usize, xml: &str, end: bool) -> bool {
     let mut n = 0;
@@ -546,6 +555,14 @@ fn place(items: &mut Vec<Item>, pos: &mut usize, at: usize, xml: &str, end: bool
         let mut cut = None;
         match &mut items[n] {
             Item::Raw(_) => {}
+            // A revision is not cut by a range: one that starts or ends in another's insertion or in one just made
+            // stands before or after all of it. A mark inside `w:ins` is itself read as inserted, and some readers
+            // (LibreOffice) then take the words the range covers before the insertion as inserted too.
+            Item::Wrap { items: inner, ins: true, .. } => {
+                let (from, to) = (*pos, *pos + width(inner));
+                *pos = to;
+                if if end { from < at && at <= to } else { from <= at && at < to } { cut = Some((if end { n + 1 } else { n }, None)) }
+            }
             Item::Wrap { items: inner, .. } => {
                 if place(inner, pos, at, xml, end) { return true }
             }
@@ -1619,6 +1636,33 @@ mod tests {
         assert_eq!((done.kept, done.changed, done.added, done.removed), (3, 1, 1, 1));
         // Read as if the changes were accepted, the file says what was wanted.
         assert_eq!(texts(&done.bytes), wanted.iter().map(|w| w.text.clone()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_comment_on_a_tracked_insertion_stays_outside_it() {
+        // A sentence added after one that stays, with a comment on the paragraph as it now reads (what a change by the assistant leaves).
+        let source = file("<w:p><w:r><w:t>Roots grow down into the soil.</w:t></w:r></w:p><w:p><w:r><w:t>Hairs take up water.</w:t></w:r></w:p>", "");
+        let text = "Roots grow down into the soil. They branch where water is.";
+        let note = |range: std::ops::Range<usize>| Note { range, author: "助手".into(), date: "2026-11-12T00:00:00Z".into(), body: "补了一句".into() };
+        let wanted = vec![Wanted { text: text.into(), role: Role::Body, notes: vec![note(0..text.len())] }, body("Hairs take up water.")];
+        let options = Options { track: true, author: "Xu".into(), date: "2026-11-12T00:00:00Z".into() };
+        let done = rewrite(&source, &wanted, &options).unwrap();
+        if let Ok(path) = std::env::var("DOCX_DUMP") { std::fs::write(path, &done.bytes).unwrap() }
+        let out = body_of(&done.bytes);
+        let who = "w:author=\"Xu\" w:date=\"2026-11-12T00:00:00Z\"";
+        // The insertion holds the new sentence and nothing else: where the comment ends and its mark stand after it.
+        assert_eq!(out, format!("<w:p><w:commentRangeStart w:id=\"1\"/><w:r><w:t xml:space=\"preserve\">Roots grow down into the soil.</w:t></w:r><w:ins w:id=\"1\" {who}><w:r><w:t xml:space=\"preserve\"> They branch where water is.</w:t></w:r></w:ins><w:commentRangeEnd w:id=\"1\"/><w:r><w:commentReference w:id=\"1\"/></w:r></w:p><w:p><w:r><w:t>Hairs take up water.</w:t></w:r></w:p>"));
+        assert_eq!(texts(&done.bytes), [text, "Hairs take up water."]);
+        // A comment that starts or ends inside the insertion covers all of it instead: a range mark never stands inside a revision.
+        let inside = text.find("branch").unwrap();
+        for range in [inside..text.len(), 6..inside + 6, inside..inside + 6] {
+            let wanted = vec![Wanted { text: text.into(), role: Role::Body, notes: vec![note(range.clone())] }, body("Hairs take up water.")];
+            let out = body_of(&rewrite(&source, &wanted, &options).unwrap().bytes);
+            let ins = &out[out.find("<w:ins").unwrap()..out.find("</w:ins>").unwrap()];
+            assert!(!ins.contains("comment"), "{range:?}: {out}");
+            assert!(out.contains("<w:commentRangeStart w:id=\"1\"/>") && out.contains("<w:commentRangeEnd w:id=\"1\"/><w:r><w:commentReference w:id=\"1\"/></w:r>"), "{range:?}: {out}");
+            assert!(out.find("<w:commentRangeStart").unwrap() < out.find("<w:commentRangeEnd").unwrap(), "{range:?}: {out}");
+        }
     }
 
     #[test]

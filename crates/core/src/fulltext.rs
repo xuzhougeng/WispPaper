@@ -60,30 +60,42 @@ pub fn file_pages(path: &Path) -> Result<Vec<String>, String> {
     let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
     let pages = match extension.as_str() {
         "txt" | "md" | "markdown" => vec![std::fs::read_to_string(path).map_err(|e| format!("无法读取文件：{e}"))?],
-        "pdf" => {
-            let bytes = std::fs::read(path).map_err(|e| format!("无法读取文件：{e}"))?;
-            // Read off the glyphs first: that keeps the breaks the page shows. pdf-extract
-            // is the second try; it panics on some files hayro reads, and reads some it does not.
-            let laid_out = std::panic::catch_unwind(|| crate::pdftext::pages(bytes.clone())).unwrap_or_else(|_| Err(PARSER.into()));
-            match laid_out {
-                Ok(pages) if pages.iter().any(|p| !p.trim().is_empty()) => pages.into_iter().map(|p| tidy(&p)).collect(),
-                // A password stops the second reader as well.
-                Err(locked) if failure_kind(&locked) == "locked" => return Err(locked),
-                first => {
-                    let plain = std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem_by_pages(&bytes)).ok().and_then(Result::ok);
-                    match (plain, first) {
-                        (Some(pages), _) => pages.into_iter().map(|p| tidy(&p)).collect(),
-                        // The first read it and found no text: said below.
-                        (None, Ok(pages)) => pages,
-                        // What the first reader found out is the more exact of the two.
-                        (None, Err(first)) if first == NO_ENCODING => return Err(first),
-                        (None, Err(_)) => return Err(PARSER.into()),
-                    }
-                }
-            }
-        }
+        "pdf" => pdf_text(std::fs::read(path).map_err(|e| format!("无法读取文件：{e}"))?)?,
         other => return Err(format!("不支持提取 .{other} 文件的文字。")),
     };
+    kept_pages(pages)
+}
+
+/// The text of a PDF that is not a file yet (one just fetched), page by
+/// page, as `file_pages` reads a stored one.
+pub fn pdf_pages(bytes: &[u8]) -> Result<Vec<String>, String> {
+    kept_pages(pdf_text(bytes.to_vec())?)
+}
+
+fn pdf_text(bytes: Vec<u8>) -> Result<Vec<String>, String> {
+    // Read off the glyphs first: that keeps the breaks the page shows. pdf-extract
+    // is the second try; it panics on some files hayro reads, and reads some it does not.
+    let laid_out = std::panic::catch_unwind(|| crate::pdftext::pages(bytes.clone())).unwrap_or_else(|_| Err(PARSER.into()));
+    Ok(match laid_out {
+        Ok(pages) if pages.iter().any(|p| !p.trim().is_empty()) => pages.into_iter().map(|p| tidy(&p)).collect(),
+        // A password stops the second reader as well.
+        Err(locked) if failure_kind(&locked) == "locked" => return Err(locked),
+        first => {
+            let plain = std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem_by_pages(&bytes)).ok().and_then(Result::ok);
+            match (plain, first) {
+                (Some(pages), _) => pages.into_iter().map(|p| tidy(&p)).collect(),
+                // The first read it and found no text: said below.
+                (None, Ok(pages)) => pages,
+                // What the first reader found out is the more exact of the two.
+                (None, Err(first)) if first == NO_ENCODING => return Err(first),
+                (None, Err(_)) => return Err(PARSER.into()),
+            }
+        }
+    })
+}
+
+/// The pages as they are kept: an error when none says anything, cut at the length one paper may have.
+fn kept_pages(pages: Vec<String>) -> Result<Vec<String>, String> {
     if pages.iter().all(|p| p.trim().is_empty()) {
         return Err(NO_TEXT_LAYER.into());
     }
@@ -262,9 +274,45 @@ pub fn score(text_lower: &str, terms: &[String]) -> f32 {
     total
 }
 
+/// A PDF made by hand for tests: one page per text, a line of the page per line of the text, in Helvetica.
+#[cfg(test)]
+pub(crate) fn text_pdf(pages: &[&str]) -> Vec<u8> {
+    let mut objects: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into(), String::new(), "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into()];
+    let mut kids = vec![];
+    for text in pages {
+        let lines: Vec<String> = text.lines().map(|line| format!("({}) Tj T*", line.replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)"))).collect();
+        let content = format!("BT /F1 11 Tf 14 TL 72 720 Td {} ET", lines.join(" "));
+        let page = objects.len() + 1;
+        kids.push(format!("{page} 0 R"));
+        objects.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents {} 0 R >>", page + 1));
+        objects.push(format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()));
+    }
+    objects[1] = format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids.join(" "), kids.len());
+    let mut out = String::from("%PDF-1.4\n");
+    let mut offsets = vec![];
+    for (n, object) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.push_str(&format!("{} 0 obj\n{object}\nendobj\n", n + 1));
+    }
+    let xref = out.len();
+    out.push_str(&format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1));
+    for offset in offsets {
+        out.push_str(&format!("{offset:010} 00000 n \n"));
+    }
+    out.push_str(&format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1));
+    out.into_bytes()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pdf_read_before_it_is_a_file() {
+        let pages = pdf_pages(&text_pdf(&["Root atlas\nAbstract", "Supp. Figure 1. Quality (A)"])).unwrap();
+        assert_eq!(pages, ["Root atlas\nAbstract", "Supp. Figure 1. Quality (A)"]);
+        assert_eq!(failure_kind(&pdf_pages(b"%PDF-1.4 not really a pdf").unwrap_err()), "parser");
+    }
 
     #[test]
     fn terms_of_mixed_text() {

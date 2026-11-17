@@ -19,7 +19,7 @@ pub const SKIP: &str = "skip";
 
 /// Bumped when `blocks`, `assign` or `sentences` change what they make of
 /// the same pages, so structures made by rule are made again.
-pub const VERSION: i32 = 2;
+pub const VERSION: i32 = 3;
 
 /// A paragraph or a heading of a paper, in reading order.
 #[derive(Clone, Debug, PartialEq)]
@@ -240,6 +240,14 @@ fn is_caption(text: &str) -> bool {
     latin || ["图", "表", "図", "附图", "附表", "그림", "표"].iter().any(|start| lower.strip_prefix(start).is_some_and(|rest| rest.trim_start().chars().next().is_some_and(|c| c.is_ascii_digit() || c.eq_ignore_ascii_case(&'s'))))
 }
 
+/// The words of a button a publisher draws on the page: Crossmark's, which
+/// stands alone like a title on the first page and would head the
+/// sentences after it.
+fn is_button(text: &str) -> bool {
+    let words = text.split_whitespace().map(str::to_lowercase).collect::<Vec<_>>().join(" ");
+    matches!(words.as_str(), "check for updates" | "check for update" | "updates check for")
+}
+
 /// The small print of a first or last page: licence, copyright, correspondence, dates.
 fn is_notice(text: &str) -> bool {
     let lower = text.to_lowercase();
@@ -302,6 +310,8 @@ pub fn blocks(pages: &[String]) -> Vec<Block> {
             let text = join_lines(&lines, &lexicon);
             let heading = looks_like_heading(&lines, &text);
             lines.clear();
+            // What a button on the page says is no word of the paper's, and no heading for the sentences after it.
+            if is_button(&text) { continue }
             // What starts in small letters carries on the paragraph left open before the page or column ended.
             let first = text.chars().next();
             let continues = !heading && first.is_some_and(char::is_lowercase);
@@ -489,7 +499,13 @@ pub const OUTLINE_SYSTEM: &str = "你在整理一篇学术论文的版面提取�
 部分只有这几种：abstract（摘要）、introduction（导言，含背景）、methods（材料与方法）、results（结果）、discussion（讨论，含结论）、other（属于正文但不属于以上任何一种，例如综述的各个主题章节）。\n\
 不属于正文的块不要列出：题目、作者、单位、通讯信息、收稿日期、页眉页脚、图注和表注、表格内容、致谢、基金、作者贡献、数据可用性、参考文献、补充材料说明。\n\
 注意：摘要常常没有标题，是题目和作者之后、正文之前概述全文的那一段，它是 abstract 而不是 introduction。有的期刊（如 Nature）导言没有标题，直接跟在摘要后面；结果部分常由论文自己的小标题组成；方法可能排在参考文献之后。小标题下的段落归入它所在的部分。\n\
-只输出结果，每行一个部分，写出属于它的块编号范围，例如：\nintroduction: 6-11\nresults: 12-58, 61-64\nmethods: 80-112\n不要解释。";
+只输出结果，每行一个部分，写出属于它的块编号范围，例如：\nintroduction: 6-11\nresults: 12-58, 61-64\nmethods: 80-112\n不要解释。\n\
+没有任何一块属于正文时（例如这是论文的补充材料、只有图注和图中的文字，或者根本不是论文），只输出 none。";
+
+/// What is said when a model looked at a file's outline and found no body
+/// text in it: an answer, not a failure of the service, so asking again
+/// would not help and the run does not count it towards giving up.
+pub const NO_BODY: &str = "模型没有在这个文件里找到论文的正文：它多半是补充材料、只有图表，或者不是一篇论文。分节保持原样；这是论文全文的话，可以换一个模型再整理。";
 
 /// How much of a block the model sees.
 const OUTLINE_CHARS: usize = 110;
@@ -510,8 +526,13 @@ pub fn outline_prompt(title: &str, blocks: &[Block]) -> String {
 
 /// The model's answer to `outline_prompt`, as a label for each of the
 /// `count` blocks. A block it did not list is left out; headings never
-/// carry sentences. An answer that names no block at all is an error.
+/// carry sentences. An answer that names no block at all is an error:
+/// `NO_BODY` when the model said so (`none`, or nothing, which is what the
+/// instructions to list only body text and explain nothing come to for a
+/// file of legends), another when the answer cannot be read.
 pub fn parse_outline(reply: &str, blocks: &[Block], abstract_text: &str) -> Result<Vec<&'static str>, String> {
+    let said = reply.trim().trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
+    if said.is_empty() || said == "none" || said == "无" { return Err(NO_BODY.into()) }
     let abstract_start: String = bare(abstract_text).chars().take(60).collect();
     let mut labels = vec![SKIP; blocks.len()];
     let mut named = 0;
@@ -833,7 +854,7 @@ mod tests {
     #[test]
     fn blocks_of_pages() {
         let pages = [
-            page("Journal of Roots 12 (2024) 100\n\nArticle\n\nA study of roots\n\nThe root is long and it is known that roots have evolved diverse strate-\ngies to tackle the variability in soil condi-\ntions\n1,2. However, single-\ncell work on the single-cell level is rare and the understanding of\n47,000 cells remains"),
+            page("Journal of Roots 12 (2024) 100\n\nArticle\n\nCheck for\nupdates\n\nA study of roots\n\nThe root is long and it is known that roots have evolved diverse strate-\ngies to tackle the variability in soil condi-\ntions\n1,2. However, single-\ncell work on the single-cell level is rare and the understanding of\n47,000 cells remains"),
             page("Journal of Roots 12 (2024) 101\n\nlimited to this day.\n\nResults\n\nFig. 1 | A legend of the first figure, long enough.\n\n101"),
             page("Journal of Roots 12 (2024) 102\n\nDiscussion More text here, after a name of a part run into it.\n\nResults from elsewhere stay."),
             page("Journal of Roots 12 (2024) 103\n\nThe end."),
@@ -856,6 +877,8 @@ mod tests {
         );
         assert_eq!(blocks.iter().map(|b| b.heading).collect::<Vec<_>>(), [true, true, false, true, false, true, false, false, false]);
         assert_eq!((blocks[2].page, blocks[3].page), (1, 2));
+        // The words of Crossmark's button are passed over wherever they stand; a sentence that says them is not.
+        assert!(is_button("Check for updates") && is_button("CHECK FOR  UPDATES") && !is_button("Check for updates of the atlas") && !is_button("Updates"));
     }
 
     #[test]
@@ -905,7 +928,10 @@ mod tests {
         assert_eq!(labels, [SKIP, "introduction", SKIP, "results", SKIP, "results"]);
         assert_eq!(parse_outline("导言：1；结果：3", &blocks, "").unwrap()[1], "introduction");
         assert_eq!(parse_outline("introduction: 1", &blocks, INTRO).unwrap()[1], "abstract");
-        assert!(parse_outline("I cannot tell.", &blocks, "").is_err());
+        assert!(parse_outline("I cannot tell.", &blocks, "").is_err_and(|error| error != NO_BODY));
+        // No body text in the file (a supplement, legends only): the model says none, or nothing at all, and that is said as it is.
+        for reply in ["", " \n", "none", "None.", "`none`", "无"] { assert_eq!(parse_outline(reply, &blocks, ""), Err(NO_BODY.to_string()), "{reply:?}") }
+        assert!(OUTLINE_SYSTEM.contains("只输出 none"));
     }
 
     #[test]

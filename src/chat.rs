@@ -195,6 +195,23 @@ pub(crate) fn review_note(review: &wisp_core::review::Review) -> String {
     note
 }
 
+/// What 核对全文 on the review's card asks: the saved sections, checked claim by claim.
+pub(crate) const VERIFY_SECTIONS: &str = "/verify 已保存的各节正文";
+
+/// Whether a question is that request, in either language of the window.
+pub(crate) fn verifies_sections(question: &str) -> bool {
+    let question = question.trim();
+    question == VERIFY_SECTIONS || question == t(VERIFY_SECTIONS)
+}
+
+/// The saved sections in full, for the one question that checks them. What is saved is the record's, and need not be
+/// what the conversation last said: a section may have been changed in the record, kept from a selection, or written
+/// in a conversation taken up again; and without it the model looks for a manuscript on the writing page.
+pub(crate) fn review_sections(review: &wisp_core::review::Review) -> String {
+    let sections: Vec<String> = review.sections.iter().filter(|section| !section.body.trim().is_empty()).map(|section| format!("## {}\n{}", section.name, section.body.trim())).collect();
+    format!("[已保存的各节正文]\n要核对的就是下面这 {} 节，原样取自综述记录。它们不在写作页的稿件里，不用去找稿件，也不要改成核对上一个回答。按节核对，每节先写节名。\n\n{}", sections.len(), sections.join("\n\n"))
+}
+
 /// A text to keep as a section: its name from a heading on its first line, else numbered, and the text under it.
 fn section_of(text: &str, review: &wisp_core::review::Review) -> (String, String) {
     let trimmed = text.trim();
@@ -230,7 +247,7 @@ fn elapsed(chat: &Chat) -> String {
     if seconds < 60 { format!("{seconds}s") } else { format!("{}m {:02}s", seconds / 60, seconds % 60) }
 }
 
-/// The tools of a run of calls in a few words: 「检索全文 ×2 · 读取全文」.
+/// The tools of a run of calls in a few words: 「检索全文 ×2 · 阅读全文」.
 fn tools_summary(calls: &[&str]) -> String {
     let mut counted: Vec<(&str, usize)> = vec![];
     for call in calls {
@@ -1309,7 +1326,7 @@ impl Workspace {
             _ if review.sections.is_empty() => (t("大纲已确认。让助手按大纲一节一节地写，写好一节保存一节。").into(), vec![primary("review-next-ask", t("写第一节"), ask(t("请按大纲写第一节。")), cx)]),
             _ => {
                 let mut buttons = vec![primary("review-next-ask", t("写下一节"), ask(t("请按大纲写下一节：接着已保存的章节往下写；各节都已保存时照实说明。")), cx)];
-                if review.checks_current { buttons.push(secondary("review-next-complete", t("标为完成"), Cmd::Review(ReviewDo::Complete, String::new()), cx)) } else { buttons.push(secondary("review-next-verify", t("核对全文"), ask(t("/verify 已保存的各节正文")), cx)) }
+                if review.checks_current { buttons.push(secondary("review-next-complete", t("标为完成"), Cmd::Review(ReviewDo::Complete, String::new()), cx)) } else { buttons.push(secondary("review-next-verify", t("核对全文"), ask(t(VERIFY_SECTIONS)), cx)) }
                 buttons.push(secondary("review-next-manuscript", t("存为新稿件"), Cmd::ReviewToManuscript, cx));
                 (if review.checks_current { tf!("已保存 {} 节，检查已记录。", "{} sections saved, checks recorded.", review.sections.len()) } else { tf!("已保存 {} 节。全部写完后让助手逐条核对，再存为稿件。", "{} sections saved. When all are written, have the assistant verify them, then save as a manuscript.", review.sections.len()) }, buttons)
             }
@@ -1670,6 +1687,13 @@ mod tests {
         review.sections.push(ReviewSection { name: "一、引言".into(), body: "很长的正文".into() });
         let note = super::review_note(&review);
         assert!(note.contains("已由用户确认") && note.contains("已保存的章节：一、引言") && !note.contains("很长的正文"));
+        // The one question that checks the saved sections is given them, as the record holds them; an empty one is left out.
+        review.sections.push(ReviewSection { name: "二、方法".into(), body: " ".into() });
+        review.sections.push(ReviewSection { name: "三、结论".into(), body: "根向下长 [P1 p.2 \"Roots grow down\"]。\n".into() });
+        assert!(super::verifies_sections(" /verify 已保存的各节正文 ") && super::verifies_sections(super::VERIFY_SECTIONS));
+        assert!(!super::verifies_sections("/verify") && !super::verifies_sections("/verify 根向下长"));
+        let sections = super::review_sections(&review);
+        assert!(sections.contains("下面这 2 节") && sections.contains("## 一、引言\n很长的正文\n\n## 三、结论\n根向下长 [P1 p.2 \"Roots grow down\"]。") && !sections.contains("二、方法"));
     }
 
     #[test]

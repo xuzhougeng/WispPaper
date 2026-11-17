@@ -100,7 +100,12 @@ fn import_one_pdf(store: &mut Store, path: &Path, tags: &[String], target: Optio
     std::fs::File::open(path)?.take(1024).read_to_end(&mut header)?;
     if !crate::openaccess::is_pdf(&header) { bail!("文件没有 PDF 标识：{}", path.display()) }
     let pages = fulltext::file_pages(path);
-    let paper = target.cloned().unwrap_or_else(|| Paper {
+    // The same file under another name is the paper that holds it, whether or not it names a DOI.
+    let held = match target {
+        Some(_) => None,
+        None => store.paper_holding(path)?.map(|id| store.get_paper(&id)).transpose()?,
+    };
+    let paper = target.cloned().or(held).unwrap_or_else(|| Paper {
         title: path.file_stem().unwrap_or_default().to_string_lossy().into_owned(),
         doi: pages.as_ref().ok().and_then(|pages| lookup::find_doi(&pages.iter().take(2).cloned().collect::<Vec<_>>().join("\n"))).unwrap_or_default(),
         source: "PDF 导入".into(),
@@ -241,6 +246,32 @@ mod tests {
         std::fs::create_dir(&empty).unwrap();
         assert!(fixture.call("import_pdf", json!({"path": empty})).unwrap_err().contains("没有 PDF"));
         assert!(!import::scan_pdf_folder(&fixture.root.join("missing")).errors.is_empty());
+    }
+
+    #[test]
+    fn the_same_pdf_under_another_name_is_not_a_second_paper() {
+        let fixture = Fixture::new();
+        let (first, second, other) = (fixture.root.join("in/Zhu 2021.pdf"), fixture.root.join("in/下载 (1).pdf"), fixture.root.join("in/other.pdf"));
+        // No DOI on its pages: the record is named after the file, and nothing but the file says the two are one.
+        pdf(&first, "Root cells without a number");
+        std::fs::copy(&first, &second).unwrap();
+        pdf(&other, "Leaf cells without a number");
+        let added = fixture.call("import_pdf", json!({"path": first})).unwrap();
+        assert_eq!((added["added"].as_u64(), added["filesAdded"].as_u64()), (Some(1), Some(1)));
+        let id = added["results"][0]["paperId"].as_str().unwrap().to_string();
+        let again = fixture.call("import_pdf", json!({"path": second})).unwrap();
+        assert_eq!((again["added"].as_u64(), again["skipped"].as_u64(), again["filesAdded"].as_u64(), again["filesExisting"].as_u64()), (Some(0), Some(1), Some(0), Some(1)));
+        assert_eq!(again["results"][0]["paperId"].as_str(), Some(id.as_str()));
+        // A folder holding both and a third: one new paper.
+        let folder = fixture.call("import_pdf", json!({"path": fixture.root.join("in")})).unwrap();
+        assert_eq!((folder["total"].as_u64(), folder["added"].as_u64(), folder["skipped"].as_u64()), (Some(3), Some(1), Some(2)));
+        let store = fixture.store();
+        assert_eq!(store.list_papers().unwrap().len(), 2);
+        assert_eq!((store.paper_holding(&second).unwrap(), store.paper_files(&id).unwrap().len()), (Some(id.clone()), 1));
+        // In the trash, the paper still stands for its file.
+        fixture.store().trash_paper(&id).unwrap();
+        let trashed = fixture.call("import_pdf", json!({"path": second})).unwrap();
+        assert_eq!((trashed["added"].as_u64(), trashed["inTrash"].as_u64()), (Some(0), Some(1)));
     }
 
     #[test]

@@ -33,6 +33,14 @@ pub type Fetch<'a> = &'a dyn Fn(&str) -> Result<String, String>;
 /// GET a file and return its bytes: a PDF, most of the time.
 pub type Download<'a> = &'a dyn Fn(&str) -> Result<Vec<u8>, String>;
 
+/// Several reasons as one sentence: each without the full stop it came
+/// with, a semicolon between them and one full stop after the last, so
+/// that a failure quoted among others does not read 「HTTP 403。；」.
+pub fn reasons(parts: &[String]) -> String {
+    let parts: Vec<&str> = parts.iter().map(|part| part.trim().trim_end_matches(['。', '.', '；', ';']).trim_end()).filter(|part| !part.is_empty()).collect();
+    if parts.is_empty() { String::new() } else { format!("{}。", parts.join("；")) }
+}
+
 /// What a search found: how many records the database holds for the query
 /// (when it says), and the newest of them.
 #[derive(Clone, Debug, Default, PartialEq)]

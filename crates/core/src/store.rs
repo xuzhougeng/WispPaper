@@ -418,7 +418,10 @@ pub struct PaperSentence {
 /// What undoing a batch did.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Undone {
+    /// Papers taken out of the library.
     pub removed: usize,
+    /// Where their records were set aside, relative to the library folder; empty when none was removed.
+    pub set_aside: String,
     /// (id, title) of the papers left in place because someone has worked on them.
     pub kept: Vec<(String, String)>,
 }
@@ -817,6 +820,15 @@ impl Store {
         Ok(file)
     }
 
+    /// The paper that already holds this very file, byte for byte, under
+    /// whatever name: a PDF taken in a second time is that paper again, not
+    /// a new one, also when it carries no DOI to know it by. A paper in the
+    /// trash counts, as it does for a record.
+    pub fn paper_holding(&self, source: &Path) -> Result<Option<String>> {
+        let sha = file_hash(source).with_context(|| format!("无法读取文件 {}", source.display()))?;
+        Ok(self.db.query_row("SELECT paper_id FROM resources WHERE sha256 = ?1 ORDER BY added_at, id LIMIT 1", [sha], |r| r.get(0)).optional()?)
+    }
+
     /// Keep a fetched file with a paper: `bytes` as `name`, and where it came from.
     pub fn import_fetched(&mut self, paper_id: &str, name: &str, bytes: &[u8], kind: &str, url: &str, source: &str, version: &str) -> Result<PaperFile> {
         // Through a file of that name, so that it is stored the way a dropped one is.
@@ -941,8 +953,12 @@ impl Store {
 
     /// Take back what a batch added. A paper someone has since worked on
     /// (a screening decision, reading progress, a star, notes, tags, field
-    /// values, a file, or a place in the trash) stays and is reported; the
-    /// others are removed for good, so a later run can bring them in again.
+    /// values, a file, a conversation about it, a citation in a manuscript,
+    /// or a place in the trash) stays and is reported. The others leave the
+    /// library, so a later run can bring them in again (in the trash they
+    /// would keep being skipped), and nothing is lost by it: their records
+    /// are first set aside as a BibTeX file under `removed/`, which can be
+    /// imported like any other.
     pub fn undo_batch(&mut self, id: &str) -> Result<Undone> {
         let undone_at: Option<String> = self.db.query_row("SELECT undone_at FROM import_batches WHERE id = ?1", [id], |r| r.get(0)).optional()?;
         match undone_at {
@@ -955,14 +971,23 @@ impl Store {
             stmt.query_map([id], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?
         };
         let mut undone = Undone::default();
+        let mut leaving: Vec<Paper> = vec![];
         for paper_id in ids {
             let paper = self.get_paper(&paper_id)?;
-            let trashed = self.db.query_row("SELECT 1 FROM trashed_papers WHERE paper_id = ?1", [&paper_id], |_| Ok(())).optional()?.is_some();
-            let touched = paper.screening != "pending" || paper.reading != "unread" || paper.starred || !paper.notes.trim().is_empty() || !paper.tags.is_empty() || !paper.fields.is_empty() || trashed || !self.paper_files(&paper_id)?.is_empty();
-            if touched {
-                undone.kept.push((paper.id, paper.title));
-            } else {
-                self.delete_paper(&paper_id)?;
+            let held = |sql: &str| -> Result<bool> { Ok(self.db.query_row(sql, [&paper_id], |_| Ok(())).optional()?.is_some()) };
+            let trashed = held("SELECT 1 FROM trashed_papers WHERE paper_id = ?1")?;
+            let used = held("SELECT 1 FROM conversations WHERE paper_id = ?1")? || held("SELECT 1 FROM cite_keys WHERE paper_id = ?1")?;
+            let touched = paper.screening != "pending" || paper.reading != "unread" || paper.starred || !paper.notes.trim().is_empty() || !paper.tags.is_empty() || !paper.fields.is_empty() || trashed || used || !self.paper_files(&paper_id)?.is_empty();
+            if touched { undone.kept.push((paper.id, paper.title)) } else { leaving.push(paper) }
+        }
+        if !leaving.is_empty() {
+            // Kept before anything goes: a record that cannot be set aside is not removed either.
+            let relative = format!("removed/undone-import-{id}.bib");
+            let dir = self.root.join("removed");
+            std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(dir.join(format!("undone-import-{id}.bib")), crate::export::bibtex(&leaving.iter().collect::<Vec<_>>()))).with_context(|| format!("无法把要移出的记录另存到 {relative}"))?;
+            undone.set_aside = relative;
+            for paper in &leaving {
+                self.delete_paper(&paper.id)?;
                 undone.removed += 1;
             }
         }
@@ -1381,6 +1406,18 @@ pub fn translation_key(text: &str, prompt: &str) -> String {
     hasher.finalize().iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn file_hash(source: &Path) -> Result<String> {
+    let mut input = std::fs::File::open(source)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 1 << 16];
+    loop {
+        let n = input.read(&mut buffer)?;
+        if n == 0 { break }
+        hasher.update(&buffer[..n]);
+    }
+    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
 fn copy_hashed(source: &Path, target: &Path) -> Result<(u64, String)> {
     let mut input = std::fs::File::open(source)?;
     let mut output = std::fs::File::create(target)?;
@@ -1591,8 +1628,13 @@ mod tests {
         assert_eq!((undone.removed, undone.kept.clone()), (1, vec![(two.id.clone(), "Two".to_string())]));
         let left: Vec<String> = store.list_papers().unwrap().into_iter().map(|p| p.id).collect();
         assert!(left.contains(&existing.id) && left.contains(&two.id) && left.len() == 2);
-        // Removed for good: the same record can come in again.
-        assert_eq!(store.import_papers(vec![paper("One", "10.1000/1")]).unwrap().added.len(), 1);
+        // Out of the library and not in its trash, yet not lost: the record is set aside as a file that can be imported.
+        assert!(store.list_trash().unwrap().is_empty());
+        assert_eq!(undone.set_aside, format!("removed/undone-import-{}.bib", batch.id));
+        let aside = crate::import::parse_references(&std::fs::read_to_string(store.root.join(&undone.set_aside)).unwrap(), "").unwrap();
+        assert_eq!(aside.iter().map(|p| (p.title.as_str(), p.doi.as_str())).collect::<Vec<_>>(), [("One", "10.1000/1")]);
+        // So the same record can come in again, by a later run or from that file.
+        assert_eq!(store.import_papers(aside).unwrap().added.len(), 1);
         assert!(store.undo_batch(&batch.id).unwrap_err().to_string().contains("已经撤销"));
         assert!(store.undo_batch("B-none").is_err());
 

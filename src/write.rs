@@ -241,7 +241,7 @@ impl Workspace {
                     })
                     .when(!search.note.is_empty(), |d| d.child(div().text_size(text_px(11.)).text_color(Theme::warning()).child(search.note.clone())))
                     .child(self.render_narrowing(cx))
-                    .child(self.render_groundwork(cx)),
+                    .child(self.render_groundwork(width, cx)),
             )
             .children(self.render_assist_card(width, cx))
             .when(!heading.is_empty(), |d| d.child(div().flex_none().px(px(14.)).pb(px(6.)).text_size(text_px(11.)).text_color(Theme::text_tertiary()).truncate().child(heading)))
@@ -356,7 +356,7 @@ impl Workspace {
 
     /// What the candidates are drawn from: how many full texts there are,
     /// how they were sorted into parts, and the model's part in it.
-    fn render_groundwork(&self, cx: &mut Context<Self>) -> Div {
+    fn render_groundwork(&self, width: f32, cx: &mut Context<Self>) -> Div {
         let lib = self.lib.as_ref().unwrap();
         let writing = &lib.writing;
         let sorting = &writing.sorting;
@@ -452,7 +452,8 @@ impl Workspace {
                         })),
                 )
             })
-            .when(!sorting.error.is_empty(), |d| d.child(ui::error_line(&sorting.error)))
+            // A width in pixels: wrapping words that share the column are measured narrower than they are drawn, and leave a gap under the box.
+            .when(!sorting.error.is_empty(), |d| d.child(ui::error_line(&sorting.error).flex_none().w(px(width - 28.))))
     }
 }
 

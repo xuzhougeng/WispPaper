@@ -550,6 +550,7 @@ impl Workspace {
         lib.writing.side = if draft.comments.is_empty() { Side::Candidates } else { Side::Comments };
         lib.writing.structures = lib.store.structures().unwrap_or_default();
         lib.enter_write();
+        self.write_retire_blank(&id);
         self.write_show(id, section, cx);
         self.write_texts_changed(cx);
         self.say(said, cx);

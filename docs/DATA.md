@@ -9,6 +9,7 @@
 | Notion 笔记保存记录 | 各文献库的 `wisp-paper.sqlite` 中 `note_saves` 表，保存父页面、笔记页面 ID、草稿指纹及写入状态；不保存另一份笔记正文或令牌 |
 | PDF 标注（下划线、高亮、原文、页码、坐标、笔记） | 文献库的 `wisp-paper.sqlite` 中 `pdf_annotations` 表；原 PDF 不改写，备份时需连同数据库一起保存；删除标注或移除其附件会删除对应标注记录 |
 | 被移除的文献库、附件 | 同目录下的 `removed/`（只移动，不删除） |
+| 撤销一次导入时移出的文献记录 | 文献库文件夹里的 `removed/undone-import-<批次号>.bib`（BibTeX，可以再导入）；处理过的文献不移出 |
 | 设置 | 系统配置目录下的 `WispPaper/settings.json` |
 | 上次的界面（打开的文献库、页面、选中的文献） | `settings.json` 旁边的 `session.json`；在「设置 › 通用 › 启动」关闭后即删除 |
 

@@ -2995,7 +2995,7 @@ impl Workspace {
                 self.modal_error.clear();
                 self.modal = Some(Modal::Confirm {
                     title: t("撤销这次导入？").into(),
-                    message: tf!("{}\n\n这次导入新增的 {} 篇文献里，还没有处理过的会被删除；已经做过收录判断、读过、收藏、写过笔记、加过标签或附件的会保留。", "{}\n\nOf {} papers added by this import, untouched papers will be deleted. Papers already screened, read, starred, annotated, tagged or given attachments are kept.", batch.label, batch.added),
+                    message: tf!("{}\n\n这次导入新增的 {} 篇文献里，还没有处理过的会移出文献库，记录另存在文献库文件夹的 removed 里，可以再导入；已经做过收录判断、读过、收藏、写过笔记、加过标签或附件、提过问、被稿件引用的会保留。", "{}\n\nOf {} papers added by this import, untouched papers leave the library; their records are set aside in the library folder under removed and can be imported again. Papers already screened, read, starred, annotated, tagged, given attachments, asked about or cited in a manuscript are kept.", batch.label, batch.added),
                     action: t("撤销导入").into(),
                     cmd: Cmd::UndoImport(id),
                 });
@@ -3005,7 +3005,8 @@ impl Workspace {
                 if self.change(cx, |lib| lib.store.undo_batch(&id).map(|done| undone = Some(done)))
                     && let Some(done) = undone
                 {
-                    self.say(if done.kept.is_empty() { tf!("已撤销：删除了 {} 篇", "Undone: {} papers deleted", done.removed) } else { tf!("已撤销：删除了 {} 篇，保留了处理过的 {} 篇", "Undone: {} deleted, {} edited papers kept", done.removed, done.kept.len()) }, cx);
+                    let aside = if done.set_aside.is_empty() { String::new() } else { tf!("，记录另存在 {}", "; records set aside in {}", done.set_aside) };
+                    self.say(if done.kept.is_empty() { tf!("已撤销：移出了 {} 篇{aside}", "Undone: {} papers removed{aside}", done.removed) } else { tf!("已撤销：移出了 {} 篇{aside}；保留了处理过的 {} 篇", "Undone: {} removed{aside}; {} edited papers kept", done.removed, done.kept.len()) }, cx);
                 }
                 self.run(Cmd::CloseModal, window, cx);
             }
@@ -3780,11 +3781,17 @@ impl Workspace {
         paper.tags = clean_strings(paper.tags.iter().chain(tags));
         let mut row = ImportRow { name: path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| stem.clone()), outcome: Imported::Added, paper_id: None, unrecognised: false, textless: String::new() };
         let stored = (|| -> anyhow::Result<()> {
-            let target = match lib.store.existing_paper(&{
+            let known = lib.store.existing_paper(&{
                 let mut probe = paper.clone();
                 probe.normalize();
                 probe
-            })? {
+            })?;
+            // The same file under another name is the paper that holds it: without a DOI nothing else says so.
+            let known = match known {
+                Some(known) => Some(known),
+                None => lib.store.paper_holding(path)?,
+            };
+            let target = match known {
                 Some(existing) => {
                     if lib.trash.iter().any(|t| t.paper.id == existing) {
                         row.outcome = Imported::InTrash;
@@ -4144,8 +4151,10 @@ impl Workspace {
             (format!("我在文献的 PDF 里选中了下面的原文，问题是就它提的；引用它时沿用这里的出处写法。\n{}\n\n{prompt}", quoted.join("\n")), [quoted.join("\n"), question].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n"))
         };
         // The record, not what the model says of itself, is where the review stands: each question of a review's conversation says so.
-        // Only what steers the writing goes along (the sections by name: their text was said in this conversation, and sending it with every question would send it many times over).
+        // Only what steers the writing goes along (the sections by name: sending their text with every question would send it many times over),
+        // except with the question that asks for the saved sections to be checked, which is about that text.
         let prompt = match chat.review.as_ref().filter(|_| talk == Talk::Library) {
+            Some(review) if crate::chat::verifies_sections(&question) && review.sections.iter().any(|section| !section.body.trim().is_empty()) => format!("{prompt}\n\n{}\n\n{}", crate::chat::review_note(review), crate::chat::review_sections(review)),
             Some(review) => format!("{prompt}\n\n{}", crate::chat::review_note(review)),
             None => prompt,
         };
@@ -4968,7 +4977,12 @@ impl Workspace {
             } else {
                 let blocks = structure::blocks(&pages);
                 let request = ai::plain_request(&profile, structure::OUTLINE_SYSTEM, &structure::outline_prompt(&name, &blocks))?;
-                let read = structure::parse_outline(&wisp_net::complete(request, protocol)?, &blocks, &summary)?;
+                // Told to list only body text and explain nothing, a model answers a file of legends (a supplement) with nothing: that is its answer, and `parse_outline` says what it means.
+                let reply = match wisp_net::complete(request, protocol) {
+                    Err(nothing) if nothing == wisp_net::NO_CONTENT => String::new(),
+                    reply => reply?,
+                };
+                let read = structure::parse_outline(&reply, &blocks, &summary)?;
                 // What stands under a heading that names its part stays there; the model decides the rest.
                 let (labels, sure) = structure::assign_sure(&blocks, &summary);
                 Ok(Made::Sorted(structure::sentences(&blocks, &structure::merge(&labels, &sure, &read))))
@@ -5003,7 +5017,8 @@ impl Workspace {
                     }
                     Err(err) => {
                         sorting.failed += 1;
-                        sorting.streak += 1;
+                        // A file without body text is an answer about the file: the service is well, and the run goes on.
+                        if err != structure::NO_BODY { sorting.streak += 1 }
                         if sorting.streak >= SCREEN_GIVE_UP {
                             sorting.error = tf!("连续 {SCREEN_GIVE_UP} 篇没有成功，已停止。最后一篇「{title}」：{err}", "Stopped after {SCREEN_GIVE_UP} consecutive failures. Last paper “{title}”: {err}");
                             sorting.todo.clear();
@@ -5226,11 +5241,14 @@ impl Workspace {
                     return;
                 };
                 *busy = true;
+                // The dialog that asked, told by its field: closed meanwhile, its answer is dropped, and it is not
+                // taken for a dialog opened after it (which it would close, adding a paper nobody is waiting for).
+                let asked = input.entity_id();
                 let library = self.lib.as_ref().map(|l| l.info.id.clone()).unwrap_or_default();
                 cx.spawn_in(window, async move |this, cx| {
                     let found = cx.background_executor().spawn(async move { wisp_net::lookup_paper(&id) }).await;
                     this.update_in(cx, |this, window, cx| {
-                        if !matches!(this.modal, Some(Modal::AddById { .. })) || this.lib.as_ref().is_none_or(|l| l.info.id != library) { return }
+                        if !matches!(&this.modal, Some(Modal::AddById { input, .. }) if input.entity_id() == asked) || this.lib.as_ref().is_none_or(|l| l.info.id != library) { return }
                         if let Some(Modal::AddById { busy, .. }) = this.modal.as_mut() { *busy = false }
                         let added = found.and_then(|paper| this.lib.as_mut().unwrap().store.add_paper(paper).map_err(|e| format!("{e:#}")));
                         match added {
@@ -6006,6 +6024,12 @@ impl Workspace {
                 "close" => {
                     if crate::background::close(self.settings.keep_running, window, cx) { window.remove_window() }
                     return;
+                }
+                // `addid:<DOI or PMID>` opens 通过 DOI / PMID 添加 with that typed; `submit` then looks it up.
+                "addid" => {
+                    self.run(Cmd::AddById, window, cx);
+                    if let Some(Modal::AddById { input, .. }) = &self.modal { input.update(cx, |input, cx| input.set_text(arg, cx)) }
+                    None
                 }
                 "modal" => match arg {
                     "fields" => Some(Cmd::ManageFields),

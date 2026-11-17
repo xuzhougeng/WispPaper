@@ -189,6 +189,7 @@ impl Workspace {
         lib.writing.reading = false;
         lib.writing.structures = lib.store.structures().unwrap_or_default();
         lib.enter_write();
+        self.write_retire_blank(&id);
         // The sentences the assistant quoted are what the citations rest on in the new manuscript.
         for (section, body, quoted) in &brought { self.sources_quoted(&id, section, body, quoted, cx) }
         self.write_show(id, section, cx);
@@ -210,6 +211,13 @@ impl Workspace {
             }
             Err(err) => self.fail(tf!("稿件没有建好：{err:#}", "Cannot create manuscript: {err:#}"), cx),
         }
+    }
+
+    /// After a manuscript was made or taken in: the empty one 写作 opened the library with gives way to it.
+    pub(crate) fn write_retire_blank(&mut self, keep: &str) {
+        let Some(lib) = self.lib.as_mut() else { return };
+        let retired = lib.store.retire_blank_manuscripts(keep).unwrap_or_default();
+        lib.writing.manuscripts.retain(|manuscript| !retired.contains(&manuscript.id));
     }
 
     /// Keep the section being written as a snapshot when it changed: on leaving it, or after a pause.
@@ -319,6 +327,8 @@ impl Workspace {
                         let (id, section) = (made.id.clone(), made.sections.get(1).map(|s| s.id.clone()).unwrap_or_default());
                         lib.writing.manuscripts.push(made);
                         lib.writing.reading = false;
+                        // A new one beside an empty one nothing was done with: the empty one goes.
+                        self.write_retire_blank(&id);
                         self.write_show(id, section, cx);
                         if let Some(lib) = self.lib.as_ref() { lib.writing.title.read(cx).focus(window) }
                     }

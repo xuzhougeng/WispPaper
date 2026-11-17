@@ -102,7 +102,7 @@ $Library = $Created.id
 
 PDF 和 Zotero 返回 `added`、`skipped`、`inTrash`、`filesAdded`、`filesExisting`、`failed`、`results`；Zotero 另有 `otherAttachments`（未迁移的非 PDF 附件数）。逐项检查 `results[].problems`，以及真实 `paperId`、`fileIds`。`skipped` 包括保留已有记录但仍可能补入 PDF 的条目；`failed` 是存在问题的项数，可能与 `added` 重叠，例如已添加记录但缺失附件。部分失败时仍返回 JSON、退出码可能为 0，不代表全部成功。
 
-PDF 返回的 `textless` 和逐项 `textError` 表示文件已保存但未读出文字，不能当作导入失败，也不能宣称已经读过全文。没有 DOI 的同一论文若文件名不同，可能无法自动去重；优先明确 `--paper-id`。本地导入不会生成 `batchId`，不能用 `undo_import` 撤销；该命令只适用于在线检索批次。
+PDF 返回的 `textless` 和逐项 `textError` 表示文件已保存但未读出文字，不能当作导入失败，也不能宣称已经读过全文。内容完全相同的 PDF 换了文件名再导入，会按文件内容认出已有的那篇；同一论文的不同文件（另一个版本、重新下载后字节不同）又没有 DOI 时仍可能无法自动去重，优先明确 `--paper-id`。本地导入不会生成 `batchId`，不能用 `undo_import` 撤销；该命令只适用于在线检索批次。
 
 导入后用 `library_status`、`list_papers` 和 `get_paper` 核对记录、附件和未完成项。上述本地导入不联网，不移动源文件。
 
@@ -145,7 +145,7 @@ $Imported | Select-Object batchId, total, fetched, added, skipped
 & $Wisp undo_import -l $Library --batch-id $Imported.batchId
 ```
 
-撤销会删除该批次新增且尚未处理的记录；已判断、阅读、收藏、写笔记、加标签或附件的记录保留。报告返回的 `removed` 和 `kept`，不要宣称一定能完全回滚，也不要把它当作撤销桌面文件导入的接口。
+撤销会把该批次新增且尚未处理的记录移出文献库（不进回收站），并把这些记录另存为 `setAside` 指出的 `.bib` 文件，可以用 `import_references` 再导入；已判断、阅读、收藏、写笔记、加标签或附件、提过问、被稿件引用的记录保留。报告返回的 `removed`、`kept` 和 `setAside`，不要宣称一定能完全回滚，也不要把它当作撤销桌面文件导入的接口。
 
 需要更新已保存的检索式时：
 
