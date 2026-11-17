@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>向整个文献库提问 · Wisp Paper 教程</title>
+<meta name="description" content="就整个文献库问一个综述性的问题：看助手读了哪些材料，读懂带页码和原句的出处，点开回到 PDF，再用 /verify 让它逐条核对。">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F5F4F1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1A1B1D" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="../app-icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../app-icon.png">
+<link rel="stylesheet" href="../style.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body class="doc">
+<a class="skip" href="#main">跳到正文</a>
+
+<header class="top">
+  <div class="wrap top-in">
+    <a class="brand" href="../index.html" aria-label="Wisp Paper"><img src="../app-icon.svg" width="26" height="26" alt=""><span>Wisp Paper</span></a>
+    <nav aria-label="站点">
+      <a href="index.html" aria-current="page">教程</a>
+      <a href="../index.html#ideas">理念</a>
+      <a href="../index.html#tools">工具</a>
+      <a href="../index.html#download">下载</a>
+    </nav>
+    <a class="gh" href="https://github.com/xuzhougeng/WispPaper">GitHub<span aria-hidden="true"> ↗</span></a>
+  </div>
+</header>
+
+<main id="main" class="wrap doc-wrap">
+  <nav class="crumbs" aria-label="位置"><a href="index.html">教程</a><span>›</span>阅读</nav>
+
+  <header class="doc-head">
+    <p class="kicker">教程 04　·　阅读</p>
+    <h1>向整个文献库提问，并核对回答</h1>
+    <p class="lead">明天要和导师碰头，想先对整个方向有个底：覆盖了哪些物种和器官，原生质体和细胞核两条路线各要付出什么，文献之间哪里说法不一。这一篇让助手读整个库来回答，再一条条核对它引的话，而不是直接相信它。</p>
+    <dl class="facts">
+      <div><dt>场景</dt><dd>组会前，就「植物单细胞转录组」库里的 28 篇文献做一次概览。</dd></div>
+      <div><dt>需要</dt><dd>一个筛选过的文献库，其中多数文献存了 PDF；一个模型服务。</dd></div>
+      <div><dt>用时</dt><dd>约 10 分钟，其中等回答的时间占一大半。</dd></div>
+    </dl>
+  </header>
+
+  <div class="doc-cols">
+    <nav class="toc" aria-label="本篇的小节">
+      <h2>本篇</h2>
+      <ol>
+        <li><a href="#s1">先定范围</a></li>
+        <li><a href="#s2">提问，看它读了什么</a></li>
+        <li><a href="#s3">读出处和核对标记</a></li>
+        <li><a href="#s4">回到原文那一页</a></li>
+        <li><a href="#s5">让助手逐条核对</a></li>
+        <li><a href="#s6">比较、检索和接着问</a></li>
+        <li class="plain"><a href="#recap">回顾</a></li>
+      </ol>
+    </nav>
+
+    <article class="prose">
+      <section id="s1">
+        <h2><i>1</i>先定范围</h2>
+        <p>点左侧的「助手」。还没开始对话时，页面列出它能做的几类事：「找文献」「读文献」「整理」「写」，每组下面是几句现成的话和斜杠命令，点一句就发出去。标题下面一行是范围：「范围：当前列表的 28 篇」。</p>
+
+        <figure class="shot">
+          <img src="../img/t/ask-01-start.jpg" width="1372" height="867" loading="lazy" alt="助手页面：标题下写着范围是当前列表的 28 篇，中间是找文献、读文献、整理、写四组建议，底部是提问框。">
+          <figcaption><b>图 1</b>　开始对话前的助手页。注意标题下的范围那一行。</figcaption>
+        </figure>
+
+        <p>范围就是「全部文献」里此刻显示的列表。先在那里搜索或筛选，助手读到的就只是那一部分。例如先搜 <code>nuclei</code>，范围变成「当前列表的 5 篇」。也可以在助手页点右上角的「文献」，在弹出的面板里再输入词缩小：在这 5 篇里找 <code>protoplast</code>，范围变成「符合「protoplast」的 1 篇」。面板每一行右边有个加号，点它（或把这一行拖进对话）就只读这一篇，提问框上方出现「第一个问题只读这 1 篇」。</p>
+        <p>这里要的是全库概览，所以不做筛选，用全部 28 篇。</p>
+      </section>
+
+      <section id="s2">
+        <h2><i>2</i>提问，看它读了什么</h2>
+        <p>在提问框里写下问题，按 <kbd>Enter</kbd> 发送（<kbd>Shift</kbd> + <kbd>Enter</kbd> 换行）：</p>
+        <blockquote><cite>提问</cite><p>这个文献库里的研究覆盖了哪些物种和器官？原生质体（scRNA-seq）和细胞核（snRNA-seq）两条路线各要付出什么代价？文献之间有哪些说法不一致？请尽量引用全文的页码和原句。</p></blockquote>
+        <p>发送后，范围那一行换成「已提供 28 篇文献的记录，40 页相关全文」。文献多的时候放不下的只给题目，这一行会写「N 篇仅题目」；这个库不大，28 篇都给了完整记录。再点「文献」，面板改为列出这次交给模型的材料：每篇有一个编号 P1、P2……，后面写着「完整记录」或「完整记录 · 5 页全文」，以及这篇有没有全文。</p>
+
+        <figure class="shot">
+          <img src="../img/t/ask-02-materials.jpg" width="1372" height="867" loading="lazy" alt="文献面板：P1 到 P13 的题目，每行写着完整记录，有的还写着几页全文，右侧标着有全文或无全文。">
+          <figcaption><b>图 2</b>　提问之后的「文献」面板。编号就是回答里出处用的标签，「几页全文」是这次随问题一起发出的相关页数。</figcaption>
+        </figure>
+
+        <p>这个面板值得看一眼：P1、P4、P6、P7、P8 等 7 篇写着「无全文」，关于它们的话只能来自摘要。有全文的也只送了和问题相关的几页，助手觉得不够时会自己去检索和翻阅。</p>
+        <p>这一次助手没有调用工具，两分钟左右就写完了：先是一张物种、器官和研究路线的表，然后分节讲两条路线的代价和文献的分歧。开头一段是：</p>
+        <blockquote><cite>助手</cite><p>这个库的具体实验对象以拟南芥、水稻和玉米为主，已经扩展到甘薯、荆芥、茶树、大白菜、广藿香和芦苇；器官覆盖根、叶、茎尖、种子、节和再生材料。</p></blockquote>
+
+        <figure class="shot">
+          <img src="../img/t/ask-03-answer.jpg" width="1372" height="867" loading="lazy" alt="回答的后半部分：一张论文内部不一致的表，正文里有绿色的带页码和英文原句的出处，下面是 8 张出处卡片和「另外 41 个出处」。">
+          <figcaption><b>图 3</b>　回答的末尾。绿色方括号是出处，下面一排是出处卡片。</figcaption>
+        </figure>
+      </section>
+
+      <section id="s3">
+        <h2><i>3</i>读出处和核对标记</h2>
+        <p>回答里的出处有两种写法。<code>[P13]</code> 只说依据是哪一篇；<code>[P11 p.9 "The composition of the cell wall…"]</code> 还给出 PDF 的页码和逐字的原句。回答下面每个出处一张卡片，先显示 8 张，其余收在「另外 41 个出处」里，点开才看得到。</p>
+        <p>带原句的卡片末尾写着一个核对结果：软件把这句原句和那篇文献保存的文字逐字比对（只比字母和数字，换行、连字符不算）。可能的结果是：</p>
+        <ul>
+          <li>「原文一致」：这句话就在所说的那一页（或在摘要里）。</li>
+          <li>「原文在 p.N」：话是原文里的，但在另一页；点卡片会去真正的那一页。</li>
+          <li>「只对上开头的 N%」：开头对得上，后面被改过或拼接过。</li>
+          <li>「原文里没有这句」：全文里找不到。</li>
+          <li>「没有全文可核对」：这篇没有可读的全文，句子也不在摘要里。</li>
+        </ul>
+
+        <figure class="shot">
+          <img src="../img/t/ask-04-checks.jpg" width="1372" height="867" loading="lazy" alt="展开后的出处卡片，带页码和原句的每张都标着绿色的「原文一致」；下方是正在进行的 /verify，有两行折叠的工具调用。">
+          <figcaption><b>图 4</b>　展开全部出处后，这次回答的 21 句原句都是「原文一致」。下半部分是第 5 步的 /verify 正在运行，灰色的一行是折叠起来的工具调用。</figcaption>
+        </figure>
+
+        <p>这一次 21 句原句全部「原文一致」，没有出现别的结果。但这只说明「这句话在原文里」，不说明它撑得起前面那句结论。第 5 步会看到，这些原句都对得上的同一个回答，结论仍然有说过头的地方。</p>
+      </section>
+
+      <section id="s4">
+        <h2><i>4</i>回到原文那一页</h2>
+        <p>点一张带原句的卡片，例如「P12 p.2 · However, this approach is problematic…」。右侧打开这篇文献的 PDF，翻到第 2 页，那句话涂成黄色。</p>
+
+        <figure class="shot">
+          <img src="../img/t/ask-05-source.jpg" width="1372" height="867" loading="lazy" alt="左边是对话，右边打开了一篇水稻颖果文献的 PDF 第 2 页，其中一句关于原生质体制备噪声的话被黄色高亮。">
+          <figcaption><b>图 5</b>　点出处卡片，PDF 停在引用的那一页，原句高亮。读它的上下文，判断它说的是不是回答里那个意思。</figcaption>
+        </figure>
+
+        <p>这句话在 P12 里是导言对前人方法的概括，不是这篇论文自己测出来的。回答把它当作「原生质体路线的代价」的依据，可以用，但分量和一项直接比较的实验不同。这种区别比对程序看不出来，要你读上下文。</p>
+      </section>
+
+      <section id="s5">
+        <h2><i>5</i>让助手逐条核对</h2>
+        <p>在同一个对话里输入 <code>/verify</code> 发送，不写别的就是核对上一个回答。它要求助手把论断逐条列出，每条去全文里找出处、读那一页的上下文，写成「论断 → 原文摘录 → 支持到什么程度」；只有摘要可依据的说明是摘要，不写页码。</p>
+        <p>这次用了约 5 分钟。对话里先出现两行灰色的「检索全文 ×25 · 阅读全文 ×10」「阅读全文 ×20 · 读取文献 ×7 · 检索全文」，点一下展开，每次调用一行，写着查了什么词、读了哪篇第几页起的几页，以及「11 条结果」「读了 2 页」这样的结果。</p>
+        <p>结果列了 99 条，其中的 66 句原文摘录也全部「原文一致」。值得看的是它对上一个回答的修正：</p>
+        <blockquote><cite>助手</cite><p>P22 自己也使用“总体可比”的表述，因此与 P23 不构成直接矛盾；物种范围还需计入 P25 实际再分析的棉花数据。</p></blockquote>
+        <p>它还指出 P9 存的 PDF 是补充材料，不能把那里的页码当作正文页码；P1、P4、P7、P14、P18 只能依摘要核对，那几条没有页码。</p>
+
+        <figure class="shot">
+          <img src="../img/t/ask-06-verify.jpg" width="1372" height="867" loading="lazy" alt="/verify 回答的末尾：第 95 到 99 条论断和一段总结，总结开头一句被选中，旁边浮出「引用追问」和「复制」两个按钮；下面的出处卡片大多标着原文一致。">
+          <figcaption><b>图 6</b>　/verify 的结尾和总结。选中一段文字，旁边出现「引用追问」。</figcaption>
+        </figure>
+
+        <p>想就某一句接着问：拖选这句，松开后选区旁出现「引用追问」和「复制」。点「引用追问」，这句作为引用块进入提问框，接着写问题发送即可。</p>
+        <aside class="note"><b>提示</b>/verify 的判断也是模型给的。它说「直接支持」的地方，你仍要点开原文看一眼，尤其是要写进组会幻灯片的数字。</aside>
+      </section>
+
+      <section id="s6">
+        <h2><i>6</i>比较、检索和接着问</h2>
+        <p>点「新对话」开始另一个问题。两个斜杠命令在准备组会时很顺手：</p>
+        <ul>
+          <li><code>/compare P22 P12</code>：先读两篇的记录和全文（这次读了 P22 第 1 到 14 页、P12 第 1 到 13 页），列表比较研究问题、材料与方法、结论和局限，再说一致、互补和矛盾之处。这次它的结论是两篇之间没有直接互相否定的结果，反而指出 P12 自己关于 ASE 随发育变化的表述前后不一致。编号随范围而定：同样是全部 28 篇时，P22、P12 就是面板里的那两篇。</li>
+          <li><code>/search ambient RNA</code>：在已存全文和记录里找一个短语。这次列出 4 篇，每篇给出页码和原句，并说明另有 7 篇只有全文链接、只查了记录，不能据此判断它们的正文有没有提到。</li>
+        </ul>
+        <p>每次对话都存在这个文献库里。点右上角的「历史」，列出以前的对话和各问了几个问题；点开一次，标题下写着「历史对话：接着提问时，会按文献库现在的内容重新提供材料」，可以接着问。</p>
+        <p>助手要改动文献库时会先停下来问你。这次让它「给还没有 PDF 的文献查找开放全文」，对话里出现一张卡片：「助手想改动文献库，等你同意」，写着要做的操作「查找开放全文：limit 50」，下面是「允许」「这次对话里都允许」「不允许」。</p>
+        <p>常问的话可以存成自己的命令：「设置 › AI › 命令」里点「添加命令」，填名称、说明和模板，模板里写 <code>{}</code> 的地方换成命令后面的内容。之后在提问框输入 <code>/</code> 就能选到它。命令只是一段提示，不会让助手多出工具或绕过确认。</p>
+        <aside class="note warn"><b>注意</b>提问时发给你在设置里配置的模型服务的，是问题本身、范围内文献的记录和笔记、相关的全文页面，以及助手用工具读取的内容。没有存 PDF 的文献，助手只能读摘要，回答会说明这一点、不给页码。对你要在组会上讲的几篇，先把 PDF 拖进窗口附上，再问一次。</aside>
+      </section>
+
+      <section id="recap" class="recap">
+        <h2>回顾</h2>
+        <ul>
+          <li>范围是「全部文献」里当前显示的列表，可以先搜索，或在「文献」面板里缩小、只读一篇。</li>
+          <li>提问后从「已提供……」一行和「文献」面板看清这次交给模型的是什么。</li>
+          <li>带页码和原句的出处会被逐字比对，结果写在卡片上；点卡片回到 PDF 那一页。</li>
+          <li>「原文一致」只说明话在原文里；结论是否成立，用 /verify 和你自己读上下文来判断。</li>
+          <li>要把整个库读成一张逐篇的表，接着看<a href="extract.html">把一批文献读成一张表</a>；要就一篇深读，回看<a href="read.html">精读一篇文献</a>。</li>
+        </ul>
+      </section>
+    </article>
+  </div>
+
+  <nav class="pager" aria-label="上一篇和下一篇">
+    <a class="prev" href="read.html"><small>上一篇 · 03</small><strong>精读一篇文献</strong></a>
+    <a class="next" href="extract.html"><small>下一篇 · 05</small><strong>把一批文献读成一张表</strong></a>
+  </nav>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-in">
+    <div class="refs">
+      <h2>参考</h2>
+      <ol>
+        <li><a href="index.html">全部教程</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/FEATURES.md">功能详解：每个页面能做什么</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/DATA.md">数据与隐私：文件放在哪里，哪些数据会离开本机</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/issues">问题与想法：Issues</a></li>
+      </ol>
+    </div>
+    <div class="colophon">
+      <p><b>关于这篇教程</b>　截图和数字来自 2026 年 11 月在 macOS 上用 v0.10.0 的一次实际操作。模型每次的回答不一样，你照做时措辞和数字会有出入，步骤是一样的。</p>
+      <p><b>助手可能出错</b>　它的建议和回答都要你确认；关键的数字和结论请对照原文。</p>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>精读一篇文献 · Wisp Paper 教程</title>
+<meta name="description" content="把一篇文献从头读到尾：对照译文读摘要和段落，高亮和划线，就这一篇向助手提问并核对出处，把回答存成笔记，把要紧的图截下来收进图片库。">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F5F4F1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1A1B1D" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="../app-icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../app-icon.png">
+<link rel="stylesheet" href="../style.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body class="doc">
+<a class="skip" href="#main">跳到正文</a>
+
+<header class="top">
+  <div class="wrap top-in">
+    <a class="brand" href="../index.html" aria-label="Wisp Paper"><img src="../app-icon.svg" width="26" height="26" alt=""><span>Wisp Paper</span></a>
+    <nav aria-label="站点">
+      <a href="index.html" aria-current="page">教程</a>
+      <a href="../index.html#ideas">理念</a>
+      <a href="../index.html#tools">工具</a>
+      <a href="../index.html#download">下载</a>
+    </nav>
+    <a class="gh" href="https://github.com/xuzhougeng/WispPaper">GitHub<span aria-hidden="true"> ↗</span></a>
+  </div>
+</header>
+
+<main id="main" class="wrap doc-wrap">
+  <nav class="crumbs" aria-label="位置"><a href="index.html">教程</a><span>›</span>阅读</nav>
+
+  <header class="doc-head">
+    <p class="kicker">教程 03　·　阅读</p>
+    <h1>精读一篇文献：读、标、问、记</h1>
+    <p class="lead">下周组会轮到你讲一篇文章，这一篇要读透。本篇在 Wisp Paper 里把它从头读到尾：对照译文读摘要和难懂的段落，边读边高亮、划线，读不懂的地方就这一篇问助手并核对它引的原句，把好的回答存成笔记，把要讲的图截下来收进图片库。</p>
+    <dl class="facts">
+      <div><dt>场景</dt><dd>精读一篇玉米叶舌区单细胞核图谱的文章，准备组会。</dd></div>
+      <div><dt>需要</dt><dd>一篇带 PDF 的文献，一个在「设置 › AI」里配置好的模型服务。</dd></div>
+      <div><dt>用时</dt><dd>约 15 分钟，不算读文章本身。</dd></div>
+    </dl>
+  </header>
+
+  <div class="doc-cols">
+    <nav class="toc" aria-label="本篇的小节">
+      <h2>本篇</h2>
+      <ol>
+        <li><a href="#s1">打开文献，先读译文摘要</a></li>
+        <li><a href="#s2">进入阅读模式</a></li>
+        <li><a href="#s3">高亮、划线，写下批注</a></li>
+        <li><a href="#s4">就这一篇提问，核对出处</a></li>
+        <li><a href="#s5">截图：拿图提问，收进图片库</a></li>
+        <li><a href="#s6">存为笔记，标上阅读状态</a></li>
+        <li class="plain"><a href="#recap">回顾</a></li>
+      </ol>
+    </nav>
+
+    <article class="prose">
+      <section id="s1">
+        <h2><i>1</i>打开文献，先读译文摘要</h2>
+        <p>要读的是 2026 年发表在 Nature Communications 上的 A single-nucleus atlas of ligular region uncovers brassinosteroid-driven cell fate transitions controlling leaf angle in maize，全文 17 页，库里已存了 PDF。在列表上方的搜索框里输入 <code>ligular</code>，点这一篇，右侧打开详情。详情有三个标签页：「信息」是题录、状态、摘要和笔记，「PDF」是全文，「提问」是只就这一篇的对话。</p>
+        <p>在「信息」里点摘要标题右边的「显示译文」，题目和摘要在原处换成中文；列表上方同样位置的按钮也变成了「显示原文」，再点一下切回。</p>
+
+        <figure class="shot">
+          <img src="../img/t/read-01-info.jpg" width="1372" height="867" loading="lazy" alt="文献列表只剩一篇，右侧详情打开在「信息」页，题目和摘要都显示为中文译文，摘要标题右边是「显示原文」。">
+          <figcaption><b>图 1</b>　「信息」页的译文摘要。状态一行是「未读」「已纳入」「已存 PDF」，读完再回来改。</figcaption>
+        </figure>
+
+        <p>译文由你在「设置 › AI」里给翻译指定的模型生成，题目和摘要会发给这个模型服务；译过的保存在文献库里，同一段文字不会再请求一次。术语和数字以原文为准。</p>
+      </section>
+
+      <section id="s2">
+        <h2><i>2</i>进入阅读模式</h2>
+        <p>切到「PDF」。打开时页面是「适应宽度」，工具栏上的比例写成「适应宽度 · 52%」这样；两边的 − 和 + 是缩小、放大，点比例本身是一个菜单，有「适应宽度」「适应整页」和几档百分比。为看清一张图手动放大之后，比例旁边会出现「适应宽度」，点一下回去。</p>
+        <p>详情面板太窄，不适合精读。点工具栏上的「阅读模式」（<kbd>⌘</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd>，Windows 上是 <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd>），侧栏和文献列表收起，整个窗口留给这篇文献，顶上只剩题目、三个标签页和「退出阅读」，按 <kbd>Esc</kbd> 退出。本例窗口里，阅读模式的适应宽度是 167%，正文和纸上差不多大。</p>
+        <p>读到第 2 页引言末尾，作者交代这项研究为什么要做。拖选这一段，松开鼠标后选区旁出现一排按钮：「复制」「下划线」「高亮」「添加到对话」「翻译」。点「翻译」，译文出现在选区下方的卡片里，可以「复制译文」。</p>
+
+        <figure class="shot">
+          <img src="../img/t/read-02-translate.jpg" width="1372" height="867" loading="lazy" alt="阅读模式下的 PDF 第 2 页，左栏选中了以 Despite nearly a century of research 开头的一段，选区下方的卡片里是这段的中文译文。">
+          <figcaption><b>图 2</b>　阅读模式里翻译选中的一段。卡片标题行可以只这一次换用别的模型。</figcaption>
+        </figure>
+
+        <p>这一次译出的是「尽管近一个世纪以来已有大量研究，调控叶舌区起始和 LA 形成的机制仍不清楚……该图谱仅捕获了中期的表达谱」。正文里的上标引用号会被当作文字一起译进去（「新的机会 21」），读的时候心里有数。</p>
+
+        <h3>分屏：图在一边，正文在另一边</h3>
+        <p>第 2 页的正文反复引用图 1，而图 1 在第 3 页。点工具栏的「分屏」，选「左右分屏」：同一份 PDF 分成两半，各自滚动。一半停在正文，另一半停在图上，就不用来回翻。两半一起缩放，选字、标注、截图、翻译在哪一半都能用；选「不分屏」收起。分屏只属于当前这一篇，换一篇时回到不分屏，中间的分隔条也还不能拖动。</p>
+
+        <figure class="shot">
+          <img src="../img/t/read-03-split.jpg" width="1372" height="867" loading="lazy" alt="阅读模式下左右分屏：左半是第 2 页讲四条分化轨迹的正文，右半是第 3 页的图 1，工具栏上的按钮显示为「左右分屏」。">
+          <figcaption><b>图 3</b>　左右分屏。左半读第 2 页的轨迹描述，右半对着第 3 页的图 1。</figcaption>
+        </figure>
+      </section>
+
+      <section id="s3">
+        <h2><i>3</i>高亮、划线，写下批注</h2>
+        <p>讲四个阶段的那一句是组会要先讲的，选中它点「高亮」，新高亮是黄色。想按用途分颜色，就点一下这条高亮，旁边出现一个小菜单：黄、绿、蓝、粉、紫五个色点，当前的那个带圈，另有「删除高亮」只删这一条。本例把它换成了绿色。下一段的首句「Hormones play an indispensable regulatory role during ligular region development」选中后点「下划线」。在高亮上拖动仍是选字，不会误改颜色。</p>
+        <p>页面右上角的「标注 (2)」展开这份 PDF 的全部标注，每条写着页码和类型，可以「定位」回原处、写「笔记」、「删除」。给高亮那条写上一句给自己的提示，点「保存笔记」。</p>
+
+        <figure class="shot">
+          <img src="../img/t/read-04-marks.jpg" width="1372" height="867" loading="lazy" alt="第 2 页上一段绿色高亮和一句蓝色下划线，右上角展开的标注列表有两条：第 2 页高亮，下面是笔记「S0 到 S3 四个阶段，组会上先用这句讲清时间线」；第 2 页下划线。">
+          <figcaption><b>图 4</b>　绿色高亮、下划线和「标注」列表，高亮那条下面是自己写的笔记。</figcaption>
+        </figure>
+
+        <aside class="note"><b>提示</b>标注存在文献库的数据库里，按页面坐标叠在 PDF 上显示，原始 PDF 文件一个字节都不改。所以用系统里别的阅读器打开原文件，看不到这些高亮；反过来也不用担心把出版社的文件弄乱。</aside>
+      </section>
+
+      <section id="s4">
+        <h2><i>4</i>就这一篇提问，核对出处</h2>
+        <p>方法部分要讲清楚，先问助手。点「提问」，窗口换成提问的布局：侧栏收起，文献成为左边一条窄列表（↑↓ 换一篇），中间是对话，右边是这篇的 PDF。对话上方写着「将提供这篇文献的记录和 17 页全文」，也就是这些内容会发给你配置的模型服务。空白的对话里列了三个常用问题，点一下就发出去；这里自己写：</p>
+        <blockquote><cite>提问</cite><p>这篇的 snRNA-seq 取了哪几个发育阶段和哪些自交系？细胞核怎么分离、质控阈值是多少？请引用原文页码。</p></blockquote>
+        <p>这一次等了两分多钟。回答先用一张表分开两套数据：B73 的 S1 到 S3 发育图谱，S0 用已发表的茎尖和叶原基 scRNA-seq 补上；Z58、B73、W22 三个自交系在 S2 阶段的比较。质控一张表：剔除检测到的基因数「<200 或 >15,000」的核、在少于 3 个核中表达的基因，双细胞率设为 1%，用 SoupX 校正环境 RNA。分离细胞核这一问，它没有编，直接说「目前提供的全文没有报告具体的细胞核分离步骤」，方法部分是从建库写起的。这一点正好可以在组会上提。</p>
+        <p>回答里绿色的 <code>[P28 p.11 "…"]</code> 是出处：页码加一句原文。回答下面每条出处一张卡片，带引文的卡片右端写着核对的结果：「原文一致」是这句话确实在那一页；还可能是「原文在 p.N」（在别的页）、「只对上开头的 N%」或「原文里没有这句」。点一张卡片，右边的 PDF 跳到那一页，把这句话标出来。</p>
+
+        <figure class="shot">
+          <img src="../img/t/read-05-answer.jpg" width="1372" height="867" loading="lazy" alt="提问布局：中间是回答的后半段和一列出处卡片，每张卡片右端写着「原文一致」，其中第 11 页质控那张被点中；右边的 PDF 跳到第 11 页，质控那句话被黄色标出。">
+          <figcaption><b>图 5</b>　点出处卡片，PDF 跳到第 11 页并标出那句质控标准。卡片右端的「原文一致」只说明这句话在原文里。</figcaption>
+        </figure>
+
+        <aside class="note warn"><b>注意</b>「原文一致」回答的是「引的话在不在原文里」，不是「回答的结论对不对」。助手把原句放进自己的解释时仍可能理解错，关键数字点开卡片对一眼上下文。对话下方一直写着「回答可能有误，请对照原文」。</aside>
+
+        <h3>带着一段原文追问</h3>
+        <p>读摘要时对一句话有疑问：变异来自近轴细胞伸长和随后的下表皮木质化，这解释了自交系之间叶夹角的差异。在右边的 PDF 上选中这句，选区旁的按钮里点「添加到对话」，它带着「原文 · 第 1 页」出现在输入框上方，提问时作为引文交给模型。接着问：</p>
+        <blockquote><cite>提问</cite><p>这句结论的证据够不够？三个自交系各测了几个样本、有没有生物学重复？作者自己承认了哪些局限？</p></blockquote>
+        <p>这次助手先说明要核对什么，然后自己翻了全文，对话里多出一行「阅读全文：P28 · 第 10 页起」。它的判断是：证据足以支持伸长和木质化与叶夹角差异有关，但把摘要这句理解成已经证明了因果，「表述就偏强」，伸长部分有突变体支持，木质化部分只有相关。重复一问它分得很清楚：bulk RNA-seq 明确写了每个自交系 3 个生物学重复；比较用的 snRNA-seq，「每系重复数，目前无法从正文确认」，要去补充材料里查。它还指出作者没有单独的局限小节，列出的几处未解问题都附了原句。这些都值得在组会上讨论，讲之前把它引的几页自己翻一遍。</p>
+      </section>
+
+      <section id="s5">
+        <h2><i>5</i>截图：拿图提问，收进图片库</h2>
+        <p>组会要讲图 1，先弄懂它。在右边的 PDF 翻到第 3 页，点工具栏的「截图」（按钮变成「取消截图」），在页面上框住整张图。框好后旁边出现「收藏到图片库」「用这张截图提问」「取消」。</p>
+
+        <figure class="shot">
+          <img src="../img/t/read-06-cut.jpg" width="1372" height="867" loading="lazy" alt="提问布局右边的 PDF 第 3 页，图 1 被一个绿色框框住，框下面是三个按钮：收藏到图片库、用这张截图提问、取消。">
+          <figcaption><b>图 6</b>　框住第 3 页的图 1。截图可以收进图片库，也可以直接拿来提问。</figcaption>
+        </figure>
+
+        <p>点「用这张截图提问」，截图作为图片加到输入框上方。图片会发给模型服务，所以你配置的模型要能看图。问：</p>
+        <blockquote><cite>提问</cite><p>截图是图 1。c 和 g 两个 UMAP 各说明了什么？伪时间上的四条轨迹分别通向哪些细胞？</p></blockquote>
+        <p>回答说 c 是细胞类型图谱，g 在同样的细胞上叠加发育阶段和伪时间，再用一张表对应四条轨迹：1 通向表皮，2 通向维管组织，3 和 4 通向后期叶舌区，每行附上第 2 页的原句。它还提醒「伪时间反映转录状态的推断顺序，不等于直接观察到的细胞谱系」，并指出图里一处值得核对的地方：g 把轨迹 1 附近标为「C2/C6/C19 EP」，而 c 的图例把 C2 标为 PC（薄壁细胞）。对着图 1 的图例看，确实如此。</p>
+
+        <h3>收进图片库</h3>
+        <p>再框一次图 1，这次点「收藏到图片库」。弹出的对话框左边是截图，右边四个字段：图号、图注、标签、备注。图号和图注通常从这一页的文字里读出来，但这篇的图注排在下一页，对话框里写着「这一页上没有找到挨着它的图注，可以自己填，也可以先留空」。点「图注」右边的 AI 图标，模型看着这张图写出一段中文图注，从「玉米叶舌区域的单核转录组图谱及细胞分化轨迹。a，B73 玉米 V3 期植株……」写起，逐个分图说明。写出的内容留在字段里，可以改；「图号」这次仍是空的，自己补上 <code>Fig. 1</code>。点「收藏」才会存下来。</p>
+
+        <figure class="shot">
+          <img src="../img/t/read-07-collect.jpg" width="1372" height="867" loading="lazy" alt="「收藏到图片库」对话框：左边是图 1 的截图，下面写着第 3 页和文献出处；右边图号为空，图注一栏是模型写出的中文图注，标签和备注为空，右下角是「取消」和「收藏」。">
+          <figcaption><b>图 7</b>　收藏对话框。图注由模型看图写出，图号还空着；收藏前要看一遍。</figcaption>
+        </figure>
+
+        <p>收进来的图在左侧「收藏」里，顶上切到「图片」。卡片上是缩略图、出处、页码和图注，可以搜索图注、标签、备注和所属文献。点开一张图，「打开原文」在右侧打开这篇的 PDF，停在截图所在的第 3 页；「用这张图提问」把它带回这篇的对话。</p>
+
+        <figure class="shot">
+          <img src="../img/t/read-08-figures.jpg" width="1372" height="867" loading="lazy" alt="「收藏」页切到「图片 1」，只有一张图 1 的卡片，写着第 3 页和图注开头；右侧详情打开了这篇文献的 PDF，停在第 3 页的图 1。">
+          <figcaption><b>图 8</b>　图片库里的图 1，「打开原文」回到它所在的第 3 页。</figcaption>
+        </figure>
+      </section>
+
+      <section id="s6">
+        <h2><i>6</i>存为笔记，标上阅读状态</h2>
+        <p>讲图 1 的那条回答值得留下。回答下面有「存为笔记」，点开是一个可以编辑的窗口，说明它「会加到……「我的笔记」末尾，已有的笔记不动」。笔记会随文献记录一起提供给以后的提问，所以先改掉不对的地方，再点「存入笔记」。存下的内容以「问：」开头，引用去掉了只在这次对话里有意义的 P28 编号，保留页码和原句，末尾自动加上一行「（2026.11.17 提问所得 · 模型的回答，未核对原文）」。</p>
+        <p>最后回到「信息」，点状态一行的「未读」，选「已精读」。列表里这一篇的阅读一栏变成「已精读」，左侧「未读」的计数少了一篇。往下是「我的笔记」，刚存的回答就在里面；标题右边的「保存 / 导出」可以把笔记连同选定的问答保存到 Notion 或本地文件。</p>
+        <aside class="note"><b>提示</b>对话本身也留着：「提问」页顶上的「历史」列出这篇文献问过的每次对话，点一行接着问。高亮、笔记、图片和对话都保存在这个文献库的文件夹里。</aside>
+      </section>
+
+      <section id="recap" class="recap">
+        <h2>回顾</h2>
+        <ul>
+          <li>用「显示译文」和选段「翻译」进入一篇英文文章，在阅读模式和分屏里对照着读。</li>
+          <li>高亮、换色、划线，在「标注」列表里写笔记；这些都不改动 PDF 文件本身。</li>
+          <li>就这一篇提问，用出处卡片和「原文一致」跳回原句核对；带着选中的原文或截下的图追问。</li>
+          <li>图 1 收进图片库，模型写的图注先看过再收藏；好的回答存为笔记，状态改为「已精读」。</li>
+          <li>下一步：把问题扩大到整个文献库，见<a href="ask.html">向整个文献库提问</a>；要把一批文献的关键信息读成表，见<a href="extract.html">把一批文献读成一张表</a>。</li>
+        </ul>
+      </section>
+    </article>
+  </div>
+
+  <nav class="pager" aria-label="上一篇和下一篇">
+    <a class="prev" href="migrate.html"><small>上一篇 · 02</small><strong>把已有的文献搬进来</strong></a>
+    <a class="next" href="ask.html"><small>下一篇 · 04</small><strong>向整个文献库提问</strong></a>
+  </nav>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-in">
+    <div class="refs">
+      <h2>参考</h2>
+      <ol>
+        <li><a href="index.html">全部教程</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/FEATURES.md">功能详解：每个页面能做什么</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/DATA.md">数据与隐私：文件放在哪里，哪些数据会离开本机</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/issues">问题与想法：Issues</a></li>
+      </ol>
+    </div>
+    <div class="colophon">
+      <p><b>关于这篇教程</b>　截图和数字来自 2026 年 11 月在 macOS 上用 v0.10.0 的一次实际操作。模型每次的回答不一样，你照做时措辞和数字会有出入，步骤是一样的。</p>
+      <p><b>助手可能出错</b>　它的建议和回答都要你确认；关键的数字和结论请对照原文。</p>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

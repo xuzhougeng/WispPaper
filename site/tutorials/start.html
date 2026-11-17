@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>从一个课题开始 · Wisp Paper 教程</title>
+<meta name="description" content="从一个空的 Wisp Paper 开始：配置模型，建库写主题，让助手拟检索式，从 PubMed 和 Europe PMC 导入 355 篇，由助手读过摘要给出建议，再由你确认收录。">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F5F4F1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1A1B1D" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="../app-icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../app-icon.png">
+<link rel="stylesheet" href="../style.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body class="doc">
+<a class="skip" href="#main">跳到正文</a>
+
+<header class="top">
+  <div class="wrap top-in">
+    <a class="brand" href="../index.html" aria-label="Wisp Paper"><img src="../app-icon.svg" width="26" height="26" alt=""><span>Wisp Paper</span></a>
+    <nav aria-label="站点">
+      <a href="index.html" aria-current="page">教程</a>
+      <a href="../index.html#ideas">理念</a>
+      <a href="../index.html#tools">工具</a>
+      <a href="../index.html#download">下载</a>
+    </nav>
+    <a class="gh" href="https://github.com/xuzhougeng/WispPaper">GitHub<span aria-hidden="true"> ↗</span></a>
+  </div>
+</header>
+
+<main id="main" class="wrap doc-wrap">
+  <nav class="crumbs" aria-label="位置"><a href="index.html">教程</a><span>›</span>收集</nav>
+
+  <header class="doc-head">
+    <p class="kicker">教程 01　·　收集</p>
+    <h1>从一个课题开始：检索、导入、筛选</h1>
+    <p class="lead">导师给了一个方向「植物单细胞转录组」，手里一篇文献都没有。这一篇从一个空的 Wisp Paper 开始：配置模型，建库，让助手拟检索式，从 PubMed 和 Europe PMC 导入 355 篇，由助手逐篇读过摘要给出建议，最后由你确认收不收。</p>
+    <dl class="facts">
+      <div><dt>场景</dt><dd>刚接手一个课题，要在一个下午里攒出第一批文献，并分出哪些值得读。</dd></div>
+      <div><dt>需要</dt><dd>Wisp Paper 和一个你自己的模型服务（Claude API、OpenAI 兼容或 OpenAI Responses 接口）。</dd></div>
+      <div><dt>用时</dt><dd>约 15 分钟，其中等模型和数据库约 8 分钟。</dd></div>
+    </dl>
+  </header>
+
+  <div class="doc-cols">
+    <nav class="toc" aria-label="本篇的小节">
+      <h2>本篇</h2>
+      <ol>
+        <li><a href="#s1">安装，配置模型</a></li>
+        <li><a href="#s2">新建文献库，写下主题</a></li>
+        <li><a href="#s3">让助手拟检索式</a></li>
+        <li><a href="#s4">保存并导入</a></li>
+        <li><a href="#s5">让助手筛选</a></li>
+        <li><a href="#s6">确认收录判断</a></li>
+        <li class="plain"><a href="#recap">回顾</a></li>
+      </ol>
+    </nav>
+
+    <article class="prose">
+      <section id="s1">
+        <h2><i>1</i>安装，配置模型</h2>
+        <p>从<a href="https://github.com/xuzhougeng/WispPaper/releases/latest">发布页</a>下载：macOS 是 <code>.dmg</code>，打开后把 Wisp Paper 拖进「应用程序」；Windows 有安装版 <code>-setup.exe</code>（装在当前用户名下，不需要管理员权限）和便携版 <code>.zip</code>。拟检索式和筛选都要调用模型，Wisp Paper 不自带模型，先在设置里接上你自己的。</p>
+        <p>点首页右上角的「设置」（<kbd>⌘</kbd> + <kbd>,</kbd>，Windows 上是 <kbd>Ctrl</kbd> + <kbd>,</kbd>），进入「AI」。「模型」一栏左边是模型服务，DeepSeek、Kimi、GLM 已经列着，各标着「缺 API Key」；用其中一家，点开它填上 API Key 即可。用别的服务就点「添加服务」，从列表里选，或选「其他 OpenAI 兼容服务」：</p>
+        <ul>
+          <li><b>接口</b>：Claude API、OpenAI 兼容、Responses 三选一。</li>
+          <li><b>服务地址</b>：OpenAI 兼容的服务写到 <code>/v1</code>。</li>
+          <li><b>API Key</b>：留空则读对应的环境变量，例如 <code>OPENAI_API_KEY</code>。</li>
+          <li><b>模型</b>：在「模型」下的空白框里填服务要求的模型名称，点「添加」。一个服务可以放几个模型，每个模型有自己的思考档位。</li>
+        </ul>
+        <p>没有保存按钮，改了就存。服务名下的「缺 API Key」换成了模型的个数，就可以用了。</p>
+
+        <figure class="shot">
+          <img src="../img/t/start-01-models.jpg" width="1372" height="867" loading="lazy" alt="设置 › AI 的「模型」一栏：左边是模型服务列表，选中的服务右边是名称、接口、服务地址、API Key、代理，以及它的两个模型和各自的思考档位。">
+          <figcaption><b>图 1</b>　一个 OpenAI 兼容的服务，放了两个模型。模型名右边的蓝字说明它眼下负责哪些任务。</figcaption>
+        </figure>
+
+        <p>一个模型就够走完全程。这次多做了两件事：在「任务」里把「翻译」交给一个把思考调低的小模型；把「同时阅读的篇数」从默认的 3 调到 8，筛选时同时发出这么多请求，服务限速时调小。</p>
+
+        <figure class="shot">
+          <img src="../img/t/start-02-tasks.jpg" width="1372" height="867" loading="lazy" alt="设置 › AI 的「任务」一栏：助手、批量筛选、翻译、整理全文各自选用的模型，批量筛选下面的「同时阅读的篇数」选在 8。">
+          <figcaption><b>图 2</b>　「任务」一栏。拟检索式用「助手」的模型，筛选用「批量筛选」的模型。</figcaption>
+        </figure>
+
+        <aside class="note warn"><b>注意</b>API Key 以明文保存在本机的 <code>settings.json</code> 里。用到模型时，主题、检索要求和文献的摘要会发给你配置的模型服务。</aside>
+      </section>
+
+      <section id="s2">
+        <h2><i>2</i>新建文献库，写下主题</h2>
+        <p>回到首页，点「新建文献库」（<kbd>⌘</kbd> + <kbd>⇧</kbd> + <kbd>N</kbd>）。名称写「植物单细胞转录组」。主题不只是备注：助手拟检索式、判断收录、回答问题时都会读到它，所以值得写具体。这次写的是：</p>
+        <blockquote><cite>主题</cite><p>植物单细胞与单核转录组测序（scRNA-seq / snRNA-seq）：各物种和器官的细胞图谱、发育轨迹与细胞命运、环境胁迫响应，以及原生质体制备、细胞类型注释、跨物种整合等方法学问题。</p></blockquote>
+
+        <figure class="shot">
+          <img src="../img/04-new-library.jpg" width="1372" height="870" loading="lazy" alt="「新建文献库」对话框：名称、主题和一排标识色，右下角是「取消」和「创建」。">
+          <figcaption><b>图 3</b>　选一个标识色，之后这个库的强调色都是它。</figcaption>
+        </figure>
+
+        <p>点「创建」后，页面问从哪里开始。文献已经在 Zotero 或导出文件里，选「导入已有的文献」或「从 Zotero 导入」，见<a href="migrate.html">教程 02</a>。这里手里什么都没有，选推荐的「从检索文献开始」。</p>
+
+        <figure class="shot">
+          <img src="../img/t/start-03-guide-start.jpg" width="1372" height="867" loading="lazy" alt="新建的空文献库：「植物单细胞转录组」建好了，从哪里开始？下面四个选择：从检索文献开始（推荐）、导入已有的文献、从 Zotero 导入、先空着，自己添加。">
+          <figcaption><b>图 4</b>　建好之后的四个选择。</figcaption>
+        </figure>
+      </section>
+
+      <section id="s3">
+        <h2><i>3</i>让助手拟检索式</h2>
+        <p>主题已经填进输入框，可以再改。下面一排是数据库：PubMed 默认选中，再加选 Europe PMC，它收预印本，这个领域的新工作常先发在 bioRxiv。Crossref 和 arXiv 对这个主题帮助不大，不选。</p>
+        <p>点「拟检索式」。大约一分钟后，助手为每个数据库各拟了三条取向不同的检索式：一条宽的，一条聚焦图谱、发育与胁迫，一条从制样和注释等方法学角度。每条下面是它立刻试检索的结果：数据库里一共命中多少篇，最新的几篇是什么。</p>
+
+        <figure class="shot">
+          <img src="../img/t/start-04-guide-queries.jpg" width="1372" height="867" loading="lazy" alt="向导的检索页：主题框下选中了 PubMed 和 Europe PMC，下面是 PubMed 的宽检索式，带一句说明、检索式全文、命中 999 篇和最新的六个题目，其中有胰腺炎和骨折愈合的研究。">
+          <figcaption><b>图 5</b>　PubMed 的宽检索式。最新的题目里混着胰腺炎、骨折愈合，说明它太宽。图是重做这一步时截的，命中数和下表略有出入。</figcaption>
+        </figure>
+
+        <p>这次试检索的命中数：</p>
+        <div class="scroll">
+          <table>
+            <caption><b>表 1</b>　六条检索式试检索的命中篇数。</caption>
+            <thead><tr><th>数据库</th><th>宽检索</th><th>图谱、发育与胁迫</th><th>方法学</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">PubMed</th><td>1007</td><td>520</td><td>205</td></tr>
+              <tr><th scope="row">Europe PMC</th><td>1212</td><td>635</td><td>247</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p><b>看标题，不看检索式写得漂不漂亮。</b>方法学那条命中的几乎都是 single-cell、single-nucleus 开头的植物研究。试检索不往文献库里写任何东西；不满意可以改主题后点「重新拟」，或者点「自己写检索式」。这次选了两条：PubMed 的方法学检索式，Europe PMC 的图谱、发育与胁迫检索式。点「选用」，按钮变成「已选用」。</p>
+      </section>
+
+      <section id="s4">
+        <h2><i>4</i>保存并导入</h2>
+        <p>点右下角的「保存并导入所选的 2 条」。两条检索式保存到「检索与导入」页并立即运行，约 40 秒：</p>
+        <ul>
+          <li>PubMed：命中 205 篇，取回 200 篇，新增 200 篇。</li>
+          <li>Europe PMC：命中 635 篇，取回 200 篇，新增 155 篇，跳过已有的 45 篇。两个数据库有重叠，Wisp Paper 按 DOI、PMID、题目去重。</li>
+        </ul>
+
+        <figure class="shot">
+          <img src="../img/09-searches-imported.jpg" width="1372" height="870" loading="lazy" alt="检索与导入页：两条保存的检索式，各自写着上次运行命中、取回、新增和跳过的篇数，下面是两行导入记录，每行右边有「撤销」。">
+          <figcaption><b>图 6</b>　两条检索式和它们的导入记录。</figcaption>
+        </figure>
+
+        <aside class="note"><b>提示</b>这份记录是在每条检索式最多取回 200 篇的版本上做的。现在向导保存的检索式每次最多取回最新的 2000 篇（Crossref 200 篇），一次向数据库要 200 篇，分几次取完；同样的两条会把命中的 205 篇和 635 篇都带回来，后面的篇数和用时也相应变多。上限在检索式的「每次取回」里改。</aside>
+
+        <p>一共 355 篇，全部是「待判断」：先宽一些地导入，再逐篇判断。导错了，「导入记录」里那一行的「撤销」会删掉那一批新增的、还没人处理过的文献。页面上方的「自动更新」可以让检索式每 6 小时、每天或每周自己运行，新文献同样以「待判断」进来。</p>
+      </section>
+
+      <section id="s5">
+        <h2><i>5</i>让助手筛选</h2>
+        <p>列表里已经能看出混进了不相干的东西，比如一篇讲城市绿地里烟头的。355 篇一篇篇看摘要要半天，先交给助手读一遍。</p>
+        <p>打开左侧的「筛选」，页头是「批量」和「逐篇」两种看法，先用「批量」。「筛选目标」写什么样的文献应当收进这个库；留空则只按主题判断，写清楚边界会准得多：</p>
+        <blockquote><cite>筛选目标</cite><p>收录：以植物为研究对象、实际产生或分析了单细胞 / 单核转录组数据（scRNA-seq、snRNA-seq）的原创研究、方法与数据资源，以及该领域的综述。不收录：研究对象不是植物、只用 bulk RNA-seq、或只是顺带提到单细胞技术的文献。</p></blockquote>
+        <p>点「让助手判断 355 篇」。助手 8 篇同时读，有全文读全文，这里都只有摘要。进度条下面是正在读的文献，读完的带着建议排进队列。</p>
+
+        <figure class="shot">
+          <img src="../img/t/start-05-screen-running.jpg" width="1372" height="867" loading="lazy" alt="筛选页的「批量」：筛选目标下面是进度框「助手正在阅读 9 / 27」和正在读的七个题目，再下面是按建议分的组：全部 27、已纳入 5、相关 1、证据不足 1、不相关 2、还没有建议 18。">
+          <figcaption><b>图 7</b>　读到一半。这张图来自一个只有 27 篇待判断的小库，355 篇时框里的数字相应更大。</figcaption>
+        </figure>
+
+        <p>355 篇这一轮用了约 4 分 40 秒，建议分成四组：</p>
+        <div class="scroll">
+          <table>
+            <caption><b>表 2</b>　助手对 355 篇的建议。</caption>
+            <thead><tr><th>建议</th><th>篇数</th><th>意思</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">已纳入</th><td>257</td><td>符合筛选目标</td></tr>
+              <tr><th scope="row">相关</th><td>52</td><td>和主题有关，但不满足收录条件，留作参考</td></tr>
+              <tr><th scope="row">证据不足</th><td>4</td><td>摘要里看不出来（其中 2 篇没有摘要）</td></tr>
+              <tr><th scope="row">不相关</th><td>42</td><td>不属于这个主题</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>中途可以点「停止」，没读的留到下一轮；个别文献没判断成不会打断这一轮。筛选目标随时可以换：已有的建议标为按旧目标，再让助手按当前目标判断一遍，你已经做的判断不会被改动。</p>
+      </section>
+
+      <section id="s6">
+        <h2><i>6</i>确认收录判断</h2>
+        <p><b>助手的建议只是建议。</b>它不改任何一篇的收录判断，改的人只有你。一轮读完，进度条下出现「助手读完了，去确认它的建议」，右上角的按钮也变成「确认 N 条建议」，点它进入「确认建议」：</p>
+
+        <figure class="shot">
+          <img src="../img/t/start-06-confirm.jpg" width="1372" height="867" loading="lazy" alt="确认建议页：每行一篇文献，左边是勾选框，题目下面是把握、读了什么和理由，右边四个判断里助手建议的那个高亮。打开了「把握低的在前」，最上面两篇写着「没有可读的内容」，建议证据不足。底部写着将写入 27 篇，右下角是「确认这 27 篇」。">
+          <figcaption><b>图 8</b>　打开「把握低的在前」之后：没有摘要可读的两篇排在最上面，其中一篇讲人的背根神经节，并不是植物研究。同样来自 27 篇的小库。</figcaption>
+        </figure>
+
+        <p>每一行是一篇文献、助手的理由和它将得到的判断，默认都勾选。不同意的点右边另一个判断，拿不准的取消勾选，留在待判断；「把握低的在前」把最该看一眼的排到上面。图 8 里就有一个要改的：那篇背根神经节的研究没有摘要，助手只能说「证据不足」，看题目就知道它不相关。最后点「确认这 N 篇」，勾选的一次写成收录判断，助手的理由一并记为判断理由。写入之前什么都不会改动，写入之后页面上方有「撤销」。</p>
+        <p>只想先处理一组，在「批量」里点队列上方的分组，例如「不相关 42」，按钮就成了「确认这 42 条「不相关」」。想一篇篇细看，切到页头的「逐篇」：一次一篇，助手的建议、理由和它依据的原句在上（原句逐字引自摘要或全文，引不出原文的理由不会被当作依据），摘要在中间，四个判断在下。按 <kbd>Y</kbd> 已纳入、<kbd>R</kbd> 相关、<kbd>U</kbd> 证据不足、<kbd>N</kbd> 不相关，<kbd>A</kbd> 采纳建议，判断完自动换下一篇。</p>
+
+        <figure class="shot">
+          <img src="../img/t/start-07-single.jpg" width="1372" height="867" loading="lazy" alt="逐篇筛选：左边是这一轮 27 篇的列表，右边是第 21 篇，拟南芥叶片冷响应的单细胞蛋白质组研究。助手的建议是「相关」，把握 94%，只读了摘要，理由下面是引自摘要的原句；底部四个判断按钮，「相关」上标着「建议」。">
+          <figcaption><b>图 9</b>　一篇判断得不错的：单细胞蛋白质组研究，助手认为它没有产生 scRNA-seq / snRNA-seq 数据，不满足收录条件，建议「相关」而不是「已纳入」。</figcaption>
+        </figure>
+
+        <p>那次运行最后写入了 257 篇已纳入和 42 篇不相关，剩下 52 篇相关、4 篇证据不足留着：这些正是值得自己看一眼的。回到「全部文献」，不相关的默认隐藏，列表是 313 篇，「收录」一栏有了结果。</p>
+
+        <figure class="shot">
+          <img src="../img/15-papers-included.jpg" width="1372" height="870" loading="lazy" alt="全部文献列表：共 313 篇，收录一栏多数是「已纳入」，少数还是「待判断」。">
+          <figcaption><b>图 10</b>　确认之后的全部文献。还是「待判断」的，是留给自己看的那 56 篇。</figcaption>
+        </figure>
+      </section>
+
+      <section id="recap" class="recap">
+        <h2>回顾</h2>
+        <ul>
+          <li>在「设置 › AI」接上自己的模型服务，并把筛选的并发调到 8。</li>
+          <li>建库时写了一段具体的主题，助手据此为两个数据库拟了 6 条检索式；按试检索命中的标题选了 2 条，导入 355 篇。</li>
+          <li>写下筛选目标，助手用约 4 分 40 秒读完 355 篇摘要；你在「确认」里过目后写入，库里留下 313 篇。</li>
+          <li>接下来：精读其中一篇，见<a href="read.html">教程 03</a>；就整个库提问并核对出处，见<a href="ask.html">教程 04</a>；用 <code>/review</code> 分阶段写综述，见<a href="review.html">教程 06</a>。</li>
+        </ul>
+      </section>
+    </article>
+  </div>
+
+  <nav class="pager" aria-label="上一篇和下一篇">
+    <a class="next" href="migrate.html"><small>下一篇 · 02</small><strong>把已有的文献搬进来</strong></a>
+  </nav>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-in">
+    <div class="refs">
+      <h2>参考</h2>
+      <ol>
+        <li><a href="index.html">全部教程</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/FEATURES.md">功能详解：每个页面能做什么</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/DATA.md">数据与隐私：文件放在哪里，哪些数据会离开本机</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/issues">问题与想法：Issues</a></li>
+      </ol>
+    </div>
+    <div class="colophon">
+      <p><b>关于这篇教程</b>　截图和数字来自 2026 年 11 月 10 日在 macOS 上用 v0.2.0 的一次实际操作，并在 11 月 17 日按 v0.10.0 核对、重截了界面变了的几张。模型每次的回答不一样，数据库也每天在更新，你照做时措辞和数字会有出入，步骤是一样的。</p>
+      <p><b>助手可能出错</b>　它的建议和回答都要你确认；关键的数字和结论请对照原文。</p>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

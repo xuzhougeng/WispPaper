@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>和合作者改稿 · Wisp Paper 教程</title>
+<meta name="description" content="把导师留了批注的 Word 稿件导入 Wisp Paper，逐条处理批注，让助手再审一遍，由你决定采纳哪些修改，最后导出成带修订和批注的 Word 发回去，版式不动。">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F5F4F1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1A1B1D" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="../app-icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../app-icon.png">
+<link rel="stylesheet" href="../style.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body class="doc">
+<a class="skip" href="#main">跳到正文</a>
+
+<header class="top">
+  <div class="wrap top-in">
+    <a class="brand" href="../index.html" aria-label="Wisp Paper"><img src="../app-icon.svg" width="26" height="26" alt=""><span>Wisp Paper</span></a>
+    <nav aria-label="站点">
+      <a href="index.html" aria-current="page">教程</a>
+      <a href="../index.html#ideas">理念</a>
+      <a href="../index.html#tools">工具</a>
+      <a href="../index.html#download">下载</a>
+    </nav>
+    <a class="gh" href="https://github.com/xuzhougeng/WispPaper">GitHub<span aria-hidden="true"> ↗</span></a>
+  </div>
+</header>
+
+<main id="main" class="wrap doc-wrap">
+  <nav class="crumbs" aria-label="位置"><a href="index.html">教程</a><span>›</span>写作</nav>
+
+  <header class="doc-head">
+    <p class="kicker">教程 08　·　写作</p>
+    <h1>和合作者改稿：Word 批注与修订</h1>
+    <p class="lead">导师把初稿发了回来，页边是一串 Word 批注。这一篇把这份 .docx 导入写作页，逐条处理批注，再让助手审一遍；采纳哪条修改由你决定。最后导出成带修订的 Word，导师在 Word 里逐条接受或拒绝，版式原样不动。</p>
+    <dl class="facts">
+      <div><dt>场景</dt><dd>单核转录组图谱论文的引言和方法，导师 Zhang Ming 留了 5 条批注。</dd></div>
+      <div><dt>需要</dt><dd>一份 .docx 稿件；一个模型服务（审阅和改写时用）。</dd></div>
+      <div><dt>用时</dt><dd>约 15 分钟，其中等模型不到 2 分钟。</dd></div>
+    </dl>
+  </header>
+
+  <div class="doc-cols">
+    <nav class="toc" aria-label="本篇的小节">
+      <h2>本篇</h2>
+      <ol>
+        <li><a href="#s1">导入导师返回的 Word 稿件</a></li>
+        <li><a href="#s2">逐条看导师的批注</a></li>
+        <li><a href="#s3">让助手审阅这一节</a></li>
+        <li><a href="#s4">采纳、撤回或忽略</a></li>
+        <li><a href="#s5">按你的话改一处</a></li>
+        <li><a href="#s6">导出带修订的 Word</a></li>
+        <li class="plain"><a href="#recap">回顾</a></li>
+      </ol>
+    </nav>
+
+    <article class="prose">
+      <section id="s1">
+        <h2><i>1</i>导入导师返回的 Word 稿件</h2>
+        <p>稿件是 <code>root-atlas-draft_ZM.docx</code>：题目、「Introduction」和「Methods」两个一级标题，方法下面三个二级标题，一张样本表。导师在 Word 里留了 5 条批注，还直接改了一处（在 Cell Ranger 后面插入了版本号，没有接受）。</p>
+        <p>打开文献库，进入「写作」，点左侧大纲底部的「稿件」，选「导入 Word / Markdown 文件…」。也可以把 .docx 直接拖进窗口，在文献列表上拖也行，导入后会转到写作页。</p>
+
+        <figure class="shot">
+          <img src="../img/t/revise-01-import.jpg" width="1372" height="867" loading="lazy" alt="写作页：左侧大纲有 Introduction 和 Methods 两节，中间是引言的正文，三处文字有黄色底色；右侧「批注」页列出 Zhang Ming 的三条批注；顶部提示已导入 2 节、5 条批注。">
+          <figcaption><b>图 1</b>　导入后的提示说清了读进来什么、什么留在 Word 文件里。被批注的文字有底色，大纲上的数字是每节待处理的批注。</figcaption>
+        </figure>
+
+        <p>这次的提示原文是：</p>
+        <blockquote><cite>提示</cite><p>已导入「root-atlas-draft_ZM.docx」：2 节，5 条批注。1 个表格、0 张图留在 Word 文件里，导出时还在原处。文件里未接受的修订按接受后的文字读入</p></blockquote>
+        <ul>
+          <li>只有最高一级的标题分节。三个二级标题留在「Methods」的正文里，各占一行。</li>
+          <li>表格和图片不进稿件的文字，表题那一行作为普通段落留着。导出时表格回到原处。</li>
+          <li>导师插入的「(version 7.1)」直接成了正文。</li>
+          <li>Wisp Paper 把这份 Word 文件复制了一份，放在文献库文件夹的 <code>manuscripts/</code> 里，导出时以它为底。原文件挪走或删掉都不影响。</li>
+        </ul>
+        <p>如果文件没有用 Word 的标题样式（标题只是加粗的段落），导入前会先问「按哪些段落分节？」。它列出看上去像标题的段落，并说明理由：「常见章节名」「加粗」等。勾选的段落各开一节，其余留在正文里。</p>
+
+        <figure class="shot">
+          <img src="../img/t/revise-02-headings.jpg" width="1372" height="867" loading="lazy" alt="「按哪些段落分节？」对话框：五个候选段落，Introduction 和 Methods 标着常见章节名并已勾选，三个加粗的小标题未勾选；按钮「不导入」和「按 2 个标题导入」。">
+          <figcaption><b>图 2</b>　同一份稿件去掉标题样式后的样子。取消三个小标题，按 2 个标题导入。导出回 Word 时，它们仍是文件里原来的段落。</figcaption>
+        </figure>
+        <aside class="note"><b>提示</b>旧的 .doc 读不了，先在 Word 里另存为 .docx。导入后也可以在稿件下方把光标所在的段落「设为标题」，或「从这里拆成新节」。</aside>
+      </section>
+
+      <section id="s2">
+        <h2><i>2</i>逐条看导师的批注</h2>
+        <p>右侧「批注」页按位置列出这一节的批注，每条带着它所指的原文。点批注里的引文，稿件跳到那处文字并选中；点稿件里带底色的文字或右边的小标记，也会翻到对应的批注。</p>
+        <p>导师问「Check this number against Table 1.」，对照样本表，四个时间点加起来正是 48,312，不用改，就在这条上点「标为已处理」。来自 Word 的批注只能标为已处理，删不掉；处理过的收在列表底部的「已处理 1 条」里，可以再「重新打开」。</p>
+        <p>自己也可以留批注：选中「recent work has combined it with chromatin accessibility in the same cell」，点「给选中的文字写批注」，写下要补的引用，点「保存」（或按回车）。</p>
+
+        <figure class="shot">
+          <img src="../img/t/revise-03-comment.jpg" width="1372" height="867" loading="lazy" alt="右侧批注页顶部是正在写的批注：引着选中的英文句子，输入框里是一句中文提醒，下面是「取消」和「保存」；底部显示「已处理 1 条」。">
+          <figcaption><b>图 3</b>　给选中的文字写批注。底部的「已处理 1 条」是刚才核对过数字的那条。</figcaption>
+        </figure>
+        <aside class="note warn"><b>注意</b>「标为已处理」只在 Wisp Paper 里有效。导师的 5 条批注会原样留在导出的 Word 文件里，包括你标为已处理的那几条。在 Word 里要不要「解决」它们，由导师决定。</aside>
+      </section>
+
+      <section id="s3">
+        <h2><i>3</i>让助手审阅这一节</h2>
+        <p>「让助手审阅这一节」的结果和 Word 的审阅一样，是一条条批注：每条指向一处原文，要改文字的附上「建议改为」。上面的输入框可以写一句想让它看什么，也可以不填。这次写的是：</p>
+        <blockquote><cite>想让助手看什么</cite><p>先回应导师的批注；再看研究空白是否写清楚</p></blockquote>
+        <p>先点一下正文，确认没有选中文字，再点「让助手审阅这一节」。有选中的文字时按钮变成「让助手审阅选中的文字」，只审那一段。不到一分钟，提示「助手留了 5 条批注。」其中三条回应了批注：两条对导师，一条对你刚写的那条。</p>
+
+        <figure class="shot">
+          <img src="../img/t/revise-04-review.jpg" width="1372" height="867" loading="lazy" alt="右侧批注页：Zhang Ming 关于研究空白太含糊的批注下面，是助手的一条批注，开头写着回应 Zhang Ming，下方「建议改为」给出一句新的英文，按钮「采纳修改」和「忽略」。批注页顶部有「采纳全部 4 处修改」。">
+          <figcaption><b>图 4</b>　导师说研究空白太含糊，助手的批注紧挨着它，附上改写的一句。顶部的「采纳全部 4 处修改」一次接受所有带建议的批注。</figcaption>
+        </figure>
+
+        <p>回应导师第一条批注（要引 Denyer 2019 和 Shulse 2019）的那条没有给改法：</p>
+        <blockquote><cite>助手</cite><p>请核实两篇原始文献并按稿件引用格式插入；目前未提供文献条目，暂不代造引用标记。</p></blockquote>
+        <p>它不编造引用。需要核实的地方，它会在批注里写明，比如「请核实既有研究是否已回答这些问题」。</p>
+        <aside class="note warn"><b>注意</b>审阅时，这一节（或选中的部分）的文字、你写的要求，以及这一节未处理的批注（连同作者名）会发送给你在设置里配置的模型服务。</aside>
+      </section>
+
+      <section id="s4">
+        <h2><i>4</i>采纳、撤回或忽略</h2>
+        <p>助手的批注不会自己改稿件。点「采纳修改」，稿件里那处文字才被换掉。批注随之移到新的文字上，写着「已修改，原文是」和原来的句子，旁边多一个「撤回修改」。</p>
+
+        <figure class="shot">
+          <img src="../img/t/revise-05-applied.jpg" width="1372" height="867" loading="lazy" alt="稿件第二段末句已换成新的英文句子；右侧助手的批注下方显示「已修改，原文是」和原句，按钮「撤回修改」「标为已处理」。">
+          <figcaption><b>图 5</b>　采纳之后，原句留在批注里，随时可以撤回。</figcaption>
+        </figure>
+
+        <p>这次的处理：</p>
+        <ul>
+          <li>研究空白那句，采纳。导师那条「Too vague」随后标为已处理。</li>
+          <li>把「restricted to the endodermis and the xylem pole pericycle」改成「detected specifically in」的那条，采纳。助手的理由是「restricted」意味着已证实别的细胞类型没有响应，超出了数据能支持的程度。</li>
+          <li>建议把研究目标改写成「To characterize the temporal dynamics…」的那条，点「忽略」，这条批注就去掉了。</li>
+          <li>两条只提醒、不改字的批注（补引用），留着，等补上文献再标为已处理。</li>
+        </ul>
+        <p>再审一次，上一轮还没处理的助手批注会被新的一轮替换，采纳过的保留。改后的句子是模型写的，数据和结论是否站得住，要你自己对照结果核实。</p>
+      </section>
+
+      <section id="s5">
+        <h2><i>5</i>按你的话改一处</h2>
+        <p>导师在方法里问为什么选这四个时间点。到「Methods」一节，在稿件下方的输入框（「让助手改这一节」）里写：</p>
+        <blockquote><cite>让助手改这一节</cite><p>在取样时间那句后面补一句：说明为什么选这四个时间点；不要编造文献和数据</p></blockquote>
+        <p>发送后，改动直接落在稿件里，新的文字有底色，左边有一条竖线。输入框上方列出改了几处，每处可以「撤销」，也可以「全部撤销」或「保留」。不到 40 秒，助手在那句后面加了一句：</p>
+        <blockquote><cite>助手</cite><p>These time points were selected to provide a baseline at 0 hours and capture early and later transcriptional responses over the first 24 hours of osmotic stress.</p></blockquote>
+
+        <figure class="shot">
+          <img src="../img/t/revise-06-revise.jpg" width="1372" height="867" loading="lazy" alt="方法一节，取样那句后面多了一句绿色底色的新句子；稿件下方的框写着「改了 1 处」，有「全部撤销」和「保留」；右侧多出一条助手批注，记着要求和原文。">
+          <figcaption><b>图 6</b>　从 Word 导入的稿件里，助手每改一处都会留一条批注，记下你的要求和改动前的原文。</figcaption>
+        </figure>
+        <p>这条批注是自动留下的，导出后导师能看到这里改过什么。用正文下方的「润色」「仿写」替换一段，同样会留一条。</p>
+      </section>
+
+      <section id="s6">
+        <h2><i>6</i>导出带修订的 Word</h2>
+        <p>点稿件上方的「导出」。来自 Word 的稿件有两种 Word 导出：</p>
+        <ul>
+          <li>「Word（.docx）：原文件的版式，带批注」：改动直接写进正文，不留修订记录。</li>
+          <li>「Word（.docx）：改动记为修订，带批注」：每处改动记为 Word 的修订，导师可以在 Word 里逐条接受或拒绝。</li>
+        </ul>
+
+        <figure class="shot">
+          <img src="../img/t/revise-07-export.jpg" width="1372" height="867" loading="lazy" alt="「导出」菜单展开：Markdown（.md）、Word（.docx）：原文件的版式，带批注、Word（.docx）：改动记为修订，带批注、复制全文。">
+          <figcaption><b>图 7</b>　「导出」菜单。从零写的稿件只有一种 Word 导出。</figcaption>
+        </figure>
+
+        <p>选第二种，导出后提示「改动 3 段，都记为修订，批注 6 条」。6 条是你和助手留的批注，导师的 5 条本来就在文件里。把导出的文件解压，对照原文件：</p>
+        <ul>
+          <li>没改过的段落、标题、样本表和样式表都和原文件逐字节相同。改过的段落只换了文字，格式不变。</li>
+          <li>修订是逐词的：删掉的词划线，加上的词另记，作者是「设置 › 通用 › 写作」里填的「署名」。署名留空时，用这台电脑的用户名。</li>
+          <li>你的批注署你的名字。助手的批注署「Wisp Paper 助手」，没采纳的建议在批注里写成「建议改为：……」。</li>
+          <li>导师原来那处没接受的修订（版本号）在导出的文件里仍然是修订。</li>
+        </ul>
+
+        <figure class="shot">
+          <img src="../img/t/revise-08-word.jpg" width="1140" height="1010" loading="lazy" alt="导出的 Word 文件在 LibreOffice 中的渲染：引言第二段末句的旧词有删除线，新词有下划线；第三段 restricted to 被换成 with osmotic stress responses detected specifically in，and 换成 or。">
+          <figcaption><b>图 8</b>　导出的文件用 LibreOffice 打开后的引言。删除和插入按词标出，等导师逐条接受或拒绝。</figcaption>
+        </figure>
+        <aside class="note"><b>提示</b>选第一种导出，改动不留痕迹，原句就只留在助手批注的记录里。发给导师审的稿子，用第二种。</aside>
+      </section>
+
+      <section id="recap" class="recap">
+        <h2>回顾</h2>
+        <ul>
+          <li>导入 Word 稿件：一级标题分节，导师的批注连同它们所指的文字一起读进来，表格和图片留在文件里。</li>
+          <li>导师的批注逐条核对、标为已处理；自己的提醒写在选中的文字上。</li>
+          <li>助手审阅时先回应导师，再给出「建议改为」，采纳与否由你决定，采纳后可以撤回。</li>
+          <li>按你的话改的地方会自动留批注；导出时改动记为修订，没改的段落原样不动。</li>
+          <li>稿件还没写，先看<a href="write.html">写论文：候选句、配引用与出处</a>；改完稿想跟进新发表的文献，看<a href="follow.html">跟进新文献</a>。</li>
+        </ul>
+      </section>
+    </article>
+  </div>
+
+  <nav class="pager" aria-label="上一篇和下一篇">
+    <a class="prev" href="write.html"><small>上一篇 · 07</small><strong>写论文</strong></a>
+    <a class="next" href="follow.html"><small>下一篇 · 09</small><strong>跟进新文献</strong></a>
+  </nav>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-in">
+    <div class="refs">
+      <h2>参考</h2>
+      <ol>
+        <li><a href="index.html">全部教程</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/FEATURES.md">功能详解：每个页面能做什么</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/DATA.md">数据与隐私：文件放在哪里，哪些数据会离开本机</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/issues">问题与想法：Issues</a></li>
+      </ol>
+    </div>
+    <div class="colophon">
+      <p><b>关于这篇教程</b>　截图和数字来自 2026 年 11 月在 macOS 上用 v0.10.0 的一次实际操作。模型每次的回答不一样，你照做时措辞和数字会有出入，步骤是一样的。</p>
+      <p><b>助手可能出错</b>　它的建议和回答都要你确认；关键的数字和结论请对照原文。</p>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

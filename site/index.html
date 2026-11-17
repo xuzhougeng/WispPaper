@@ -25,6 +25,7 @@
     <a class="brand" href="#top" aria-label="Wisp Paper"><img src="app-icon.svg" width="26" height="26" alt=""><span>Wisp Paper</span></a>
     <nav aria-label="本页的章节">
       <a href="#case">案例</a>
+      <a href="tutorials/index.html">教程</a>
       <a href="#ideas">理念</a>
       <a href="#tools">工具</a>
       <a href="#download">下载</a>
@@ -220,7 +221,23 @@
       </figure>
     </div>
 
-    <p class="more"><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/TUTORIAL.md">完整的教程：每一步的截图、实际填的内容和数字<span aria-hidden="true"> →</span></a></p>
+    <div class="guides-head">
+      <h3>接着做：九篇教程</h3>
+      <p>上面是一次运行的梗概。每一步的截图和实际填的内容在第一篇教程里；之后的八篇各讲一件科研里的事，用的是同一个文献库。</p>
+    </div>
+    <nav class="guides" aria-label="教程">
+      <a href="tutorials/start.html"><span class="num">01</span><span><strong>从一个课题开始</strong><span>检索、导入、筛选：这次运行的完整记录</span></span></a>
+      <a href="tutorials/migrate.html"><span class="num">02</span><span><strong>把已有的文献搬进来</strong><span>Zotero、PDF 文件夹、BibTeX 与 RIS</span></span></a>
+      <a href="tutorials/read.html"><span class="num">03</span><span><strong>精读一篇文献</strong><span>对照译文读，标注，提问，记笔记，收图</span></span></a>
+      <a href="tutorials/ask.html"><span class="num">04</span><span><strong>向整个文献库提问</strong><span>带出处的回答，以及怎么核对它</span></span></a>
+      <a href="tutorials/extract.html"><span class="num">05</span><span><strong>把一批文献读成一张表</strong><span>自定义词条，由助手提取、你来确认</span></span></a>
+      <a href="tutorials/review.html"><span class="num">06</span><span><strong>分阶段写一篇综述</strong><span>要求、框架、大纲、分节，每步确认</span></span></a>
+      <a href="tutorials/write.html"><span class="num">07</span><span><strong>写论文</strong><span>候选句、配引用，每条引用的出处</span></span></a>
+      <a href="tutorials/revise.html"><span class="num">08</span><span><strong>和合作者改稿</strong><span>Word 批注、助手审阅、带修订导出</span></span></a>
+      <a href="tutorials/follow.html"><span class="num">09</span><span><strong>跟进新文献</strong><span>自动更新，以及 wisp 与 MCP</span></span></a>
+    </nav>
+
+    <p class="more"><a href="tutorials/index.html">全部教程：各篇讲什么、需要什么、要多久<span aria-hidden="true"> →</span></a></p>
   </div>
 </section>
 
@@ -322,8 +339,8 @@
       <ul>
         <li>还在早期，变化很快。</li>
         <li>助手的部分需要你自己的模型服务；API Key 以明文保存在本机的 <code>settings.json</code>。</li>
-        <li>每次运行一条检索式，最多取回最新的 200 篇。</li>
-        <li>应用不会自己更新，只提示有新版本。</li>
+        <li>每次运行一条检索式，最多取回最新的 2000 篇；这次运行是在上限还是 200 篇的版本上做的。</li>
+        <li>Linux 版不会自己更新，只提示有新版本。</li>
         <li>Linux 版没有签名，也没有在真机上测试过。</li>
       </ul>
     </div>
@@ -451,7 +468,7 @@
     <div class="refs">
       <h2>参考</h2>
       <ol>
-        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/TUTORIAL.md">教程：从零建一个「植物单细胞转录组」文献库</a></li>
+        <li><a href="tutorials/index.html">教程：九个科研场景，从建库到改稿</a></li>
         <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/FEATURES.md">功能详解：每个页面能做什么</a></li>
         <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/DATA.md">数据与隐私：文件放在哪里，哪些数据会离开本机</a></li>
         <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/CLI.md">命令行与 MCP</a></li>

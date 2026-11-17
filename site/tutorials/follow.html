@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>跟进新文献 · Wisp Paper 教程</title>
+<meta name="description" content="让保存的检索式定期运行，新文献进来由助手先读一遍、你来确认；再用命令行 wisp 和 MCP，把同一个文献库交给终端里的脚本和外部的 AI 客户端。">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F5F4F1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1A1B1D" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="../app-icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../app-icon.png">
+<link rel="stylesheet" href="../style.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body class="doc">
+<a class="skip" href="#main">跳到正文</a>
+
+<header class="top">
+  <div class="wrap top-in">
+    <a class="brand" href="../index.html" aria-label="Wisp Paper"><img src="../app-icon.svg" width="26" height="26" alt=""><span>Wisp Paper</span></a>
+    <nav aria-label="站点">
+      <a href="index.html" aria-current="page">教程</a>
+      <a href="../index.html#ideas">理念</a>
+      <a href="../index.html#tools">工具</a>
+      <a href="../index.html#download">下载</a>
+    </nav>
+    <a class="gh" href="https://github.com/xuzhougeng/WispPaper">GitHub<span aria-hidden="true"> ↗</span></a>
+  </div>
+</header>
+
+<main id="main" class="wrap doc-wrap">
+  <nav class="crumbs" aria-label="位置"><a href="index.html">教程</a><span>›</span>跟进</nav>
+
+  <header class="doc-head">
+    <p class="kicker">教程 09　·　跟进</p>
+    <h1>跟进新文献，把文献库交给别的工具</h1>
+    <p class="lead">文献库建好了，也筛过一遍。接下来它要跟着领域往前走，又不能每周占掉你半天。这一篇先在窗口里让检索式定期运行、新文献由助手先读，再用命令行 <code>wisp</code> 和 MCP，把同一个库交给终端和外部的 AI 客户端。</p>
+    <dl class="facts">
+      <div><dt>场景</dt><dd>「植物单细胞转录组」已经有 29 篇筛过的文献，想把单核转录组（snRNA-seq）的新工作也跟上，并在终端和 Claude Code 里查这个库。</dd></div>
+      <div><dt>需要</dt><dd>一个有检索式的文献库，一个模型服务（筛选用）；会用终端。</dd></div>
+      <div><dt>用时</dt><dd>约 15 分钟。</dd></div>
+    </dl>
+  </header>
+
+  <div class="doc-cols">
+    <nav class="toc" aria-label="本篇的小节">
+      <h2>本篇</h2>
+      <ol>
+        <li><a href="#s1">加一条检索式，先试检索</a></li>
+        <li><a href="#s2">运行、导入记录与自动更新</a></li>
+        <li><a href="#s3">每周的筛选：只看新来的</a></li>
+        <li><a href="#s4">在终端里用 wisp</a></li>
+        <li><a href="#s5">窗口关着时定时更新</a></li>
+        <li><a href="#s6">交给外部的 AI 客户端：MCP</a></li>
+        <li class="plain"><a href="#recap">回顾</a></li>
+      </ol>
+    </nav>
+
+    <article class="prose">
+      <section id="s1">
+        <h2><i>1</i>加一条检索式，先试检索</h2>
+        <p>库里原有两条检索式：PubMed 的图谱与方法，Europe PMC 的胁迫响应。单核转录组的文章常常不在这两条的范围里，所以再加一条只看题目里带 single-nucleus 的。</p>
+        <p>在左侧打开「检索与导入」，点「新建检索式」，填「来源」「检索式」「名称」和「每次取回」（取最新的多少篇，默认 50，最多 2000），点「保存」。保存不会运行它。本例用的是命令行，效果相同（命令行见第 4 节）：</p>
+        <figure class="code">
+          <figcaption>命令行</figcaption>
+<pre><code><span class="p">$</span> wisp save_search --source europepmc --name "Europe PMC：单核转录组" --max-results 20 \
+    --query '(TITLE:"single-nucleus" OR TITLE:"single-nuclei" OR TITLE:snRNA-seq) AND (TITLE:plant OR TITLE:Arabidopsis OR TITLE:rice OR TITLE:maize OR TITLE:tomato OR TITLE:wheat) AND OPEN_ACCESS:y'
+{
+  "id": "S-1794920544477-a8810c21",
+  "kind": "europepmc",
+  "maxResults": 20,
+  "enabled": true,
+  "lastRun": null
+  …
+}</code></pre>
+        </figure>
+        <p>新的检索式出现在页面最下面，「还没有运行过」。先点它的「试检索」：这一步只向数据库要结果，不往库里写任何东西。</p>
+
+        <figure class="shot">
+          <img src="../img/t/follow-01-searches.jpg" width="1372" height="867" loading="lazy" alt="检索与导入页：上方是自动更新的四个选项，下面三张检索式卡片，前两张写着上次运行的结果，第三张下面展开了试检索的结果。">
+          <figcaption><b>图 1</b>　第三条检索式的试检索：数据库中共命中 16 篇，取回的 16 篇里 12 篇是新的，4 篇已在文献库中。</figcaption>
+        </figure>
+
+        <p>往下看列表。已经在库里的几篇字是灰的，右边标着「已在库中 · 已纳入」，说明这条检索式和库的方向一致；新的几篇题目都是植物的单核转录组研究，可以运行。</p>
+
+        <figure class="shot">
+          <img src="../img/t/follow-02-trial.jpg" width="1372" height="867" loading="lazy" alt="试检索结果的列表：每行一篇文献的题目、作者、年份和期刊，其中四行字色较浅，右侧标着「已在库中 · 已纳入」。">
+          <figcaption><b>图 2</b>　试检索的结果按时间从新到旧。灰色的几行已经在库里，标签上是你当时的收录判断。</figcaption>
+        </figure>
+        <aside class="note"><b>提示</b>检索式会发给所选的数据库（这里是 Europe PMC）。命中上千篇的宽检索每次只带回最新的若干篇，宁可拆成几条聚焦的。</aside>
+      </section>
+
+      <section id="s2">
+        <h2><i>2</i>运行、导入记录与自动更新</h2>
+        <p>点「运行并导入」。这次取回 16 篇，新增 12 篇，跳过已有的 4 篇：Wisp Paper 按 DOI、PMID 和题目认出了库里已有的文献，回收站里的也算。紧接着再运行一次，结果是「取回 16 篇，新增 0 篇，跳过已有的 16 篇」。第一次运行把「每次取回」的篇数都取一遍，之后的运行只为库里还没有的文献而来，通常一两次请求就结束。</p>
+        <p>每次运行都在页面下方的「导入记录」里留一行。有新增的那一行右边有「撤销」：它删去这一批新增、还没有人处理过的文献；已经做过收录判断、读过、收藏、写过笔记、加过标签或附件的会保留。撤销前会再问一遍。</p>
+        <p>页面顶上的「自动更新」默认是「关闭」，此时只在你点「运行并导入」时访问数据库。本例选了「每周」，旁边的说明随之变成：应用开着时按这个间隔运行已启用的检索式；关着时错过的，下次打开时补上。某条检索式运行失败的，最多一小时后再试。点卡片上的「停用」可以让某一条不参加自动更新和「全部运行」。</p>
+
+        <figure class="shot">
+          <img src="../img/t/follow-03-auto.jpg" width="1372" height="867" loading="lazy" alt="检索与导入页：自动更新选中了「每周」；第三条检索式写着上次运行命中 16 篇、新增 0 篇；下方导入记录有四行，有新增的三行右侧有「撤销」。">
+          <figcaption><b>图 3</b>　自动更新设为「每周」。导入记录最上面两行是同一条检索式的两次运行：第一次新增 12 篇，第二次新增 0 篇，所以没有「撤销」。</figcaption>
+        </figure>
+        <p>自动更新带进来新文献时，如果这个库正开着，窗口里会提示「自动更新：新增 N 篇待判断的文献」。新文献一律是「待判断」，左侧「筛选」旁边的数字就是要你处理的篇数。</p>
+      </section>
+
+      <section id="s3">
+        <h2><i>3</i>每周的筛选：只看新来的</h2>
+        <p>第一次筛几百篇的做法在<a href="start.html">教程 01</a>里。之后每周的事少得多：打开「筛选」，上面的「筛选目标」保持原样，点「让助手判断 12 篇」。助手几篇同时读，有全文读全文，没有就读摘要。这一轮不到一分钟读完，建议是已纳入 10 篇、相关 2 篇。</p>
+
+        <figure class="shot">
+          <img src="../img/t/follow-04-queue.jpg" width="1372" height="867" loading="lazy" alt="筛选页的批量视图：筛选目标的文字框下是「这一轮判断完了 12 / 12」的进度条和「助手读完了，去确认它的建议」，再下面是按建议分组的按钮和带「建议：已纳入 · 把握 100%」标签的文献列表。">
+          <figcaption><b>图 4</b>　「批量」视图：一轮读完，队列按建议分成「已纳入 10」和「相关 2」，右上角的按钮变成「确认 12 条建议」。</figcaption>
+        </figure>
+
+        <p>筛选页现在有三种看法。「批量」是上图的队列；「逐篇」一次一篇，左边是这一轮的文献，右边是助手的建议、理由、它引的原句和摘要，下面四个判断按钮，也可以按 <kbd>Y</kbd> / <kbd>R</kbd> / <kbd>U</kbd> / <kbd>N</kbd>，<kbd>A</kbd> 采纳建议。两篇建议「相关」的值得逐篇看：</p>
+
+        <figure class="shot">
+          <img src="../img/t/follow-05-single.jpg" width="1372" height="867" loading="lazy" alt="逐篇视图：左侧是 12 篇的列表，第 12 篇 GAMETE 被选中；右侧是助手建议「相关」、把握 99%、只读了摘要，理由和一句引自摘要的原文，下方是摘要和四个判断按钮，「相关」按钮标着「建议」。">
+          <figcaption><b>图 5</b>　「逐篇」看第 12 篇。助手的理由：这篇用的是单核 ATAC-seq，摘要里没有转录组数据，所以建议「相关」而不是「已纳入」。</figcaption>
+        </figure>
+        <p>这两篇是 GAMETE maps the genetic architecture of chromatin accessibility in rice pollen at single-nucleus resolution 和 2017 年那篇玉米单倍体诱导的单核测序（全基因组测序，不是转录组）。助手只读了摘要，引的原句可以在摘要里找到，判断站得住。</p>
+        <p>第三种是「确认建议」页：点「确认 12 条建议」进入（页面上方的切换只有「批量」和「逐篇」），每篇一行，写着将要写入的判断，不同意的就在行上改，拿不准的取消勾选，再点「确认这 12 篇」一次写入。写入之前什么都不会改动，写入之后也能「撤销」。</p>
+
+        <figure class="shot">
+          <img src="../img/t/follow-06-confirm.jpg" width="1372" height="867" loading="lazy" alt="确认建议页：每行一篇文献，左边是勾选框，中间是题目、把握和理由的开头，右边四个判断，已选中的是「已纳入」；底部写着将写入 12 篇：已纳入 10 · 相关 2，右下角是「确认这 12 篇」按钮。">
+          <figcaption><b>图 6</b>　「确认建议」页：底下一行是将要写入的结果，下面列着这一页能用的按键。</figcaption>
+        </figure>
+        <p>本例照建议写入，提示「已确认 12 篇：已纳入 10 · 相关 2」。收录判断从头到尾是你写的，助手只给建议。</p>
+        <aside class="note"><b>筛选目标改了之后</b>已有的建议标为「按旧目标」，按钮变成「按当前目标判断 N 篇」。已经判断过的文献可以点「复核已判断的 N 篇」，让助手按新目标再读一遍：看法和你不同的回到队列，归在「与你的判断不同」，保持还是改由你选，你原来的判断不会被动。</aside>
+      </section>
+
+      <section id="s4">
+        <h2><i>4</i>在终端里用 wisp</h2>
+        <p><code>wisp</code> 是不开窗口的入口，随安装包附带：macOS 在 <code>/Applications/Wisp Paper.app/Contents/MacOS/wisp</code>；Windows 在主程序 <code>WispPaper.exe</code> 旁边，安装版在 <code>%LOCALAPPDATA%\Programs\Wisp Paper</code>；Linux 也在主程序旁边。它读写的是应用设置里的同一个数据文件夹，应用开着时也能用；<code>--data-dir 文件夹</code> 可以指定另一个。输出都是 JSON，出错时信息写到 stderr，退出码为 1。下面把它简写为 <code>wisp</code>，<code>wisp help</code> 列出全部命令，<code>wisp 命令 --help</code> 列出一个命令的参数。只有一个文献库时可以省略 <code>-l</code>。</p>
+
+        <figure class="code">
+          <figcaption>命令行 · 库的概况</figcaption>
+<pre><code><span class="p">$</span> wisp list_libraries
+{ "libraries": [ { "id": "L-1794919865367-65179074", "name": "植物单细胞转录组",
+    "papers": 41, "autoSyncHours": 168, … } ] }
+
+<span class="p">$</span> wisp library_status
+{ "papers": 41,
+  "screening": { "pending": 0, "included": 38, "excluded": 2, "uncertain": 0, "irrelevant": 1 },
+  "fulltext": { "missing": 0, "linked": 19, "stored": 22, "textless": 0 },
+  "labels": { "screening": { "excluded": "相关", … } }, … }</code></pre>
+        </figure>
+        <p>注意收录判断存的是英文键：<code>excluded</code> 在界面上显示为「相关」，对照表就在 <code>labels</code> 里。</p>
+
+        <figure class="code">
+          <figcaption>命令行 · 查文献和全文</figcaption>
+<pre><code><span class="p">$</span> wisp list_papers --query protoplast --limit 3
+{ "total": 6, "papers": [ { "id": "P-1794919880205-33da66a1",
+    "title": "Single-Cell Transcriptome and Network Analyses Unveil Key Transcription Factors …",
+    "year": 2022, "screening": "included", "fulltext": "linked", "suggested": "included" }, … ] }
+
+<span class="p">$</span> wisp search_fulltext "protoplast isolation" --limit 3
+{ "total": 80, "papersSearched": 22, "papersWithoutText": 19, "hits": [ {
+    "paperId": "P-1794919877581-a6b186c3",
+    "title": "Integrated experimental and computational workflows for single-cell transcriptomics in plants",
+    "page": 11, "exact": true,
+    "snippet": "… one was used immediately for protoplast isolation, another for fresh nucleus isola- tion …" }, … ] }
+
+<span class="p">$</span> wisp read_fulltext P-1794919877581-a6b186c3 --page 11
+{ "pageCount": 14, "pages": [ { "page": 11, "text": "Page 11 of 14\n\nWang et al. Plant Methods (2026) 22:12 …" } ] }</code></pre>
+        </figure>
+        <p><code>search_fulltext</code> 只查保存了全文的文献：这里 22 篇有文字，19 篇没有（刚导入的 12 篇都还没有 PDF）。<code>read_fulltext</code> 一次最多读 8 页，用来核对上下文。</p>
+
+        <figure class="code">
+          <figcaption>命令行 · 试检索和运行</figcaption>
+<pre><code><span class="p">$</span> wisp search_online pubmed '"single-nucleus"[Title] AND (plant[Title/Abstract] OR Arabidopsis[Title]) AND 2026[dp]' --limit 3
+{ "source": "pubmed", "total": 20, "fetched": 3, "new": 3, "inLibrary": 0,
+  "results": [ { "title": "A single-nucleus transcriptomic atlas reveals the endodermal gene regulatory network underlying Arabidopsis stem gravitropism",
+                 "year": 2026, "pmid": "43020179", "inLibrary": null }, … ] }
+
+<span class="p">$</span> wisp run_search S-1794920544477-a8810c21
+{ "batchId": "B-1794920690194-3d0159de", "search": "Europe PMC：单核转录组",
+  "total": 16, "fetched": 16, "added": 12, "skipped": 4,
+  "addedPapers": [ { "title": "Single-nucleus transcriptomics reveals transcriptional dynamics underlying maize ligule development", "year": 2026 }, … ] }</code></pre>
+        </figure>
+        <p><code>search_online</code> 和窗口里的「试检索」一样不写入，已在库里的文献 <code>inLibrary</code> 给出它的 ID 和收录判断。<code>run_search</code> 返回的批次号可以交给 <code>undo_import</code> 整批撤销，规则和窗口里相同。</p>
+      </section>
+
+      <section id="s5">
+        <h2><i>5</i>窗口关着时定时更新</h2>
+        <p>自动更新只在应用开着时运行。窗口不常开的话，让系统的计划任务定期执行 <code>wisp sync_searches</code>：它只运行已到期的检索式，判断「到期」用的正是第 2 节选的间隔，所以计划任务跑得勤一些也不会重复检索。macOS 和 Linux 上用 <code>crontab -e</code> 加一行，每小时看一次：</p>
+        <figure class="code">
+          <figcaption>crontab</figcaption>
+<pre><code>0 * * * * "/Applications/Wisp Paper.app/Contents/MacOS/wisp" sync_searches &gt;&gt; "$HOME/wisp-sync.log" 2&gt;&amp;1</code></pre>
+        </figure>
+        <p>macOS 的 launchd、Windows 的任务计划程序可以做同样的事：定时运行这条命令。</p>
+        <aside class="note warn"><b>注意</b><code>sync_searches</code> 只处理「自动更新」没有关闭的文献库。自动更新是「关闭」时它什么也不做，返回 <code>{"runs": [], "added": 0, "failed": 0}</code>；加 <code>--force</code> 则不看间隔和开关，运行所有已启用的检索式。部分失败时退出码仍可能是 0，要看 JSON 里的 <code>failed</code> 和 <code>runs[].error</code>。</aside>
+      </section>
+
+      <section id="s6">
+        <h2><i>6</i>交给外部的 AI 客户端：MCP</h2>
+        <p><code>wisp mcp</code> 在标准输入输出上提供 MCP 服务，Claude Code、Claude Desktop 或其他支持 MCP 的客户端启动它，就能用和命令行相同的一组工具。在客户端的配置里加上：</p>
+        <figure class="code">
+          <figcaption>MCP 配置</figcaption>
+<pre><code>{
+  "mcpServers": {
+    "wisp-paper": {
+      "command": "/Applications/Wisp Paper.app/Contents/MacOS/wisp",
+      "args": ["mcp", "--read-only"]
+    }
+  }
+}</code></pre>
+        </figure>
+        <p>Claude Code 可以直接用命令添加：</p>
+        <figure class="code">
+          <figcaption>命令行</figcaption>
+<pre><code><span class="p">$</span> claude mcp add wisp-paper -- "/Applications/Wisp Paper.app/Contents/MacOS/wisp" mcp --read-only</code></pre>
+        </figure>
+        <p>先确认服务能回答：把 <code>initialize</code> 和 <code>tools/list</code> 两个请求送进去。本例的 <code>wisp mcp</code> 列出 37 个工具，<code>wisp mcp --read-only</code> 列出 19 个：</p>
+        <figure class="code">
+          <figcaption>命令行 · 检查 MCP 服务</figcaption>
+<pre><code><span class="p">$</span> printf '%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}' \
+    '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | wisp mcp --read-only
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18", … "serverInfo":{"name":"wisp-paper","title":"Wisp Paper","version":"0.10.0"}, …}}
+{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"list_note_sources", … }, …]}}</code></pre>
+        </figure>
+        <p>接好之后，在客户端里可以这样问：</p>
+        <blockquote><cite>提问</cite><p>在 Wisp Paper 的「植物单细胞转录组」库里，找出全文提到 protoplast isolation 的文献，读出相关的那一页，比较原生质体和细胞核分离两条路线，每条结论给出文献 ID、页码和原句。</p></blockquote>
+        <p>客户端的回答要自己核对：拿它给的文献 ID 和页码，在窗口里打开 PDF 看原句。</p>
+
+        <h3>写入的边界</h3>
+        <p>不带 <code>--read-only</code> 时多出的 18 个工具都会改动数据：建库，导入 PDF、BibTeX 和 Zotero，保存、运行、同步、删除检索式，撤销导入，查找并下载 PDF，整理标签和阅读状态，写稿件的一节和大纲，导出和保存笔记，还有 <code>suggest_screening</code> 和 <code>suggest_field</code>。</p>
+        <ul>
+          <li>收录判断和自定义词条，外部客户端最多能提建议（这两个工具也只在不带 <code>--read-only</code> 时提供）：<code>suggest_screening</code> 提出收录建议，<code>suggest_field</code> 提出词条取值，都附逐字引文。它们出现在「筛选」和「提取」页等你确认，没有工具能直接设定收录判断或词条。</li>
+          <li>窗口里的助手在导入、运行或删除检索式、撤销导入、查找 PDF、整理文献和改稿之前会先问你；外部客户端调用 <code>wisp mcp</code> 时没有这一步，它调用了，事情就做了。</li>
+        </ul>
+        <aside class="note warn"><b>注意</b>只想让外部客户端查和读，就用 <code>--read-only</code>。读全文时仍可能在库里留下文字缓存，但不改文献和判断。</aside>
+      </section>
+
+      <section id="recap" class="recap">
+        <h2>回顾</h2>
+        <ul>
+          <li>加了一条单核转录组的检索式，试检索之后运行，新增 12 篇；再运行一次新增 0 篇，导入记录里可以整批撤销。</li>
+          <li>自动更新设为每周；窗口关着时由 cron 执行 <code>wisp sync_searches</code>，只运行到期的检索式。</li>
+          <li>助手不到一分钟读完 12 篇新文献，逐篇看过两篇「相关」后，在「确认建议」页一次写入。</li>
+          <li>同一个库在终端里用 <code>wisp</code> 查、在外部客户端里用 <code>wisp mcp --read-only</code> 读；收录判断始终在窗口里由你做。</li>
+          <li>新文献进来之后，回到<a href="ask.html">向整个文献库提问</a>或<a href="extract.html">把一批文献读成一张表</a>。</li>
+        </ul>
+      </section>
+    </article>
+  </div>
+
+  <nav class="pager" aria-label="上一篇和下一篇">
+    <a class="prev" href="revise.html"><small>上一篇 · 08</small><strong>和合作者改稿</strong></a>
+    <a class="next" href="index.html"><small>回到</small><strong>全部教程</strong></a>
+  </nav>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-in">
+    <div class="refs">
+      <h2>参考</h2>
+      <ol>
+        <li><a href="index.html">全部教程</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/FEATURES.md">功能详解：每个页面能做什么</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/DATA.md">数据与隐私：文件放在哪里，哪些数据会离开本机</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/issues">问题与想法：Issues</a></li>
+      </ol>
+    </div>
+    <div class="colophon">
+      <p><b>关于这篇教程</b>　截图和数字来自 2026 年 11 月在 macOS 上用 v0.10.0 的一次实际操作。模型每次的回答不一样，你照做时措辞和数字会有出入，步骤是一样的。</p>
+      <p><b>助手可能出错</b>　它的建议和回答都要你确认；关键的数字和结论请对照原文。</p>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

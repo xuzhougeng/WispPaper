@@ -20,7 +20,7 @@
   <a href="https://xuzhougeng.github.io/WispPaper/"><b>主页</b></a> ·
   <a href="#安装"><b>安装</b></a> ·
   <a href="#功能">功能</a> ·
-  <a href="docs/TUTORIAL.md">教程</a> ·
+  <a href="https://xuzhougeng.github.io/WispPaper/tutorials/">教程</a> ·
   <a href="docs/ZOTERO.md">Zotero 导入</a> ·
   <a href="docs/CLI.md">命令行与 MCP</a> ·
   <a href="docs/DATA.md">数据与隐私</a> ·
@@ -32,7 +32,7 @@
 </p>
 
 > [!NOTE]
-> Wisp Paper 还在早期，变化很快。支持中文和英文界面，在「设置 › 通用 › 界面语言」中切换（Settings › General › Interface language），立即生效并自动保存。第一次用，可以跟着[教程](docs/TUTORIAL.md)从零建一个文献库。遇到问题或有想法，欢迎[提 issue](https://github.com/xuzhougeng/WispPaper/issues)，更欢迎直接发 pull request。
+> Wisp Paper 还在早期，变化很快。支持中文和英文界面，在「设置 › 通用 › 界面语言」中切换（Settings › General › Interface language），立即生效并自动保存。第一次用，可以跟着[教程](https://xuzhougeng.github.io/WispPaper/tutorials/)从零建一个文献库；之后的几篇各讲一个科研场景：精读、提问、提取、写综述、写论文、改稿。遇到问题或有想法，欢迎[提 issue](https://github.com/xuzhougeng/WispPaper/issues)，更欢迎直接发 pull request。
 
 ## 为什么是 Wisp Paper
 
@@ -99,7 +99,8 @@ WISP_PAPER_HOME=/tmp/wisp-demo cargo run
 
 | | |
 |---|---|
-| [教程](docs/TUTORIAL.md) | 从零建一个「植物单细胞转录组」文献库的完整记录，带截图 |
+| [教程](https://xuzhougeng.github.io/WispPaper/tutorials/) | 九篇按科研场景写的教程，带截图：建库、迁移、精读、提问、提取、写综述、写论文、改稿、跟进新文献 |
+| [建库案例](docs/TUTORIAL.md) | 从零建一个「植物单细胞转录组」文献库的原始记录（v0.2.0） |
 | [功能详解](docs/FEATURES.md) | 每个页面能做什么 |
 | [数据与隐私](docs/DATA.md) | 文件放在哪里，哪些数据会离开本机 |
 | [命令行与 MCP](docs/CLI.md) | `wisp` 的用法、工具一览、MCP 配置 |

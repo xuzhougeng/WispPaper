@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>把已有的文献搬进来 · Wisp Paper 教程</title>
+<meta name="description" content="把 Zotero 里的记录、攒了几年的 PDF 文件夹、导师发来的 .bib 和几个 DOI 搬进同一个文献库，再补齐没认出的题录，找回缺的全文。全程不需要模型。">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F5F4F1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1A1B1D" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="../app-icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../app-icon.png">
+<link rel="stylesheet" href="../style.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body class="doc">
+<a class="skip" href="#main">跳到正文</a>
+
+<header class="top">
+  <div class="wrap top-in">
+    <a class="brand" href="../index.html" aria-label="Wisp Paper"><img src="../app-icon.svg" width="26" height="26" alt=""><span>Wisp Paper</span></a>
+    <nav aria-label="站点">
+      <a href="index.html" aria-current="page">教程</a>
+      <a href="../index.html#ideas">理念</a>
+      <a href="../index.html#tools">工具</a>
+      <a href="../index.html#download">下载</a>
+    </nav>
+    <a class="gh" href="https://github.com/xuzhougeng/WispPaper">GitHub<span aria-hidden="true"> ↗</span></a>
+  </div>
+</header>
+
+<main id="main" class="wrap doc-wrap">
+  <nav class="crumbs" aria-label="位置"><a href="index.html">教程</a><span>›</span>收集</nav>
+
+  <header class="doc-head">
+    <p class="kicker">教程 02　·　收集</p>
+    <h1>把已有的文献搬进来：Zotero、PDF 与题录</h1>
+    <p class="lead">换工具时最怕的是东西散在几处：一部分在 Zotero 里，一部分是这几年随手存下的 PDF，还有导师发来的 .bib 和报告上记下的几个 DOI。这一篇把它们搬进同一个文献库，重复的只留一份，再把没认出来的题录补齐，把缺的全文找回来。</p>
+    <dl class="facts">
+      <div><dt>场景</dt><dd>课题已经做了一阵，文献散在 Zotero、一个按物种分了子文件夹的 PDF 文件夹、一份 .bib 和几个 DOI 里。</dd></div>
+      <div><dt>需要</dt><dd>一个文献库（可以是空的）和能上网的电脑。不需要模型：这一篇的每一步都不经过模型服务。</dd></div>
+      <div><dt>用时</dt><dd>约 10 分钟，其中查询数据库和下载全文要等几分钟。</dd></div>
+    </dl>
+  </header>
+
+  <div class="doc-cols">
+    <nav class="toc" aria-label="本篇的小节">
+      <h2>本篇</h2>
+      <ol>
+        <li><a href="#s1">添加文献的几个入口</a></li>
+        <li><a href="#s2">从 Zotero 搬过来</a></li>
+        <li><a href="#s3">导入整个 PDF 文件夹</a></li>
+        <li><a href="#s4">导师的 .bib 和报告里的 DOI</a></li>
+        <li><a href="#s5">按题目补全没认出的 PDF</a></li>
+        <li><a href="#s6">找回缺的全文</a></li>
+        <li class="plain"><a href="#recap">回顾</a></li>
+      </ol>
+    </nav>
+
+    <article class="prose">
+      <section id="s1">
+        <h2><i>1</i>添加文献的几个入口</h2>
+        <p>本例从一个空的文献库「植物单细胞转录组」开始。所有入口都在左上角的「添加文献」里：</p>
+
+        <figure class="shot">
+          <img src="../img/t/migrate-01-add-menu.jpg" width="1372" height="867" loading="lazy" alt="空文献库的主页，左上角「添加文献」展开的菜单有六项：通过 DOI / PMID 添加、导入 PDF 文件、导入文件夹、导入 BibTeX / RIS、从 Zotero 导入、手动录入。">
+          <figcaption><b>图 1</b>　「添加文献」菜单。中间的空白处也写着：PDF 和整个文件夹可以直接拖进窗口。</figcaption>
+        </figure>
+
+        <ul>
+          <li>「通过 DOI / PMID 添加…」：一次一篇，快捷键 <kbd>⌘</kbd> + <kbd>N</kbd>（Windows 上是 <kbd>Ctrl</kbd> + <kbd>N</kbd>）。</li>
+          <li>「导入 PDF 文件…」「导入文件夹…」：读出文字，在前两页找 DOI 再查题录；文件夹里子文件夹的名字成为标签。</li>
+          <li>「导入 BibTeX / RIS…」：只有记录，不带 PDF。</li>
+          <li>「从 Zotero 导入…」：读本机 Zotero 的数据库，记录、标签、笔记和 PDF 一起带过来。</li>
+        </ul>
+
+        <p>搬几次都不会出现两份。每篇文献进来时先按 DOI 找，再按 PMID，最后按题目；已经在库里的，记录不动。回收站里的文献也算已有的：删掉的那篇不会因为再导入一次就回来。</p>
+      </section>
+
+      <section id="s2">
+        <h2><i>2</i>从 Zotero 搬过来</h2>
+        <p>先搬 Zotero，因为那里的记录最完整，标签和笔记也在那里。</p>
+        <ol>
+          <li>在 Zotero 里等同步完成，把要带走的 PDF 打开一次，确认已经下载到本机，然后<strong>退出 Zotero</strong>。只关窗口，它可能还在后台占着数据库。</li>
+          <li>在 Wisp Paper 里点「添加文献 › 从 Zotero 导入…」，读一遍说明，点「选择 zotero.sqlite…」，选 Zotero 数据目录里的 <code>zotero.sqlite</code>。数据目录在 Zotero 的「设置 › 高级 › 文件和文件夹」里能打开。</li>
+        </ol>
+        <p>导入用只读方式打开 Zotero 的数据库，PDF 是复制过来的，原文件不动，这一步也不联网。本例的 Zotero 库很小，6 篇，几秒钟就完成了：</p>
+
+        <figure class="shot">
+          <img src="../img/t/migrate-02-zotero-report.jpg" width="1372" height="867" loading="lazy" alt="「Zotero 导入」结果窗口：6 / 6 项已处理，导入完成；新增 6 篇，新增 PDF 4 个，待处理 1 项；其中一篇下面写着找不到 PDF，请先在 Zotero 中下载或修复路径。左侧标签栏出现精读、Zotero/拟南芥、Zotero/方法/注释等标签。">
+          <figcaption><b>图 2</b>　Zotero 导入的结果。黄色的一行是还要处理的：那篇的记录进来了，PDF 没找到。左侧多了一串 <code>Zotero/…</code> 标签。</figcaption>
+        </figure>
+
+        <p>这一次的结果是「新增 6 篇 · 已有 0 篇 · 回收站 0 篇 · 失败 0 篇 · 新增 PDF 4 个 · 待处理 1 项」，另有 1 个网页快照没有迁移。看左侧的标签：Zotero 里的标签原样带来（「精读」「数据库」），分类变成了 <code>Zotero/方法/注释</code> 这样带路径的标签，点一下就能筛出那个分类。挂在文献下的笔记合进了文献的笔记，Extra 里的 PMID 也认了出来。</p>
+        <p>待处理的那一项是 Multiome 那篇：Zotero 里有附件记录，文件却从没下载过。记录照样进来了，全文留到第 6 步去找。</p>
+        <p>迁移范围、常见报错（比如「数据库正在被占用」）和只搬一部分的办法，见 <a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/ZOTERO.md">从 Zotero 导入文献</a>。</p>
+        <aside class="note"><b>提示</b>Zotero 里有一篇讲背根神经节的文献是当年误存的，和植物无关。在详情里点「移到回收站」。下一步的文件夹里也有它的 PDF，等会儿看它会怎样。</aside>
+      </section>
+
+      <section id="s3">
+        <h2><i>3</i>导入整个 PDF 文件夹</h2>
+        <p>攒了几年的 PDF 放在一个叫「历年 PDF」的文件夹里，按物种分了「水稻」「拟南芥」「方法」三个子文件夹，一共 11 个文件。有的文件名是作者加年份，有的是 <code>scan_0032.pdf</code> 这种看不出是什么的。</p>
+        <p>点「添加文献 › 导入文件夹…」选这个文件夹，或者直接把它拖进窗口。导入在后台进行，侧栏下方多出一块进度「导入 PDF 2/11」，下面是一条分段的进度条，换到别的页面也在。每个文件要读文字、找 DOI、再查一次题录，11 个文件不到一分钟读完，进度块变成「PDF 导入完成 11/11」。点它打开明细：</p>
+
+        <figure class="shot">
+          <img src="../img/t/migrate-03-pdf-report.jpg" width="1372" height="867" loading="lazy" alt="「PDF 导入」明细窗口：11 / 11 项已处理，导入完成；已导入 9、待完善 1、已跳过 1；新增 9、附到已有文献 1、在回收站里未导入 1。逐个文件列出结果：scan_0032.pdf 已添加但没认出 DOI，DRG_scRNA.pdf 的文献在回收站里没有导入，其余为已添加。左下角侧栏是「PDF 导入完成 11/11」。">
+          <figcaption><b>图 3</b>　导入明细。黄字是要你再看一眼的：一个没认出 DOI，一个对应回收站里的文献。点一行打开那篇文献。</figcaption>
+        </figure>
+
+        <ul>
+          <li><strong>新增 9</strong>：认出 DOI 的 8 篇带着完整题录进来，<code>scan_0032.pdf</code> 没认出，以文件名建了条目。</li>
+          <li><strong>附到已有文献 1</strong>：水稻叶鞘那篇在 Zotero 里已经有了，PDF 是同一个文件，没有再存一份；原记录多了一个「水稻」标签。</li>
+          <li><strong>在回收站里、未导入 1</strong>：就是刚才移到回收站的那篇，它没有回来。</li>
+        </ul>
+        <p>左侧的标签栏多了「拟南芥」「方法」「水稻」，各 3 篇。不在任何子文件夹里的 PDF 不加标签。</p>
+      </section>
+
+      <section id="s4">
+        <h2><i>4</i>导师的 .bib 和报告里的 DOI</h2>
+        <p>导师发来的 <code>导师推荐.bib</code> 有 6 条。点「添加文献 › 导入 BibTeX / RIS…」选中它，也可以拖进窗口。窗口顶部提示「导入 5 篇，跳过 1 篇已有的。」：跳过的是 NRTPredictor，Zotero 里已经有了。从 .bib 来的只有记录，全文一栏是「有链接」。</p>
+        <p>报告上记下的两篇，一篇有 DOI，一篇只记了 PMID。点「添加文献 › 通过 DOI / PMID 添加…」，粘贴进去：</p>
+
+        <figure class="shot">
+          <img src="../img/t/migrate-04-doi.jpg" width="1372" height="867" loading="lazy" alt="「通过 DOI / PMID 添加」对话框，输入框里是 10.3389/fpls.2025.1666531，下面说明题目、作者、期刊、年份和摘要会从 Crossref 与 Europe PMC 查询后填入，查询会把这个编号发送给这两个服务。">
+          <figcaption><b>图 4</b>　一次添加一篇。对话框写明了会把编号发给 Crossref 和 Europe PMC。</figcaption>
+        </figure>
+
+        <p>点「查询并添加」，几秒后玉米根的那篇进来，题目、作者、期刊、摘要都填好了。再打开一次，填 PMID <code>42021342</code>，进来的是芦苇入侵那篇（Genome Biology，2026）。也可以粘贴 doi.org 的链接。到这里库里有 21 篇，「缺 PDF」视图里有 9 篇。</p>
+      </section>
+
+      <section id="s5">
+        <h2><i>5</i>按题目补全没认出的 PDF</h2>
+        <p>列表的「全文」一栏有四种状态：「无全文」，「有链接」（有 DOI 或网址，没有文件），「已存 PDF」，以及「PDF 无文字」（存了文件，但没读出文字，暂时不能拿来提问）。点表头上方的「全文」筛选可以只看其中一种。</p>
+        <p>现在要处理的是 <code>scan_0032</code>：它是「已存 PDF」，题目却还是文件名，作者和年份待补。在 PDF 标签里翻一下就明白为什么没认出：这个文件是某篇文章的补充材料，第一页是「Supp. Figure 1」，没有题目也没有 DOI。看图注认得出，它是那篇拟南芥叶肉干旱响应的单细胞研究的补充材料。</p>
+        <ol>
+          <li>在详情里点「按题目补全」。</li>
+          <li>题目还是文件名，不会拿它去查，所以框是空的。写上题目（这里输入了 Dual and spatially resolved drought responses in the Arabidopsis leaf mesophyll revealed by single cell transcriptomics），作者和年份可以不填。</li>
+          <li>点「查找」。</li>
+        </ol>
+
+        <figure class="shot">
+          <img src="../img/t/migrate-05-complete-candidates.jpg" width="1372" height="867" loading="lazy" alt="「按题目补全」对话框：题目框里是输入的题目；下面写着 Crossref 5 条、Europe PMC 2 条、arXiv 没有查到；两条候选，一条是 2024 年的预印本（DOI 10.1101/2024.08.30.610433），一条是 2025 年 New Phytologist 的正式发表版本（DOI 10.1111/nph.20446），都标着「题目一致」。">
+          <figcaption><b>图 5</b>　每个来源各查到几条写在上面。同一题目的预印本和正式发表版本是两条候选，选哪条由你决定。</figcaption>
+        </figure>
+
+        <p>这一次 Crossref 查到 5 条，Europe PMC 2 条，arXiv 没有查到，合并成两条候选：2024 年的预印本和 2025 年 New Phytologist 上的正式版本，都标着「题目一致」。排在前面只说明题目更像。本例选了正式发表的版本，点它逐个字段核对：</p>
+
+        <figure class="shot">
+          <img src="../img/t/migrate-06-complete-fields.jpg" width="1372" height="867" loading="lazy" alt="「按题目补全 · 核对这条记录」：候选的出处是 Crossref、Europe PMC；下面逐个字段列出题目、作者、年份、期刊、发表状态、DOI、PMID、摘要，每个字段旁有勾选框和「现在」的内容，题目现在是 scan_0032（文件名），其余现在空着，全部已勾选；右下角按钮是「写入 8 个字段」。">
+          <figcaption><b>图 6</b>　每个字段下面写着「现在」是什么。默认只勾空着的字段和只是文件名的题目；已有的内容要你勾上才会被替换。</figcaption>
+        </figure>
+
+        <p>8 个字段都是空的或只是文件名，默认全勾上。点「写入 8 个字段」，提示「已补全」，这一行有了题目、作者和年份。</p>
+        <aside class="note warn"><b>注意</b>查找时发出去的只有题目、作者和年份，不上传 PDF，也不经过模型。题目相近不等于同一篇：拿不准时点「打开网页」对照。候选已是库里另一篇文献时，它不能写进这一篇。实在查不到，用「编辑信息与词条」手填，一篇文献可以一直没有 DOI。</aside>
+      </section>
+
+      <section id="s6">
+        <h2><i>6</i>找回缺的全文</h2>
+        <p>从 .bib、DOI 和 Zotero 来的记录里，有 9 篇没有 PDF。点左侧的「缺 PDF」把它们列出来：</p>
+
+        <figure class="shot">
+          <img src="../img/t/migrate-07-nopdf.jpg" width="1372" height="867" loading="lazy" alt="「缺 PDF」视图，列出 9 篇全文为「有链接」的文献；列表上方一条绿色说明：可以替你找开放获取的全文，要付费或登录的不会去取，查找时会把 DOI 或 PMID 发给 OpenAlex、Europe PMC 和出版商；右边按钮「为 9 篇查找开放全文」。">
+          <figcaption><b>图 7</b>　「缺 PDF」视图顶部的说明写明了会发出什么、发给谁。</figcaption>
+        </figure>
+
+        <p>它只找能免费合法取得的版本：arXiv，OpenAlex 和 Europe PMC 列出的开放获取文件，以及被它们标为开放获取的 Springer / BMC、Nature、Frontiers 文章在出版商那里的 PDF。不登录，不绕过付费墙。没有 DOI、PMID 或 arXiv 编号的文献查不了。</p>
+        <p>点「为 9 篇查找开放全文」。侧栏下方又出现一块进度「查找全文」，进度条按颜色分段：绿色已保存，黄色未找到地址，红色下载失败，蓝色正在查找，灰色等待中。点它打开「全文查找」，看正在查哪几篇、每篇的结果和原因；查的过程中可以「停止查找」，也可以「收起」去做别的。这一次不到一分钟查完：</p>
+
+        <figure class="shot">
+          <img src="../img/t/migrate-08-fetch-report.jpg" width="1372" height="867" loading="lazy" alt="「全文查找」窗口：9 / 9 篇已处理，查找完成；已保存 2，下载失败 7；逐篇列出原因，例如 GreenCells 和 Multiome 两篇是 OpenAlex 给的地址返回的不是 PDF，多半是登录页或验证页，茶树表皮毛那篇是 academic.oup.com 返回 HTTP 403。背后的「缺 PDF」只剩 7 篇。">
+          <figcaption><b>图 8</b>　9 篇里保存了 2 篇，另外 7 篇找到了地址，出版商却不给程序下载。每篇下面写着原因。</figcaption>
+        </figure>
+
+        <p>保存下来的是芦苇那篇（来自 Springer）和玉米根那篇（来自 Frontiers），PDF 附到了原来的条目上，文字也读了出来。另外 7 篇都是开放获取的文章，地址也找到了，但 MDPI 和牛津大学出版社返回 HTTP 403，其余几家返回的是登录页或验证页，没有被当成 PDF 存下来。「缺 PDF」里还剩 7 篇。</p>
+        <p>剩下的这几篇，在详情里点「打开网页」，用浏览器下载 PDF，再把文件拖进 Wisp Paper 的窗口。它会读出 DOI，认出库里已有这篇，把 PDF 附到原条目上，明细里写「文献库里已有这篇，PDF 附到了原条目」，不会多出一条记录。单篇文献的「PDF」标签里也有「查找开放全文」和「添加 PDF」两个按钮。</p>
+        <aside class="note"><b>提示</b>下载失败不代表这篇没有开放全文，只是这次没能替你取到。过一阵可以在「缺 PDF」里再点一次，按钮只替还没有 PDF 的文献去找。</aside>
+      </section>
+
+      <section id="recap" class="recap">
+        <h2>回顾</h2>
+        <ul>
+          <li>从 Zotero 带来 6 篇的记录、标签、分类、笔记和 4 个 PDF；Zotero 本身没有被改动。</li>
+          <li>导入一个 11 个 PDF 的文件夹，子文件夹成了标签；重复的附到原条目，回收站里的没有回来。</li>
+          <li>.bib 进来 5 篇、跳过 1 篇已有的；DOI 和 PMID 各添加一篇。</li>
+          <li>没认出 DOI 的补充材料，按题目补全成了 New Phytologist 上的正式版本；9 篇缺全文的找回 2 篇，其余的原因写在明细里。</li>
+          <li>整个过程没有用到模型。接下来可以<a href="read.html">精读其中一篇</a>，或者回到<a href="start.html">从一个课题开始</a>，用检索把库补全。</li>
+        </ul>
+      </section>
+    </article>
+  </div>
+
+  <nav class="pager" aria-label="上一篇和下一篇">
+    <a class="prev" href="start.html"><small>上一篇 · 01</small><strong>从一个课题开始</strong></a>
+    <a class="next" href="read.html"><small>下一篇 · 03</small><strong>精读一篇文献</strong></a>
+  </nav>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-in">
+    <div class="refs">
+      <h2>参考</h2>
+      <ol>
+        <li><a href="index.html">全部教程</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/FEATURES.md">功能详解：每个页面能做什么</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/DATA.md">数据与隐私：文件放在哪里，哪些数据会离开本机</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/issues">问题与想法：Issues</a></li>
+      </ol>
+    </div>
+    <div class="colophon">
+      <p><b>关于这篇教程</b>　截图和数字来自 2026 年 11 月在 macOS 上用 v0.10.0 的一次实际操作。模型每次的回答不一样，你照做时措辞和数字会有出入，步骤是一样的。</p>
+      <p><b>助手可能出错</b>　它的建议和回答都要你确认；关键的数字和结论请对照原文。</p>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

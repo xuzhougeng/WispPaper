@@ -1,0 +1,139 @@
+<!doctype html>
+<!-- The skeleton of a tutorial. Copy it to <slug>.html and fill it in; build.sh
+     leaves files that start with "_" out of the site. Every element a tutorial
+     may use is shown here once: use these, and add no styles or scripts. -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>教程的题目 · Wisp Paper 教程</title>
+<meta name="description" content="一两句话：这篇教程带读者做成什么。">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F5F4F1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1A1B1D" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="../app-icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../app-icon.png">
+<link rel="stylesheet" href="../style.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body class="doc">
+<a class="skip" href="#main">跳到正文</a>
+
+<header class="top">
+  <div class="wrap top-in">
+    <a class="brand" href="../index.html" aria-label="Wisp Paper"><img src="../app-icon.svg" width="26" height="26" alt=""><span>Wisp Paper</span></a>
+    <nav aria-label="站点">
+      <a href="index.html" aria-current="page">教程</a>
+      <a href="../index.html#ideas">理念</a>
+      <a href="../index.html#tools">工具</a>
+      <a href="../index.html#download">下载</a>
+    </nav>
+    <a class="gh" href="https://github.com/xuzhougeng/WispPaper">GitHub<span aria-hidden="true"> ↗</span></a>
+  </div>
+</header>
+
+<main id="main" class="wrap doc-wrap">
+  <nav class="crumbs" aria-label="位置"><a href="index.html">教程</a><span>›</span>阅读</nav>
+
+  <header class="doc-head">
+    <p class="kicker">教程 03　·　阅读</p>
+    <h1>教程的题目</h1>
+    <p class="lead">导语，两三句：谁在什么时候会遇到这件事，读完能做成什么。</p>
+    <dl class="facts">
+      <div><dt>场景</dt><dd>一句话的研究场景。</dd></div>
+      <div><dt>需要</dt><dd>要先有什么：一个文献库、几篇带 PDF 的文献、一个模型服务。</dd></div>
+      <div><dt>用时</dt><dd>约 10 分钟。</dd></div>
+    </dl>
+  </header>
+
+  <div class="doc-cols">
+    <nav class="toc" aria-label="本篇的小节">
+      <h2>本篇</h2>
+      <ol>
+        <li><a href="#s1">第一步的名字</a></li>
+        <li><a href="#s2">第二步的名字</a></li>
+        <li class="plain"><a href="#recap">回顾</a></li>
+      </ol>
+    </nav>
+
+    <article class="prose">
+      <section id="s1">
+        <h2><i>1</i>第一步的名字</h2>
+        <p>正文。界面上的字用直角引号：点「设置」，进入「AI」。按键写成 <kbd>⌘</kbd> + <kbd>K</kbd>，Windows 上是 <kbd>Ctrl</kbd> + <kbd>K</kbd>。命令和文件名写成 <code>wisp mcp</code>。</p>
+
+        <figure class="shot">
+          <img src="../img/t/slug-01-name.jpg" width="1372" height="870" loading="lazy" alt="不看图的人也能明白的一句描述。">
+          <figcaption><b>图 1</b>　图注：这张图里要看的是什么。</figcaption>
+        </figure>
+
+        <p>读者照着输入的文字、助手原样说的话，放在引用块里：</p>
+        <blockquote><cite>提问</cite><p>这几篇文献各用了哪种制样方法？</p></blockquote>
+
+        <ul>
+          <li>不分先后的几件事。</li>
+          <li>第二件。</li>
+        </ul>
+        <ol>
+          <li>有先后的几步。</li>
+          <li>第二步。</li>
+        </ol>
+
+        <aside class="note"><b>提示</b>顺手可以知道的事。</aside>
+        <aside class="note warn"><b>注意</b>不知道就会出错、或者会把内容发出本机的事。</aside>
+
+        <h3>一个小节</h3>
+        <div class="scroll">
+          <table>
+            <caption><b>表 1</b>　表的说明。</caption>
+            <thead><tr><th>列</th><th>列</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">行名</th><td>内容</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <figure class="code">
+          <figcaption>命令行</figcaption>
+<pre><code><span class="p">$</span> wisp list_libraries   <span class="c"># 注释</span></code></pre>
+        </figure>
+      </section>
+
+      <section id="s2">
+        <h2><i>2</i>第二步的名字</h2>
+        <p>…</p>
+      </section>
+
+      <section id="recap" class="recap">
+        <h2>回顾</h2>
+        <ul>
+          <li>这一篇做成了什么，三到五条。</li>
+        </ul>
+      </section>
+    </article>
+  </div>
+
+  <nav class="pager" aria-label="上一篇和下一篇">
+    <a class="prev" href="migrate.html"><small>上一篇 · 02</small><strong>把已有的文献搬进来</strong></a>
+    <a class="next" href="ask.html"><small>下一篇 · 04</small><strong>向文献库提问，并核对回答</strong></a>
+  </nav>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-in">
+    <div class="refs">
+      <h2>参考</h2>
+      <ol>
+        <li><a href="index.html">全部教程</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/FEATURES.md">功能详解：每个页面能做什么</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/DATA.md">数据与隐私：文件放在哪里，哪些数据会离开本机</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/issues">问题与想法：Issues</a></li>
+      </ol>
+    </div>
+    <div class="colophon">
+      <p><b>关于这篇教程</b>　截图和数字来自 2026 年 11 月在 macOS 上用 v0.10.0 的一次实际操作。模型每次的回答不一样，你照做时措辞和数字会有出入，步骤是一样的。</p>
+      <p><b>助手可能出错</b>　它的建议和回答都要你确认；关键的数字和结论请对照原文。</p>
+    </div>
+  </div>
+</footer>
+</body>
+</html>
