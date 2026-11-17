@@ -4,7 +4,7 @@
 
 use crate::i18n::t;
 use crate::input::{InputEvent, TextInput};
-use crate::pdf::{PdfEvent, PdfView, Zoom, ZoomTo};
+use crate::pdf::{PdfEvent, PdfView, Split, Zoom, ZoomTo};
 use crate::settings::{AiTab, SettingsPage, SettingsView, UpdateState};
 use crate::shortcuts::{self, Dismiss};
 use crate::theme;
@@ -191,6 +191,8 @@ pub enum MenuKind {
     ModelEffort(usize),
     /// How large the PDF's pages are drawn.
     PdfZoom,
+    /// Whether the PDF is shown twice, side by side or one over the other.
+    PdfSplit,
     /// 写作: the library's manuscripts, one section's own, export, and the language.
     Manuscripts,
     Section(String),
@@ -403,6 +405,8 @@ pub enum Cmd {
     ToggleSidebar,
     /// Draw the pages of the PDF on show larger, smaller, or at a given size.
     PdfZoom(ZoomTo),
+    /// Show the PDF on show twice, each half scrolled on its own, or once again.
+    PdfSplit(Split),
     /// Cut a piece out of a page as a picture for a question, or stop doing so.
     PdfCut,
     /// Show the paper's PDF to the right of its conversation, or put it away.
@@ -1980,6 +1984,12 @@ impl Workspace {
                     items.push(MenuItem { label: label.into(), checked: current == zoom, note, cmd: Cmd::PdfZoom(ZoomTo::Set(zoom)) });
                 }
             }
+            MenuKind::PdfSplit => {
+                let Some(current) = self.lib.as_ref().and_then(|lib| lib.pdf.as_ref()).map(|pdf| pdf.read(cx).split()) else { return };
+                for (label, split) in [("不分屏", Split::Off), ("左右分屏", Split::Side), ("上下分屏", Split::Stacked)] {
+                    items.push(MenuItem { label: t(label).into(), checked: current == split, note: None, cmd: Cmd::PdfSplit(split) });
+                }
+            }
             MenuKind::Columns => {
                 let Some(lib) = &self.lib else { return };
                 for (key, name) in crate::library::COLUMNS {
@@ -2574,6 +2584,10 @@ impl Workspace {
             }
             Cmd::PdfCut => {
                 if let Some(pdf) = self.lib.as_ref().and_then(|lib| lib.pdf.clone()) { pdf.update(cx, |pdf, cx| pdf.toggle_cutting(cx)) }
+            }
+            Cmd::PdfSplit(split) => {
+                // It is for this paper: the next one opens whole.
+                if let Some(pdf) = self.lib.as_ref().and_then(|lib| lib.pdf.clone()) { pdf.update(cx, |pdf, cx| pdf.set_split(split, cx)) }
             }
             Cmd::BesidePdf(show) => {
                 // Beside the conversation the window is laid out for the two (`asking`); put away, the library is back around it.
@@ -5856,6 +5870,12 @@ impl Workspace {
                 // `float` / `float:off`: the paper's conversation over its PDF, or beside it; `fold` / `fold:off` folds it up or opens it.
                 "float" => Some(Cmd::FloatChat(arg != "off")),
                 "fold" => Some(Cmd::FoldChat(arg != "off")),
+                // `pdfsplit:side`, `pdfsplit:stacked`, `pdfsplit:off`: the PDF on show twice, or once again.
+                "pdfsplit" => Some(Cmd::PdfSplit(match arg {
+                    "side" => Split::Side,
+                    "stacked" => Split::Stacked,
+                    _ => Split::Off,
+                })),
                 // `zoom:150`, `zoom:page`, `zoom:width`, `zoom:in`, `zoom:out`
                 "zoom" => Some(Cmd::PdfZoom(match arg {
                     "in" => ZoomTo::In,
@@ -5881,7 +5901,7 @@ impl Workspace {
                     return;
                 }
                 "menu" => {
-                    let kind = match arg { "sort" => MenuKind::Sort, "columns" => MenuKind::Columns, "year" => MenuKind::Filter(FilterKey::Year), "zoom" => MenuKind::PdfZoom, "fulltext" => MenuKind::Filter(FilterKey::Fulltext), "manuscripts" => MenuKind::Manuscripts, "export" => MenuKind::ManuscriptExport, "retry" => MenuKind::ExtractRetry, _ => MenuKind::Add };
+                    let kind = match arg { "sort" => MenuKind::Sort, "columns" => MenuKind::Columns, "year" => MenuKind::Filter(FilterKey::Year), "zoom" => MenuKind::PdfZoom, "pdfsplit" => MenuKind::PdfSplit, "fulltext" => MenuKind::Filter(FilterKey::Fulltext), "manuscripts" => MenuKind::Manuscripts, "export" => MenuKind::ManuscriptExport, "retry" => MenuKind::ExtractRetry, _ => MenuKind::Add };
                     self.open_menu(kind, point(px(if matches!(arg, "zoom" | "manuscripts" | "export" | "retry") { 900. } else { 20. }), px(120.)), cx);
                     return;
                 }

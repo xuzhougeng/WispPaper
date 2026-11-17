@@ -169,6 +169,53 @@ impl Zoom {
     }
 }
 
+/// Whether the file is shown twice, each half scrolled on its own: a figure
+/// in one, the page that speaks of it in the other.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Split {
+    #[default]
+    Off,
+    /// Two halves side by side.
+    Side,
+    /// One half over the other.
+    Stacked,
+}
+
+/// The band between the two halves, in logical pixels: wide enough to tell a page that both halves show from one page.
+const DIVIDER: f32 = 4.;
+
+/// The size of a half of a viewer of this size; all of it while it is not split.
+fn pane_size(split: Split, view: (f32, f32)) -> (f32, f32) {
+    match split {
+        Split::Off => view,
+        Split::Side => (((view.0 - DIVIDER) / 2.).max(0.), view.1),
+        Split::Stacked => (view.0, ((view.1 - DIVIDER) / 2.).max(0.)),
+    }
+}
+
+/// The half of a split viewer a point of it is in, the point given from the viewer's top left corner.
+fn pane_at(split: Split, view: (f32, f32), at: (f32, f32)) -> usize {
+    let half = pane_size(split, view);
+    match split {
+        Split::Off => 0,
+        Split::Side => (at.0 >= half.0 + DIVIDER) as usize,
+        Split::Stacked => (at.1 >= half.1 + DIVIDER) as usize,
+    }
+}
+
+/// One view of the pages: where it is scrolled to.
+struct Pane {
+    list: ListState,
+    /// How far the pages are moved to the left, when they are wider than the view.
+    scroll_x: f32,
+}
+
+impl Pane {
+    fn new() -> Self {
+        Pane { list: ListState::new(0, ListAlignment::Top, px(600.)), scroll_x: 0. }
+    }
+}
+
 /// A change of zoom asked for from the toolbar, the menu or the keyboard.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ZoomTo {
@@ -468,7 +515,13 @@ pub struct PdfView {
     /// Most recently shown last.
     recent: VecDeque<usize>,
     pending: HashSet<usize>,
-    list: ListState,
+    /// The views of the pages: the second is on show only while the viewer is split.
+    panes: [Pane; 2],
+    split: Split,
+    /// The half the pointer last worked in: the one the page number, the keys and a citation speak of.
+    active: usize,
+    /// The half the selection, the piece cut out or the highlight clicked was made in: what is offered for it stands there.
+    held: usize,
     requests: mpsc::Sender<Request>,
     citation: CitationFocus,
     error: Option<String>,
@@ -476,9 +529,7 @@ pub struct PdfView {
     width: f32,
     height: f32,
     zoom: Zoom,
-    /// How far the pages are moved to the left, when they are wider than the viewer.
-    scroll_x: f32,
-    /// How far they can be.
+    /// How far the pages can be moved to the left, when they are wider than the view.
     max_x: f32,
     /// Device pixels per logical pixel of the window the viewer is in.
     device_scale: f32,
@@ -538,13 +589,15 @@ impl PdfView {
             broken: HashSet::new(),
             recent: VecDeque::new(),
             pending: HashSet::new(),
-            list: ListState::new(0, ListAlignment::Top, px(600.)),
+            panes: [Pane::new(), Pane::new()],
+            split: Split::Off,
+            active: 0,
+            held: 0,
             requests,
             error: None,
             width: 0.,
             height: 0.,
             zoom,
-            scroll_x: 0.,
             max_x: 0.,
             device_scale: 2.,
             goto: None,
@@ -593,9 +646,41 @@ impl PdfView {
         cx.emit(PdfEvent::Annotate { paper: self.paper_id.clone(), resource: self.resource_id.clone(), page, kind, quote, boxes });
     }
 
-    /// The page at the top of the view, 1-based.
+    /// The page at the top of the view, 1-based: of a split viewer, the half last worked in.
     pub fn current_page(&self) -> usize {
-        self.list.logical_scroll_top().item_ix + 1
+        self.list().logical_scroll_top().item_ix + 1
+    }
+
+    /// The pages as the half last worked in shows them.
+    fn list(&self) -> &ListState {
+        &self.panes[self.active].list
+    }
+
+    pub fn split(&self) -> Split {
+        self.split
+    }
+
+    /// The size of one view of the pages: the viewer's, or a half of it.
+    fn pane_size(&self) -> (f32, f32) {
+        pane_size(self.split, (self.width, self.height))
+    }
+
+    /// Show the file once, or twice side by side or one over the other. The
+    /// second half starts where the first is; put away, the half last worked
+    /// in is the one that stays.
+    pub fn set_split(&mut self, split: Split, cx: &mut Context<Self>) {
+        if split == self.split { return }
+        let was = self.split;
+        if split == Split::Off && self.active == 1 { self.panes.swap(0, 1) }
+        if split == Split::Off { (self.active, self.held) = (0, 0) }
+        self.resize((0., 0.), |this| this.split = split);
+        if was == Split::Off {
+            let top = self.panes[0].list.logical_scroll_top();
+            self.panes[1].list.reset(self.sizes.len());
+            self.panes[1].list.scroll_to(top);
+            self.panes[1].scroll_x = self.panes[0].scroll_x;
+        }
+        cx.notify();
     }
 
     pub fn zoom(&self) -> Zoom {
@@ -604,7 +689,7 @@ impl PdfView {
 
     /// How large the page in view is drawn, in percent of its own size.
     pub fn percent(&self) -> f32 {
-        self.scale_of(self.list.logical_scroll_top().item_ix) / POINT_PX * 100.
+        self.scale_of(self.list().logical_scroll_top().item_ix) / POINT_PX * 100.
     }
 
     /// Go to a 1-based page and look for a sentence quoted from it; when it
@@ -620,46 +705,53 @@ impl PdfView {
 
     /// How many logical pixels a point of this page takes.
     fn scale_of(&self, index: usize) -> f32 {
-        page_scale(self.zoom, self.sizes.get(index).copied().unwrap_or((595., 842.)), (self.width, self.height))
+        page_scale(self.zoom, self.sizes.get(index).copied().unwrap_or((595., 842.)), self.pane_size())
     }
 
-    /// Where a page's left edge stands in the viewer: in the middle while
-    /// the page fits, else moved by the sideways scroll.
-    fn sheet_left(&self, sheet_width: f32) -> f32 {
-        if sheet_width + 2. * MARGIN <= self.width { (self.width - sheet_width) / 2. } else { MARGIN - self.scroll_x }
+    /// Where a page's left edge stands in its view: in the middle while
+    /// the page fits, else moved by that view's sideways scroll.
+    fn sheet_left(&self, pane: usize, sheet_width: f32) -> f32 {
+        let width = self.pane_size().0;
+        if sheet_width + 2. * MARGIN <= width { (width - sheet_width) / 2. } else { MARGIN - self.panes[pane].scroll_x }
     }
 
     /// Change what decides the size of the pages (the zoom, the viewer's
-    /// size), and keep in view what was: the point `anchor` pixels from the
-    /// viewer's top left corner stays under it.
+    /// size, the split), and keep in view what was: the point `anchor`
+    /// pixels from the top left corner of the half last worked in stays
+    /// under it, and the other half keeps its top.
     fn resize(&mut self, anchor: (f32, f32), change: impl FnOnce(&mut Self)) {
-        let top = self.list.logical_scroll_top();
-        let before = self.scale_of(top.item_ix);
-        let (page_width, page_height) = self.sizes.get(top.item_ix).copied().unwrap_or((595., 842.));
-        let left = self.sheet_left(page_width * before);
+        let before = [0, 1].map(|pane| {
+            let top = self.panes[pane].list.logical_scroll_top();
+            let scale = self.scale_of(top.item_ix);
+            (top, scale, self.sheet_left(pane, self.sizes.get(top.item_ix).map_or(595., |size| size.0) * scale))
+        });
         change(self);
-        let after = self.scale_of(top.item_ix);
         let widest = self.sizes.iter().enumerate().map(|(index, (width, _))| width * self.scale_of(index)).fold(0., f32::max);
-        self.max_x = (widest + 2. * MARGIN - self.width).max(0.);
-        let ratio = after / before.max(0.001);
-        // Sideways: the point of the page under the anchor comes back under it.
-        self.scroll_x = (MARGIN - (anchor.0 - (anchor.0 - left) * ratio)).clamp(0., self.max_x);
-        if (ratio - 1.).abs() < 0.0005 { return }
-        // Page heights follow the scale: measure the list again.
-        let offset = ((f32::from(top.offset_in_item) + anchor.1) * ratio - anchor.1).clamp(0., (page_height * after - 1.).max(0.));
-        self.list.reset(self.sizes.len());
-        self.list.scroll_to(ListOffset { item_ix: top.item_ix, offset_in_item: px(offset) });
+        self.max_x = (widest + 2. * MARGIN - self.pane_size().0).max(0.);
+        for (pane, (top, before, left)) in before.into_iter().enumerate() {
+            let anchor = if pane == self.active { anchor } else { (anchor.0, 0.) };
+            let page_height = self.sizes.get(top.item_ix).map_or(842., |size| size.1);
+            let after = self.scale_of(top.item_ix);
+            let ratio = after / before.max(0.001);
+            // Sideways: the point of the page under the anchor comes back under it.
+            self.panes[pane].scroll_x = (MARGIN - (anchor.0 - (anchor.0 - left) * ratio)).clamp(0., self.max_x);
+            if (ratio - 1.).abs() < 0.0005 { continue }
+            // Page heights follow the scale: measure the list again.
+            let offset = ((f32::from(top.offset_in_item) + anchor.1) * ratio - anchor.1).clamp(0., (page_height * after - 1.).max(0.));
+            self.panes[pane].list.reset(self.sizes.len());
+            self.panes[pane].list.scroll_to(ListOffset { item_ix: top.item_ix, offset_in_item: px(offset) });
+        }
     }
 
-    /// Draw the pages at another size. `anchor` is the point of the viewer
-    /// that stays where it is (the pointer's place); without one, the top.
+    /// Draw the pages at another size. `anchor` is the point of the half
+    /// last worked in that stays where it is (the pointer's place); without one, the top.
     pub fn set_zoom(&mut self, zoom: Zoom, anchor: Option<(f32, f32)>, cx: &mut Context<Self>) {
         let zoom = match zoom {
             Zoom::Percent(percent) => Zoom::Percent(percent.clamp(ZOOM_MIN, ZOOM_MAX)),
             fit => fit,
         };
         if zoom == self.zoom { return }
-        self.resize(anchor.unwrap_or((self.width / 2., 0.)), |this| this.zoom = zoom);
+        self.resize(anchor.unwrap_or((self.pane_size().0 / 2., 0.)), |this| this.zoom = zoom);
         cx.notify();
     }
 
@@ -679,9 +771,22 @@ impl PdfView {
     fn wheel(&mut self, event: &ScrollWheelEvent, bounds: Bounds<Pixels>, cx: &mut Context<Self>) -> bool {
         let delta = event.delta.pixel_delta(px(20.));
         let (dx, dy) = (f32::from(delta.x), f32::from(delta.y));
+        // The half under the pointer is the one worked in from here on.
+        let at = (f32::from(event.position.x - bounds.origin.x), f32::from(event.position.y - bounds.origin.y));
+        let view = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+        let pane = pane_at(self.split, view, at);
+        if pane != self.active {
+            self.active = pane;
+            cx.notify();
+        }
         if event.modifiers.secondary() || event.modifiers.control {
             if dy != 0. {
-                let anchor = (f32::from(event.position.x - bounds.origin.x), f32::from(event.position.y - bounds.origin.y));
+                let half = pane_size(self.split, view);
+                let anchor = match (self.split, pane) {
+                    (Split::Side, 1) => (at.0 - half.0 - DIVIDER, at.1),
+                    (Split::Stacked, 1) => (at.0, at.1 - half.1 - DIVIDER),
+                    _ => at,
+                };
                 self.set_zoom(Zoom::Percent(self.percent() * (dy / 240.).exp()), Some(anchor), cx);
             }
             return true;
@@ -689,7 +794,7 @@ impl PdfView {
         // A wheel that only turns one way moves sideways with Shift held.
         let sideways = if event.modifiers.shift && dx == 0. { dy } else { dx };
         if self.max_x <= 0. || sideways == 0. || (sideways.abs() <= dy.abs() && !event.modifiers.shift) { return false }
-        self.scroll_x = (self.scroll_x - sideways).clamp(0., self.max_x);
+        self.panes[pane].scroll_x = (self.panes[pane].scroll_x - sideways).clamp(0., self.max_x);
         cx.notify();
         true
     }
@@ -704,7 +809,7 @@ impl PdfView {
         if self.sizes.is_empty() {
             self.goto = Some(page);
         } else {
-            self.list.scroll_to(ListOffset { item_ix: page.clamp(1, self.sizes.len()) - 1, offset_in_item: px(0.) });
+            self.list().scroll_to(ListOffset { item_ix: page.clamp(1, self.sizes.len()) - 1, offset_in_item: px(0.) });
         }
         cx.notify();
     }
@@ -714,7 +819,7 @@ impl PdfView {
         self.citation.clear();
         if self.sizes.is_empty() { return self.go_to(page, cx) }
         let index = page.clamp(1, self.sizes.len()) - 1;
-        self.list.scroll_to(ListOffset { item_ix: index, offset_in_item: px((top * self.scale_of(index) - 48.).max(0.)) });
+        self.list().scroll_to(ListOffset { item_ix: index, offset_in_item: px((top * self.scale_of(index) - 48.).max(0.)) });
         cx.notify();
     }
 
@@ -722,7 +827,7 @@ impl PdfView {
         match reply {
             Reply::Opened(sizes) => {
                 self.sizes = sizes;
-                self.list.reset(self.sizes.len());
+                for pane in &self.panes { pane.list.reset(self.sizes.len()) }
                 self.resize((0., 0.), |_| {});
                 if let Some(page) = self.goto.take() { self.scroll_to_page(page, cx) }
             }
@@ -735,8 +840,8 @@ impl PdfView {
                 // Bring the first line of the quotation a little below the top of the view, and into it sideways.
                 if let Some(first) = self.citation.boxes.first() {
                     let scale = self.scale_of(index);
-                    self.list.scroll_to(ListOffset { item_ix: index, offset_in_item: px((first[1] * scale - 80.).max(0.)) });
-                    if self.max_x > 0. { self.scroll_x = (first[0] * scale - 40.).clamp(0., self.max_x) }
+                    self.list().scroll_to(ListOffset { item_ix: index, offset_in_item: px((first[1] * scale - 80.).max(0.)) });
+                    if self.max_x > 0. { self.panes[self.active].scroll_x = (first[0] * scale - 40.).clamp(0., self.max_x) }
                 }
             }
             Reply::NotFound(request) => { self.citation.finish(request, None); }
@@ -757,7 +862,9 @@ impl PdfView {
                         // A page rendered again at another size takes the place of the one it had.
                         if let Some((old, ..)) = self.images.insert(index, (Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])), scale, size)) { cx.drop_image(old, None) }
                         self.touch(index);
-                        while self.recent.len() > KEEP_PAGES || (self.recent.len() > 2 && self.images.values().map(|(.., size)| size).sum::<usize>() > KEEP_BYTES) {
+                        // Two halves show twice the pages.
+                        let keep = if self.split == Split::Off { KEEP_PAGES } else { KEEP_PAGES + 6 };
+                        while self.recent.len() > keep || (self.recent.len() > 2 && self.images.values().map(|(.., size)| size).sum::<usize>() > KEEP_BYTES) {
                             if let Some(old) = self.recent.pop_front() && let Some((image, ..)) = self.images.remove(&old) {
                                 cx.drop_image(image, None);
                             }
@@ -777,7 +884,8 @@ impl PdfView {
         self.recent.push_back(index);
     }
 
-    fn page(&mut self, index: usize) -> AnyElement {
+    /// A page as one of the views draws it. The two share its picture and what is marked on it.
+    fn page(&mut self, pane: usize, index: usize) -> AnyElement {
         let (w, h) = self.sizes.get(index).copied().unwrap_or((595., 842.));
         let scale = self.scale_of(index);
         let (width, height) = (w * scale, h * scale);
@@ -823,7 +931,7 @@ impl PdfView {
             .filter(|_| cited)
             .map(|line| div().absolute().left(px(line[0] * scale - 1.)).top(px(line[1] * scale)).w(px((line[2] - line[0]) * scale + 2.)).h(px((line[3] - line[1]) * scale)).rounded(px(2.)).bg(hsla(50. / 360., 1., 0.5, 0.35)))
             .collect();
-        let sheet = div().relative().flex_none().ml(px(self.sheet_left(width))).w(px(width)).h(px(height)).bg(gpui::white()).border_1().border_color(Theme::line()).overflow_hidden();
+        let sheet = div().relative().flex_none().ml(px(self.sheet_left(pane, width))).w(px(width)).h(px(height)).bg(gpui::white()).border_1().border_color(Theme::line()).overflow_hidden();
         let sheet = match image {
             Some((image, _)) => sheet.when(cutting, |d| d.cursor_crosshair()).when(!cutting, |d| d.cursor_text()).child(img(image).w(px(width)).h(px(height))).children(annotations).children(selected).children(marks).children(cut),
             None => sheet.flex().items_center().justify_center().text_size(text_px(12.)).text_color(Theme::text_placeholder()).child(if self.broken.contains(&index) { tf!("第 {} 页无法渲染", "Cannot render page {}", index + 1) } else { tf!("第 {} 页", "Page {}", index + 1) }),
@@ -834,19 +942,32 @@ impl PdfView {
         div().w_full().flex().pb(px(PAGE_GAP)).child(sheet).into_any_element()
     }
 
-    /// Where a page stands in the window. The list leaves out its own top padding from what it says, though it draws every item below it.
-    fn item_bounds(&self, index: usize) -> Option<Bounds<Pixels>> {
-        self.list.bounds_for_item(index).map(|bounds| Bounds { origin: point(bounds.origin.x, bounds.origin.y + px(PAGE_GAP)), size: bounds.size })
+    /// Where a page stands in the window, in one of the views. The list leaves out its own top padding from what it says, though it draws every item below it.
+    fn item_bounds(&self, pane: usize, index: usize) -> Option<Bounds<Pixels>> {
+        self.panes[pane].list.bounds_for_item(index).map(|bounds| Bounds { origin: point(bounds.origin.x, bounds.origin.y + px(PAGE_GAP)), size: bounds.size })
     }
 
-    /// The page under a point of the window, and the point in that page's own points.
-    fn locate(&self, position: Point<Pixels>) -> Option<(usize, f32, f32)> {
-        let top = self.list.logical_scroll_top().item_ix;
+    /// The view a point of the window is in.
+    fn pane_under(&self, position: Point<Pixels>) -> Option<usize> {
+        let shown = if self.split == Split::Off { 1 } else { 2 };
+        (0..shown).find(|pane| self.panes[*pane].list.viewport_bounds().contains(&position))
+    }
+
+    /// Where a page's sheet stands in the viewer, in the half its selection, cut or highlight was made in: its top left corner.
+    fn sheet_place(&self, page: usize) -> Option<(f32, f32)> {
+        let (item, view) = (self.item_bounds(self.held, page)?, self.panes[0].list.viewport_bounds());
+        let left = self.sheet_left(self.held, self.sizes.get(page)?.0 * self.scale_of(page));
+        Some((f32::from(item.left() - view.left()) + left, f32::from(item.top() - view.top())))
+    }
+
+    /// The page under a point of the window in one of the views, and the point in that page's own points.
+    fn locate(&self, pane: usize, position: Point<Pixels>) -> Option<(usize, f32, f32)> {
+        let top = self.panes[pane].list.logical_scroll_top().item_ix;
         (top..self.sizes.len().min(top + 8)).find_map(|index| {
-            let bounds = self.item_bounds(index)?;
+            let bounds = self.item_bounds(pane, index)?;
             if position.y < bounds.top() || position.y >= bounds.bottom() { return None }
             let scale = self.scale_of(index);
-            let left = f32::from(bounds.left()) + self.sheet_left(self.sizes[index].0 * scale);
+            let left = f32::from(bounds.left()) + self.sheet_left(pane, self.sizes[index].0 * scale);
             Some((index, (f32::from(position.x) - left) / scale, f32::from(position.y - bounds.top()) / scale))
         })
     }
@@ -855,13 +976,19 @@ impl PdfView {
     fn press(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus);
         (self.selection, self.selecting, self.translation, self.mark_menu, self.pressed_mark) = (None, false, None, None, None);
+        // The half pressed in is the one worked in; a drag stays in it. The line between the two is neither.
+        let Some(pane) = self.pane_under(event.position) else {
+            if self.cutting { self.cut = None }
+            return cx.notify();
+        };
+        (self.active, self.held) = (pane, pane);
         if self.cutting {
             // A piece of the page is cut out from here.
-            self.cut = self.locate(event.position).map(|(page, x, y)| (page, [x, y, x, y]));
+            self.cut = self.locate(pane, event.position).map(|(page, x, y)| (page, [x, y, x, y]));
             self.selecting = self.cut.is_some();
             return cx.notify();
         }
-        let Some((page, x, y)) = self.locate(event.position) else { return cx.notify() };
+        let Some((page, x, y)) = self.locate(pane, event.position) else { return cx.notify() };
         self.pressed_mark = self.highlight_at(page, x, y).map(|(id, line)| (MarkMenu { id, page, x, line }, event.position));
         if let Some(at) = self.marks.get(&page).and_then(|marks| pdftext::mark_at(marks, x, y)) {
             self.selection = Some(Selection { page, anchor: at, focus: at });
@@ -883,7 +1010,7 @@ impl PdfView {
     fn drag(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
         if !self.selecting { return }
         if event.pressed_button != Some(MouseButton::Left) { return self.release(None, cx) }
-        let Some((page, x, y)) = self.locate(event.position) else { return };
+        let Some((page, x, y)) = self.locate(self.held, event.position) else { return };
         if let Some((cut_page, corners)) = self.cut.as_mut() {
             if *cut_page == page {
                 (corners[2], corners[3]) = (x, y);
@@ -985,6 +1112,7 @@ impl PdfView {
     /// Mark a piece of a 0-based page as cut out, as a drag would.
     pub fn set_cut(&mut self, page: usize, bbox: [f32; 4], cx: &mut Context<Self>) {
         (self.cutting, self.cut, self.selection, self.selecting, self.translation) = (true, Some((page, bbox)), None, false, None);
+        self.held = self.active;
         cx.notify();
     }
 
@@ -1016,6 +1144,7 @@ impl PdfView {
         if marks.is_empty() { return false }
         let last = marks.len() - 1;
         (self.selection, self.selecting, self.translation, self.cut) = (Some(Selection { page, anchor: from.min(last), focus: to.min(last) }), false, None, None);
+        self.held = self.active;
         cx.notify();
         true
     }
@@ -1056,9 +1185,8 @@ impl PdfView {
         let selection = card.selection;
         let boxes = pdftext::mark_boxes(self.marks.get(&selection.page)?.get(selection.anchor.min(selection.focus)..=selection.anchor.max(selection.focus))?);
         let (first, last) = (boxes.first()?, boxes.last()?);
-        let (item, view) = (self.item_bounds(selection.page)?, self.list.viewport_bounds());
         let scale = self.scale_of(selection.page);
-        let (x, y) = (f32::from(item.left() - view.left()) + self.sheet_left(self.sizes.get(selection.page)?.0 * scale), f32::from(item.top() - view.top()));
+        let (x, y) = self.sheet_place(selection.page)?;
         let (left, right) = boxes.iter().fold((f32::MAX, f32::MIN), |(l, r), line| (l.min(line[0]), r.max(line[2])));
         let place = card_place([x + left * scale, y + first[1] * scale, x + right * scale, y + last[3] * scale], CARD_W, CARD_TALL, (self.width, self.height));
         let button = |id: &'static str, label: &'static str| div().id(id).flex().flex_none().items_center().h(text_px(24.)).px(px(8.)).rounded(px(6.)).cursor_pointer().text_color(Theme::accent()).hover(|s| s.bg(Theme::hover())).child(label);
@@ -1193,11 +1321,10 @@ impl PdfView {
             }
             (None, None) => return None,
         };
-        let (item, view) = (self.item_bounds(page)?, self.list.viewport_bounds());
         let scale = self.scale_of(page);
+        let (x, y) = self.sheet_place(page)?;
         // Under the last line of the selection, kept inside the viewer.
-        let left = f32::from(item.left() - view.left()) + self.sheet_left(self.sizes.get(page)?.0 * scale) + last[0] * scale;
-        let top = f32::from(item.top() - view.top()) + last[3] * scale + 6.;
+        let (left, top) = (x + last[0] * scale, y + last[3] * scale + 6.);
         let button = |id: &'static str, label: &'static str| div().id(id).flex().flex_none().items_center().h(text_px(26.)).px(px(9.)).rounded(px(6.)).cursor_pointer().hover(|s| s.bg(Theme::hover())).child(label);
         Some(
             div()
@@ -1241,9 +1368,8 @@ impl PdfView {
     fn mark_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let menu = self.mark_menu.as_ref()?;
         let mark = self.annotations.iter().find(|a| a.id == menu.id)?;
-        let (item, view) = (self.item_bounds(menu.page)?, self.list.viewport_bounds());
         let scale = self.scale_of(menu.page);
-        let (x, y) = (f32::from(item.left() - view.left()) + self.sheet_left(self.sizes.get(menu.page)?.0 * scale), f32::from(item.top() - view.top()));
+        let (x, y) = self.sheet_place(menu.page)?;
         const HEIGHT: f32 = 34.;
         let below = y + menu.line.1 * scale + 6.;
         let top = if below + HEIGHT + 8. <= self.height { below } else { y + menu.line.0 * scale - 6. - HEIGHT };
@@ -1356,8 +1482,21 @@ impl Render for PdfView {
             return ui::empty_state("file-text", t("正在打开 PDF…"), "").size_full().into_any_element();
         }
         self.device_scale = window.scale_factor();
-        let entity = cx.entity();
         let (measured, wheel) = (cx.entity(), cx.entity());
+        let pane = |pane: usize| {
+            let entity = cx.entity();
+            list(self.panes[pane].list.clone(), move |index, _, cx| entity.update(cx, |this, _| this.page(pane, index))).size_full().pt(px(PAGE_GAP))
+        };
+        // The pages once, or twice with a line between: each half scrolls on its own.
+        let pages = match self.split {
+            Split::Off => pane(0).into_any_element(),
+            split => {
+                let half = |pane| div().flex_1().min_w_0().min_h_0().overflow_hidden().child(pane);
+                let line = div().flex_none().bg(Theme::line_strong());
+                let line = if split == Split::Side { line.w(px(DIVIDER)).h_full() } else { line.h(px(DIVIDER)).w_full() };
+                div().size_full().flex().when(split == Split::Stacked, |d| d.flex_col()).child(half(pane(0))).child(line).child(half(pane(1))).into_any_element()
+            }
+        };
         // A card for a selection that has since gone goes with it.
         if self.translation.as_ref().is_some_and(|t| Some(t.selection) != self.selection) { self.translation = None }
         let bar = self.selection_bar(cx);
@@ -1398,7 +1537,7 @@ impl Render for PdfView {
                 .absolute()
                 .size_full(),
             )
-            .child(list(self.list.clone(), move |index, _, cx| entity.update(cx, |this, _| this.page(index))).size_full().pt(px(PAGE_GAP)))
+            .child(pages)
             // Explain whether the citation names a page or a passage within it.
             .children(bar)
             .children(card)
@@ -1412,7 +1551,23 @@ impl Render for PdfView {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that would bring in gpui's own `test` attribute.
-    use super::{CARD_EDGE, CardPlace, CitationFocus, CitationStatus, MARGIN, POINT_PX, Zoom, card_place, page_scale, picture_serves, render_scale, zoom_step};
+    use super::{CARD_EDGE, CardPlace, CitationFocus, CitationStatus, DIVIDER, MARGIN, POINT_PX, Split, Zoom, card_place, page_scale, pane_at, pane_size, picture_serves, render_scale, zoom_step};
+
+    #[test]
+    fn a_split_viewer_has_two_equal_halves() {
+        let view = (800. + DIVIDER, 600. + DIVIDER);
+        assert_eq!(pane_size(Split::Off, view), view);
+        assert_eq!((pane_size(Split::Side, view), pane_size(Split::Stacked, view)), ((400., view.1), (view.0, 300.)));
+        // Before the viewer is laid out its height is not known: a half is not less than nothing.
+        assert_eq!(pane_size(Split::Stacked, (800., 0.)), (800., 0.));
+        // A point is in the first half up to the line between them, in the second past it.
+        assert_eq!((pane_at(Split::Off, view, (700., 500.)), pane_at(Split::Side, view, (399., 500.)), pane_at(Split::Side, view, (400. + DIVIDER, 10.))), (0, 0, 1));
+        assert_eq!((pane_at(Split::Stacked, view, (700., 299.)), pane_at(Split::Stacked, view, (10., 300. + DIVIDER))), (0, 1));
+        // At a fit the pages of a half are as wide as the half, side by side; a percentage stays.
+        let a4 = (595., 842.);
+        assert_eq!(page_scale(Zoom::FitWidth, a4, pane_size(Split::Side, view)), (400. - 2. * MARGIN) / 595.);
+        assert_eq!(page_scale(Zoom::Percent(150.), a4, pane_size(Split::Side, view)), page_scale(Zoom::Percent(150.), a4, view));
+    }
 
     #[test]
     fn page_only_citation_marks_its_page_before_or_after_pdf_opens() {
