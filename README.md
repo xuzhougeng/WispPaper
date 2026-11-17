@@ -52,7 +52,8 @@
 |---|---|---|
 | **macOS**，Apple 芯片 | `WispPaper-v<版本>-macos-arm64.dmg` | Developer ID 签名并经 Apple 公证。打开后把 Wisp Paper 拖进「应用程序」 |
 | **macOS**，Intel | `WispPaper-v<版本>-macos-x64.dmg` | 同上 |
-| **Windows** 10 / 11（x64） | `WispPaper-v<版本>-windows-x64.zip` | 解压后运行 `WispPaper.exe`，带 Authenticode 签名 |
+| **Windows** 10 / 11（x64），安装版 | `WispPaper-v<版本>-windows-x64-setup.exe` | 装在当前用户名下（`%LOCALAPPDATA%\Programs\Wisp Paper`），不需要管理员权限，带 Authenticode 签名 |
+| **Windows** 10 / 11（x64），便携版 | `WispPaper-v<版本>-windows-x64.zip` | 解压后运行 `WispPaper.exe`，不写注册表，带 Authenticode 签名 |
 | **Linux**（x64） | `WispPaper-v<版本>-linux-x64.tar.gz` | 解压后运行 `wisp-paper`；没有签名，也没有在真机上测试过 |
 
 命令行工具 `wisp` 随包附带：Windows 和 Linux 在主程序旁边，macOS 在 `Wisp Paper.app/Contents/MacOS/wisp`。

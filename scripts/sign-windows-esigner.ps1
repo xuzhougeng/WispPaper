@@ -1,6 +1,6 @@
 # 用 SSL.com eSigner CodeSignTool 给一个 Windows 可执行文件做 Authenticode 签名。
 #
-# scripts/package-windows.ps1 -Sign 为每个 exe 调用本脚本一次（WispPaper.exe 和 wisp.exe）。
+# scripts/package-windows.ps1 -Sign 为每个 exe 调用本脚本一次（WispPaper.exe、wisp.exe 和安装程序）。
 # 每次签名都消耗一个 eSigner TOTP，所以连续两次签名之间会等到下一个 30 秒窗口。
 #
 # 用法：

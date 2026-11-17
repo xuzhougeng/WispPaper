@@ -19,7 +19,7 @@
 
 ## 开始之前
 
-**安装。** 从[发布页](https://github.com/xuzhougeng/WispPaper/releases/latest)下载：macOS 是 `.dmg`（打开后把 Wisp Paper 拖进「应用程序」），Windows 是 `.zip`（解压后运行 `WispPaper.exe`）。两者都带代码签名。想从源码编译，见[开发](DEVELOPMENT.md)。
+**安装。** 从[发布页](https://github.com/xuzhougeng/WispPaper/releases/latest)下载：macOS 是 `.dmg`（打开后把 Wisp Paper 拖进「应用程序」），Windows 有安装版 `-setup.exe`（装在当前用户名下，不需要管理员权限）和便携版 `.zip`（解压后运行 `WispPaper.exe`）。都带代码签名。想从源码编译，见[开发](DEVELOPMENT.md)。
 
 **一个模型服务。** 拟检索式、筛选、翻译和提问都要调用模型。Wisp Paper 不自带模型，支持三种接口：Claude API、OpenAI 兼容的 chat/completions、OpenAI 的 Responses。本例用的是一个 OpenAI 兼容的服务，地址写到 `/v1`。没有模型也能用文献库本身的功能（收集、整理、PDF、导出），只是没有这篇教程里的助手部分。
 
