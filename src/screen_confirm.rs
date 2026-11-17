@@ -53,7 +53,7 @@ impl Workspace {
         let Some(lib) = self.lib.as_mut() else { return };
         match cmd {
             Cmd::ConfirmTick(id) => {
-                lib.screen.confirm.toggle(&id);
+                if let Some(suggestion) = lib.suggestions.get(&id) { lib.screen.confirm.toggle(suggestion) }
                 lib.screen.confirm.cursor = Some(id);
             }
             Cmd::ConfirmChoose(id, status) => {
@@ -65,8 +65,8 @@ impl Workspace {
                 lib.screen.confirm_scroll = UniformListScrollHandle::new();
             }
             Cmd::ConfirmTickAll(on) => {
-                let ids: Vec<String> = lib.confirm_rows().iter().map(|(p, _)| p.id.clone()).collect();
-                lib.screen.confirm.tick_all(ids.iter().map(String::as_str), on);
+                let shown: Vec<Suggestion> = lib.confirm_rows().iter().map(|(_, suggestion)| (*suggestion).clone()).collect();
+                lib.screen.confirm.tick_all(shown.iter(), on);
             }
             Cmd::ConfirmSort => {
                 lib.screen.confirm.doubtful_first = !lib.screen.confirm.doubtful_first;
@@ -120,7 +120,7 @@ impl Workspace {
             "a" => Cmd::ConfirmChoose(id, suggestion.verdict.clone()),
             "s" => Cmd::ToggleStar(id),
             // Left waiting: not written.
-            "p" | "0" if lib.screen.confirm.ticked(&id) => Cmd::ConfirmTick(id),
+            "p" | "0" if lib.screen.confirm.ticked(suggestion) => Cmd::ConfirmTick(id),
             key => match screening::status_of(key).filter(|status| *status != "pending") {
                 Some(status) => Cmd::ConfirmChoose(id, status.to_string()),
                 None => return,
@@ -190,7 +190,8 @@ impl Workspace {
                 .child(ui::ghost_button("confirm-undo", None, Some(t("撤销").into())).h(text_px(24.)).text_size(text_px(12.)).on_click(self.on(Cmd::ConfirmUndo, cx)))
         });
         if all.is_empty() {
-            return div().flex().flex_col().size_full().child(head).children(done).child(self.render_confirm_empty(cx)).into_any_element();
+            // The page keeps its title and the way back when nothing is left to confirm: after the last suggestions were written, too.
+            return div().flex().flex_col().size_full().child(top).child(head).children(done).child(self.render_confirm_empty(cx)).into_any_element();
         }
 
         // One part per suggested verdict, as in the queue.
@@ -294,7 +295,7 @@ impl Workspace {
             .filter_map(|i| {
                 let (paper, suggestion) = rows.get(i)?;
                 let id = |part: &str| SharedString::from(format!("confirm-{part}-{}", paper.id));
-                let (ticked, on_cursor) = (confirm.ticked(&paper.id), confirm.cursor.as_deref() == Some(paper.id.as_str()));
+                let (ticked, on_cursor) = (confirm.ticked(suggestion), confirm.cursor.as_deref() == Some(paper.id.as_str()));
                 let status = confirm.status(suggestion);
                 let tick = div()
                     .id(id("tick"))
@@ -319,7 +320,7 @@ impl Workspace {
                     .cursor_pointer()
                     .on_click(self.on(Cmd::ConfirmCursor(paper.id.clone()), cx))
                     .child(div().truncate().when(on_cursor, |d| d.font_weight(FontWeight::MEDIUM)).child(paper.title.clone()))
-                    .child(div().truncate().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(about.join(" · ")));
+                    .child(div().truncate().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(ui::one_line(&about.join(" · "))));
                 // The status the paper will get: the suggested one unless the person picks another.
                 let choices = DECISIONS.iter().enumerate().map(|(n, (key, _, _))| {
                     let (color, fill) = theme::status_colors(key);

@@ -163,13 +163,20 @@ pub(crate) fn tick_box(ticked: bool, able: bool) -> Div {
 /// The values of a field: chips for a multi-value field, a line of text otherwise.
 fn values_view(field: &FieldDef, values: &[String]) -> Div {
     if field.kind == FieldKind::Tags { return div().flex().flex_1().min_w_0().gap(px(4.)).overflow_hidden().children(values.iter().map(|value| ui::chip(value.clone(), Theme::text(), Theme::bg_sunken()))) }
-    div().flex_1().min_w_0().truncate().child(values.join("；"))
+    div().flex_1().min_w_0().truncate().child(ui::one_line(&values.join("；")))
 }
 
 impl Library {
     /// The proposals waiting for the person, paper by paper.
     pub fn extract_rows(&self) -> Vec<Row<'_>> {
         extract::rows(&self.papers, &self.fields, &self.extract.proposals)
+    }
+
+    /// Where the sentence behind a row's proposal stands in the paper's PDF: the page and the sentence, when it is from the full text and the file is there.
+    fn extract_cited(&self, key: &Key) -> Option<(usize, String)> {
+        let proposal = self.extract.proposals.get(&key.0, &key.1)?;
+        self.pdf_file(&key.0)?;
+        proposal.page.filter(|_| !proposal.excerpt.is_empty()).map(|page| (page, proposal.excerpt.clone()))
     }
 
     /// The waiting proposal for a field of a paper.
@@ -285,15 +292,16 @@ impl Workspace {
             Do::Cursor(key) => {
                 let Some(lib) = self.lib.as_mut() else { return };
                 lib.extract.review.cursor = Some(key.clone());
-                // A paper open beside the list follows the row.
-                if lib.selected.is_some() { self.select(Some(key.0), window, cx) }
+                // A paper open beside the list follows the row: its PDF to the row's sentence, any other tab to the paper.
+                if lib.selected.is_some() {
+                    if lib.tab == Tab::Pdf { self.extract_beside(&key, window, cx) } else { self.select(Some(key.0), window, cx) }
+                }
             }
             Do::Beside => {
                 let Some(lib) = self.lib.as_ref() else { return };
-                let Some((id, _)) = lib.extract.review.cursor.clone() else { return };
-                if lib.selected.as_deref() == Some(id.as_str()) { return self.select(None, window, cx) }
-                let tab = if lib.pdf_file(&id).is_some() { Tab::Pdf } else { Tab::Info };
-                self.run(Cmd::OpenPaper(id, tab), window, cx);
+                let Some(key) = lib.extract.review.cursor.clone() else { return };
+                if lib.selected.as_deref() == Some(key.0.as_str()) { return self.select(None, window, cx) }
+                self.extract_beside(&key, window, cx);
             }
             Do::Apply => self.extract_apply(cx),
             Do::Undo => self.extract_undo(cx),
@@ -350,6 +358,19 @@ impl Workspace {
             Err(err) => self.modal_error = err,
         }
         cx.notify();
+    }
+
+    /// The paper of a row beside the list: its PDF at the sentence the proposal rests on, the first page when the
+    /// sentence is the abstract's, the record when there is no PDF.
+    fn extract_beside(&mut self, key: &Key, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(lib) = self.lib.as_ref() else { return };
+        match lib.extract_cited(key) {
+            Some((page, quote)) => self.run(Cmd::GotoSource(key.0.clone(), Some(page), quote), window, cx),
+            None => {
+                let tab = if lib.pdf_file(&key.0).is_some() { Tab::Pdf } else { Tab::Info };
+                self.run(Cmd::OpenPaper(key.0.clone(), tab), window, cx);
+            }
+        }
     }
 
     /// Start asking the assistant about `fields` for `papers`. What it says
@@ -901,7 +922,7 @@ impl Workspace {
                 .child(div().flex().items_center().gap(px(8.)).child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(paper.title.clone())).child(if asking { div().flex().flex_none().items_center().gap(px(5.)).text_size(text_px(12.)).text_color(Theme::accent()).child(ui::spinner("extract-asking", 13., Theme::accent())).child(t("正在读这一篇…")).into_any_element() } else { again.into_any_element() }).child(open))
                 .child(div().flex().items_start().gap(px(8.)).child(div().flex_none().pt(px(1.)).text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(row.field.name.clone())).child(self.selectable(format!("extract-value-{}-{}", paper.id, row.field.id), review.values(row).join("；"), cx).flex_1().min_w_0().line_height(text_px(21.))));
             if !proposal.excerpt.is_empty() {
-                let quote = div().id("extract-quote").flex().gap(px(8.)).px(px(10.)).py(px(8.)).rounded(px(6.)).bg(Theme::bg_sunken()).border_l_2().border_color(Theme::accent()).text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text_secondary()).child(div().flex_1().min_w_0().child(proposal.excerpt.clone()));
+                let quote = div().id("extract-quote").flex().gap(px(8.)).px(px(10.)).py(px(8.)).rounded(px(6.)).bg(Theme::bg_sunken()).border_l_2().border_color(Theme::accent()).text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text_secondary()).child(div().flex_1().min_w_0().child(ui::one_line(&proposal.excerpt)));
                 block = block.child(match proposal.page {
                     Some(page) => quote.cursor_pointer().child(div().flex_none().text_color(Theme::accent()).child(tf!("第 {page} 页", "Page {page}"))).on_click(self.on(Cmd::GotoSource(paper.id.clone(), Some(page), proposal.excerpt.clone()), cx)),
                     None => quote.child(div().flex_none().text_color(Theme::text_tertiary()).child(t("摘要"))),
@@ -1049,7 +1070,7 @@ impl Workspace {
                 let quote = if proposal.excerpt.is_empty() {
                     div().id(id("quote")).truncate().text_size(text_px(12.)).text_color(Theme::warning()).child(tf!("没有找到原文依据 · {}", "No sentence of the paper found for it · {}", basis(proposal)))
                 } else {
-                    let line = div().id(id("quote")).flex().items_center().gap(px(6.)).text_size(text_px(12.)).text_color(Theme::text_secondary()).child(div().min_w_0().truncate().child(format!("“{}”", proposal.excerpt)));
+                    let line = div().id(id("quote")).flex().items_center().gap(px(6.)).text_size(text_px(12.)).text_color(Theme::text_secondary()).child(div().min_w_0().truncate().child(format!("“{}”", ui::one_line(&proposal.excerpt))));
                     match proposal.page {
                         Some(page) => line.cursor_pointer().hover(|s| s.text_color(Theme::text())).child(div().flex_none().text_color(Theme::accent()).child(tf!("第 {page} 页", "Page {page}"))).on_click(self.on(Cmd::GotoSource(paper.id.clone(), Some(page), proposal.excerpt.clone()), cx)),
                         None => line.child(div().flex_none().text_color(Theme::text_tertiary()).child(t("摘要"))),

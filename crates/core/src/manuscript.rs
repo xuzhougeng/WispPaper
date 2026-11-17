@@ -915,6 +915,37 @@ impl Store {
         Ok(())
     }
 
+    /// Whether a manuscript is still the empty one 写作 opens a library
+    /// with: no title, the sections a new one starts with and not a word
+    /// in them, and nothing kept of it (a version, a comment, a
+    /// conversation, a file it came from).
+    pub fn manuscript_blank(&self, id: &str) -> Result<bool> {
+        let Some(manuscript) = self.manuscript(id)? else { return Ok(false) };
+        let shape: Vec<(String, &str)> = manuscript.sections.iter().map(|section| (section.name.clone(), section.kind.as_str())).collect();
+        let untouched = manuscript.title.is_empty() && manuscript.sections.iter().all(|section| section.body.trim().is_empty()) && LANGUAGES.iter().any(|(code, _)| imrad(code) == shape);
+        if !untouched { return Ok(false) }
+        let kept = |sql: &str| -> Result<bool> { Ok(self.db.query_row(sql, [id], |_| Ok(())).optional()?.is_some()) };
+        Ok(!(kept("SELECT 1 FROM section_snapshots WHERE section_id IN (SELECT id FROM manuscript_sections WHERE manuscript_id = ?1)")?
+            || kept("SELECT 1 FROM manuscript_comments WHERE manuscript_id = ?1")?
+            || kept("SELECT 1 FROM manuscript_sources WHERE manuscript_id = ?1")?
+            || kept("SELECT 1 FROM conversations WHERE paper_id = ?1")?))
+    }
+
+    /// Put away the manuscripts that are still blank, except `keep`: the
+    /// empty one 写作 made so that there was something to write in gives
+    /// way to the first real one (a new one, a file, a review), and does
+    /// not stay beside it as a stray 未命名稿件. The ids put away.
+    pub fn retire_blank_manuscripts(&mut self, keep: &str) -> Result<Vec<String>> {
+        let mut retired = vec![];
+        for manuscript in self.manuscripts()? {
+            if manuscript.id != keep && self.manuscript_blank(&manuscript.id)? {
+                self.remove_manuscript(&manuscript.id)?;
+                retired.push(manuscript.id);
+            }
+        }
+        Ok(retired)
+    }
+
     /// Put a manuscript away: it stays in the database, only no longer listed.
     pub fn remove_manuscript(&mut self, id: &str) -> Result<()> {
         self.db.execute("UPDATE manuscripts SET removed_at = ?2 WHERE id = ?1", params![id, now_iso()])?;
@@ -1215,6 +1246,35 @@ mod tests {
         assert_eq!(store.manuscripts().unwrap().len(), 2);
         store.remove_manuscript(&en.id).unwrap();
         assert_eq!(store.manuscripts().unwrap().iter().map(|m| m.title.as_str()).collect::<Vec<_>>(), ["根系"]);
+    }
+
+    #[test]
+    fn the_empty_manuscript_writing_starts_with_gives_way_to_a_real_one() {
+        let mut store = store();
+        // What opening 写作 makes in a library without a manuscript, and then a new one beside it.
+        let placeholder = store.create_manuscript("", DEFAULT_LANGUAGE).unwrap();
+        assert!(store.manuscript_blank(&placeholder.id).unwrap());
+        let real = store.create_manuscript("", "zh").unwrap();
+        assert_eq!(store.retire_blank_manuscripts(&real.id).unwrap(), std::slice::from_ref(&placeholder.id));
+        assert_eq!(store.manuscripts().unwrap().iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), [real.id.as_str()]);
+        // One the person did anything with is not blank: a title, a word, a section of their own, a version kept, a conversation.
+        let fresh = |store: &mut Store| store.create_manuscript("", "en").unwrap();
+        let titled = fresh(&mut store);
+        store.rename_manuscript(&titled.id, "Roots").unwrap();
+        let written = fresh(&mut store);
+        store.save_section_body(&written.sections[1].id, "Roots grow.").unwrap();
+        let shaped = fresh(&mut store);
+        store.add_section(&shaped.id, "Root hairs", "other").unwrap();
+        let emptied = fresh(&mut store);
+        store.save_section_body(&emptied.sections[0].id, "A whole abstract that was written and is worth keeping as a version of this section.").unwrap();
+        store.take_snapshot(&emptied.sections[0].id, "leave").unwrap();
+        store.save_section_body(&emptied.sections[0].id, "").unwrap();
+        let asked = fresh(&mut store);
+        store.db.execute("INSERT INTO conversations(id, paper_id, created_at, updated_at) VALUES ('C-1', ?1, '', '')", [&asked.id]).unwrap();
+        for manuscript in [&titled, &written, &shaped, &emptied, &asked] { assert!(!store.manuscript_blank(&manuscript.id).unwrap(), "{}", manuscript.id) }
+        let blank = fresh(&mut store);
+        assert_eq!(store.retire_blank_manuscripts("").unwrap(), [real.id.clone(), blank.id.clone()]);
+        assert_eq!(store.manuscripts().unwrap().len(), 5);
     }
 
     #[test]

@@ -161,6 +161,38 @@ pub fn is_pdf(bytes: &[u8]) -> bool {
     bytes[..bytes.len().min(1024)].windows(5).any(|window| window == b"%PDF-")
 }
 
+/// How many of a file's first pages say what it is.
+const OPENING_PAGES: usize = 3;
+
+/// Whether a line opens a supplementary figure or table: "Supp. Figure 1.",
+/// "Supplementary Table 2", "Supplemental Fig. 3", "Figure S4", "Table S1".
+fn supplementary_caption(line: &str) -> bool {
+    let line = line.trim_start().to_lowercase();
+    let numbered = |rest: &str| rest.trim_start_matches(|c: char| c.is_whitespace() || c == '.').trim_start_matches('s').starts_with(|c: char| c.is_ascii_digit());
+    let item = |rest: &str| ["figure", "fig", "table", "movie", "video", "dataset", "data set", "note", "file"].iter().find_map(|name| rest.trim_start().strip_prefix(name)).is_some_and(numbered);
+    if let Some(rest) = ["supplementary", "supplemental", "supporting", "supp.", "supp", "suppl.", "suppl"].iter().find_map(|word| line.strip_prefix(word)) { return item(rest) }
+    // "Figure S4": the S is what says it.
+    ["figure", "fig.", "fig", "table"].iter().find_map(|name| line.strip_prefix(name)).is_some_and(|rest| rest.trim_start().strip_prefix('s').is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit())))
+}
+
+/// Whether a line is the heading a supplement stands under: "Supplementary Information", "Supporting Information for".
+fn supplementary_heading(line: &str) -> bool {
+    let line = line.trim_start().to_lowercase();
+    let Some(rest) = ["supplementary", "supplemental", "supporting"].iter().find_map(|word| line.strip_prefix(word)) else { return false };
+    ["information", "material", "data", "figures", "tables", "methods", "appendix", "text", "file", "online"].iter().any(|name| rest.trim_start().starts_with(name))
+}
+
+/// Whether a file is a paper's supplement and not the paper itself, by the
+/// text of its pages: every one of its first pages that says anything
+/// holds the caption of a supplementary figure or table, or opens with a
+/// supplement's heading. An article names its supplement too, but not at
+/// the start of a line on each of its first pages. A repository lists the
+/// supplement as a file of the paper, and an index hands it on as its PDF.
+pub fn supplement(pages: &[String]) -> bool {
+    let opening: Vec<&String> = pages.iter().filter(|page| !page.trim().is_empty()).take(OPENING_PAGES).collect();
+    !opening.is_empty() && opening.iter().all(|page| page.lines().any(supplementary_caption) || page.lines().filter(|line| !line.trim().is_empty()).take(3).any(supplementary_heading))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,6 +258,33 @@ mod tests {
         let (found, notes) = candidates(&paper("10.48550/arXiv.1706.03762", "", ""), &offline);
         assert_eq!((found[0].url.as_str(), notes.len()), ("https://arxiv.org/pdf/1706.03762", 0));
         assert_eq!((publisher_candidate("10.3389/fpls.2021.661361").unwrap().source.as_str(), publisher_candidate("10.1016/j.cell.2020.01.001")), ("Frontiers", None));
+    }
+
+    #[test]
+    fn a_supplement_is_not_the_paper() {
+        let pages = |texts: &[&str]| texts.iter().map(|text| text.to_string()).collect::<Vec<_>>();
+        // The file two records were given as their full text: figures and their legends, nothing else.
+        let figures = pages(&[
+            "Supp. Figure 1. Gene expression changes upon cell wall digestion. (A)\n\nVolcano plot of the cell wall\ndigestion triggered response\n\nA\n\n-Log10 FDR",
+            "Cluster 1 Cluster 2\n\nU D FD U D FD\n\nA\n\nB\n\nSupp. Figure 2. Functional analysis of gene expression changes caused by cell-wall digestion. (A) k-\n\nmeans clustering",
+            "Supp. Figure 3. Comparison of the transcriptome profiles of Digested and Fixed-Digested samples",
+            "A\n\nB\n\nNot significant",
+        ]);
+        assert!(supplement(&figures));
+        // Other ways a supplement is written: a title page, numbered with an S, tables; a blank first page is passed over.
+        assert!(supplement(&pages(&["", "Supplementary Information for\n\nA root atlas\n\nZhu M, Lee A", "Figure S1. Quality control.\nReads per cell", "Table S2: Marker genes"])));
+        assert!(supplement(&pages(&["Supplemental Table 1 | Primers used in this study\nGene Forward Reverse"])));
+        // An article: it names its supplement in running text and under its first page, not on every page.
+        let article = pages(&[
+            "RESEARCH Open Access\nA single-cell atlas of the root\nZhu M, Lee A\n\nAbstract\nBackground: Roots grow.\n\nSupplementary Information The online version contains supplementary material available at https://doi.org/10.1186/x.",
+            "Introduction\nRoots take up water (Fig. 1).\nSupplementary Figure 1 shows the quality of the libraries, and",
+            "Results\nWe profiled 10,000 cells.",
+        ]);
+        assert!(!supplement(&article));
+        // An article that shows a supplementary figure early is still one: its first page is not a supplement's.
+        assert!(!supplement(&pages(&["A root atlas\nAbstract\nRoots grow.", "Figure S1. Quality control.", "Figure S2. Clusters."])));
+        assert!(!supplement(&pages(&["Figures 2 and 3 show the clusters.\nTable salt content was measured.", "Supported by a grant."])));
+        assert!(!supplement(&[]) && !supplement(&pages(&["", " "])));
     }
 
     #[test]

@@ -414,6 +414,14 @@ pub fn icon_action(id: impl Into<ElementId>, name: &str, color: Hsla, tip: impl 
     div().id(id).flex().flex_none().items_center().justify_center().size(px(24.)).rounded(px(6.)).cursor_pointer().hover(|s| s.bg(Theme::hover())).active(|s| s.bg(Theme::pressed())).child(icon(name, 14., color)).tooltip(self::tip(tip))
 }
 
+/// A text on one line: its line breaks and runs of spaces as single
+/// spaces. A row of a `uniform_list` has one height, so a line break in
+/// what it shows (a sentence as a PDF sets it, a model's reason) would be
+/// drawn over the row below; `truncate` alone keeps hard breaks.
+pub fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 #[cfg(test)]
 mod progress_tests {
     use super::{import_segments, zotero_segments};
@@ -434,4 +442,3 @@ mod progress_tests {
         assert_eq!(zotero_segments(&zotero).map(|(n, _, _)| n), [1, 1, 1, 1, 1, 1]);
     }
 }
-

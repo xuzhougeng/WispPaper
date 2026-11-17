@@ -152,6 +152,8 @@ pub struct Confirming {
     choice: BTreeMap<String, String>,
     /// Papers left out: they stay waiting.
     skipped: BTreeSet<String>,
+    /// Papers counted in by the person though nothing of them was read.
+    counted: BTreeSet<String>,
     /// The suggested verdict on show; empty for all of them.
     pub part: String,
     /// The suggestions the assistant was least sure of come first.
@@ -171,24 +173,39 @@ impl Confirming {
         self.choice.contains_key(paper_id)
     }
 
-    pub fn ticked(&self, paper_id: &str) -> bool {
-        !self.skipped.contains(paper_id)
+    /// Whether the paper is written when the person confirms. A suggestion
+    /// made with nothing to read (no abstract, no full text: `basis` is
+    /// `none`) says only that the assistant could not tell, which is no
+    /// ground for a decision: such a paper stays waiting unless the person
+    /// counts it in.
+    pub fn ticked(&self, suggestion: &Suggestion) -> bool {
+        let id = &suggestion.paper_id;
+        !self.skipped.contains(id) && (!unread(suggestion) || self.counted.contains(id))
     }
 
     /// Give a paper a status; choosing one counts it in again.
     pub fn choose(&mut self, suggestion: &Suggestion, status: &str) {
         if status == suggestion.verdict { self.choice.remove(&suggestion.paper_id); } else { self.choice.insert(suggestion.paper_id.clone(), status.to_string()); }
-        self.skipped.remove(&suggestion.paper_id);
+        self.count(suggestion, true);
     }
 
-    pub fn toggle(&mut self, paper_id: &str) {
-        if !self.skipped.remove(paper_id) { self.skipped.insert(paper_id.to_string()); }
+    pub fn toggle(&mut self, suggestion: &Suggestion) {
+        self.count(suggestion, !self.ticked(suggestion));
     }
 
     /// Count these papers in, or leave them all out.
-    pub fn tick_all<'a>(&mut self, ids: impl Iterator<Item = &'a str>, on: bool) {
-        for id in ids {
-            if on { self.skipped.remove(id); } else { self.skipped.insert(id.to_string()); }
+    pub fn tick_all<'a>(&mut self, suggestions: impl Iterator<Item = &'a Suggestion>, on: bool) {
+        for suggestion in suggestions { self.count(suggestion, on) }
+    }
+
+    fn count(&mut self, suggestion: &Suggestion, on: bool) {
+        let id = &suggestion.paper_id;
+        if on {
+            self.skipped.remove(id);
+            self.counted.insert(id.clone());
+        } else {
+            self.skipped.insert(id.clone());
+            self.counted.remove(id);
         }
     }
 
@@ -203,11 +220,16 @@ impl Confirming {
 
     /// What confirming writes: every ticked paper with its status and the reason kept with it.
     pub fn plan(&self, rows: &[(&Paper, &Suggestion)]) -> Vec<Line> {
-        rows.iter().filter(|(paper, _)| self.ticked(&paper.id)).map(|(paper, suggestion)| {
+        rows.iter().filter(|(_, suggestion)| self.ticked(suggestion)).map(|(paper, suggestion)| {
             let status = self.status(suggestion);
             Line { paper_id: paper.id.clone(), status: status.to_string(), reason: reason_for(paper, Some(suggestion), status) }
         }).collect()
     }
+}
+
+/// Whether a suggestion was made without anything of the paper to read.
+pub fn unread(suggestion: &Suggestion) -> bool {
+    suggestion.basis == "none"
 }
 
 #[cfg(test)]
@@ -292,16 +314,16 @@ mod tests {
         assert_eq!(confirm.plan(&rows).iter().map(|line| (line.paper_id.as_str(), line.status.as_str(), line.reason.as_str())).collect::<Vec<_>>(), [("a", "included", "because a"), ("b", "irrelevant", "because b"), ("c", "irrelevant", "because c")]);
         // Another status leaves the reason to the person; a paper left out is not written.
         confirm.choose(&suggestions[1], "uncertain");
-        confirm.toggle("c");
-        assert!(confirm.changed("b") && !confirm.changed("a") && !confirm.ticked("c") && confirm.status(&suggestions[1]) == "uncertain");
+        confirm.toggle(&suggestions[2]);
+        assert!(confirm.changed("b") && !confirm.changed("a") && !confirm.ticked(&suggestions[2]) && confirm.status(&suggestions[1]) == "uncertain");
         assert_eq!(confirm.plan(&rows), [Line { paper_id: "a".into(), status: "included".into(), reason: "because a".into() }, Line { paper_id: "b".into(), status: "uncertain".into(), reason: String::new() }]);
         // Choosing a status for a paper left out counts it in; the suggested one is no change.
         confirm.choose(&suggestions[2], "irrelevant");
         confirm.choose(&suggestions[1], "irrelevant");
-        assert!(confirm.ticked("c") && !confirm.changed("c") && !confirm.changed("b"));
-        confirm.tick_all(["a", "b"].into_iter(), false);
+        assert!(confirm.ticked(&suggestions[2]) && !confirm.changed("c") && !confirm.changed("b"));
+        confirm.tick_all(suggestions[..2].iter(), false);
         assert_eq!(confirm.plan(&rows).len(), 1);
-        confirm.tick_all(["a", "b"].into_iter(), true);
+        confirm.tick_all(suggestions[..2].iter(), true);
         assert_eq!(confirm.plan(&rows).len(), 3);
         // One verdict on show; a part nobody suggested shows everything. The least sure first, when asked.
         confirm.part = "irrelevant".into();
@@ -309,5 +331,28 @@ mod tests {
         confirm.part = "uncertain".into();
         confirm.doubtful_first = true;
         assert_eq!(confirm.order(rows.clone()).iter().map(|(p, _)| p.id.as_str()).collect::<Vec<_>>(), ["b", "c", "a"]);
+    }
+
+    #[test]
+    fn a_paper_with_nothing_to_read_is_not_ticked_until_the_person_ticks_it() {
+        let papers = [paper("a", "pending"), paper("b", "pending")];
+        // The assistant read an abstract of the one and nothing of the other: 证据不足 for both.
+        let suggestions = [Suggestion { basis: "abstract".into(), ..suggestion("a", "uncertain", 0.5) }, Suggestion { basis: "none".into(), ..suggestion("b", "uncertain", 0.2) }];
+        let rows: Vec<(&Paper, &Suggestion)> = papers.iter().zip(&suggestions).collect();
+        let mut confirm = Confirming::default();
+        assert!(unread(&suggestions[1]) && !unread(&suggestions[0]));
+        assert!(confirm.ticked(&suggestions[0]) && !confirm.ticked(&suggestions[1]));
+        assert_eq!(confirm.plan(&rows).iter().map(|line| line.paper_id.as_str()).collect::<Vec<_>>(), ["a"]);
+        // Ticked by hand, by 全选 or by choosing a status it is written like the rest; and can be left out again.
+        confirm.toggle(&suggestions[1]);
+        assert_eq!(confirm.plan(&rows).len(), 2);
+        confirm.toggle(&suggestions[1]);
+        assert!(!confirm.ticked(&suggestions[1]));
+        confirm.tick_all(suggestions.iter(), true);
+        assert_eq!(confirm.plan(&rows).len(), 2);
+        confirm.tick_all(suggestions.iter(), false);
+        assert!(confirm.plan(&rows).is_empty());
+        confirm.choose(&suggestions[1], "irrelevant");
+        assert_eq!(confirm.plan(&rows), [Line { paper_id: "b".into(), status: "irrelevant".into(), reason: String::new() }]);
     }
 }

@@ -534,6 +534,12 @@ impl Workspace {
     /// The columns of the table in a list `width` wide: the star and the title, then those the reader left on
     /// show, at the widths the reader gave them, as far as the title keeps `TITLE_MIN`.
     fn columns(settings: &wisp_core::settings::Settings, lib: &Library, width: f32) -> Vec<Column> {
+        Self::fitted(settings, lib, width).0
+    }
+
+    /// Those columns, and the names of the ones the reader left on show that the width has no room for:
+    /// the row of names says how many they are, so a column does not go without a word.
+    fn fitted(settings: &wisp_core::settings::Settings, lib: &Library, width: f32) -> (Vec<Column>, Vec<String>) {
         let column = |label: &str, own: f32, sort: Option<&'static str>, kind: ColumnKind| {
             let key = kind.key();
             let width = settings.column_widths.get(&key).map_or(own, |w| w.clamp(COLUMN_MIN, COLUMN_MAX));
@@ -549,11 +555,14 @@ impl Workspace {
         optional.push(column(t("收录"), if english { 176. } else { 84. }, None, ColumnKind::Screening));
         optional.retain(|c| !settings.columns_hidden.contains(&c.key));
         let mut chosen = vec![];
+        let mut left_out = vec![];
         for c in optional {
             let w = c.width.unwrap_or(0.);
             if room >= w {
                 room -= w;
                 chosen.push(c);
+            } else {
+                left_out.push(c);
             }
         }
         // Shown in reading order rather than the order they were admitted in.
@@ -567,8 +576,9 @@ impl Workspace {
             _ => 0,
         };
         chosen.sort_by_key(rank);
+        left_out.sort_by_key(rank);
         columns.extend(chosen);
-        columns
+        (columns, left_out.into_iter().map(|c| c.label).collect())
     }
 
     /// What is left for the title's words in a row `width` wide: the row's padding, the other columns and the cell's padding off.
@@ -687,7 +697,34 @@ impl Workspace {
                 .with_animation("filters-card", Animation::new(std::time::Duration::from_millis(240)), |card, shown| card.opacity(((shown - 0.4) / 0.6).max(0.)))
         });
 
-        let columns = Self::columns(&self.settings, lib, width);
+        let (columns, left_out) = Self::fitted(&self.settings, lib, width);
+        // The columns there is no room for, said at the end of the title's name: the title's cell is the one that gives, so nothing moves.
+        let more = (!left_out.is_empty()).then(|| {
+            let (count, names) = (left_out.len(), left_out.join(if crate::i18n::is_english() { ", " } else { "、" }));
+            div()
+                .id("th-more")
+                .flex()
+                .flex_none()
+                .items_center()
+                .h(text_px(20.))
+                .px(px(7.))
+                .rounded(px(10.))
+                .bg(Theme::bg_body())
+                .border_1()
+                .border_color(Theme::line())
+                .text_size(text_px(11.))
+                .text_color(Theme::text_secondary())
+                .cursor_pointer()
+                .hover(|s| s.text_color(Theme::text()))
+                .occlude()
+                .child(tf!("+{count} 列", "+{count} columns"))
+                .tooltip(ui::tip(tf!("这个宽度放不下 {count} 列：{names}。拉宽窗口或收起侧栏就会出现；点这里选择显示哪些列。", "No room at this width for {count} columns: {names}. Widen the window or put the sidebar away to see them; click to choose the columns.")))
+                .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.open_menu(MenuKind::Columns, event.position, cx);
+                }))
+        });
+        let mut more = more;
         let (sort_key, sort_desc) = filter::sort_parts(&f.sort);
         let spare = (Self::title_room(&columns, width) - TITLE_MIN).max(0.);
         let header: Vec<AnyElement> = columns
@@ -750,6 +787,7 @@ impl Workspace {
                     .child(div().min_w_0().truncate().child(c.label.clone()))
                     .children(edge)
                     .when(active, |d| d.child(ui::icon("chevron-down", 12., Theme::text()).when(!sort_desc, |s| s.with_transformation(Transformation::rotate(percentage(0.5))))))
+                    .when_some(if matches!(c.kind, ColumnKind::Title) { more.take() } else { None }, |d, more| d.child(div().flex_1()).child(more))
                     .into_any_element()
             })
             .collect();

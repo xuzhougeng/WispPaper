@@ -269,7 +269,7 @@ pub fn catalog() -> Vec<ToolDef> {
         scoped(
             "undo_import",
             "撤销导入",
-            "撤销一个导入批次：删除它新增的、还没有人处理过的文献。已经做过收录判断、读过、收藏、写过笔记、加过标签或附件的文献保留，并在结果里列出。",
+            "撤销一个导入批次：把它新增的、还没有人处理过的文献移出文献库（不进回收站，所以以后的检索还能再导入）；移出的记录另存为文献库文件夹里的 removed/undone-import-<批次号>.bib（结果里的 setAside），可以用 import_references 再导入。已经做过收录判断、读过、收藏、写过笔记、加过标签或附件、提过问、被稿件引用的文献保留，并在结果里列出。",
             json!({"batchId": {"type": "string", "description": "run_search 或 list_imports 给出的批次号。"}}),
             &["batchId"],
         ),
@@ -965,15 +965,20 @@ fn fetch_pdf(store: &mut Store, paper: &Paper, look_only: bool, fetch: Fetch, do
     if look_only {
         row["outcome"] = json!(if candidates.is_empty() { "not_found" } else { "candidates" });
         row["candidates"] = json!(listed);
-        if !failures.is_empty() { row["reason"] = json!(failures.join("；")) }
+        if !failures.is_empty() { row["reason"] = json!(sources::reasons(&failures)) }
         return Ok(row);
     }
     for candidate in &candidates {
         match download(&candidate.url) {
             Ok(bytes) if openaccess::is_pdf(&bytes) => {
+                // Read before it is kept: a repository lists a paper's supplement among its files, and that is not its full text.
+                let pages = fulltext::pdf_pages(&bytes);
+                if pages.as_ref().is_ok_and(|pages| openaccess::supplement(pages)) {
+                    failures.push(format!("{}：给出的文件是补充材料（附图、附表），不是正文，没有保存", candidate.source));
+                    continue;
+                }
                 let file = store.import_fetched(&paper.id, &file_name(paper), &bytes, "fulltext", &candidate.url, &candidate.source, candidate.version)?;
-                // Saved is not yet readable: the text is read at once, and what came of it said.
-                let pages = fulltext::file_pages(&store.file_path(&file));
+                // Saved is not yet readable: what came of reading its text is kept and said.
                 store.save_fulltext_pages(&file.id, &pages)?;
                 row["outcome"] = json!("saved");
                 row["source"] = json!(candidate.source);
@@ -995,9 +1000,9 @@ fn fetch_pdf(store: &mut Store, paper: &Paper, look_only: bool, fetch: Fetch, do
     }
     row["outcome"] = json!(if candidates.is_empty() { "not_found" } else { "failed" });
     // A file is listed and was not handed out: some publishers give it to a browser only.
-    if !candidates.is_empty() { failures.push("这些地址不向程序提供文件时，可以在浏览器里打开文献的链接下载，再把 PDF 拖进窗口".into()) }
+    if !candidates.is_empty() { failures.push("拿不到文件时，可以在浏览器里打开文献的链接下载，再把 PDF 拖进窗口".into()) }
     if candidates.is_empty() && failures.is_empty() { failures.push("没有找到开放获取的全文。可以打开文献的链接自己下载，再把 PDF 拖进窗口：它会附到这一条上。".into()) }
-    row["reason"] = json!(failures.join("；"));
+    row["reason"] = json!(sources::reasons(&failures));
     Ok(row)
 }
 
@@ -1193,7 +1198,7 @@ fn find_metadata(store: &mut Store, args: &Value, fetch: Fetch) -> Result<Value>
     let query = complete::Query { title: title.trim().to_string(), author: text(args, "author")?.to_string(), year };
     let found = complete::find(&query, fetch);
     // No source could be asked: there is nothing to tell candidates from.
-    if found.asked.iter().all(|asked| !asked.error.is_empty()) { bail!("{}", found.asked.iter().map(|asked| format!("{}：{}", asked.source, asked.error)).collect::<Vec<_>>().join("；")) }
+    if found.asked.iter().all(|asked| !asked.error.is_empty()) { bail!("{}", sources::reasons(&found.asked.iter().map(|asked| format!("{}：{}", asked.source, asked.error)).collect::<Vec<_>>())) }
     let placeholder = complete::placeholder_title(&paper, &files);
     let mut candidates = vec![];
     for candidate in &found.candidates {
@@ -1287,7 +1292,9 @@ fn run_search(store: &mut Store, id: &str, fetch: Fetch) -> Result<Value> {
 
 fn undo_import(store: &mut Store, args: &Value) -> Result<Value> {
     let undone = store.undo_batch(text(args, "batchId")?)?;
-    Ok(json!({"removed": undone.removed, "kept": undone.kept.iter().map(|(id, title)| json!({"id": id, "title": title})).collect::<Vec<_>>()}))
+    let mut result = json!({"removed": undone.removed, "kept": undone.kept.iter().map(|(id, title)| json!({"id": id, "title": title})).collect::<Vec<_>>()});
+    if !undone.set_aside.is_empty() { result["setAside"] = json!(store.root().join(&undone.set_aside)) }
+    Ok(result)
 }
 
 // ---- scheduled updates
@@ -1872,6 +1879,37 @@ pub(crate) mod tests {
         let failed = super::call(&root, "find_pdf", &json!({"paperId": third.id}), &open, &walled).unwrap();
         assert_eq!((failed["failed"].as_u64(), again), (Some(1), 0));
         assert!(failed["papers"][0]["reason"].as_str().unwrap().contains("返回的不是 PDF"));
+        // Reasons that end in a full stop are joined without doubling it.
+        let refused = |_: &str| -> Result<Vec<u8>, String> { Err("link.springer.com 返回 HTTP 403。".into()) };
+        let failed = super::call(&root, "find_pdf", &json!({"paperId": third.id}), &open, &refused).unwrap();
+        assert_eq!(failed["papers"][0]["reason"], "Springer：link.springer.com 返回 HTTP 403；拿不到文件时，可以在浏览器里打开文献的链接下载，再把 PDF 拖进窗口。");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_supplement_is_not_kept_as_the_full_text() {
+        let (root, _) = sample();
+        let mut store = Store::open(&libraries::list(&root)[0].dir).unwrap();
+        let paper = store.add_paper(Paper { title: "Drought in the mesophyll".into(), doi: "10.1186/drought-1".into(), ..Default::default() }).unwrap();
+        drop(store);
+        // The repository's file is the paper's supplementary figures; the publisher has the article.
+        let index = |url: &str| -> Result<String, String> {
+            if url.contains("openalex") { Ok(json!({"open_access": {"is_oa": true}, "best_oa_location": {"is_oa": true, "pdf_url": "https://repo.example/file.pdf", "version": "publishedVersion"}, "locations": []}).to_string()) } else { Ok(json!({"resultList": {"result": []}}).to_string()) }
+        };
+        let supplement = crate::fulltext::text_pdf(&["Supp. Figure 1. Gene expression changes upon cell wall digestion.\nVolcano plot", "Cluster 1 Cluster 2\nSupp. Figure 2. Functional analysis.", "Supp. Figure 3. Comparison of the profiles."]);
+        let article = crate::fulltext::text_pdf(&["Drought in the mesophyll\nAbstract\nLeaves respond to drought.", "Introduction\nSupplementary Figure 1 shows the design."]);
+        let only_supplement = |_: &str| -> Result<Vec<u8>, String> { Ok(supplement.clone()) };
+        let failed = super::call(&root, "find_pdf", &json!({"paperId": paper.id}), &index, &only_supplement).unwrap();
+        assert_eq!((failed["saved"].as_u64(), failed["failed"].as_u64()), (Some(0), Some(1)));
+        assert!(failed["papers"][0]["reason"].as_str().unwrap().starts_with("OpenAlex：给出的文件是补充材料（附图、附表），不是正文，没有保存；Springer：给出的文件是补充材料"));
+        let store = Store::open(&libraries::list(&root)[0].dir).unwrap();
+        assert!(store.paper_files(&paper.id).unwrap().is_empty());
+        assert_eq!(store.get_paper(&paper.id).unwrap().fulltext, "linked");
+        drop(store);
+        // The next address has the article: that one is kept, with its text.
+        let files = |url: &str| -> Result<Vec<u8>, String> { Ok(if url.contains("repo.example") { supplement.clone() } else { article.clone() }) };
+        let found = super::call(&root, "find_pdf", &json!({"paperId": paper.id}), &index, &files).unwrap();
+        assert_eq!((found["papers"][0]["outcome"].as_str(), found["papers"][0]["source"].as_str(), found["papers"][0]["pages"].as_u64()), (Some("saved"), Some("Springer"), Some(2)));
         std::fs::remove_dir_all(root).ok();
     }
 

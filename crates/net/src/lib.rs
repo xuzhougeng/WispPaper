@@ -143,7 +143,7 @@ pub fn lookup_paper(id: &Identifier) -> Result<Paper, String> {
         Ok(None) => {}
         Err(err) => notes.push(format!("Europe PMC：{err}")),
     }
-    paper.ok_or_else(|| if notes.is_empty() { "没有找到这个编号对应的文献，请检查后重试，或改用手动录入。".to_string() } else { notes.join("；") })
+    paper.ok_or_else(|| if notes.is_empty() { "没有找到这个编号对应的文献，请检查后重试，或改用手动录入。".to_string() } else { wisp_core::sources::reasons(&notes) })
 }
 
 /// The newest published release, read off the redirect `url` answers with
@@ -266,6 +266,11 @@ pub fn stream_chat(request: HttpRequest, protocol: Protocol, events: async_chann
     send(ChatEvent::Done(reader.finish()));
 }
 
+/// What `complete` says of an answer without a word in it. Where nothing
+/// is itself an answer (no block of a file is body text), the caller tells
+/// it apart from a failure by this.
+pub const NO_CONTENT: &str = "模型没有返回内容。";
+
 /// Send a request and wait for the whole answer as text: for a one-off
 /// question whose reply is read by code, not shown as it arrives.
 pub fn complete(request: HttpRequest, protocol: Protocol) -> Result<String, String> {
@@ -283,7 +288,7 @@ pub fn complete(request: HttpRequest, protocol: Protocol) -> Result<String, Stri
             }
         }
     }
-    if text.trim().is_empty() { return Err("模型没有返回内容。".into()) }
+    if text.trim().is_empty() { return Err(NO_CONTENT.into()) }
     Ok(text)
 }
 
