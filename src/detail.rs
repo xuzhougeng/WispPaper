@@ -3,7 +3,7 @@
 
 use crate::i18n::{label, t};
 use crate::app::{Cmd, Edge, MenuKind, Tab, Talk, Translated, Workspace};
-use crate::pdf::{Zoom, ZoomTo};
+use crate::pdf::{Split, Zoom, ZoomTo};
 use crate::theme::{self, Theme, text_px};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
@@ -457,10 +457,11 @@ impl Workspace {
             pdf.set_width(width);
             pdf.library_chat = library_chat;
         });
-        let (page, count, percent, zoom, cutting) = {
+        let (page, count, percent, zoom, cutting, split) = {
             let view = pdf.read(cx);
-            (view.current_page(), view.page_count(), view.percent(), view.zoom(), view.cutting())
+            (view.current_page(), view.page_count(), view.percent(), view.zoom(), view.cutting(), view.split())
         };
+        let split_label = match split { Split::Off => t("分屏"), Split::Side => t("左右分屏"), Split::Stacked => t("上下分屏") };
         // The fit the reader reads at, which a zoom by hand goes back to.
         let fit = lib.zoom;
         let fit_label = |zoom: Zoom| if zoom == Zoom::FitPage { t("适应整页") } else { t("适应宽度") };
@@ -499,6 +500,8 @@ impl Workspace {
                                 .when(!zoom.fits(), |d| d.child(ui::ghost_button("pdf-zoom-fit", None, Some(fit_label(fit).into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).on_click(self.on(Cmd::PdfZoom(ZoomTo::Set(fit)), cx)))),
                         )
                     })
+                    // The same file twice, side by side or one over the other: a figure in one half, the page that speaks of it in the other.
+                    .when(count > 0, |d| d.child(ui::ghost_button("pdf-split", None, Some(split_label.into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).when(split != Split::Off, |d| d.text_color(Theme::accent())).on_click(self.on_menu(MenuKind::PdfSplit, cx))))
                     // Cut a piece out of a page (a figure, a table): to keep in the figure library, or as a picture for the next question.
                     .when(count > 0, |d| d.child(ui::ghost_button("pdf-cut", None, Some(if cutting { t("取消截图").into() } else { t("截图").into() })).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).when(cutting, |d| d.text_color(Theme::accent())).on_click(self.on(Cmd::PdfCut, cx))))
                     // The whole window for this paper; in reading mode the way back is at the top.
