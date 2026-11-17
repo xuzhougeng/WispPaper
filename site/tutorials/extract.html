@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>把一批文献读成一张表 · Wisp Paper 教程</title>
+<meta name="description" content="定义物种、组织、材料、测序平台和要点五个词条，让助手逐篇从原文里找出取值并附上依据的原句，确认之后写入，再把词条作为表格列、筛选条件，导出成 CSV。">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F5F4F1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1A1B1D" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="../app-icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../app-icon.png">
+<link rel="stylesheet" href="../style.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body class="doc">
+<a class="skip" href="#main">跳到正文</a>
+
+<header class="top">
+  <div class="wrap top-in">
+    <a class="brand" href="../index.html" aria-label="Wisp Paper"><img src="../app-icon.svg" width="26" height="26" alt=""><span>Wisp Paper</span></a>
+    <nav aria-label="站点">
+      <a href="index.html" aria-current="page">教程</a>
+      <a href="../index.html#ideas">理念</a>
+      <a href="../index.html#tools">工具</a>
+      <a href="../index.html#download">下载</a>
+    </nav>
+    <a class="gh" href="https://github.com/xuzhougeng/WispPaper">GitHub<span aria-hidden="true"> ↗</span></a>
+  </div>
+</header>
+
+<main id="main" class="wrap doc-wrap">
+  <nav class="crumbs" aria-label="位置"><a href="index.html">教程</a><span>›</span>整理</nav>
+
+  <header class="doc-head">
+    <p class="kicker">教程 05　·　整理</p>
+    <h1>把一批文献读成一张表</h1>
+    <p class="lead">写综述之前，常要先做一张表：每篇文献研究的是什么物种、哪个器官，用的是原生质体还是细胞核，在什么平台上测的，结论是什么。这一篇让助手替你逐篇读出这些内容，每个取值附一句原文；你过目、改掉不对的，再写进文献库，排成表格，导出。</p>
+    <dl class="facts">
+      <div><dt>场景</dt><dd>文献库「植物单细胞转录组」里已纳入 28 篇，要为每篇填好五个词条。</dd></div>
+      <div><dt>需要</dt><dd>一个筛选过的文献库，最好有一部分存了 PDF；在「设置 › AI」里配置好的模型服务。</dd></div>
+      <div><dt>用时</dt><dd>助手读 28 篇不到两分钟；过目看你读多细，本例约 10 分钟。</dd></div>
+    </dl>
+  </header>
+
+  <div class="doc-cols">
+    <nav class="toc" aria-label="本篇的小节">
+      <h2>本篇</h2>
+      <ol>
+        <li><a href="#s1">定义要填的词条</a></li>
+        <li><a href="#s2">让助手逐篇阅读</a></li>
+        <li><a href="#s3">过目：原句对不对得上</a></li>
+        <li><a href="#s4">写入，以及撤销</a></li>
+        <li><a href="#s5">词条成了表格的列</a></li>
+        <li><a href="#s6">导出成表格文件</a></li>
+        <li class="plain"><a href="#recap">回顾</a></li>
+      </ol>
+    </nav>
+
+    <article class="prose">
+      <section id="s1">
+        <h2><i>1</i>定义要填的词条</h2>
+        <p>词条是这个文献库给每篇文献加的字段，只属于当前文献库。先把表格的几列定下来。</p>
+        <p>点侧栏左下角的「自定义词条」。库里还没有词条时，对话框里有一个「添加单细胞文献预设」，一次加上物种、组织、测序类型、测序平台四个，可以在此基础上改。每个词条有三种类型：</p>
+        <ul>
+          <li><b>文本</b>：一行文字。</li>
+          <li><b>多值</b>：一篇文献可以有几个值，例如物种、组织；可以按值筛选。</li>
+          <li><b>单选</b>：只能是固定选项之一。</li>
+        </ul>
+        <p>本例把预设里的「测序类型」改成单选词条「材料」，选项是「原生质体, 细胞核, 两者都有」。点词条右边的笔形图标修改，改完点「保存修改」。</p>
+        <p>最下面一栏「说明」值得写：助手提取时读到的就是这句话。本例给「物种」写的是「研究用的物种，写学名」，给「组织」写的是「测序取材的器官或组织，例如根尖、叶片、花序、种子」。</p>
+
+        <figure class="shot">
+          <img src="../img/t/extract-01-fields.jpg" width="1372" height="867" loading="lazy" alt="自定义词条对话框：物种、组织、材料、测序平台、要点五个词条，下方正在修改「材料」，类型为单选，选项为原生质体、细胞核、两者都有，并有一句说明。">
+          <figcaption><b>图 1</b>　五个词条和它们的类型；正在修改的「材料」是单选，选项和说明写在下面两栏。</figcaption>
+        </figure>
+
+        <p>第五个词条「要点」是现成的：一两句话概括这篇文献发现了什么。它不用自己定义，下一步的对话框里点一下就加上，默认显示为表格列。</p>
+      </section>
+
+      <section id="s2">
+        <h2><i>2</i>让助手逐篇阅读</h2>
+        <p>有三个地方可以开始，范围不同：</p>
+        <ul>
+          <li>在文献列表里选中几篇（<kbd>Shift</kbd> 或 <kbd>⌘</kbd> 点选，Windows 上是 <kbd>Ctrl</kbd>），右键「让助手填写词条…」：只读选中的。</li>
+          <li>在「自定义词条」对话框左下角点「让助手填写…」，或者侧栏「提取」页右上角的同名按钮：读当前列表里的全部文献。</li>
+          <li>在一篇文献详情的某个词条旁点 ✦：只问这一篇的这一项。</li>
+        </ul>
+        <p>本例在「全部文献」下点「让助手填写…」，列表里正是纳入的 28 篇。对话框列出所有词条，默认全勾；还没有「要点」时，这里有一行「添加这个词条」。</p>
+
+        <figure class="shot">
+          <img src="../img/t/extract-02-dialog.jpg" width="1372" height="867" loading="lazy" alt="「让助手填写词条」对话框：五个词条都已勾选，各带类型和说明；下方写着将读列表里的 28 篇中的 28 篇，其中 21 篇有全文，其余读摘要；按钮「开始读 28 篇」。">
+          <figcaption><b>图 2</b>　开始之前，对话框说明要读几篇、几篇有全文，以及用哪个模型、同时读几篇。</figcaption>
+        </figure>
+
+        <p>这次它说「将读列表里的 28 篇中的 28 篇，其中 21 篇有全文，其余读摘要。」已经填好或已经问过的词条不会重复问，要再问一遍就勾选「重新提取」。点「开始读 28 篇」。</p>
+
+        <aside class="note warn"><b>注意</b>每篇文献的题目、书目信息、摘要，存了 PDF 的还有全文，都会发给你在设置里配置的模型服务。用的是「批量筛选」那个模型，同时读的篇数也和筛选相同，在「设置 › AI」里改。</aside>
+
+        <p>助手读的时候，侧栏下方有「提取词条」的进度条，「提取」页顶上列出正在读的文献，提出的取值陆续出现在下面。可以换到别的页面做事，也可以点「停止」。</p>
+
+        <figure class="shot">
+          <img src="../img/t/extract-03-running.jpg" width="1372" height="867" loading="lazy" alt="提取页：顶部写着助手正在阅读 21/28，提出 76 个取值，有停止按钮；下面是已提出的取值列表；侧栏左下方有「提取词条 21/28」的进度条。">
+          <figcaption><b>图 3</b>　读到第 21 篇：侧栏和页面顶上都看得到进度，已提出的取值先列在下面。</figcaption>
+        </figure>
+
+        <p>个别文献没读成不会打断这一轮。一轮停下之后还有没读成或没轮到的，进度栏上会出现「选模型重试」，换一个模型只读剩下的，这个选择只用这一次。本例 28 篇都读成了，没有用到它。</p>
+      </section>
+
+      <section id="s3">
+        <h2><i>3</i>过目：原句对不对得上</h2>
+        <p>读完后，「提取」页一行是一篇文献的一个词条：取值、原文里的那句话、出自哪篇文献。原句在全文里的，右边是页码，点一下在 PDF 里翻到那一页并高亮这句；只在摘要里的，右边写「摘要」。上方的标签可以只看某一个词条。</p>
+
+        <figure class="shot">
+          <img src="../img/t/extract-04-review.jpg" width="1372" height="867" loading="lazy" alt="提取页：这一轮读完了，28/28，提出 108 个取值；按词条分为物种 23、组织 24、材料 18、测序平台 15、要点 28；每行有勾选框、取值、原文引句和文献题目；底部写着将写入 107 个取值，1 条没有勾选。">
+          <figcaption><b>图 4</b>　这一轮的结果：108 个取值，107 个默认勾选。单选词条把三个选项都列出来，标出选中的那个。</figcaption>
+        </figure>
+
+        <p>这一轮问了 28 × 5 = 140 项，助手提出了 108 个取值，其余 32 项它答的是没有：文中没有说明的，它不猜。例如 GreenCells 这篇数据库文章，物种、组织、材料、平台四项都是空的；Tao 等人的玉米叶肉细胞文章摘要里只写了 maize，没有学名，「物种」也空着。这些空着的不会出现在提取页上，留给你自己填。</p>
+        <p>默认勾选的是：词条还空着，并且找到了原文依据的取值。两种情况不勾选，留给你判断：</p>
+        <ul>
+          <li>词条已经有别的值。行上会写「现为：…（会被替换）」；多值词条是「已有：…（加在后面）」，写入时保留已有的值。</li>
+          <li>没有原文依据。助手摘的句子必须逐字出现在摘要或全文里，找不到就不算依据，那一行写「没有找到原文依据」。本例只有一条：一篇玉米根的要点。</li>
+        </ul>
+        <p>单选词条的回答对不上任何选项时，那一行写「助手答「…」，不在选项里」，可以从选项里选一个，或者留着不写。本例的 18 个「材料」都落在选项里。</p>
+        <p>有了原句也要看一眼它是从哪里摘的。ReadZS 这篇的「物种」是 Arabidopsis thaliana，取值本身不错，但依据在「第 28 页」。点进去，高亮的是参考文献列表里一篇文章的题目：</p>
+
+        <figure class="shot">
+          <img src="../img/t/extract-05-source.jpg" width="1372" height="867" loading="lazy" alt="提取页只看物种，选中 ReadZS 一行，引句标着第 28 页；右侧打开这篇的 PDF，停在第 28 页的参考文献列表，其中一条被黄色高亮。">
+          <figcaption><b>图 5</b>　点「第 28 页」，PDF 翻到那一页：被当作依据的是参考文献里的一个题目，不是作者自己的陈述。</figcaption>
+        </figure>
+
+        <p>同一篇的「组织」更明显：助手填了「根；肺；血液；心脏」，依据是作者把方法用在人肺细胞图谱上的那句。对一个植物文献库，这不是想要的答案。另一篇水稻颖果的文章，「物种」的依据也是参考文献里的一个题目。本例最后不勾选两条：</p>
+        <ul>
+          <li>ReadZS 的「组织」：混进了人的器官。</li>
+          <li>Multiome 那篇的「物种」：只写了 Arabidopsis，说明里要的是学名。</li>
+        </ul>
+        <p>点行首的勾选框，或用 <kbd>↑</kbd> <kbd>↓</kbd> 移动、<kbd>Space</kbd> 勾选，<kbd>Enter</kbd> 在右边对照 PDF。</p>
+      </section>
+
+      <section id="s4">
+        <h2><i>4</i>写入，以及撤销</h2>
+        <p>在点写入之前，什么都没有写进词条，提取页上的都只是建议。底部现在是「将写入 105 个取值，涉及 28 篇文献。3 条没有勾选，留在这里。」点「写入这 105 个取值」。写入是一次完成的：要么全部写入，要么都不写。</p>
+
+        <figure class="shot">
+          <img src="../img/t/extract-06-written.jpg" width="1372" height="867" loading="lazy" alt="提取页顶部绿色提示：已写入 105 个取值，涉及 28 篇文献，右侧有撤销；下面剩下三条没有勾选的：Multiome 的物种、ReadZS 的组织、一篇玉米根文章的要点，后者标着没有找到原文依据。">
+          <figcaption><b>图 6</b>　写入之后可以「撤销」；没勾选的 3 条还在，可以以后再定，或者「清除没勾选的 3 条」。</figcaption>
+        </figure>
+
+        <p>写错了点「撤销」，105 个取值回到写入之前。用不上的建议可以「清除」，清除的不再列出，以后也不会再问。</p>
+      </section>
+
+      <section id="s5">
+        <h2><i>5</i>词条成了表格的列</h2>
+        <p>写入之后，打开一篇文献的「信息」页，「自定义词条」下面每个取值都带着它依据的那句原文和页码，以后看到一个值，可以点回出处。还没写入的建议也在这里，旁边是「采纳」和「忽略」；助手答没有的，写「未填写 · 助手没有在文中找到」。要自己改值，点「编辑信息与词条」。</p>
+
+        <figure class="shot">
+          <img src="../img/t/extract-07-detail.jpg" width="1372" height="867" loading="lazy" alt="ReadZS 的信息页：自定义词条一栏，物种已填 Arabidopsis thaliana，下面是引句和第 28 页；组织未填写，下面是待定的建议「根、肺、血液、心脏」和采纳、忽略；材料写着未填写，助手没有在文中找到；测序平台为 10x Genomics Chromium，带第 16 页的引句。">
+          <figcaption><b>图 7</b>　一篇文献的词条：写入的值带着原句，没写入的建议可以在这里采纳或忽略，每项旁的 ✦ 只重问这一项。</figcaption>
+        </figure>
+
+        <p>要让词条成为文献列表的列，在表头上点右键，勾选组织、材料、测序平台；不需要的期刊、阅读两列可以取消。拖动两列之间的分隔线改列宽，宽度会记住，双击分隔线恢复这一列的默认宽度。列太多、窗口放不下时，排在后面的列不显示：本例「要点」就没有放下，在详情里看。</p>
+        <p>多值和单选的词条同时出现在筛选条上。点「材料」，列出每个选项有几篇：</p>
+
+        <figure class="shot">
+          <img src="../img/t/extract-08-table.jpg" width="1372" height="867" loading="lazy" alt="文献列表的表格多了物种、组织、材料、测序平台四列；筛选条上点开了「材料」，列出全部、原生质体 10、细胞核 7、两者都有 1。">
+          <figcaption><b>图 8</b>　词条作为表格列，也作为筛选：本库纳入的文献里，10 篇用原生质体，7 篇用细胞核，1 篇两者都比较了。</figcaption>
+        </figure>
+
+        <p>选「细胞核」，列表只剩那 7 篇。也可以在顶上的搜索框里搜词条的值。</p>
+      </section>
+
+      <section id="s6">
+        <h2><i>6</i>导出成表格文件</h2>
+        <p>点列表右上角的「导出」，选「表格（.csv）」，再选保存的位置。导出的是当前列表上的文献：先用筛选条选好，导出的就是这一部分。同一个菜单里还有「BibTeX（.bib）」，给参考文献管理用。</p>
+        <p>CSV 一行是一篇文献。前面是题录和状态，列名是英文的：<code>title</code>、<code>authors</code>、<code>journal</code>、<code>year</code>、<code>doi</code>、<code>pmid</code>、<code>screening</code>、<code>reading</code>、<code>fulltext</code>、<code>tags</code> 等，状态写的也是英文的值，例如 <code>included</code>、<code>unread</code>。接着每个自定义词条一列，列名就是词条名，多值词条的几个值用分号隔开；最后是 <code>notes</code>、<code>abstract</code>、<code>source</code>、<code>added_at</code>。文件是 UTF-8 编码，开头带 BOM，电子表格软件直接打开，中文不会乱码；以 <code>=</code>、<code>+</code>、<code>-</code>、<code>@</code> 开头的内容前面加了一个单引号，不会被当成公式。</p>
+        <aside class="note"><b>提示</b>CSV 里只有写入词条的取值，没有依据的原句。要核对某个值，回到这篇文献的详情，原句和页码都在那里。</aside>
+      </section>
+
+      <section id="recap" class="recap">
+        <h2>回顾</h2>
+        <ul>
+          <li>定义了五个词条：物种、组织（多值），材料（单选），测序平台（多值），要点（文本），并为它们写了说明。</li>
+          <li>助手读了 28 篇，提出 108 个取值，107 个附有原文；文中没有说明的 32 项答没有，没有猜。</li>
+          <li>点开原句核对，发现两处依据摘自参考文献、一处混进了人的器官；不勾选 2 条，写入 105 个。</li>
+          <li>词条成了表格的列和筛选条件，按当前列表导出成 CSV。</li>
+          <li>有了这张表，可以接着<a href="review.html">分阶段写一篇综述</a>；表里的结论要追问时，回到<a href="ask.html">向整个文献库提问</a>。</li>
+        </ul>
+      </section>
+    </article>
+  </div>
+
+  <nav class="pager" aria-label="上一篇和下一篇">
+    <a class="prev" href="ask.html"><small>上一篇 · 04</small><strong>向整个文献库提问</strong></a>
+    <a class="next" href="review.html"><small>下一篇 · 06</small><strong>分阶段写一篇综述</strong></a>
+  </nav>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-in">
+    <div class="refs">
+      <h2>参考</h2>
+      <ol>
+        <li><a href="index.html">全部教程</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/FEATURES.md">功能详解：每个页面能做什么</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/DATA.md">数据与隐私：文件放在哪里，哪些数据会离开本机</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/issues">问题与想法：Issues</a></li>
+      </ol>
+    </div>
+    <div class="colophon">
+      <p><b>关于这篇教程</b>　截图和数字来自 2026 年 11 月在 macOS 上用 v0.10.0 的一次实际操作。模型每次的回答不一样，你照做时措辞和数字会有出入，步骤是一样的。</p>
+      <p><b>助手可能出错</b>　它的建议和回答都要你确认；关键的数字和结论请对照原文。</p>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

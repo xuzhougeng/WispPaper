@@ -243,6 +243,18 @@ html:not(.js) .steps-list { display: none; }
 .verdict span { -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 .verdict span.lit { animation: sweep 2.8s ease-out; }
 
+/* ---------- §1: the door to the tutorials (site/tutorials/) ---------- */
+.guides-head { margin-top: clamp(64px, 9vw, 112px); }
+.guides-head p { margin-top: 12px; max-width: 41em; color: var(--ink-2); }
+.guides { margin-top: 26px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 clamp(20px, 3vw, 40px); border-top: 1px solid var(--line-strong); }
+.guides a { display: grid; grid-template-columns: 2.4rem minmax(0, 1fr); column-gap: 10px; padding: 18px 0 20px; border-bottom: 1px solid var(--line); text-decoration: none; }
+.guides a:hover { color: inherit; }
+.guides .num { font-size: 1.5rem; line-height: 1.25; }
+.guides > a > span:last-child { display: block; }
+.guides strong { font: 900 1.06rem/1.45 var(--serif); transition: color .15s ease; }
+.guides a:hover strong { color: var(--accent); }
+.guides span span { display: block; margin-top: 4px; font-size: .86rem; line-height: 1.65; color: var(--ink-2); }
+
 /* ---------- §2: the theses ---------- */
 .theses { margin-top: clamp(40px, 6vw, 72px); border-bottom: 1px solid var(--line-strong); }
 .thesis { display: grid; grid-template-columns: 5.4rem minmax(0, 1fr) minmax(0, 19rem); column-gap: clamp(20px, 3.5vw, 52px); padding-block: clamp(28px, 4vw, 44px); border-top: 1px solid var(--line-strong); align-items: start; }
@@ -332,6 +344,7 @@ html:not(.js) .steps-list { display: none; }
 
 /* ---------- narrower ---------- */
 @media (max-width: 1040px) {
+  .guides { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .thesis { grid-template-columns: 4rem minmax(0, 1fr); }
   .proof { grid-column: 2; padding-top: 14px; }
   .limits { grid-template-columns: 4rem minmax(0, 1fr); }
@@ -359,6 +372,7 @@ html:not(.js) .steps-list { display: none; }
   .limits ul { columns: 1; }
 }
 @media (max-width: 600px) {
+  .guides { grid-template-columns: minmax(0, 1fr); }
   .top nav a { padding: 6px 8px; }
   .gh { display: none; }
   .brand span { display: none; }

@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>分阶段写一篇综述 · Wisp Paper 教程</title>
+<meta name="description" content="用 /review 在助手里分四步写一节小综述：写作要求、初步框架、大纲、分节写作，每一步由你点按钮确认；保存的正文带着逐条证据，最后存为稿件。">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F5F4F1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1A1B1D" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="../app-icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../app-icon.png">
+<link rel="stylesheet" href="../style.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body class="doc">
+<a class="skip" href="#main">跳到正文</a>
+
+<header class="top">
+  <div class="wrap top-in">
+    <a class="brand" href="../index.html" aria-label="Wisp Paper"><img src="../app-icon.svg" width="26" height="26" alt=""><span>Wisp Paper</span></a>
+    <nav aria-label="站点">
+      <a href="index.html" aria-current="page">教程</a>
+      <a href="../index.html#ideas">理念</a>
+      <a href="../index.html#tools">工具</a>
+      <a href="../index.html#download">下载</a>
+    </nav>
+    <a class="gh" href="https://github.com/xuzhougeng/WispPaper">GitHub<span aria-hidden="true"> ↗</span></a>
+  </div>
+</header>
+
+<main id="main" class="wrap doc-wrap">
+  <nav class="crumbs" aria-label="位置"><a href="index.html">教程</a><span>›</span>写作</nav>
+
+  <header class="doc-head">
+    <p class="kicker">教程 06　·　写作</p>
+    <h1>分阶段写一篇综述</h1>
+    <p class="lead">导师要你在开题报告里写一节小综述：植物单细胞转录组的样品制备，原生质体和细胞核两条路线各带来什么偏差。文献已经筛过一遍。这一篇用 <code>/review</code> 让助手按四步来写，每一步由你确认，写出的每一处引用都留下一条可以对照原文的证据。</p>
+    <dl class="facts">
+      <div><dt>场景</dt><dd>从筛选过的文献库写一节约两千字的小综述。</dd></div>
+      <div><dt>需要</dt><dd>一个筛选过的文献库，最好有全文；在设置里配置好的模型。</dd></div>
+      <div><dt>用时</dt><dd>约 40 分钟，其中等模型回答占一半。</dd></div>
+    </dl>
+  </header>
+
+  <div class="doc-cols">
+    <nav class="toc" aria-label="本篇的小节">
+      <h2>本篇</h2>
+      <ol>
+        <li><a href="#s1">用 /review 开始，先定写作要求</a></li>
+        <li><a href="#s2">只有按钮算确认</a></li>
+        <li><a href="#s3">初步框架：先读已有综述</a></li>
+        <li><a href="#s4">按库里的研究重建大纲</a></li>
+        <li><a href="#s5">写一节，保存一节</a></li>
+        <li><a href="#s6">证据：原句在不在，支不支持</a></li>
+        <li><a href="#s7">核对、标为完成、存为稿件</a></li>
+        <li class="plain"><a href="#recap">回顾</a></li>
+      </ol>
+    </nav>
+
+    <article class="prose">
+      <section id="s1">
+        <h2><i>1</i>用 /review 开始，先定写作要求</h2>
+        <p>综述最怕一开始就动笔：范围、读者、篇幅没说清，写到一半才发现方向不对。<code>/review</code> 把这件事拆成四步，第一步只谈要求。</p>
+        <ol>
+          <li>打开文献库，点左侧的「助手」。对话的范围是当前列表里的文献，这个库里是 28 篇。</li>
+          <li>在输入框里打 <code>/review</code>，空一格写主题，可以连同篇幅和读者一起写，然后发送。</li>
+        </ol>
+        <blockquote><cite>提问</cite><p>/review 植物单细胞转录组的样品制备：原生质体与细胞核两条路线，各自带来哪些偏差。写一节两千字左右的小综述，读者是刚入门的研究生</p></blockquote>
+        <p>发出之后，对话上方多了一行进度：「写作要求 › 初步框架 › 大纲 › 分节写作」。这次对话从此带着一份综述记录。</p>
+        <p>不到一分钟，助手交回一张要求清单：核心问题、范围边界、读者、篇幅、文献时间范围、引用要求、图表，每一项标明是你已经说过的（「已明确」），还是它替你补的（「建议」）。比如篇幅口径一项它建议「正文控制在约 1,800—2,200 个中文字」，图表一项建议配一张偏差来源的比较表。</p>
+        <figure class="shot">
+          <img src="../img/t/review-01-requirements.jpg" width="1372" height="867" loading="lazy" alt="助手页面，上方是四步进度，第 1 步写作要求高亮；对话里是一张写作要求表格，每行有项目、要求或建议、状态三列；对话末尾一张卡片写着第 1 步写作要求，右侧是绿色按钮「采用为写作要求」。">
+          <figcaption><b>图 1</b>　第一条回答是要求清单。要看的是最下面的卡片：该你做的那一步总在对话末尾，这里是「采用为写作要求」。</figcaption>
+        </figure>
+        <p>清单里哪项不合适，就在对话里接着说，助手每次都给出完整的一份新清单。</p>
+      </section>
+
+      <section id="s2">
+        <h2><i>2</i>只有按钮算确认</h2>
+        <p>这次没有点按钮，而是在对话里回了一句「可以」。助手把标着「建议」的几项定了稿，又交回一份完整清单，最后一行是：</p>
+        <blockquote><cite>助手</cite><p>本清单为定稿，请点击本条回答末尾的「采用为写作要求」按钮完成确认；点击后进入已有综述检索与初步框架阶段。</p></blockquote>
+        <p>进度还停在第 1 步，记录里的写作要求仍是空的。这是有意的设计：模型说的话可能和你想的有出入，对话里一句「可以」不会写进记录；写进记录、算作确认的只有你点的那一下。点「采用为写作要求」，记下的是最后这条回答的全文，同时确认。</p>
+        <figure class="shot">
+          <img src="../img/t/review-02-adopted.jpg" width="1372" height="867" loading="lazy" alt="点按钮后的助手页面：顶部提示「已采用为写作要求」，进度行里写作要求前出现对勾，第 2 步初步框架高亮；末尾卡片写着写作要求已确认，下一步读已有综述，按钮是「提出初步框架」和「跳过」。">
+          <figcaption><b>图 2</b>　采用之后，「写作要求」打勾，卡片换成下一步的两个按钮：「提出初步框架」和「跳过」。</figcaption>
+        </figure>
+        <aside class="note"><b>提示</b>只想采用回答里的一段，就选中那段文字，点选区旁的「所选采用为写作要求」。后面几步同理。</aside>
+      </section>
+
+      <section id="s3">
+        <h2><i>3</i>初步框架：先读已有综述</h2>
+        <p>动手搭结构之前，先看看别人已经怎么综述过这个话题。点卡片上的「提出初步框架」，它替你发出一句请求：「请找出这个主题已发表的综述，逐篇比较，再提出初步框架。」</p>
+        <p>这一步助手会查文献库，也会到 PubMed、Europe PMC 试检索库外的综述，所以检索词会发给这两个数据库。这次等了两三分钟，交回的内容是：</p>
+        <ul>
+          <li>一张比较表，10 篇综述各占一行：问的核心问题、章节结构、长处、局限，以及读到的是什么。库里的 Integrated single cell transcriptomics analysis for unraveling heterogeneity and plasticity of root cells for sustainable and regenerative agriculture 有全文，它标「已读正文全文，p.1—13」；另两篇库内综述只读了摘要；库外 7 篇只有题录和摘要片段，章节结构一栏照实写「未读到」。</li>
+          <li>综合出的初步框架，五章，每章写明要回答的问题和暂定答案，比如第三章「细胞核路线：绕开部分解离问题后，测量对象改变意味着什么？」，暂定答案里明说「暂不下定论」。</li>
+          <li>建议补读的库外综述，以及「本轮未导入或下载新文献」。</li>
+        </ul>
+        <figure class="shot">
+          <img src="../img/t/review-03-framework.jpg" width="1372" height="867" loading="lazy" alt="初步框架回答的末尾：列出需要补读的四篇库外综述，下方是 P27、P28、P30 三篇来源的标签，以及一个带对勾的引文标签 P27 p.13，后面标着「原文一致」；卡片按钮是「采用为初步框架」和「跳过」。">
+          <figcaption><b>图 3</b>　回答下面是它用到的来源。带引号的那一枚是摘录，已经和这篇文献保存的文字比对过，显示「原文一致」。</figcaption>
+        </figure>
+        <p>初步框架只是从已有综述得来的起点，还没有被原始研究检验。满意就点「采用为初步框架」。这个主题如果没有可参照的综述，点「跳过」，直接按文献库拟大纲。</p>
+      </section>
+
+      <section id="s4">
+        <h2><i>4</i>按库里的研究重建大纲</h2>
+        <p>点卡片上的「重建大纲」。助手按初步框架的每一章去读库里的原始研究，逐章说明保留、改写、合并、拆分还是删去，以及是哪篇文献让它这样改。</p>
+        <p>这次约两分钟。它先列出实际读到的范围：最直接的证据是 Integrated experimental and computational workflows for single-cell transcriptomics in plants（玉米上原生质体与鲜样、冻样提核的同一研究比较），已读第 1 到 12 页；拟南芥叶片干旱那篇，它注明附件是补充材料，「未读到论文正文」。然后给出五节的大纲，每节有预计字数、代表文献和证据缺口。原来的第四章被拆开，「背景污染与校正」单独成节，依据是那篇玉米研究观察到校正后灵敏度下降。</p>
+        <p>最有用的是单列的一段「文献库证据尚撑不住的内容」，例如「核路线更接近所有细胞的原始状态」不能作为一般结论，鲜样与冻样的差异也不能全归于冷冻，因为那篇研究同时改变了组织破碎的流程。</p>
+        <figure class="shot">
+          <img src="../img/t/review-04-outline.jpg" width="1372" height="867" loading="lazy" alt="大纲回答的末尾：一张表列出原始研究补出的内容，下面是大纲确认后需要补核对的四项，再下面是 P22、P36、P38、P40、P46、P45、P32 等来源标签和一个标着原文一致的引文；卡片是第 3 步大纲，按钮「采用为大纲」。">
+          <figcaption><b>图 4</b>　进度走到第 3 步。卡片上是「采用为大纲」；大纲确认之前，正文不能保存。</figcaption>
+        </figure>
+        <p>看过章节、代表文献和缺口，点「采用为大纲」。</p>
+      </section>
+
+      <section id="s5">
+        <h2><i>5</i>写一节，保存一节</h2>
+        <p>大纲确认后，卡片上是「写第一节」。点它，助手只写这一节，以「## 节名」开头。这次交回的引言 146 字（大纲给这一节约 180 字），其中两句带引用，形如 <code>[P22 p.8 "Root cap cells were exclusively recovered in nuclei-derived datasets."]</code>：标签、页码和一句原文。</p>
+        <p>读过觉得可以，点卡片上的「保存正文」。节名取回答开头的标题；再保存一次会成为另一节，不覆盖。</p>
+        <figure class="shot">
+          <img src="../img/t/review-05-section.jpg" width="1372" height="867" loading="lazy" alt="保存一节正文后的助手页面：顶部提示这一节已保存，它的引用带来 2 条证据，等你判断；进度行显示正文 1 节、2 条证据待判断；对话里是引言正文和两条标着原文一致的引文；卡片按钮是「写下一节」「核对全文」「存为新稿件」。">
+          <figcaption><b>图 5</b>　保存时提示「它的引用带来 2 条证据，等你判断」；进度行也记着待判断的条数。卡片换成「写下一节」「核对全文」「存为新稿件」。</figcaption>
+        </figure>
+        <p>之后每点一次「写下一节」，助手接着已保存的章节往下写。本篇为了把整条路走完，只写了引言这一节，后面四节的做法相同。</p>
+      </section>
+
+      <section id="s6">
+        <h2><i>6</i>证据：原句在不在，支不支持</h2>
+        <p>点进度行右边的「查看记录」，对话换成这份综述记录：写作要求、初步框架、大纲、各节正文、证据笔记、检查记录，从上往下排。每一项旁边都有「编辑」。</p>
+        <p>每节正文下面是它带来的证据，一处引用一条：</p>
+        <ul>
+          <li><b>论断</b>：引用所在的那句话，比如「例如，玉米制样比较中，根冠细胞仅在核数据中回收，说明图谱覆盖受路线影响。」</li>
+          <li><b>来源</b>：引用指向的文献和页码，这里是那篇玉米研究的 p.8。</li>
+          <li><b>摘录</b>：引用带的原句，下面写着比对结果。</li>
+        </ul>
+        <figure class="shot">
+          <img src="../img/t/review-06-evidence.jpg" width="1372" height="867" loading="lazy" alt="综述记录里的「1 · 引言：制样偏差发生在哪些层面？」一节：正文下面两张证据卡片，各有论断、文献题目与页码、英文摘录和绿色的「原文一致」，以及「支持」「部分支持」「不支持」「无法判断」四个判断按钮，第一张的「支持」已选中；右侧是「看原文」「编辑」「删除」。">
+          <figcaption><b>图 6</b>　两条证据的摘录都「原文一致」。第一条已判断为「支持」，第二条还等着判断，进度行变成「1 条证据待判断」。</figcaption>
+        </figure>
+        <p>比对结果有五种：「原文一致」；「原文在 p.N」，句子找到了，但在另一页；「只对上开头的 N%」；「原文里没有这句」；「没有全文可核对」，这篇文献没有可读的全文。这次两条都是「原文一致」。</p>
+        <p>比对只回答一件事：<b>这句话在不在原文里</b>。它不回答这句原文能不能撑起论断。第一条的摘录说根冠细胞只在核数据里回收，论断后半句「说明图谱覆盖受路线影响」是从中推出来的；该判「支持」还是「部分支持」，要你点「看原文」打开 PDF（摘录会高亮），读上下文后再定。点「支持」「部分支持」「不支持」或「无法判断」记下判断，再点一次已选的就收回。</p>
+        <h3>改过的地方要重新确认</h3>
+        <p>记录里的写作要求、初步框架和大纲都能直接改，但改了就要重新确认：改写作要求，后面的框架和大纲也回到待确认；改初步框架，大纲跟着待确认；标题旁出现「确认」，对话末尾的卡片也换成确认它。已经保存的正文和证据都留着。改了正文，句子还在的证据和判断不变；句子变了的，原来的判断收回。</p>
+        <aside class="note"><b>提示</b>正文里没有引用、你又想记下依据的句子，可以在记录里点「添加证据」，自己选文献、填页码和摘录。页码是 PDF 里从 1 数起的第几页，不一定是印刷页码。</aside>
+      </section>
+
+      <section id="s7">
+        <h2><i>7</i>核对、标为完成、存为稿件</h2>
+        <p>回到对话，点卡片上的「核对全文」，它发出 <code>/verify 已保存的各节正文</code>。助手把引言拆成 9 条论断，逐条附上原文摘录和结论。结论并不都是「支持」：第一句「通常先去除细胞壁获得原生质体」它判为「部分支持」，因为它只核到这一项研究的方法部分，撑不起「通常」二字；根冠那一句它判为直接支持，同时提醒这是特定材料和流程里的观察。</p>
+        <figure class="shot">
+          <img src="../img/t/review-07-verify.jpg" width="1372" height="867" loading="lazy" alt="核对回答的末尾：第 8、9 条论断各有原文摘录和核对结果，最后一段总结；下面是九个 P22 引文标签，都标着原文一致；卡片写着核对的结果可以记为检查记录，它是否属实仍要你过目，按钮「记录检查」。">
+          <figcaption><b>图 7</b>　核对的回答下面，卡片只有一个按钮「记录检查」，并说明检查是否属实仍要你过目。</figcaption>
+        </figure>
+        <p>点「记录检查」，这份核对存进记录的「检查记录」。之后卡片上出现「标为完成」。这一节的第一句该不该改，是你读完核对后的事；这次没有改，直接点了「标为完成」。</p>
+        <aside class="note warn"><b>注意</b>「标为完成」不是事实核验通过。它只要求要求和大纲已确认、至少保存了一节、检查记录是对当前内容做的；这次点它时，还有一条证据没有判断，它照样接受了。「原文一致」也只说明原句在原文里。关键的数字和结论，请自己对照原文。</aside>
+        <p>最后点「存为新稿件」。已保存的各节按顺序进入「写作」里的一份新稿件，不覆盖已有稿件。对话里的引用转成写作页的引用：<code>[P22 p.8 "Root cap cells …"]</code> 变成 <code>[@Wang2026c, p. 8]</code>，原句不进正文，留在综述记录里。对不上文献的标签会原样保留，列在稿件末尾的「来源标签（请核对）」里；这次两处都对上了。</p>
+        <figure class="shot">
+          <img src="../img/t/review-08-manuscript.jpg" width="1372" height="867" loading="lazy" alt="写作页：左侧大纲里是一节「引言：制样偏差发生在…」，146 字；中间正文里两处引用显示为 @Wang2026c, p. 8 和 @Wang2026c, p. 9；右侧是候选句列表，顶部标签页有「候选句」「批注」「参考文献 1」。">
+          <figcaption><b>图 8</b>　新稿件打开在写作页，标题取自 <code>/review</code> 后面那句话。正文里的引用已经是 <code>[@Wang2026c, p. 8]</code> 的形式，参考文献 1 篇。</figcaption>
+        </figure>
+        <p>存为稿件之后在写作页的修改，不会回到综述记录里；记录和这次对话留在文献库，从助手的「历史」里点开，可以接着写下一节。</p>
+      </section>
+
+      <section id="recap" class="recap">
+        <h2>回顾</h2>
+        <ul>
+          <li>用 <code>/review 主题</code> 开始，四步依次确认：写作要求、初步框架、大纲、分节写作。</li>
+          <li>每一步只认对话末尾卡片上的按钮；对话里说「可以」不写进记录。</li>
+          <li>保存一节时，每处引用成为一条证据；「原文一致」只说明原句在原文里，支不支持论断由你判断。</li>
+          <li>「核对全文」「记录检查」「标为完成」留下检查的痕迹，但不等于事实核验。</li>
+          <li>「存为新稿件」把各节送进写作页，引用转成 <code>[@Key, p. N]</code>。接下来在写作页里怎么改、怎么补引用，见<a href="write.html">写论文：候选句、配引用与出处</a>。</li>
+        </ul>
+      </section>
+    </article>
+  </div>
+
+  <nav class="pager" aria-label="上一篇和下一篇">
+    <a class="prev" href="extract.html"><small>上一篇 · 05</small><strong>把一批文献读成一张表</strong></a>
+    <a class="next" href="write.html"><small>下一篇 · 07</small><strong>写论文</strong></a>
+  </nav>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-in">
+    <div class="refs">
+      <h2>参考</h2>
+      <ol>
+        <li><a href="index.html">全部教程</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/FEATURES.md">功能详解：每个页面能做什么</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/DATA.md">数据与隐私：文件放在哪里，哪些数据会离开本机</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/issues">问题与想法：Issues</a></li>
+      </ol>
+    </div>
+    <div class="colophon">
+      <p><b>关于这篇教程</b>　截图和数字来自 2026 年 11 月在 macOS 上用 v0.10.0 的一次实际操作。模型每次的回答不一样，你照做时措辞和数字会有出入，步骤是一样的。</p>
+      <p><b>助手可能出错</b>　它的建议和回答都要你确认；关键的数字和结论请对照原文。</p>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

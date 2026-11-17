@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>教程 · Wisp Paper</title>
+<meta name="description" content="九篇按科研场景写的 Wisp Paper 教程：从一个课题建库、迁移 Zotero、精读、向文献库提问、把文献读成一张表、写综述、写论文、改稿，到跟进新文献。">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F5F4F1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1A1B1D" media="(prefers-color-scheme: dark)">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Wisp Paper 教程：九个科研场景">
+<meta property="og:description" content="每一篇从一件具体的事开始：一个新课题，一篇要读透的文章，一份要发回去的稿件。">
+<meta property="og:url" content="https://xuzhougeng.github.io/WispPaper/tutorials/">
+<meta property="og:image" content="https://xuzhougeng.github.io/WispPaper/img/library.png">
+<link rel="icon" href="../app-icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../app-icon.png">
+<link rel="stylesheet" href="../style.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body class="doc">
+<a class="skip" href="#main">跳到正文</a>
+
+<header class="top">
+  <div class="wrap top-in">
+    <a class="brand" href="../index.html" aria-label="Wisp Paper"><img src="../app-icon.svg" width="26" height="26" alt=""><span>Wisp Paper</span></a>
+    <nav aria-label="站点">
+      <a href="index.html" aria-current="page">教程</a>
+      <a href="../index.html#ideas">理念</a>
+      <a href="../index.html#tools">工具</a>
+      <a href="../index.html#download">下载</a>
+    </nav>
+    <a class="gh" href="https://github.com/xuzhougeng/WispPaper">GitHub<span aria-hidden="true"> ↗</span></a>
+  </div>
+</header>
+
+<main id="main" class="wrap doc-wrap">
+  <header class="doc-head">
+    <p class="kicker">教程　·　九个科研场景</p>
+    <h1>从一件具体的事开始</h1>
+    <p class="lead">每一篇教程是一次真实的操作：一个刚接手的课题，一篇要读透的文章，一份导师批过、要发回去的稿件。它们用的是同一个文献库「植物单细胞转录组」，可以从头读到尾，也可以只读手头正要做的那一篇。</p>
+    <dl class="facts">
+      <div><dt>先读哪一篇</dt><dd>手里没有文献，从 01 开始；文献已经在 Zotero 或一个文件夹里，从 02 开始。之后各篇互不依赖。</dd></div>
+      <div><dt>需要模型的</dt><dd>除了 02，其余各篇都用到助手，要先在「设置 › AI」里配置一个你自己的模型服务，01 的第一步讲怎么配。</dd></div>
+      <div><dt>版本</dt><dd>按 v0.10.0 写成，macOS 上操作；Windows 上把 ⌘ 换成 Ctrl，其余相同。</dd></div>
+    </dl>
+  </header>
+
+  <div class="shelf">
+    <section class="shelf-part">
+      <h2><small>一</small>收集</h2>
+      <div>
+        <a class="entry" href="start.html">
+          <span class="num">01</span>
+          <div>
+            <h3>从一个课题开始：检索、导入、筛选</h3>
+            <p>刚接手一个方向，手里一篇文献都没有。写下主题，让助手拟检索式，从 PubMed 和 Europe PMC 成批导入，再由助手逐篇读过、你来确认收不收。</p>
+          </div>
+          <dl><div><dt>需要</dt><dd>一个模型服务</dd></div><div><dt>用时</dt><dd>约 15 分钟</dd></div></dl>
+        </a>
+        <a class="entry" href="migrate.html">
+          <span class="num">02</span>
+          <div>
+            <h3>把已有的文献搬进来：Zotero、PDF 与题录</h3>
+            <p>文献在 Zotero 里，在一个攒了几年的 PDF 文件夹里，在导师发来的 .bib 里。把它们连同标签、笔记和 PDF 搬进一个文献库，补齐题录，找回缺的全文。</p>
+          </div>
+          <dl><div><dt>需要</dt><dd>不需要模型</dd></div><div><dt>用时</dt><dd>约 10 分钟</dd></div></dl>
+        </a>
+      </div>
+    </section>
+
+    <section class="shelf-part">
+      <h2><small>二</small>阅读</h2>
+      <div>
+        <a class="entry" href="read.html">
+          <span class="num">03</span>
+          <div>
+            <h3>精读一篇文献：读、标、问、记</h3>
+            <p>一篇要读透的文章。对照译文读，高亮和划线，就读不懂的那一段问助手，把回答存成笔记，把要紧的图和表截下来收进图片库。</p>
+          </div>
+          <dl><div><dt>需要</dt><dd>一篇带 PDF 的文献，一个模型服务</dd></div><div><dt>用时</dt><dd>约 15 分钟</dd></div></dl>
+        </a>
+        <a class="entry" href="ask.html">
+          <span class="num">04</span>
+          <div>
+            <h3>向整个文献库提问，并核对回答</h3>
+            <p>「这个方向都用过哪些制样方法，各有什么利弊？」让助手读整个库来回答，每个结论带出处；再逐条核对它引的话在不在原文里。</p>
+          </div>
+          <dl><div><dt>需要</dt><dd>一个有几十篇文献的库，一个模型服务</dd></div><div><dt>用时</dt><dd>约 10 分钟</dd></div></dl>
+        </a>
+      </div>
+    </section>
+
+    <section class="shelf-part">
+      <h2><small>三</small>整理</h2>
+      <div>
+        <a class="entry" href="extract.html">
+          <span class="num">05</span>
+          <div>
+            <h3>把一批文献读成一张表</h3>
+            <p>物种、器官、原生质体还是细胞核、测序平台：定义自己的词条，让助手逐篇从原文里找出取值，附上依据的原句；你确认之后写入，再导出成表格。</p>
+          </div>
+          <dl><div><dt>需要</dt><dd>一个文献库，一个模型服务</dd></div><div><dt>用时</dt><dd>约 15 分钟</dd></div></dl>
+        </a>
+      </div>
+    </section>
+
+    <section class="shelf-part">
+      <h2><small>四</small>写作</h2>
+      <div>
+        <a class="entry" href="review.html">
+          <span class="num">06</span>
+          <div>
+            <h3>分阶段写一篇综述</h3>
+            <p>用 <code>/review</code> 开始：写作要求、初步框架、大纲、分节写作，四步各自由你确认。每一处引用留下一条证据，来源是否支持论断，等你判断。</p>
+          </div>
+          <dl><div><dt>需要</dt><dd>一个筛选过的文献库，最好有全文；一个模型服务</dd></div><div><dt>用时</dt><dd>约 40 分钟</dd></div></dl>
+        </a>
+        <a class="entry" href="write.html">
+          <span class="num">07</span>
+          <div>
+            <h3>写论文：候选句、配引用与出处</h3>
+            <p>写引言的时候，文献库就在右手边：找句子，给写好的段落配引用，核对每条引用依据的是哪句原文；或者交代一句，让助手直接写进稿件。</p>
+          </div>
+          <dl><div><dt>需要</dt><dd>几篇带全文的文献，一个模型服务</dd></div><div><dt>用时</dt><dd>约 20 分钟</dd></div></dl>
+        </a>
+        <a class="entry" href="revise.html">
+          <span class="num">08</span>
+          <div>
+            <h3>和合作者改稿：Word 批注与修订</h3>
+            <p>导师在 Word 里留了一串批注。导入这份稿件，逐条处理，让助手再审一遍，最后导出成带修订的 Word 发回去，版式原样不动。</p>
+          </div>
+          <dl><div><dt>需要</dt><dd>一份 .docx 稿件，一个模型服务</dd></div><div><dt>用时</dt><dd>约 15 分钟</dd></div></dl>
+        </a>
+      </div>
+    </section>
+
+    <section class="shelf-part">
+      <h2><small>五</small>跟进</h2>
+      <div>
+        <a class="entry" href="follow.html">
+          <span class="num">09</span>
+          <div>
+            <h3>跟进新文献，把文献库交给别的工具</h3>
+            <p>让保存的检索式每周自己运行，新文献进来先由助手过一遍。再用 <code>wisp</code> 和 MCP，把同一个文献库交给终端里的脚本和外部的 AI 客户端。</p>
+          </div>
+          <dl><div><dt>需要</dt><dd>一个有检索式的文献库；会用终端</dd></div><div><dt>用时</dt><dd>约 15 分钟</dd></div></dl>
+        </a>
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-in">
+    <div class="refs">
+      <h2>参考</h2>
+      <ol>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/FEATURES.md">功能详解：每个页面能做什么</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/DATA.md">数据与隐私：文件放在哪里，哪些数据会离开本机</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/CLI.md">命令行与 MCP</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/issues">问题与想法：Issues</a></li>
+      </ol>
+    </div>
+    <div class="colophon">
+      <p><b>关于这些教程</b>　截图和数字来自 2026 年 11 月在 macOS 上的实际操作。模型每次的回答不一样，数据库每天在变，你照做时措辞和数字会有出入，步骤是一样的。</p>
+      <p><b>助手可能出错</b>　它的建议和回答都要你确认；关键的数字和结论请对照原文。</p>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

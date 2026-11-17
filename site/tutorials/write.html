@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>写论文 · Wisp Paper 教程</title>
+<meta name="description" content="在写作页写一篇论文的引言：看别人在这一部分怎么写，给自己的段落配引用，核对每条引用依据的原句，或者交代一句让助手写进稿件，最后导出。">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F5F4F1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1A1B1D" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="../app-icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../app-icon.png">
+<link rel="stylesheet" href="../style.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body class="doc">
+<a class="skip" href="#main">跳到正文</a>
+
+<header class="top">
+  <div class="wrap top-in">
+    <a class="brand" href="../index.html" aria-label="Wisp Paper"><img src="../app-icon.svg" width="26" height="26" alt=""><span>Wisp Paper</span></a>
+    <nav aria-label="站点">
+      <a href="index.html" aria-current="page">教程</a>
+      <a href="../index.html#ideas">理念</a>
+      <a href="../index.html#tools">工具</a>
+      <a href="../index.html#download">下载</a>
+    </nav>
+    <a class="gh" href="https://github.com/xuzhougeng/WispPaper">GitHub<span aria-hidden="true"> ↗</span></a>
+  </div>
+</header>
+
+<main id="main" class="wrap doc-wrap">
+  <nav class="crumbs" aria-label="位置"><a href="index.html">教程</a><span>›</span>写作</nav>
+
+  <header class="doc-head">
+    <p class="kicker">教程 07　·　写作</p>
+    <h1>写论文：候选句、配引用与出处</h1>
+    <p class="lead">数据分析做完了，要动笔写自己论文的引言。这一篇在写作页上走一遍：先用中文把意思写下来，看文献库里的论文在引言里怎么写，给段落配上引用，再逐条核对每条引用依据的是原文哪一句；也可以交代一句话，让助手直接写进稿件。</p>
+    <dl class="facts">
+      <div><dt>场景</dt><dd>为一篇水稻叶枕单细胞核图谱的论文写引言，文献库「植物单细胞转录组」就在旁边。</dd></div>
+      <div><dt>需要</dt><dd>文献库里有几篇带全文的文献；在「设置 › AI」里配好的模型服务。</dd></div>
+      <div><dt>用时</dt><dd>约 20 分钟，其中等模型的时间约 8 分钟。</dd></div>
+    </dl>
+  </header>
+
+  <div class="doc-cols">
+    <nav class="toc" aria-label="本篇的小节">
+      <h2>本篇</h2>
+      <ol>
+        <li><a href="#s1">新建稿件，先写下意思</a></li>
+        <li><a href="#s2">看别人在这一部分怎么写</a></li>
+        <li><a href="#s3">给一段话配引用</a></li>
+        <li><a href="#s4">润色、译成英文、仿写</a></li>
+        <li><a href="#s5">参考文献与出处</a></li>
+        <li><a href="#s6">换成助手写</a></li>
+        <li><a href="#s7">导出</a></li>
+        <li class="plain"><a href="#recap">回顾</a></li>
+      </ol>
+    </nav>
+
+    <article class="prose">
+      <section id="s1">
+        <h2><i>1</i>新建稿件，先写下意思</h2>
+        <p>在文献库左侧进入「写作」。第一次进来已经有一份「未命名稿件」，点稿件上方的标题改名，这里叫「水稻叶枕发育的单细胞核转录组图谱」。以后要另起一份，点大纲底部的「稿件 1」，菜单里有「新建稿件」，或「导入 Word / Markdown 文件…」从已有的草稿开始。</p>
+        <p>左边是大纲：新稿件按 Abstract、Introduction、Methods、Results、Discussion 分好了节，每节名称下写着它属于论文的哪一部分（摘要、导言、方法、结果、讨论）。这个「部分」决定了右边的候选句从文献的哪一部分里找；节名和部分都可以在节的菜单「名称与类型…」里改，「添加一节」加新的。稿件上方的「英文」是正文语言，可选中文、德文、法文、西班牙文、日文，「译成英文」这类按钮按它来译。</p>
+        <p>大纲标题旁有两个图标：笔是「自己写」，星形是「助手写」。先用自己写。在 Introduction 里用中文写下三段：单细胞核测序为什么被越来越多地采用，玉米叶舌区图谱发现了什么、水稻叶枕还不清楚什么，以及本研究做了什么。正文随写随存。</p>
+        <figure class="shot">
+          <img src="../img/t/write-01-outline.jpg" width="1372" height="867" loading="lazy" alt="写作页：左边是大纲，Introduction 选中；中间是三段中文草稿；右边是候选句面板，列出各篇文献导言的开头，「全文 22 篇」旁有一个带数字 6 的星形按钮。">
+          <figcaption><b>图 1</b>　左上角是两种写法的切换；右边「全文 22 篇」旁的星形按钮带着 6，是还可以让模型整理的全文篇数。</figcaption>
+        </figure>
+      </section>
+
+      <section id="s2">
+        <h2><i>2</i>看别人在这一部分怎么写</h2>
+        <p>右边的「候选句」来自文献库里各篇全文的同一部分。没写之前，它列出各篇文献导言的开头。</p>
+        <p><b>先整理全文。</b>全文按标题分成导言、方法、结果、讨论。有的 PDF 段落没有标题可依，图 1 里的星形按钮就是为它们准备的，悬停时说「让模型判断 6 篇有段落没有标题可依的全文」。点一下，由「设置 › AI › 任务」里「整理全文」那一项的模型逐篇判断，只发送这几篇的文字。这次 6 篇用了不到两分半，其中 2 篇显示「没成」，提示「模型没有返回内容」，按钮上的数字变成 2，可以再点一次重试；导言的句子从 548 句变成 526 句。</p>
+        <p><b>为一段找候选句。</b>把光标放在第二段，按 <kbd>⌘</kbd> + <kbd>↩</kbd>（Windows 上是 <kbd>Ctrl</kbd> + <kbd>Enter</kbd>），或点稿件下方的「找句子」。模型先把中文变成几组英文检索词，分「内容」「论述」「说法」列在查找框下面，例如：</p>
+        <blockquote><cite>说法</cite><p>leaf lamina joint rice leaf collar maize ligule brassinosteroids hormone response</p></blockquote>
+        <p>下面是相近的句子，每张卡片注明作者、年份和页码。鼠标移到卡片上，会出现「上下文」「复制」「原文」：「上下文」展开这句前后的句子，「原文」在 PDF 里打开它。检索词下方的「全部文献」可以收窄到一个标签或「★ 星标」的文献：选标签「玉米」后，候选范围从 526 句缩到 101 句。</p>
+        <figure class="shot">
+          <img src="../img/t/write-02-candidates.jpg" width="1372" height="867" loading="lazy" alt="候选句面板：查找框下列出四组英文检索词，下面第一张卡片展开了上下文，中间一句是 In this study, we present a systematic comparison of protoplast- and nucleus-based single-cell transcriptomic methods in maize root and leaf tissues。">
+          <figcaption><b>图 2</b>　为第二段找到的候选句。第一张卡片展开了上下文，浅色的是前后句。</figcaption>
+        </figure>
+        <p><b>引用一句。</b>这一轮排在前面的并不是玉米叶舌区那篇。在查找框里直接输入英文 <code>brassinosteroid adaxial hypodermal</code> 回车，找到它导言第 2 页的一句：</p>
+        <blockquote><cite>Wang et al., 2026</cite><p>Brassinosteroid (BR) promotes LA expansion by promoting ligular cell elongation in rice and other crops.</p></blockquote>
+        <p>把光标放在第二句的句号前，点这张卡片上的「引用」，光标处插入 <code>[@Wang2026]</code>，这句原文同时记为这处引用的出处。光标停在引用上时，稿件下方一行写着文献题目和这句原文，以及「导言 · 第 2 页」。</p>
+        <figure class="shot">
+          <img src="../img/t/write-03-cite.jpg" width="1372" height="867" loading="lazy" alt="稿件第二段句末出现绿色的 [@Wang2026]；稿件下方一行显示 @Wang2026 的题目和它的原句，标着导言第 2 页。">
+          <figcaption><b>图 3</b>　在候选句上点「引用」之后：稿件下方是这处引用的出处。</figcaption>
+        </figure>
+        <aside class="note warn"><b>注意</b>候选句是别人的写法，用来参考和引用，不要照抄。还要看清它在原文里说的是谁的发现：这句在那篇文献的导言里，讲的是前人的结论，而稿件里这句话说的是这篇文献自己的结果，更合适的依据在它的摘要或结果里。</aside>
+      </section>
+
+      <section id="s3">
+        <h2><i>3</i>给一段话配引用</h2>
+        <p>第一段写完了还没有引用。选中整段，选区旁浮出一排按钮，分三组：「找句子」「配引用」只在文献库里查找，不改文字；「润色」「译成英文」「仿写」给出改过的文字；最后是「批注」。点「配引用」。</p>
+        <p>模型先把每句话变成英文检索词，在 28 篇文献的题录、摘要和全文里找，再逐篇核对哪些真的支持这句话。第一次不到一分钟，右边出现一张卡片：每句一组，句子旁标着它的作用（这一句是「背景」），下面是勾选的文献，各带模型的理由和那篇文献自己的原句与所在位置。第一次，第一句勾了两篇综述：</p>
+        <blockquote><cite>Bawa et al., 2022 · 综述</cite><p>综述明确指出可刻画植物常见和稀有细胞类型及状态</p></blockquote>
+        <figure class="shot">
+          <img src="../img/t/write-04-citefind.jpg" width="1372" height="867" loading="lazy" alt="配引用的卡片：第一句下勾选了 Bawa et al., 2022 和 Yasmeen et al., 2026 两篇综述，各有一行绿色的理由和英文原句，底部是「插入 5 条引用」按钮。">
+          <figcaption><b>图 4</b>　配引用的卡片。勾选的是模型认为可以引用的，点一下可以取消或另选；底部按钮写着要插入几条。</figcaption>
+        </figure>
+        <p>这次底部是「插入 5 条引用」。本例放弃了这张卡片，重做了一次，这次只勾了 Bawa 2022 一篇，并说「另外 2 句没有合适的文献」。可第三句（原生质体、新鲜细胞核和冷冻细胞核三种输入可比）正是库里《Integrated experimental and computational workflows for single-cell transcriptomics in plants》的结果，模型没有选它。所以没有勾选的句子要点「看相近的」自己再看一遍。点「插入 1 条引用」，<code>[@Bawa2022]</code> 加在第一句句末的标点之前，文字不变，<kbd>⌘</kbd> + <kbd>Z</kbd> 可以撤销。</p>
+        <aside class="note"><b>提示</b>中文写的段落一样能找到英文文献，检索词由「翻译」那一项的模型来生成。卡片底部写明查找范围，这次是「其中 7 篇没有全文，只查了题录和摘要」。</aside>
+      </section>
+
+      <section id="s4">
+        <h2><i>4</i>润色、译成英文、仿写</h2>
+        <p>稿件的语言是英文，中文段落迟早要译。选中第二段点「译成英文」，右边的卡片上下对照原文和译文，下面是「替换原文」「插在下面」「复制」「放弃」。文字只在你点了替换之后才改，改后同样可以撤销。「润色」和「仿写」也是这样，改动的词会标出来；仿写参照文献库里与这段最相近的句子改写结构和措辞。</p>
+        <figure class="shot">
+          <img src="../img/t/write-05-translate.jpg" width="1372" height="867" loading="lazy" alt="译成英文的卡片：上面是中文原文，下面是英文译文，译文里保留了 [@Wang2026]；底部有替换原文、插在下面、复制、放弃四个按钮。">
+          <figcaption><b>图 5</b>　译文保留了引用 <code>[@Wang2026]</code>。</figcaption>
+        </figure>
+        <p>替换之前对一遍：译文把原文的 adaxial hypodermal cells 写成了 adaxial subepidermal layer，引用前也少了一个空格。术语以原文为准。</p>
+      </section>
+
+      <section id="s5">
+        <h2><i>5</i>参考文献与出处</h2>
+        <p>点右边的「参考文献」页（标签上的数字是引用了几篇），「本节」和「全文」切换范围，「复制」和「导出 BibTeX」在列表上方。每篇文献下面是出处：引用它的那句话依据的文献原文，附所在的部分和页码。</p>
+        <p>手打的引用没有出处。为了试一试，本例在第三段第一句后手动写了 <code>[@Qin2025; @Chau2025]</code>：后一篇讲非模式物种的标记基因，前一篇是拟南芥的昼夜节律研究，是故意引错的。列表上方随即出现带 2 的星形按钮，意思是 2 处引用还没有出处。点它，助手到被引的每篇文献里检索，再由模型核对哪一句是依据，这次不到一分钟。Chau 2025 下面记下了它摘要里的一句；Qin 2025 下面用提醒色写着：</p>
+        <blockquote><cite>参考文献页</cite><p>这篇文献里没有找到这句话的依据：非模式植物缺少已知的细胞类型标记基因，这限制了细胞类型注释的准确性。</p></blockquote>
+        <figure class="shot">
+          <img src="../img/t/write-06-sources.jpg" width="1372" height="867" loading="lazy" alt="参考文献页列出四篇：Chau 2025 下面是一句绿色底的英文原文，标着摘要；Qin 2025 下面是一行橙色提醒，说这篇文献里没有找到这句话的依据。">
+          <figcaption><b>图 6</b>　模型在 Qin 2025 里找不到依据，用提醒色标出；带星的那条出处是模型找到的。</figcaption>
+        </figure>
+        <p>点一条出处，文献的 PDF 在右边打开，翻到那一页并高亮这句。不要的出处点 × 去掉；出处只记在文献库里，稿件的文字始终是 <code>[@Key]</code>。</p>
+        <figure class="shot">
+          <img src="../img/t/write-07-pdf.jpg" width="1372" height="867" loading="lazy" alt="写作页右侧打开了玉米叶舌区那篇文献的 PDF 第 2 页，引用的那句原文用黄色高亮。">
+          <figcaption><b>图 7</b>　点出处后，PDF 翻到第 2 页，高亮的是 <code>[@Wang2026]</code> 依据的那句。</figcaption>
+        </figure>
+        <aside class="note warn"><b>注意</b>没有出现提醒色，不等于引用就对了。模型只核对原文里有没有说这件事的句子，引得是否恰当、是不是原始研究，要你自己读原文判断。</aside>
+      </section>
+
+      <section id="s6">
+        <h2><i>6</i>换成助手写</h2>
+        <p>引言还缺一段：已有的植物单细胞图谱覆盖了哪些物种和器官。这种要翻很多篇文献的综述性段落，可以交给助手。点大纲标题旁的星形图标切到「助手写」，中间换成对话，稿件移到右边。输入：</p>
+        <blockquote><cite>交代</cite><p>在 Introduction 第一段之后补一段：已有的植物单细胞和单细胞核图谱覆盖了哪些物种和器官。只用文献库里的文献并给出引用。写成英文。</p></blockquote>
+        <p>助手读了稿件、在库里查了候选句，不到两分半就写进了稿件。它在对话里只说做了什么：</p>
+        <blockquote><cite>助手</cite><p>已在 Introduction 第一段后插入英文段落，概述文献库中已有图谱的代表性物种和器官：拟南芥根尖与幼叶、水稻根细胞与叶鞘及颖果和节、玉米根与叶及叶舌区，以及甘薯根尖、荆芥叶片和大白菜茎尖。</p></blockquote>
+        <figure class="shot">
+          <img src="../img/t/write-08-agent.jpg" width="1372" height="867" loading="lazy" alt="助手写的界面：中间是对话，右边稿件里新增的英文段落有绿色底和左侧竖线，带十几处引用；稿件上方是「版本 6/6」，下方写着「助手在这一节改了 1 处」，有全部撤销和保留按钮。">
+          <figcaption><b>图 8</b>　助手写进的一段有底色和竖线；稿件下方列出改动，上方是这一节的版本。</figcaption>
+        </figure>
+        <ul>
+          <li>改动逐处列在稿件下方：点一条定位，「撤销」退回这一处，「全部撤销」全部退回，「保留」之后标记消失。大纲里刚改过的节有一个圆点。</li>
+          <li>助手动笔前，这一节原来的文字留了一个版本。稿件上方「版本 6/6」的左箭头翻到早先的一版，可以「恢复这一版」（恢复前的文字也会留一版）或「回到现在」。</li>
+          <li>它引用时摘的原句，在文献里找得到的都记成了出处，这一段的 11 处引用在参考文献页都能点开核对。</li>
+        </ul>
+        <p>新段落每句话后面引用各自分开写，例如 <code>[@Liu2024] [@TenorioBerrio2025]</code>，投稿前可以合并。「Maize datasets encompass roots and leaves」引的 <code>[@Wang2026c]</code> 是一篇比较制样方法的文献，并不是图谱，这类地方仍要对照出处看一遍。</p>
+      </section>
+
+      <section id="s7">
+        <h2><i>7</i>导出</h2>
+        <p>点稿件上方的「导出」，菜单里是「Markdown（.md）」「Word（.docx）」和「复制全文」；稿件有批注时 Word 一项写作「Word（.docx），带批注」。没写内容的节不导出。</p>
+        <p>导出的 Word 文件里，引用仍是 <code>[@Bawa2022]</code> 这样的原样文字，末尾没有参考文献表；Markdown 也一样。要排成正式的引文格式，在参考文献页切到「全文」点「导出 BibTeX」，把 .md 和 .bib 一起交给 Pandoc。</p>
+        <aside class="note"><b>提示</b>导师在 Word 里批注之后，怎样导入、逐条处理并导出成带修订的文件，见下一篇。</aside>
+      </section>
+
+      <section id="recap" class="recap">
+        <h2>回顾</h2>
+        <ul>
+          <li>用中文写下意思，候选句给出文献库里别人在同一部分的写法，「引用」把一句原文记成出处。</li>
+          <li>「配引用」逐句找出可引的文献，附理由和原句；它会漏选，没勾的句子要自己再看。</li>
+          <li>参考文献页的星形按钮为没有出处的引用补上依据，找不到依据的用提醒色标出。</li>
+          <li>「助手写」把查文献和成段的活交出去，每处改动可撤销，每节留有版本。</li>
+          <li>和合作者来回改稿，接着读<a href="revise.html">和合作者改稿</a>；只想先搭一篇综述的框架，回到<a href="review.html">分阶段写一篇综述</a>。</li>
+        </ul>
+      </section>
+    </article>
+  </div>
+
+  <nav class="pager" aria-label="上一篇和下一篇">
+    <a class="prev" href="review.html"><small>上一篇 · 06</small><strong>分阶段写一篇综述</strong></a>
+    <a class="next" href="revise.html"><small>下一篇 · 08</small><strong>和合作者改稿</strong></a>
+  </nav>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-in">
+    <div class="refs">
+      <h2>参考</h2>
+      <ol>
+        <li><a href="index.html">全部教程</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/FEATURES.md">功能详解：每个页面能做什么</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/DATA.md">数据与隐私：文件放在哪里，哪些数据会离开本机</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispPaper/issues">问题与想法：Issues</a></li>
+      </ol>
+    </div>
+    <div class="colophon">
+      <p><b>关于这篇教程</b>　截图和数字来自 2026 年 11 月在 macOS 上用 v0.10.0 的一次实际操作。模型每次的回答不一样，你照做时措辞和数字会有出入，步骤是一样的。</p>
+      <p><b>助手可能出错</b>　它的建议和回答都要你确认；关键的数字和结论请对照原文。</p>
+    </div>
+  </div>
+</footer>
+</body>
+</html>
