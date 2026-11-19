@@ -391,7 +391,7 @@ impl Workspace {
     /// Each background job stays compact; its dialog owns the live details.
     fn render_import(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let run = self.lib.as_ref()?.import.as_ref()?;
-        Some(ui::progress_entry("import-progress", if run.running() { t("导入 PDF") } else { t("PDF 导入完成") }, run.rows.len(), run.total, run.running(), &ui::import_segments(run))
+        Some(ui::progress_entry("import-progress", run.title(), run.rows.len(), run.total, run.running(), &ui::import_segments(run))
             .on_click(self.on(Cmd::ShowImport, cx)).into_any_element())
     }
 
@@ -809,7 +809,7 @@ impl Workspace {
         let status = if marked > 0 {
             tf!("已选 {marked} 篇 · 右键批量操作 · Esc 取消", "{marked} selected · Right-click for batch actions · Esc to cancel")
         } else if let Some(run) = lib.import.as_ref().filter(|run| run.running()) {
-            tf!("正在导入 PDF，已完成 {} / {}", "Importing PDFs, {} / {} complete", run.rows.len(), run.total)
+            if run.ids == 0 { tf!("正在导入 PDF，已完成 {} / {}", "Importing PDFs, {} / {} complete", run.rows.len(), run.total) } else { tf!("正在导入，已完成 {} / {}", "Importing, {} / {} complete", run.rows.len(), run.total) }
         } else if !lib.extracting.is_empty() {
             tf!("正在提取 {} 篇全文的文字，用于提问…", "Extracting full text from {} papers for chat…", lib.extracting.len())
         } else {

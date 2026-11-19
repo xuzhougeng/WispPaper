@@ -984,11 +984,13 @@ pub enum Imported {
     Attached,
     /// Its paper is in the trash: nothing was imported.
     InTrash,
+    /// An identifier of a paper the library already holds: nothing to do.
+    Held,
     Failed(String),
 }
 
 pub struct ImportRow {
-    /// The file's name.
+    /// The file's name, or the identifier looked up.
     pub name: String,
     pub outcome: Imported,
     pub paper_id: Option<String>,
@@ -1005,14 +1007,18 @@ impl ImportRow {
     }
 }
 
-/// The PDFs dropped or picked in one go (more dropped meanwhile join it):
-/// how far the reading is, then what came of each, until it is put away.
+/// The PDFs dropped or picked in one go, or the identifiers pasted into 通过 DOI / PMID 添加 (more of either
+/// meanwhile join it): how far the reading is, then what came of each, until it is put away.
 #[derive(Default)]
 pub struct ImportRun {
     pub total: usize,
+    /// How many of `total` are identifiers looked up rather than files read.
+    pub ids: usize,
     /// Names of the files currently being read; duplicate names are separate jobs.
     pub working: Vec<String>,
     pub rows: Vec<ImportRow>,
+    /// Words pasted with the identifiers that are neither a DOI nor a PMID: left out, said once in the report.
+    pub unknown: Vec<String>,
 }
 
 #[derive(Default)]
@@ -1044,6 +1050,18 @@ impl ImportRun {
         self.rows.len() < self.total
     }
 
+    /// The job's name, as what it imports: PDFs, identifiers, or both.
+    pub fn title(&self) -> &'static str {
+        match (self.ids, self.running()) {
+            (0, true) => t("导入 PDF"),
+            (0, false) => t("PDF 导入完成"),
+            (ids, true) if ids == self.total => t("按 DOI / PMID 导入"),
+            (ids, false) if ids == self.total => t("DOI / PMID 导入完成"),
+            (_, true) => t("正在导入"),
+            (_, false) => t("导入完成"),
+        }
+    }
+
     /// How many files came to this.
     pub fn count(&self, of: impl Fn(&ImportRow) -> bool) -> usize {
         self.rows.iter().filter(|row| of(row)).count()
@@ -1056,7 +1074,9 @@ impl ImportRun {
             (self.count(|row| row.outcome == Imported::Added), t("新增")),
             (self.count(|row| row.outcome == Imported::Attached), t("附到已有文献")),
             (self.count(|row| row.outcome == Imported::InTrash), t("在回收站里、未导入")),
+            (self.count(|row| row.outcome == Imported::Held), t("已有、跳过")),
             (self.count(|row| matches!(row.outcome, Imported::Failed(_))), t("没有成功")),
+            (self.unknown.len(), t("没认出、跳过")),
         ] {
             if n > 0 { facts.push(format!("{text} {n}")) }
         }
@@ -3922,6 +3942,7 @@ impl Workspace {
             Imported::Added => tf!("已添加：{title}", "Added: {title}"),
             Imported::Attached => tf!("「{stem}」已在文献库中，PDF 已附到原条目。", "“{stem}” is already in this library. PDF attached to existing record."),
             Imported::InTrash => tf!("「{stem}」对应的文献在回收站中，未导入。", "“{stem}” is in trash and was not imported."),
+            Imported::Held => tf!("「{stem}」已在文献库中。", "“{stem}” is already in this library."),
             Imported::Failed(err) => tf!("「{stem}」没有导入：{err}", "“{stem}” not imported: {err}"),
         };
         let said = if row.textless.is_empty() { said } else { tf!("{said} 但没有读出文字（{}），全文暂时不能用于提问。", "{said} But no text was extracted ({}); full text is unavailable for chat.", t(fulltext::failure_brief(&row.textless))) };
@@ -3945,6 +3966,62 @@ impl Workspace {
             if failed { self.fail(said, cx) } else { self.say(said, cx) }
         }
         cx.notify();
+    }
+
+    /// The identifiers pasted into 通过 DOI / PMID 添加, more than one, looked up in the background as an import of
+    /// their own (a PDF import going on takes them in): the dialog closes at once, the progress and the report are
+    /// the import's. Words that are no identifier are left out and said in the report.
+    fn import_ids(&mut self, ids: Vec<Identifier>, unknown: Vec<String>, cx: &mut Context<Self>) {
+        let Some(lib) = self.lib.as_mut() else { return };
+        let run = match lib.import.as_mut().filter(|run| run.running()) {
+            Some(run) => run,
+            None => lib.import.insert(ImportRun::default()),
+        };
+        run.total += ids.len();
+        run.ids += ids.len();
+        run.unknown.extend(unknown);
+        let library = lib.info.id.clone();
+        cx.notify();
+        let queue = std::rc::Rc::new(std::cell::RefCell::new(ids.into_iter().rev().collect::<Vec<_>>()));
+        for _ in 0..IMPORT_WORKERS.min(queue.borrow().len()) {
+            let (queue, library) = (queue.clone(), library.clone());
+            cx.spawn(async move |this, cx| {
+                loop {
+                    let Some(id) = queue.borrow_mut().pop() else { break };
+                    let (Identifier::Doi(name) | Identifier::Pmid(name)) = id.clone();
+                    let known = this.update(cx, |this, cx| {
+                        let Some(run) = this.lib.as_mut().filter(|l| l.info.id == library).and_then(|l| l.import.as_mut()) else { return false };
+                        run.working.push(name.clone());
+                        cx.notify();
+                        true
+                    });
+                    if !matches!(known, Ok(true)) { break }
+                    let found = cx.background_executor().spawn(async move { wisp_net::lookup_paper(&id) }).await;
+                    let done = this.update(cx, |this, cx| {
+                        let Some(lib) = this.lib.as_mut().filter(|l| l.info.id == library) else { return false };
+                        let stored = found.and_then(|paper| lib.store.import_papers(vec![paper]).and_then(|result| lib.reload().map(|()| result)).map_err(|e| format!("{e:#}")));
+                        let mut row = ImportRow { name: name.clone(), outcome: Imported::Added, paper_id: None, unrecognised: false, textless: String::new() };
+                        match stored.map(|result| (result.added.into_iter().next(), result.skipped.into_iter().next())) {
+                            Ok((Some(paper), _)) => row.paper_id = Some(paper.id),
+                            Ok((None, Some(held))) => {
+                                row.outcome = if held.in_trash { Imported::InTrash } else { Imported::Held };
+                                row.paper_id = Some(held.existing_id);
+                            }
+                            Ok((None, None)) => row.outcome = Imported::Failed(t("没有查到这篇文献。").into()),
+                            Err(err) => row.outcome = Imported::Failed(err),
+                        }
+                        let Some(run) = lib.import.as_mut() else { return false };
+                        if let Some(at) = run.working.iter().position(|working| working == &name) { run.working.remove(at); }
+                        run.rows.push(row);
+                        if !run.running() { run.working.clear() }
+                        cx.notify();
+                        true
+                    });
+                    if !matches!(done, Ok(true)) { break }
+                }
+            })
+            .detach();
+        }
     }
 
     /// Try once more to get the text of a stored file: after the reader has
@@ -5453,8 +5530,10 @@ impl Workspace {
                     self.modal_error = t("没有认出 DOI 或 PMID。DOI 形如 10.1038/s41586-020-2649-2，PMID 是一串数字。").into();
                     return;
                 }
-                if !unknown.is_empty() {
-                    self.modal_error = tf!("没有认出：{}。改好或删去后再试。", "Not recognized: {}. Fix or remove them and try again.", unknown.join("、"));
+                // Several are an import of their own, in the background; what is not an identifier is left out.
+                if ids.len() > 1 || !unknown.is_empty() {
+                    self.run(Cmd::CloseModal, window, cx);
+                    self.import_ids(ids, unknown, cx);
                     return;
                 }
                 *run = Some(IdRun { total: ids.len(), ..Default::default() });
