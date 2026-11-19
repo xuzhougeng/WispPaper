@@ -109,6 +109,7 @@ impl Workspace {
                             Imported::Failed(err) => (tf!("没有导入：{err}", "Not imported: {err}"), Theme::danger()),
                             Imported::InTrash => (t("它的文献在回收站里，没有导入").to_string(), Theme::warning()),
                             Imported::Attached => (t("文献库里已有这篇，PDF 附到了原条目").to_string(), Theme::success()),
+                            Imported::Held => (t("文献库里已有这篇，跳过了").to_string(), Theme::text_tertiary()),
                             Imported::Added if row.unrecognised => (t("已添加 · 没认出 DOI，可在文献详情里按题目补全").to_string(), Theme::warning()),
                             Imported::Added => (t("已添加").to_string(), Theme::success()),
                         };
@@ -130,15 +131,16 @@ impl Workspace {
                     })
                     .collect();
                 ui::dialog(720.).max_w(relative(0.92)).h(px(620.))
-                    .child(ui::dialog_title(t("PDF 导入")))
+                    .child(ui::dialog_title(match run.ids { 0 => t("PDF 导入"), ids if ids == run.total => t("按 DOI / PMID 导入"), _ => t("导入") }))
                     .child(ui::progress_overview(run.rows.len(), run.total, if run.running() { t("正在导入") } else { t("导入完成") }, run.running(), &ui::import_segments(run))
                         .when(!run.working.is_empty(), |d| d.child(div().flex().flex_col().gap(px(6.)).p(px(10.)).rounded(px(8.)).bg(theme::accent_of("blue").soft())
-                            .child(div().text_size(text_px(12.)).text_color(theme::accent_of("blue").strong()).child(t("正在读取")))
+                            .child(div().text_size(text_px(12.)).text_color(theme::accent_of("blue").strong()).child(if run.ids == 0 { t("正在读取") } else { t("正在处理") }))
                             .children(run.working.iter().map(|name| div().line_height(text_px(19.)).child(name.clone()))))))
                     .child(body().gap(px(4.)).border_t_1().border_color(Theme::line())
-                        .child(ui::caption(tf!("处理结果 · {} 个 PDF", "Results · {} PDFs", run.rows.len())))
-                        .when(!run.rows.is_empty(), |d| d.child(div().text_size(text_px(12.)).text_color(Theme::text_secondary()).child(run.summary())))
-                        .when(run.rows.is_empty(), |d| d.child(div().py(px(24.)).text_color(Theme::text_tertiary()).child(t("正在读取第一批文件，结果会实时出现在这里。"))))
+                        .child(ui::caption(if run.ids == 0 { tf!("处理结果 · {} 个 PDF", "Results · {} PDFs", run.rows.len()) } else { tf!("处理结果 · {} 项", "Results · {} items", run.rows.len()) }))
+                        .when(!run.rows.is_empty() || !run.unknown.is_empty(), |d| d.child(div().text_size(text_px(12.)).text_color(Theme::text_secondary()).child(run.summary())))
+                        .when(!run.unknown.is_empty(), |d| d.child(div().text_size(text_px(12.)).line_height(text_px(17.)).text_color(Theme::text_tertiary()).child(tf!("没认出是 DOI 或 PMID，跳过了：{}", "Not a DOI or PMID, skipped: {}", run.unknown.join("、")))))
+                        .when(run.rows.is_empty(), |d| d.child(div().py(px(24.)).text_color(Theme::text_tertiary()).child(if run.ids == 0 { t("正在读取第一批文件，结果会实时出现在这里。") } else { t("正在查询第一批，结果会实时出现在这里。") })))
                         .children(listed))
                     .child(
                         div()
@@ -318,7 +320,7 @@ impl Workspace {
                 .child(
                     body()
                         .child(ui::form_row(t("DOI 或 PMID"), ui::field(input, window, cx)))
-                        .child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(t("可以一次粘贴多个。题目、作者、期刊、年份和摘要会从 Crossref 与 Europe PMC 查询后填入，已有的文献会跳过。查询会把这些编号发送给这两个服务。")))
+                        .child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(t("可以一次粘贴多个，多个时在后台查询，进度在左侧栏。题目、作者、期刊、年份和摘要会从 Crossref 与 Europe PMC 查询后填入；已有的文献和认不出的行会跳过。查询会把这些编号发送给这两个服务。")))
                         .child(error),
                 )
                 .child(footer(

@@ -373,7 +373,7 @@
   "创建": "Create",
   "通过 DOI / PMID 添加": "Add by DOI / PMID",
   "DOI 或 PMID": "DOI or PMID",
-  "可以一次粘贴多个。题目、作者、期刊、年份和摘要会从 Crossref 与 Europe PMC 查询后填入，已有的文献会跳过。查询会把这些编号发送给这两个服务。": "You can paste several at once. Title, authors, journal, year and abstract are retrieved from Crossref and Europe PMC; papers already in the library are skipped. These identifiers will be sent to both services.",
+  "可以一次粘贴多个，多个时在后台查询，进度在左侧栏。题目、作者、期刊、年份和摘要会从 Crossref 与 Europe PMC 查询后填入；已有的文献和认不出的行会跳过。查询会把这些编号发送给这两个服务。": "You can paste several at once; several are looked up in the background, with progress in the sidebar. Title, authors, journal, year and abstract are retrieved from Crossref and Europe PMC; papers already in the library and unrecognised lines are skipped. These identifiers will be sent to both services.",
   "正在查询…": "Looking up…",
   "查询并添加": "Look up and add",
   "现在：空着": "Currently empty",
@@ -1440,5 +1440,12 @@
   "清空回收站": "Empty trash",
   "清空之后，它们不再阻止重复导入：以后的检索可能会把它们再导入进来。": "Once emptied, they no longer block re-import: a later search may import them again.",
   "我已知晓": "I understand",
-  "全部恢复": "Restore all"
+  "全部恢复": "Restore all",
+  "按 DOI / PMID 导入": "Import by DOI / PMID",
+  "DOI / PMID 导入完成": "DOI / PMID import complete",
+  "已有、跳过": "Already held, skipped",
+  "没认出、跳过": "Not recognised, skipped",
+  "没有查到这篇文献。": "No record was found for this identifier.",
+  "文献库里已有这篇，跳过了": "Already in this library, skipped",
+  "正在查询第一批，结果会实时出现在这里。": "Looking up the first ones. Results will appear here as they arrive."
 }
