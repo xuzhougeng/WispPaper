@@ -321,7 +321,10 @@ mod tests {
         assert!(store.add_pdf_annotation(&paper.id, &file.id, 1, Kind::Box, "x", &[[1., 1., 40., 40.]]).is_err());
         assert!(store.add_pdf_shape(&paper.id, "missing", 1, Kind::Note, [1., 1., 1., 1.], "").is_err());
         let all = store.pdf_annotations(&paper.id, &file.id).unwrap();
-        assert_eq!(all.iter().map(|a| a.kind).collect::<Vec<_>>(), [Kind::Highlight, Kind::Note, Kind::Box]);
+        // By page; the highlight and the note of page 1 are made in the same instant, so their order is the ids' and not fixed.
+        let mut first: Vec<String> = all[..2].iter().map(|a| a.kind.key().to_string()).collect();
+        first.sort();
+        assert_eq!((all.iter().map(|a| a.page).collect::<Vec<_>>(), first, all[2].kind), (vec![1, 1, 2], vec![Kind::Highlight.key().to_string(), Kind::Note.key().to_string()], Kind::Box));
         store.move_pdf_shape(&file.id, &frame.id, [60., 110., 210., 320.]).unwrap();
         store.move_pdf_shape(&file.id, &note.id, [70., 80., 0., 0.]).unwrap();
         store.recolor_pdf_annotation(&file.id, &frame.id, "orange").unwrap();
