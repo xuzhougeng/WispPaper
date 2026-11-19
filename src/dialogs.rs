@@ -11,6 +11,11 @@ use wisp_core::complete;
 use wisp_core::model::{FieldKind, PUBLICATION_STATUSES};
 use wisp_core::sources;
 
+/// Whether the phrase that confirms 清空回收站 was typed: 「我已知晓」, or in English "I understand" in any case.
+pub(crate) fn phrase_typed(typed: &str) -> bool {
+    typed.trim().to_lowercase() == t("我已知晓").to_lowercase()
+}
+
 /// A choice among a few: the chosen one filled with the accent.
 fn option_chip(id: impl Into<ElementId>, label: impl Into<SharedString>, chosen: bool) -> Stateful<Div> {
     div()
@@ -231,6 +236,34 @@ impl Workspace {
                     .child(ui::dialog_title(t("重命名标签")))
                     .child(body().child(div().text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text_tertiary()).child(tf!("「{tag}」在 {count} 篇文献上，都会改成新的名字。改成一个已有的标签，两个就合成一个。", "“{tag}” is used on {count} papers. All will be renamed. Choosing an existing tag merges them."))).child(ui::field(name, window, cx)).child(error))
                     .child(footer(t("改名"), false, self, cx))
+            }
+
+            Modal::EmptyTrash { phrase } => {
+                let count = self.lib.as_ref().map_or(0, |lib| lib.trash.len());
+                let typed = phrase_typed(phrase.read(cx).text());
+                let line = |text: String| div().text_color(Theme::text_secondary()).line_height(text_px(21.)).child(text);
+                ui::dialog(460.)
+                    .child(ui::dialog_title(t("清空回收站？")))
+                    .child(
+                        body()
+                            .child(line(tf!("回收站里的 {count} 篇文献，连同它们的笔记、词条、标注、PDF 和图片，会从磁盘上完全删除，无法恢复，请务必谨慎操作。", "The {count} papers in the trash, with their notes, fields, annotations, PDFs and pictures, will be deleted from disk completely and cannot be recovered. Please be careful.")))
+                            .child(line(t("清空之后，它们不再阻止重复导入：以后的检索可能会把它们再导入进来。").into()))
+                            .child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(tf!("请输入「{}」以确认", "Type “{}” to confirm", t("我已知晓"))))
+                            .child(ui::field(phrase, window, cx))
+                            .child(error),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_none()
+                            .justify_end()
+                            .gap(px(8.))
+                            .px(px(20.))
+                            .py(px(14.))
+                            .child(ui::secondary_button("modal-cancel", t("取消")).on_click(self.on(Cmd::CloseModal, cx)))
+                            // Dimmed and deaf until the phrase is typed.
+                            .child(ui::primary_button("modal-ok", t("清空回收站").to_string()).bg(Theme::danger()).when(!typed, |d| d.opacity(0.4)).when(typed, |d| d.on_click(self.on(Cmd::SubmitModal, cx)))),
+                    )
             }
 
             Modal::TagPapers { ids, name } => ui::dialog(420.)

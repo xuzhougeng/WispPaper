@@ -387,6 +387,11 @@ pub enum Cmd {
     RestorePaper(String),
     AskDeletePaper(String),
     DeletePaper(String),
+    /// Every paper in the trash back in the library.
+    RestoreAll,
+    /// 清空回收站: the dialog that asks for the phrase, and the deletion it leads to.
+    AskEmptyTrash,
+    EmptyTrash,
     OpenLink(String),
     AttachPdf(String),
     OpenFile(String),
@@ -534,8 +539,11 @@ pub enum Cmd {
     // Screening
     /// Ask the assistant about the pending papers it has not judged yet.
     ScreenStart,
-    /// The assistant asked again about the papers already decided, against the goal as it is now.
-    ScreenRecheck,
+    /// The assistant asked again about the papers already decided, against the goal as it is now;
+    /// with `true`, only about the included ones (继续筛: the next, tighter round of the funnel).
+    ScreenRecheck(bool),
+    /// Move the decided papers that are not included to the trash, after asking.
+    AskTrashUnincluded,
     ScreenStop,
     /// The person's decision on a paper, made on the screening page.
     ScreenDecide(String, String),
@@ -1256,6 +1264,8 @@ pub enum Modal {
     Tag { tag: String, name: Entity<TextInput> },
     /// Tags for several papers at once.
     TagPapers { ids: Vec<String>, name: Entity<TextInput> },
+    /// 清空回收站: the papers in the trash deleted from disk, once the phrase is typed.
+    EmptyTrash { phrase: Entity<TextInput> },
     /// What came of each PDF of the last import (`Library::import`).
     ImportReport,
     Zotero,
@@ -1287,6 +1297,8 @@ pub struct Library {
     pub fields: Vec<FieldDef>,
     pub files: Vec<PaperFile>,
     pub trash: Vec<TrashEntry>,
+    /// 筛选's rounds, oldest first (`Store::begin_round`).
+    pub rounds: Vec<wisp_core::store::ScreeningRound>,
     pub filters: Filters,
     /// Indices into `papers` of the rows shown, in order.
     pub shown: Vec<usize>,
@@ -1721,6 +1733,12 @@ impl Library {
         self.papers.iter().filter(|p| (p.screening != "pending") == decided && self.current_suggestion(&p.id).is_none()).collect()
     }
 
+    /// The decided papers that are not included (相关, 证据不足, 不相关):
+    /// what 把未纳入的移到回收站 takes.
+    pub fn unincluded(&self) -> Vec<String> {
+        self.papers.iter().filter(|p| !matches!(p.screening.as_str(), "pending" | "included")).map(|p| p.id.clone()).collect()
+    }
+
     /// The part of the queue on show, and its filter. A part that has
     /// emptied (the last of its papers was decided) gives way to the whole queue.
     pub fn screen_view(&self) -> (Vec<&Paper>, &str) {
@@ -1794,6 +1812,7 @@ impl Library {
         self.fields = self.store.list_fields()?;
         self.files = self.store.list_files()?;
         self.trash = self.store.list_trash()?;
+        self.rounds = self.store.screening_rounds()?;
         self.searches = self.store.list_searches()?;
         self.suggestions = self.store.list_suggestions()?.into_iter().map(|s| (s.paper_id.clone(), s)).collect();
         self.batches = self.store.list_batches(30)?;
@@ -2533,11 +2552,37 @@ impl Workspace {
             Cmd::AskDeletePaper(id) => {
                 let title = self.lib.as_ref().and_then(|l| l.trash.iter().find(|t| t.paper.id == id)).map(|t| t.paper.title.clone()).unwrap_or_default();
                 self.modal_error.clear();
-                self.modal = Some(Modal::Confirm { title: t("彻底删除这篇文献？").into(), message: tf!("「{title}」的记录、笔记和词条会被删除，无法恢复。它的 PDF 会移到文献库文件夹下的 removed 文件夹。", "The record, notes and fields of “{title}” will be deleted permanently. Its PDF moves to the library's removed folder."), action: t("彻底删除").into(), cmd: Cmd::DeletePaper(id) });
+                self.modal = Some(Modal::Confirm { title: t("彻底删除这篇文献？").into(), message: tf!("「{title}」连同它的笔记、词条、标注、PDF 和图片，会从磁盘上完全删除，无法恢复。删除之后它不再阻止重复导入。", "“{title}”, with its notes, fields, annotations, PDFs and pictures, will be deleted from disk completely and cannot be recovered. It will no longer block re-import."), action: t("彻底删除").into(), cmd: Cmd::DeletePaper(id) });
             }
             Cmd::DeletePaper(id) => {
                 self.modal = None;
-                self.change(cx, |lib| lib.store.delete_paper(&id));
+                self.change(cx, |lib| lib.store.purge_trashed(&id));
+            }
+            Cmd::RestoreAll => {
+                let ids: Vec<String> = self.lib.as_ref().map(|lib| lib.trash.iter().map(|entry| entry.paper.id.clone()).collect()).unwrap_or_default();
+                let done = self.change(cx, |lib| {
+                    for id in &ids { lib.store.restore_paper(id)? }
+                    Ok(())
+                });
+                if done { self.say(tf!("已恢复 {} 篇。", "Restored {} papers.", ids.len()), cx) }
+            }
+            Cmd::AskEmptyTrash => {
+                if self.lib.as_ref().is_none_or(|lib| lib.trash.is_empty()) { return }
+                self.modal_subscriptions.clear();
+                self.modal_error.clear();
+                let phrase = self.modal_input("", "", false, window, cx);
+                // The confirm button lights up as the phrase is typed.
+                let typed = cx.subscribe_in(&phrase, window, |_, _, event: &InputEvent, _, cx| if *event == InputEvent::Changed { cx.notify() });
+                self.modal_subscriptions.push(typed);
+                phrase.read(cx).focus(window);
+                self.modal = Some(Modal::EmptyTrash { phrase });
+            }
+            Cmd::EmptyTrash => {
+                self.modal = None;
+                self.modal_subscriptions.clear();
+                let mut count = 0;
+                if self.change(cx, |lib| lib.store.empty_trash().map(|n| count = n)) { self.say(tf!("已彻底删除 {count} 篇。", "Deleted {count} papers permanently."), cx) }
+                window.focus(&self.focus);
             }
             Cmd::OpenLink(id) => {
                 if let Some(link) = self.lib.as_ref().and_then(|l| l.paper(&id)).map(|p| p.link()).filter(|l| !l.is_empty()) {
@@ -3052,8 +3097,17 @@ impl Workspace {
                     lib.store.save_search(&mut search)
                 });
             }
-            Cmd::ScreenStart => self.screen_start(false, None, cx),
-            Cmd::ScreenRecheck => self.screen_start(true, None, cx),
+            Cmd::ScreenStart => self.screen_start("pending", None, cx),
+            Cmd::ScreenRecheck(included) => self.screen_start(if included { "included" } else { "decided" }, None, cx),
+            Cmd::AskTrashUnincluded => {
+                let Some(lib) = self.lib.as_ref() else { return };
+                let ids = lib.unincluded();
+                if ids.is_empty() { return }
+                let counts = wisp_core::screening::tally(ids.iter().filter_map(|id| lib.paper(id)).map(|p| p.screening.as_str()));
+                let each: Vec<String> = SCREENINGS.iter().zip(counts).filter(|(_, n)| *n > 0).map(|((key, _), n)| format!("{} {n}", crate::i18n::label(&SCREENINGS, key))).collect();
+                self.modal_error.clear();
+                self.modal = Some(Modal::Confirm { title: tf!("把未纳入的 {} 篇移到回收站？", "Move {} papers not included to trash?", ids.len()), message: tf!("其中{}。它们的笔记、词条和 PDF 都留着，可以在回收站里恢复。", "Of them: {}. Their notes, fields and PDFs are kept, and they can be restored from the trash.", each.join(" · ")), action: t("移到回收站").into(), cmd: Cmd::TrashPapers(ids) });
+            }
             Cmd::ScreenStop => {
                 if let Some(lib) = self.lib.as_mut() {
                     // Answers still on their way belong to a run that is over.
@@ -3331,6 +3385,7 @@ impl Workspace {
             fields: vec![],
             files: vec![],
             trash: vec![],
+            rounds: vec![],
             filters,
             shown: vec![],
             search,
@@ -4827,7 +4882,10 @@ impl Workspace {
     /// What it says is saved as a suggestion; the decision stays with the
     /// person, and a decided paper it sees otherwise comes back to the queue.
     /// With `only`, it is asked about those papers, whatever it said of them before.
-    pub(crate) fn screen_start(&mut self, decided: bool, only: Option<Vec<String>>, cx: &mut Context<Self>) {
+    /// `scope` is which papers a run over the queue takes: `pending`, the
+    /// `included` ones (继续筛) or all `decided` ones; such a run begins a
+    /// round of the funnel when the goal is new (`Store::begin_round`).
+    pub(crate) fn screen_start(&mut self, scope: &str, only: Option<Vec<String>>, cx: &mut Context<Self>) {
         let profile = self.settings.profile_for_or_default(Task::Screen);
         let workers = self.settings.screen_workers;
         let Some(lib) = self.lib.as_mut() else { return };
@@ -4838,11 +4896,18 @@ impl Workspace {
             lib.screen.error = err;
             return cx.notify();
         }
-        let mut todo: Vec<String> = only.unwrap_or_else(|| lib.screen_unasked(decided).iter().map(|p| p.id.clone()).collect());
+        let whole = only.is_none();
+        let mut todo: Vec<String> = only.unwrap_or_else(|| lib.screen_unasked(scope != "pending").iter().filter(|p| scope != "included" || p.screening == "included").map(|p| p.id.clone()).collect());
         if todo.is_empty() {
-            lib.screen.error = if decided { t("已判断的文献都有按当前目标的建议了。") } else { t("待判断的文献都已经有按当前目标的建议了。") }.into();
+            lib.screen.error = match scope {
+                "pending" => t("待判断的文献都已经有按当前目标的建议了。"),
+                "included" => t("已纳入的文献都有按当前目标的建议了。"),
+                _ => t("已判断的文献都有按当前目标的建议了。"),
+            }.into();
             return cx.notify();
         }
+        // A run over the queue is part of the funnel; asking about one paper is not.
+        if whole && lib.store.begin_round(&lib.info.criteria, scope).is_ok() && let Ok(rounds) = lib.store.screening_rounds() { lib.rounds = rounds }
         todo.reverse();
         let screen = &mut lib.screen;
         screen.run += 1;
@@ -5270,6 +5335,9 @@ impl Workspace {
                 }
                 if name == tag || self.retag(&tag, Some(&name), cx) { self.run(Cmd::CloseModal, window, cx) }
             }
+            Modal::EmptyTrash { phrase } => {
+                if crate::dialogs::phrase_typed(&text(phrase, cx)) { self.run(Cmd::EmptyTrash, window, cx) }
+            }
             Modal::TagPapers { ids, name } => {
                 let (ids, tags) = (ids.clone(), wisp_core::model::split_list(&text(name, cx)));
                 if tags.is_empty() {
@@ -5505,6 +5573,9 @@ impl Workspace {
                     "zotero" => Some(Cmd::ImportZotero),
                     "edit-paper" => self.lib.as_ref().and_then(|lib| lib.selected.clone()).map(Cmd::EditPaper),
                     "delete-paper" => self.lib.as_ref().and_then(|lib| lib.selected.clone()).map(Cmd::AskDeletePaper),
+                    // The trash page's head: 全部恢复 and the dialog of 清空回收站.
+                    "restore-all" => Some(Cmd::RestoreAll),
+                    "empty-trash" => Some(Cmd::AskEmptyTrash),
                     "guide" => Some(Cmd::OpenGuide(true)),
                     "guide-search" => Some(Cmd::OpenGuide(false)),
                     _ => None,
@@ -5793,10 +5864,13 @@ impl Workspace {
                     None
                 }
                 "zotero-report" => Some(Cmd::ShowZotero),
-                // `screen` starts the assistant on the pending papers, `screen:decided` on the decided ones.
+                // `screen` starts the assistant on the pending papers, `screen:decided` on the decided ones, `screen:included` on the included ones;
+                // `screen:unincluded` asks to move the decided papers not included to the trash.
                 // `screen:single`, `screen:confirm` and `screen:batch` are the page's three faces; `screen:go;<n>` the n-th paper of a round.
                 "screen" => Some(match arg {
-                    "decided" => Cmd::ScreenRecheck,
+                    "decided" => Cmd::ScreenRecheck(false),
+                    "included" => Cmd::ScreenRecheck(true),
+                    "unincluded" => Cmd::AskTrashUnincluded,
                     "single" => Cmd::ScreenMode(ScreenMode::Single),
                     "confirm" => Cmd::ScreenMode(ScreenMode::Confirm),
                     "batch" => Cmd::ScreenMode(ScreenMode::Batch),

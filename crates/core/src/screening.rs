@@ -5,7 +5,7 @@
 //! writes what the person decided.
 
 use crate::model::{Paper, SCREENINGS};
-use crate::store::Suggestion;
+use crate::store::{ScreeningRound, Suggestion};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The four decisions in the order their buttons stand: the status, its letter, its digit.
@@ -232,6 +232,37 @@ pub fn unread(suggestion: &Suggestion) -> bool {
     suggestion.basis == "none"
 }
 
+/// One round of the funnel: how many papers it screened, and how many of them stayed included.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Stage {
+    pub criteria: String,
+    pub started_at: String,
+    pub scope: String,
+    /// The papers it was over when it began: the pending ones, the included ones, or all decided ones.
+    pub entered: usize,
+    /// The included papers when the next round began; for the last round, now.
+    pub included: usize,
+}
+
+/// The rounds of screening as a funnel, `now` being the tally of the library
+/// as it is (`tally`). The numbers are those kept with the rounds, so trashing
+/// or deleting papers later changes no finished round.
+// ponytail: papers imported after a round began are not in its `entered`, and
+// a round screened wholly by hand (no run of the assistant) is not recorded;
+// count imports into the open round, or record a goal change itself, if that matters.
+pub fn funnel(rounds: &[ScreeningRound], now: [usize; 5]) -> Vec<Stage> {
+    rounds.iter().enumerate().map(|(n, round)| {
+        let c = round.counts;
+        let entered = match round.scope.as_str() {
+            "included" => c[1],
+            "decided" => c[1..].iter().sum(),
+            _ => c[0],
+        };
+        let included = rounds.get(n + 1).map_or(now[1], |next| next.counts[1]);
+        Stage { criteria: round.criteria.clone(), started_at: round.started_at.clone(), scope: round.scope.clone(), entered, included }
+    }).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,6 +362,17 @@ mod tests {
         confirm.part = "uncertain".into();
         confirm.doubtful_first = true;
         assert_eq!(confirm.order(rows.clone()).iter().map(|(p, _)| p.id.as_str()).collect::<Vec<_>>(), ["b", "c", "a"]);
+    }
+
+    #[test]
+    fn funnel_of_three_rounds() {
+        let round = |scope: &str, counts: [usize; 5]| ScreeningRound { criteria: scope.into(), scope: scope.into(), counts, ..Default::default() };
+        let rounds = [round("pending", [540, 0, 0, 0, 0]), round("included", [0, 100, 200, 40, 200]), round("included", [0, 23, 250, 50, 217])];
+        let stages = funnel(&rounds, [0, 2, 260, 60, 218]);
+        assert_eq!(stages.iter().map(|s| (s.entered, s.included)).collect::<Vec<_>>(), [(540, 100), (100, 23), (23, 2)]);
+        // A recheck of everything decided enters all of them.
+        assert_eq!(funnel(&[round("decided", [5, 1, 2, 3, 4])], [0; 5])[0].entered, 10);
+        assert!(funnel(&[], [1; 5]).is_empty());
     }
 
     #[test]

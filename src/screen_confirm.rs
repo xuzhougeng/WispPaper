@@ -36,10 +36,12 @@ fn breakdown(counts: &[usize; 5]) -> String {
 }
 
 impl Library {
-    /// The suggestions that can be confirmed: those for the waiting papers,
-    /// made against the goal as it is now, in the queue's order.
+    /// The suggestions that can be confirmed: those for the papers of the
+    /// queue (the waiting ones and the decided ones back for another look,
+    /// so a round of 继续筛 is confirmed in one go), made against the goal
+    /// as it is now, in the queue's order.
     pub fn confirmable(&self) -> Vec<(&Paper, &Suggestion)> {
-        self.screen_queue().into_iter().filter(|p| p.screening == "pending").filter_map(|p| self.current_suggestion(&p.id).map(|s| (p, s))).collect()
+        self.screen_queue().into_iter().filter_map(|p| self.current_suggestion(&p.id).map(|s| (p, s))).collect()
     }
 
     /// Those of them on show, in the order they are shown.
@@ -246,7 +248,7 @@ impl Workspace {
         } else {
             let mut text = tf!("将写入 {} 篇：{}。", "Will save {} papers: {}.", plan.len(), breakdown(&counts));
             if changed > 0 { text.push_str(&tf!("其中 {changed} 篇改了助手的建议。", "{changed} suggestions were changed.")) }
-            if skipped > 0 { text.push_str(&tf!("{skipped} 篇没有勾选，留在待判断。", "{skipped} unchecked papers remain pending.")) }
+            if skipped > 0 { text.push_str(&tf!("{skipped} 篇没有勾选，保持原样。", "{skipped} unchecked papers stay as they are.")) }
             text
         };
         let hint = |key: &'static str, what: &'static str| div().flex().flex_none().items_center().gap(px(5.)).child(ui::keycap(key)).child(what);
@@ -307,7 +309,9 @@ impl Workspace {
                     .cursor_pointer()
                     .on_click(self.on(Cmd::ConfirmTick(paper.id.clone()), cx))
                     .child(div().flex().items_center().justify_center().size(px(16.)).rounded(px(4.)).border_1().when(ticked, |d| d.bg(Theme::accent()).border_color(Theme::accent()).child(ui::icon("check", 11., Theme::on_accent()))).when(!ticked, |d| d.border_color(Theme::line_strong()).bg(Theme::bg_body())));
-                let mut about: Vec<String> = vec![crate::i18n::short_authors(paper), paper.year.map(|y| y.to_string()).unwrap_or_default(), basis(suggestion), suggestion.reason.clone()];
+                // A decided paper back for another look says what it was: confirming it is a change.
+                let was = if paper.screening == "pending" { String::new() } else { tf!("原判断：{}", "Was: {}", label(&SCREENINGS, &paper.screening)) };
+                let mut about: Vec<String> = vec![was, crate::i18n::short_authors(paper), paper.year.map(|y| y.to_string()).unwrap_or_default(), basis(suggestion), suggestion.reason.clone()];
                 about.retain(|part| !part.is_empty());
                 let text = div()
                     .id(id("text"))
