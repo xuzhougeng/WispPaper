@@ -8,6 +8,7 @@
 //! - `import`   BibTeX and RIS readers
 //! - `zotero`   read-only local Zotero import, with notes, tags and PDF copies
 //! - `export`   BibTeX and CSV writers
+//! - `archive`  a whole library in one `.wisppaper` file (a gzipped tar) for another Wisp Paper, and taking one in
 //! - `extract`  提取: a model's proposals for the custom fields of a paper, each with a sentence of the source
 //! - `figure`   图片库: pieces of PDF pages kept as pictures, and the caption a page gives each
 //! - `lookup`   Crossref / Europe PMC records → `Paper`
@@ -32,6 +33,7 @@
 
 pub mod ai;
 pub mod annotation;
+pub mod archive;
 pub mod cite;
 pub mod citefind;
 pub mod comment;

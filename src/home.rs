@@ -311,6 +311,7 @@ impl Workspace {
                                     .gap(px(4.))
                                     // Only while a newer release is on offer.
                                     .when_some(new_version, |d, version| d.child(ui::primary_button("home-update", tf!("新版本 {version}", "New version {version}")).h(text_px(28.)).px(px(10.)).rounded_full().text_size(text_px(12.)).on_click(self.on(Cmd::OpenSettings(SettingsPage::About), cx))))
+                                    .child(ui::ghost_button("home-import", Some("library"), Some(t("导入文献库").into())).on_click(self.on(Cmd::ImportLibrary, cx)))
                                     .child(ui::ghost_button("home-folder", Some("folder-open"), Some(t("数据目录").into())).on_click(self.on(Cmd::RevealFolder, cx)))
                                     .child(ui::ghost_button("home-settings", Some("settings-gear"), Some(t("设置").into())).on_click(self.on(Cmd::OpenSettings(SettingsPage::General), cx))),
                             ),

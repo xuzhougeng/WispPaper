@@ -39,14 +39,14 @@ pub struct ToolDef {
 }
 
 /// The tools that change the library.
-const WRITING: [&str; 18] = ["create_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "suggest_field", "sync_searches", "find_pdf", "organise_papers", "edit_section", "set_outline", "export_note", "save_note_to_notion", "resolve_note_save"];
+const WRITING: [&str; 20] = ["create_library", "import_library", "export_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "suggest_field", "sync_searches", "find_pdf", "organise_papers", "edit_section", "set_outline", "export_note", "save_note_to_notion", "resolve_note_save"];
 /// Of those, the ones the window's assistant runs only with the person's
 /// consent. Saving a search, suggesting a screening decision or proposing
 /// a field's value changes nothing a person has not yet to act on, so they
 /// run as asked. The two that write a manuscript (`MANUSCRIPT`) are asked
 /// about everywhere but in the conversation that writes that manuscript,
 /// where the person has handed the pen over.
-const CONFIRMING: [&str; 13] = ["import_pdf", "import_references", "import_zotero", "run_search", "undo_import", "remove_search", "find_pdf", "organise_papers", "edit_section", "set_outline", "export_note", "save_note_to_notion", "resolve_note_save"];
+const CONFIRMING: [&str; 15] = ["import_library", "export_library", "import_pdf", "import_references", "import_zotero", "run_search", "undo_import", "remove_search", "find_pdf", "organise_papers", "edit_section", "set_outline", "export_note", "save_note_to_notion", "resolve_note_save"];
 /// The tools that write a manuscript (`compose`).
 pub const MANUSCRIPT: [&str; 2] = ["edit_section", "set_outline"];
 
@@ -88,6 +88,20 @@ pub fn catalog() -> Vec<ToolDef> {
             writes: true,
             confirm: true,
         },
+        ToolDef {
+            name: "import_library",
+            title: "导入文献库文件",
+            description: "把另一个 Wisp Paper 导出的 .wisppaper 文件导入为新的文献库，连同其中的文献、笔记、对话、稿件和附件。总是新建，不与已有文献库合并；同名时名称后加编号。返回新库的 ID、名称和文献数量。",
+            input_schema: json!({"type": "object", "properties": {
+                "path": {"type": "string", "description": "本机 .wisppaper 文件路径，建议使用绝对路径。"},
+            }, "required": ["path"], "additionalProperties": false}),
+            writes: true,
+            confirm: true,
+        },
+        scoped("export_library", "导出文献库文件", "把整个文献库导出为一个 .wisppaper 文件，供另一台电脑上的 Wisp Paper 用 import_library 导入：文献、词条、筛选、笔记、对话、稿件和图片库，可选是否包含全文 PDF 等附件。不改文献库；不覆盖已有文件。", json!({
+            "path": {"type": "string", "description": "用户指定的 .wisppaper 文件路径；已有文件不会覆盖。"},
+            "attachments": {"type": "boolean", "description": "是否包含全文 PDF 和其他附件，默认 true。为 false 时文件小得多，但对方的文献没有全文，PDF 上的标注和读出的全文也不带过去。"},
+        }), &["path"]),
         scoped("import_pdf", "导入本地 PDF", "复制本地 PDF 到文献库；path 也可以是文件夹，递归导入其中的 PDF，子文件夹名称转为标签。离线读取前两页中的 DOI，未补全的题目使用文件名；不联网查询元数据。已有文献保留原记录并补附件，回收站条目跳过。返回逐项结果；failed 表示存在导入问题的项数，textless 表示已保存但没有读出全文的项数。", json!({
             "path": {"type": "string", "description": "本机 PDF 或文件夹路径，建议使用绝对路径。"},
             "paperId": {"type": "string", "description": "把单个 PDF 附到这篇已有文献；不能与文件夹一起使用。"},
@@ -400,7 +414,7 @@ pub fn catalog() -> Vec<ToolDef> {
 pub fn library_catalog() -> Vec<ToolDef> {
     let mut tools = catalog();
     // The tools that range over every library have no place inside one.
-    tools.retain(|t| !["list_libraries", "create_library", "sync_searches"].contains(&t.name));
+    tools.retain(|t| !["list_libraries", "create_library", "import_library", "sync_searches"].contains(&t.name));
     for tool in &mut tools {
         if let Some(properties) = tool.input_schema["properties"].as_object_mut() { properties.remove("library"); }
     }
@@ -501,6 +515,7 @@ pub fn call(root: &Path, name: &str, args: &Value, fetch: Fetch, download: Downl
 pub fn call_with(root: &Path, name: &str, args: &Value, fetch: Fetch, download: Download, publish: Option<crate::notes::Publish>) -> Result<Value, String> {
     checked(name, args)?;
     if name == "create_library" { return local::create_library(root, args).map_err(|e| format!("{e:#}")) }
+    if name == "import_library" { return local::import_library(root, args).map_err(|e| format!("{e:#}")) }
     if name == "sync_searches" { return sync_searches(root, args, fetch, crate::time::now_millis()).map_err(|e| format!("{e:#}")) }
     if name == "list_libraries" {
         let all: Vec<Value> = libraries::list(root).iter().map(|l| json!({"id": l.id, "name": l.name, "topic": l.topic, "papers": l.paper_count, "autoSyncHours": l.auto_sync_hours})).collect();
@@ -535,6 +550,7 @@ fn dispatch(store: &mut Store, info: &LibraryInfo, name: &str, args: &Value, fet
             store.resolve_note(text(args, "id")?, page)?;
             Ok(json!({"resolved": true}))
         }
+        "export_library" => local::export_library(info, args),
         "import_pdf" => local::import_pdf(store, args),
         "import_references" => local::import_references(store, args),
         "import_zotero" => local::import_zotero(store, args),
@@ -2239,8 +2255,8 @@ pub(crate) mod tests {
         // Inside a library there is no library to choose.
         let inside = library_catalog();
         assert!(inside.iter().all(|t| t.name != "list_libraries" && t.input_schema["properties"].get("library").is_none()));
-        assert!(inside.iter().all(|t| t.name != "create_library"));
-        assert_eq!(inside.len(), catalog().len() - 3);
+        assert!(inside.iter().all(|t| t.name != "create_library" && t.name != "import_library"));
+        assert_eq!(inside.len(), catalog().len() - 4);
     }
 
     #[test]
@@ -2329,6 +2345,21 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_library_moves_through_its_file() {
+        let (root, _) = sample();
+        let path = root.join("根.wisppaper");
+        assert!(call(&root, "export_library", &json!({"path": root.join("根.zip")})).unwrap_err().contains(".wisppaper"));
+        let exported = call(&root, "export_library", &json!({"path": path, "attachments": false})).unwrap();
+        assert_eq!((exported["papers"].as_u64(), exported["attachments"].as_bool()), (Some(2), Some(false)));
+        assert!(call(&root, "export_library", &json!({"path": path})).unwrap_err().contains("不会覆盖"));
+        let imported = call(&root, "import_library", &json!({"path": path})).unwrap();
+        assert_eq!((imported["name"].as_str(), imported["papers"].as_u64()), (Some("根 (2)"), Some(2)));
+        let (here, there) = (call(&root, "list_papers", &json!({"library": "根"})).unwrap(), call(&root, "list_papers", &json!({"library": imported["id"]})).unwrap());
+        assert_eq!((here["total"].as_u64(), here["papers"][0]["title"].as_str()), (there["total"].as_u64(), there["papers"][0]["title"].as_str()));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
     fn every_tool_is_callable() {
         let (root, _) = sample();
         for tool in catalog() {
@@ -2338,7 +2369,7 @@ pub(crate) mod tests {
             // Only a tool that changes the library has anything to ask the person about.
             assert!(tool.writes || !tool.confirm, "{}", tool.name);
         }
-        assert_eq!(library_catalog().iter().filter(|tool| tool.confirm).map(|tool| tool.name).collect::<Vec<_>>().len(), 13);
+        assert_eq!(library_catalog().iter().filter(|tool| tool.confirm).map(|tool| tool.name).collect::<Vec<_>>().len(), 14);
         // The tools that write a manuscript are asked about outside the conversation that writes it.
         assert!(MANUSCRIPT.iter().all(|name| catalog().iter().any(|tool| tool.name == *name && tool.writes && tool.confirm)));
         std::fs::remove_dir_all(root).ok();

@@ -79,6 +79,8 @@ wisp search_fulltext --help             # 一个工具的参数
 | `list_libraries` | 所有文献库的 ID、名称、主题和文献数量 |
 | `list_pdf_annotations` | 只读查询 PDF 下划线、高亮及笔记；可按 `--paper-id`、`--resource-id`、`--page`、`--kind`、`--query` 筛选，用 `--limit`、`--offset` 分页。返回 `quote`（原文）、`note`（用户笔记）、1-based 页码、页面左上角起的点坐标 `boxes`、附件 ID 和时间；`get_paper` 的 `pdfAnnotationCount` 给出总数。内置助手与只读 MCP 也可使用 |
 | `create_library` | 新建文献库；`--name` 必填，`--topic`、`--color` 可选，返回新库 ID（会创建文件和数据库） |
+| `export_library` | 把整个文献库导出为 `.wisppaper` 文件，`--path` 必填，已有文件不覆盖；`--attachments false` 不带 PDF 等附件 |
+| `import_library` | 把另一个 Wisp Paper 导出的 `.wisppaper` 文件导入为新文献库，`--path` 必填（会创建文件和数据库） |
 | `import_pdf` | 复制本地 PDF 或递归导入文件夹，`--path` 必填；单文件可用 `--paper-id` 附到已有条目（会改动文献库） |
 | `import_references` | 导入本地 BibTeX / RIS 文件，`--path` 必填，按内容识别格式（会改动文献库） |
 | `import_zotero` | 从本机 `zotero.sqlite` 迁移文献、笔记、标签和 PDF，`--path` 必填（会改动目标文献库） |

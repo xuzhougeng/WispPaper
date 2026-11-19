@@ -1440,5 +1440,10 @@
   "清空回收站": "Empty trash",
   "清空之后，它们不再阻止重复导入：以后的检索可能会把它们再导入进来。": "Once emptied, they no longer block re-import: a later search may import them again.",
   "我已知晓": "I understand",
-  "全部恢复": "Restore all"
+  "全部恢复": "Restore all",
+  "导入文献库": "Import library",
+  "整个文献库，含 PDF（.wisppaper）…": "Whole library, with PDFs (.wisppaper)…",
+  "整个文献库，不含 PDF（.wisppaper）…": "Whole library, without PDFs (.wisppaper)…",
+  "导出文献库，含 PDF…": "Export library with PDFs…",
+  "导出文献库，不含 PDF…": "Export library without PDFs…"
 }
