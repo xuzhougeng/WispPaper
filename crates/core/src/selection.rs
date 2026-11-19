@@ -93,6 +93,20 @@ fn citation(text: &str, line: &Range<usize>, at: usize) -> Option<Range<usize>> 
     (close >= rel && !words[open + 1..close].contains('[')).then(|| line.start + open..line.start + close + 1)
 }
 
+/// The word a double click picks in a text being read (an answer, a question
+/// asked, a paper's abstract, a PDF page): letters and digits with the marks
+/// that join them, so `Single-cell` is one word and a run of Chinese is one
+/// stretch. `at` is the character under the pointer; on a space or a mark
+/// right after a word, that word, else that one character.
+pub fn word_at(text: &str, at: usize) -> Range<usize> {
+    let index = floor(text, at);
+    let part = |c: char| c.is_alphanumeric() || matches!(c, '-' | '_' | '\'' | '’');
+    let start = text[..index].char_indices().rev().take_while(|(_, c)| part(*c)).last().map_or(index, |(at, _)| at);
+    let end = index + text[index..].char_indices().find(|(_, c)| !part(*c)).map_or(text.len() - index, |(at, _)| at);
+    if start == end { return index..index + text[index..].chars().next().map_or(0, char::len_utf8) }
+    start..end
+}
+
 /// What a paragraph says: its line without the Markdown it opens with (a
 /// quote, a list's marker, a heading's hashes) and without the spaces
 /// around it. An empty line gives an empty range where the click was.
@@ -168,6 +182,26 @@ mod tests {
         assert_eq!(pick("as shown before [-@Zhang2024, p. 3].", "Zhang2024", Unit::Word), "[-@Zhang2024, p. 3]");
         assert_eq!(pick("", "", Unit::Word), "");
         assert_eq!(word("a\n\nb", 2), 2..2);
+    }
+
+    #[test]
+    fn words_of_a_text_read() {
+        let text = "Single-cell RNA-seq（单细胞）of root, 2024.";
+        assert_eq!(&text[word_at(text, 3)], "Single-cell");
+        assert_eq!(&text[word_at(text, 0)], "Single-cell");
+        assert_eq!(&text[word_at(text, text.find("RNA").unwrap() + 4)], "RNA-seq");
+        // On the space or the comma just after a word: that word, without the mark.
+        assert_eq!(&text[word_at(text, 11)], "Single-cell");
+        assert_eq!(&text[word_at(text, text.find(',').unwrap())], "root");
+        let inflamed = "the inflammation, then";
+        assert_eq!(&inflamed[word_at(inflamed, inflamed.find("mm").unwrap())], "inflammation");
+        // A space after a mark is that space alone.
+        assert_eq!(&"a, b"[word_at("a, b", 2)], " ");
+        // Inside a Chinese letter: the run it stands in.
+        let at = text.find('细').unwrap() + 1;
+        assert_eq!(&text[word_at(text, at)], "单细胞");
+        assert_eq!(&text[word_at(text, text.len())], "");
+        assert_eq!(&text[word_at(text, text.find("2024").unwrap() + 4)], "2024");
     }
 
     #[test]

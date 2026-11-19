@@ -496,8 +496,10 @@ impl Workspace {
                                 .child(tool("pdf-zoom-out", "minus").on_click(self.on(Cmd::PdfZoom(ZoomTo::Out), cx)))
                                 .child(ui::ghost_button("pdf-zoom", None, Some(if zoom.fits() { format!("{} · {}%", fit_label(zoom), percent.round()).into() } else { format!("{}%", percent.round()).into() })).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).on_click(self.on_menu(MenuKind::PdfZoom, cx)))
                                 .child(tool("pdf-zoom-in", "plus").on_click(self.on(Cmd::PdfZoom(ZoomTo::In), cx)))
-                                // Zoomed by hand: one click back to the fit the reader reads at, offered only then.
-                                .when(!zoom.fits(), |d| d.child(ui::ghost_button("pdf-zoom-fit", None, Some(fit_label(fit).into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).on_click(self.on(Cmd::PdfZoom(ZoomTo::Set(fit)), cx)))),
+                                // The whole page in one click from any size; in force it is marked, and a click brings the page's top back.
+                                .child(ui::ghost_button("pdf-zoom-page", None, None).h(text_px(24.)).min_w(px(24.)).child(ui::icon("scan", 16., if zoom == Zoom::FitPage { Theme::accent() } else { Theme::text_secondary() })).tooltip(ui::tip(t("适应整页"))).on_click(self.on(Cmd::PdfZoom(ZoomTo::Set(Zoom::FitPage)), cx)))
+                                // Zoomed by hand: one click back to the fit the reader reads at, offered only then (the whole page has its own button).
+                                .when(!zoom.fits() && fit != Zoom::FitPage, |d| d.child(ui::ghost_button("pdf-zoom-fit", None, Some(fit_label(fit).into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).on_click(self.on(Cmd::PdfZoom(ZoomTo::Set(fit)), cx)))),
                         )
                     })
                     // The same file twice, side by side or one over the other: a figure in one half, the page that speaks of it in the other.

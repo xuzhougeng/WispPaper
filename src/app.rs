@@ -2882,17 +2882,24 @@ impl Workspace {
                 use crate::markdown::Pointer;
                 let Some(lib) = self.lib.as_mut() else { return };
                 // The keyboard goes to the window, so that copying finds the selection and not a text box.
-                if pointer == Pointer::Down {
+                if matches!(pointer, Pointer::Down | Pointer::Word) {
                     window.focus(&self.focus);
                     self.picked = None;
                 }
                 // One selection at a time: starting one in a conversation ends the other's.
-                if pointer == Pointer::Down {
+                if matches!(pointer, Pointer::Down | Pointer::Word) {
                     for other in [Talk::Library, Talk::Paper, Talk::Write].into_iter().filter(|other| *other != paper) { lib.chat_mut(other).picked = None }
                 }
                 let chat = lib.chat_mut(paper);
                 match (pointer, chat.picked.as_mut()) {
                     (Pointer::Down, _) => (chat.picked, chat.spot) = (Some((at, place, place, true)), None),
+                    // By the rule of every text read (`select::word_at`). Done at once and not held: the hand's slip
+                    // between the press and the release would else be a drag that cuts the word short.
+                    (Pointer::Word, _) => {
+                        let Some(ChatItem::Answer(answer)) = chat.messages.get(at) else { return };
+                        let word = crate::markdown::texts(answer).get(place.0).map(|piece| crate::select::word_at(piece, place.1)).filter(|word| !word.is_empty() && crate::markdown::text_between(answer, (place.0, word.start), (place.0, word.end)).trim() != "");
+                        (chat.picked, chat.spot) = (word.map(|word| (at, (place.0, word.start), (place.0, word.end), false)), None);
+                    }
                     (Pointer::Drag, Some((answer, _, to, true))) if *answer == at => *to = place,
                     (Pointer::Up, Some((_, from, to, held))) if *held => {
                         *held = false;
