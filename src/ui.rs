@@ -29,7 +29,7 @@ pub fn import_segments(run: &crate::app::ImportRun) -> [ProgressSegment; 6] {
     for row in &run.rows {
         counts[match row.outcome {
             Imported::Failed(_) => 3,
-            Imported::InTrash => 2,
+            Imported::InTrash | Imported::Held => 2,
             _ if row.open() => 1,
             _ => 0,
         }] += 1;
@@ -431,7 +431,7 @@ mod progress_tests {
     #[test]
     fn progress_categories_are_exclusive_even_when_failed_rows_have_warnings() {
         let row = |outcome, unrecognised| ImportRow { name: "same.pdf".into(), outcome, paper_id: None, unrecognised, textless: String::new() };
-        let pdfs = ImportRun { total: 7, working: vec!["same.pdf".into(), "same.pdf".into()], rows: vec![row(Imported::Added, false), row(Imported::Attached, true), row(Imported::InTrash, true), row(Imported::Failed("bad file".into()), true)] };
+        let pdfs = ImportRun { total: 7, working: vec!["same.pdf".into(), "same.pdf".into()], rows: vec![row(Imported::Added, false), row(Imported::Attached, true), row(Imported::InTrash, true), row(Imported::Failed("bad file".into()), true)], ..Default::default() };
         assert_eq!(import_segments(&pdfs).map(|(n, _, _)| n), [1, 1, 1, 1, 2, 1]);
         let zotero = ZoteroRun { total: 6, running: true, rows: vec![
             zotero::Row { paper_id: Some("saved".into()), ..Default::default() },

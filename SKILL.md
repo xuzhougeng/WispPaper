@@ -15,6 +15,7 @@ Wisp Paper 是本地优先的文献管理软件。每个文献库是独立文件
 |---|---|---|
 | 查看已有文献库、查询文献 | 支持 | `list_libraries`、`library_status`、`list_papers`、`get_paper` |
 | 新建文献库 | 支持 | `create_library` |
+| 把文献库交给另一台电脑 | 支持 | `export_library`（可不带 PDF）→ 对方 `import_library` |
 | 从在线数据库批量导入书目信息和摘要 | 支持 | `search_online` → `save_search` → `run_search` |
 | 按 DOI / PMID 直接添加条目 | 暂无专用命令 | 桌面「添加文献」 |
 | 导入本地 PDF、PDF 文件夹 | 支持 | `import_pdf`；可用 `--paper-id` 将单文件附到已有条目 |

@@ -373,7 +373,7 @@
   "创建": "Create",
   "通过 DOI / PMID 添加": "Add by DOI / PMID",
   "DOI 或 PMID": "DOI or PMID",
-  "可以一次粘贴多个。题目、作者、期刊、年份和摘要会从 Crossref 与 Europe PMC 查询后填入，已有的文献会跳过。查询会把这些编号发送给这两个服务。": "You can paste several at once. Title, authors, journal, year and abstract are retrieved from Crossref and Europe PMC; papers already in the library are skipped. These identifiers will be sent to both services.",
+  "可以一次粘贴多个，多个时在后台查询，进度在左侧栏。题目、作者、期刊、年份和摘要会从 Crossref 与 Europe PMC 查询后填入；已有的文献和认不出的行会跳过。查询会把这些编号发送给这两个服务。": "You can paste several at once; several are looked up in the background, with progress in the sidebar. Title, authors, journal, year and abstract are retrieved from Crossref and Europe PMC; papers already in the library and unrecognised lines are skipped. These identifiers will be sent to both services.",
   "正在查询…": "Looking up…",
   "查询并添加": "Look up and add",
   "现在：空着": "Currently empty",
@@ -1456,5 +1456,17 @@
   "补图、补表、补充方法等文件放在这里；PDF 附件可以在阅读器里打开，提问时会和正文一起读。": "Supplementary figures, tables and methods go here. PDF attachments open in the reader and are read together with the main text when you ask questions.",
   "选中 PDF 文字后，可添加下划线或高亮；工具栏的「方框」「便签」可以框出区域、在任意位置记笔记。": "Select PDF text to underline or highlight it. Use Box and Note in the toolbar to frame an area or add a note anywhere.",
   "附件／补充材料": "Attachments / supplementary material",
-  "（空白便签）": "(Empty note)"
+  "（空白便签）": "(Empty note)",
+  "导入文献库": "Import library",
+  "整个文献库，含 PDF（.wisppaper）…": "Whole library, with PDFs (.wisppaper)…",
+  "整个文献库，不含 PDF（.wisppaper）…": "Whole library, without PDFs (.wisppaper)…",
+  "导出文献库，含 PDF…": "Export library with PDFs…",
+  "导出文献库，不含 PDF…": "Export library without PDFs…",
+  "按 DOI / PMID 导入": "Import by DOI / PMID",
+  "DOI / PMID 导入完成": "DOI / PMID import complete",
+  "已有、跳过": "Already held, skipped",
+  "没认出、跳过": "Not recognised, skipped",
+  "没有查到这篇文献。": "No record was found for this identifier.",
+  "文献库里已有这篇，跳过了": "Already in this library, skipped",
+  "正在查询第一批，结果会实时出现在这里。": "Looking up the first ones. Results will appear here as they arrive."
 }

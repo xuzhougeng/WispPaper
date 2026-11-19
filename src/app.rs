@@ -24,7 +24,7 @@ use wisp_core::screening::{Before, Confirming, Round};
 use wisp_core::settings::{Language, Session, Settings, Task, session_file, settings_file};
 use wisp_core::store::{Conversation, ConversationInfo, ImportBatch, SavedSearch, Store, StructureInfo, Suggestion, TrashEntry};
 use wisp_core::manuscript::{Manuscript, Snapshot};
-use wisp_core::{complete, export, fulltext, import, pdftext, structure, time, tools, zotero};
+use wisp_core::{archive, complete, export, fulltext, import, pdftext, structure, time, tools, zotero};
 pub use crate::manuscripts::ManuscriptExport;
 
 /// What the middle of an open library shows.
@@ -267,6 +267,10 @@ pub enum Cmd {
     EditLibrary(String),
     AskRemoveLibrary(String),
     RemoveLibrary(String),
+    /// The whole library as a `.wisppaper` file, with its PDFs and other attachments or without.
+    ExportLibrary(String, bool),
+    /// A `.wisppaper` file from another Wisp Paper, taken in as a new library.
+    ImportLibrary,
     GoHome,
     RevealFolder,
     OpenUrl(String),
@@ -990,11 +994,13 @@ pub enum Imported {
     Attached,
     /// Its paper is in the trash: nothing was imported.
     InTrash,
+    /// An identifier of a paper the library already holds: nothing to do.
+    Held,
     Failed(String),
 }
 
 pub struct ImportRow {
-    /// The file's name.
+    /// The file's name, or the identifier looked up.
     pub name: String,
     pub outcome: Imported,
     pub paper_id: Option<String>,
@@ -1011,14 +1017,18 @@ impl ImportRow {
     }
 }
 
-/// The PDFs dropped or picked in one go (more dropped meanwhile join it):
-/// how far the reading is, then what came of each, until it is put away.
+/// The PDFs dropped or picked in one go, or the identifiers pasted into 通过 DOI / PMID 添加 (more of either
+/// meanwhile join it): how far the reading is, then what came of each, until it is put away.
 #[derive(Default)]
 pub struct ImportRun {
     pub total: usize,
+    /// How many of `total` are identifiers looked up rather than files read.
+    pub ids: usize,
     /// Names of the files currently being read; duplicate names are separate jobs.
     pub working: Vec<String>,
     pub rows: Vec<ImportRow>,
+    /// Words pasted with the identifiers that are neither a DOI nor a PMID: left out, said once in the report.
+    pub unknown: Vec<String>,
 }
 
 #[derive(Default)]
@@ -1050,6 +1060,18 @@ impl ImportRun {
         self.rows.len() < self.total
     }
 
+    /// The job's name, as what it imports: PDFs, identifiers, or both.
+    pub fn title(&self) -> &'static str {
+        match (self.ids, self.running()) {
+            (0, true) => t("导入 PDF"),
+            (0, false) => t("PDF 导入完成"),
+            (ids, true) if ids == self.total => t("按 DOI / PMID 导入"),
+            (ids, false) if ids == self.total => t("DOI / PMID 导入完成"),
+            (_, true) => t("正在导入"),
+            (_, false) => t("导入完成"),
+        }
+    }
+
     /// How many files came to this.
     pub fn count(&self, of: impl Fn(&ImportRow) -> bool) -> usize {
         self.rows.iter().filter(|row| of(row)).count()
@@ -1062,7 +1084,9 @@ impl ImportRun {
             (self.count(|row| row.outcome == Imported::Added), t("新增")),
             (self.count(|row| row.outcome == Imported::Attached), t("附到已有文献")),
             (self.count(|row| row.outcome == Imported::InTrash), t("在回收站里、未导入")),
+            (self.count(|row| row.outcome == Imported::Held), t("已有、跳过")),
             (self.count(|row| matches!(row.outcome, Imported::Failed(_))), t("没有成功")),
+            (self.unknown.len(), t("没认出、跳过")),
         ] {
             if n > 0 { facts.push(format!("{text} {n}")) }
         }
@@ -2039,10 +2063,16 @@ impl Workspace {
             MenuKind::Export => {
                 items.push(item("BibTeX（.bib）", Cmd::Export(ExportKind::Bibtex)));
                 items.push(item(t("表格（.csv）"), Cmd::Export(ExportKind::Csv)));
+                if let Some(id) = self.lib.as_ref().map(|l| l.info.id.clone()) {
+                    items.push(item(t("整个文献库，含 PDF（.wisppaper）…"), Cmd::ExportLibrary(id.clone(), true)));
+                    items.push(item(t("整个文献库，不含 PDF（.wisppaper）…"), Cmd::ExportLibrary(id, false)));
+                }
             }
             MenuKind::LibraryCard(id) => {
                 items.push(item(t("打开"), Cmd::OpenLibrary(id.clone())));
                 items.push(item(t("编辑名称与主题…"), Cmd::EditLibrary(id.clone())));
+                items.push(item(t("导出文献库，含 PDF…"), Cmd::ExportLibrary(id.clone(), true)));
+                items.push(item(t("导出文献库，不含 PDF…"), Cmd::ExportLibrary(id.clone(), false)));
                 items.push(item(t("移除文献库…"), Cmd::AskRemoveLibrary(id)));
             }
             MenuKind::PdfZoom => {
@@ -2229,6 +2259,8 @@ impl Workspace {
                 }
                 self.libraries = libraries::list(&self.root);
             }
+            Cmd::ExportLibrary(id, attachments) => self.export_library(&id, attachments, cx),
+            Cmd::ImportLibrary => self.pick_library_file(cx),
             Cmd::RevealFolder => {
                 let path = self.lib.as_ref().map_or(self.root.clone(), |l| l.info.dir.clone());
                 cx.open_with_system(&path);
@@ -3852,6 +3884,10 @@ impl Workspace {
     /// imported, and a folder gives every PDF under it, tagged with the
     /// folders between it and the file (`import::folder_pdfs`).
     pub fn import_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        // A library from another Wisp Paper becomes a library of its own, wherever it is dropped.
+        let (archives, paths): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|path| path.is_file() && path.extension().is_some_and(|e| e.eq_ignore_ascii_case(archive::EXTENSION)));
+        for path in archives { self.import_library(path, cx) }
+        if paths.is_empty() { return }
         if self.lib.is_none() { return self.fail(t("请先打开一个文献库，再拖入文件。"), cx) }
         // A Word file is a manuscript to go on with, wherever it is dropped; Markdown and plain text are, on the writing page.
         let writing = self.lib.as_ref().is_some_and(|lib| lib.page == Page::Write);
@@ -4007,6 +4043,7 @@ impl Workspace {
             Imported::Added => tf!("已添加：{title}", "Added: {title}"),
             Imported::Attached => tf!("「{stem}」已在文献库中，PDF 已附到原条目。", "“{stem}” is already in this library. PDF attached to existing record."),
             Imported::InTrash => tf!("「{stem}」对应的文献在回收站中，未导入。", "“{stem}” is in trash and was not imported."),
+            Imported::Held => tf!("「{stem}」已在文献库中。", "“{stem}” is already in this library."),
             Imported::Failed(err) => tf!("「{stem}」没有导入：{err}", "“{stem}” not imported: {err}"),
         };
         let said = if row.textless.is_empty() { said } else { tf!("{said} 但没有读出文字（{}），全文暂时不能用于提问。", "{said} But no text was extracted ({}); full text is unavailable for chat.", t(fulltext::failure_brief(&row.textless))) };
@@ -4030,6 +4067,62 @@ impl Workspace {
             if failed { self.fail(said, cx) } else { self.say(said, cx) }
         }
         cx.notify();
+    }
+
+    /// The identifiers pasted into 通过 DOI / PMID 添加, more than one, looked up in the background as an import of
+    /// their own (a PDF import going on takes them in): the dialog closes at once, the progress and the report are
+    /// the import's. Words that are no identifier are left out and said in the report.
+    fn import_ids(&mut self, ids: Vec<Identifier>, unknown: Vec<String>, cx: &mut Context<Self>) {
+        let Some(lib) = self.lib.as_mut() else { return };
+        let run = match lib.import.as_mut().filter(|run| run.running()) {
+            Some(run) => run,
+            None => lib.import.insert(ImportRun::default()),
+        };
+        run.total += ids.len();
+        run.ids += ids.len();
+        run.unknown.extend(unknown);
+        let library = lib.info.id.clone();
+        cx.notify();
+        let queue = std::rc::Rc::new(std::cell::RefCell::new(ids.into_iter().rev().collect::<Vec<_>>()));
+        for _ in 0..IMPORT_WORKERS.min(queue.borrow().len()) {
+            let (queue, library) = (queue.clone(), library.clone());
+            cx.spawn(async move |this, cx| {
+                loop {
+                    let Some(id) = queue.borrow_mut().pop() else { break };
+                    let (Identifier::Doi(name) | Identifier::Pmid(name)) = id.clone();
+                    let known = this.update(cx, |this, cx| {
+                        let Some(run) = this.lib.as_mut().filter(|l| l.info.id == library).and_then(|l| l.import.as_mut()) else { return false };
+                        run.working.push(name.clone());
+                        cx.notify();
+                        true
+                    });
+                    if !matches!(known, Ok(true)) { break }
+                    let found = cx.background_executor().spawn(async move { wisp_net::lookup_paper(&id) }).await;
+                    let done = this.update(cx, |this, cx| {
+                        let Some(lib) = this.lib.as_mut().filter(|l| l.info.id == library) else { return false };
+                        let stored = found.and_then(|paper| lib.store.import_papers(vec![paper]).and_then(|result| lib.reload().map(|()| result)).map_err(|e| format!("{e:#}")));
+                        let mut row = ImportRow { name: name.clone(), outcome: Imported::Added, paper_id: None, unrecognised: false, textless: String::new() };
+                        match stored.map(|result| (result.added.into_iter().next(), result.skipped.into_iter().next())) {
+                            Ok((Some(paper), _)) => row.paper_id = Some(paper.id),
+                            Ok((None, Some(held))) => {
+                                row.outcome = if held.in_trash { Imported::InTrash } else { Imported::Held };
+                                row.paper_id = Some(held.existing_id);
+                            }
+                            Ok((None, None)) => row.outcome = Imported::Failed(t("没有查到这篇文献。").into()),
+                            Err(err) => row.outcome = Imported::Failed(err),
+                        }
+                        let Some(run) = lib.import.as_mut() else { return false };
+                        if let Some(at) = run.working.iter().position(|working| working == &name) { run.working.remove(at); }
+                        run.rows.push(row);
+                        if !run.running() { run.working.clear() }
+                        cx.notify();
+                        true
+                    });
+                    if !matches!(done, Ok(true)) { break }
+                }
+            })
+            .detach();
+        }
     }
 
     /// Try once more to get the text of a stored file: after the reader has
@@ -4107,6 +4200,61 @@ impl Workspace {
             })
             .detach();
         }
+    }
+
+    /// The whole library in one `.wisppaper` file, for another Wisp Paper.
+    fn export_library(&mut self, id: &str, attachments: bool, cx: &mut Context<Self>) {
+        // The open library's own description is the newest.
+        let Some(info) = self.lib.as_ref().map(|l| &l.info).filter(|i| i.id == id).or_else(|| self.libraries.iter().find(|l| l.id == id)).cloned() else { return };
+        let directory = dirs::document_dir().or_else(dirs::home_dir).unwrap_or_else(|| self.root.clone());
+        let picked = cx.prompt_for_new_path(&directory, Some(&archive::file_name(&info.name)));
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(mut path))) = picked.await else { return };
+            if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case(archive::EXTENSION)) {
+                let mut named = path.into_os_string();
+                named.push(format!(".{}", archive::EXTENSION));
+                path = PathBuf::from(named);
+            }
+            this.update(cx, |this, cx| this.say(tf!("正在导出「{}」…", "Exporting “{}”…", info.name), cx)).ok();
+            let target = path.clone();
+            let result = cx.background_executor().spawn(async move { archive::export(&info, &target, attachments) }).await;
+            this.update(cx, |this, cx| match result {
+                Ok(manifest) if attachments => this.say(tf!("已导出 {} 篇文献和 {} 个文件到 {}", "Exported {} papers and {} files to {}", manifest.papers, manifest.files, path.display()), cx),
+                Ok(manifest) => this.say(tf!("已导出 {} 篇文献（不含 PDF）到 {}", "Exported {} papers (without PDFs) to {}", manifest.papers, path.display()), cx),
+                Err(err) => this.fail(format!("{err:#}"), cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn pick_library_file(&mut self, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some(t("导入").into()), extensions: Some(vec![archive::EXTENSION.into()]) });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = picked.await else { return };
+            this.update(cx, |this, cx| for path in paths { this.import_library(path, cx) }).ok();
+        })
+        .detach();
+    }
+
+    /// A `.wisppaper` file taken in as a new library; the home page shows it once it is whole.
+    pub fn import_library(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let root = self.root.clone();
+        let file = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        self.say(tf!("正在导入 {file}…", "Importing {file}…"), cx);
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_executor().spawn(async move { archive::import(&root, &path) }).await;
+            this.update(cx, |this, cx| {
+                this.libraries = libraries::list(&this.root);
+                match result {
+                    Ok(info) => this.say(tf!("已导入文献库「{}」，{} 篇文献", "Imported library “{}” with {} papers", info.name, info.paper_count), cx),
+                    Err(err) => this.fail(tf!("无法导入 {file}：{}", "Cannot import {file}: {}", format!("{err:#}")), cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn export(&mut self, kind: ExportKind, cx: &mut Context<Self>) {
@@ -5493,8 +5641,10 @@ impl Workspace {
                     self.modal_error = t("没有认出 DOI 或 PMID。DOI 形如 10.1038/s41586-020-2649-2，PMID 是一串数字。").into();
                     return;
                 }
-                if !unknown.is_empty() {
-                    self.modal_error = tf!("没有认出：{}。改好或删去后再试。", "Not recognized: {}. Fix or remove them and try again.", unknown.join("、"));
+                // Several are an import of their own, in the background; what is not an identifier is left out.
+                if ids.len() > 1 || !unknown.is_empty() {
+                    self.run(Cmd::CloseModal, window, cx);
+                    self.import_ids(ids, unknown, cx);
                     return;
                 }
                 *run = Some(IdRun { total: ids.len(), ..Default::default() });

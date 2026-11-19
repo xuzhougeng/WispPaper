@@ -4,6 +4,7 @@
 use super::text;
 use crate::{fulltext, import, libraries, lookup, zotero};
 use crate::model::{Paper, clean_strings};
+use crate::libraries::LibraryInfo;
 use crate::store::Store;
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
@@ -15,6 +16,23 @@ pub(super) fn create_library(root: &Path, args: &Value) -> Result<Value> {
     let color = if args["color"].is_null() { "blue" } else { text(args, "color")? };
     let info = libraries::create(root, text(args, "name")?, text(args, "topic")?, color)?;
     Ok(json!({"id": info.id, "name": info.name, "topic": info.topic, "color": info.color, "directory": info.dir, "papers": 0}))
+}
+
+/// A `.wisppaper` file from another Wisp Paper, taken in as a new library.
+pub(super) fn import_library(root: &Path, args: &Value) -> Result<Value> {
+    let path = input_path(args)?;
+    let info = crate::archive::import(root, &path)?;
+    Ok(json!({"id": info.id, "name": info.name, "topic": info.topic, "color": info.color, "directory": info.dir, "papers": info.paper_count}))
+}
+
+/// The whole library as a `.wisppaper` file at a path the person chose; an existing file is left alone.
+pub(super) fn export_library(info: &LibraryInfo, args: &Value) -> Result<Value> {
+    let path = PathBuf::from(text(args, "path")?);
+    if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case(crate::archive::EXTENSION)) { bail!("请选择 .wisppaper 文件路径。") }
+    if path.exists() { bail!("{} 已存在，不会覆盖。", path.display()) }
+    let attachments = args["attachments"].as_bool().unwrap_or(true);
+    let manifest = crate::archive::export(info, &path, attachments)?;
+    Ok(json!({"path": path, "papers": manifest.papers, "files": manifest.files, "bytes": std::fs::metadata(&path).map_or(0, |m| m.len()), "attachments": attachments}))
 }
 
 fn input_path(args: &Value) -> Result<PathBuf> {
