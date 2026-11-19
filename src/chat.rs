@@ -628,6 +628,12 @@ impl Workspace {
             Some(ctx) if talk == Talk::Paper => {
                 let mut line = if ctx.pages > 0 { tf!("已提供这篇文献的记录和 {} 页全文", "Provided this paper's record and {} full-text pages", ctx.pages) } else { t("这篇文献没有可读取的全文，只提供了记录和摘要").to_string() };
                 if ctx.pages_omitted > 0 { line.push_str(&tf!("（另有 {} 页超出长度未提供）", " ({} more pages exceeded the length limit)", ctx.pages_omitted)) }
+                // The files read, by name: the main text and each attachment with its number, as the answers cite them.
+                let files: Vec<String> = ctx.files.iter().map(|file| match file.attachment {
+                    Some(n) => tf!("附件 S{n} {} {} 页", "Attachment S{n} {} {} pp.", file.title, file.pages),
+                    None => tf!("正文 {} 页", "Main text {} pp.", file.pages),
+                }).collect();
+                if ctx.files.iter().any(|file| file.attachment.is_some()) { line.push_str(&tf!("：{}", ": {}", files.join(" · "))) }
                 line
             }
             Some(ctx) => {
@@ -642,12 +648,15 @@ impl Workspace {
             None if !chat.messages.is_empty() => t("历史对话：接着提问时，会按文献库现在的内容重新提供材料").to_string(),
             None if talk == Talk::Paper => {
                 let id = lib.selected.clone().unwrap_or_default();
-                match lib.pdf_file(&id).map(|f| lib.store.fulltext_pages(&f.id)) {
+                let line = match lib.main_pdf(&id).map(|f| lib.store.fulltext_pages(&f.id)) {
                     Some(Ok(Some(Ok(pages)))) => tf!("将提供这篇文献的记录和 {} 页全文", "Will provide this paper's record and {} full-text pages", pages.len()),
                     Some(Ok(Some(Err(error)))) => tf!("全文无法读取（{error}），将只提供记录和摘要", "Cannot read full text ({error}); only record and abstract will be provided"),
                     Some(_) => t("全文的文字还在提取，现在提问只会用到记录和摘要").to_string(),
                     None => t("这篇文献没有 PDF，将只提供记录和摘要").to_string(),
-                }
+                };
+                // Its attachments go along too, each said by name.
+                let attachments: Vec<String> = lib.attachments(&id).iter().enumerate().map(|(i, f)| tf!("S{} {}", "S{} {}", i + 1, f.title)).collect();
+                if attachments.is_empty() { line } else { line + &tf!("，以及 {} 个附件：{}", ", plus {} attachments: {}", attachments.len(), attachments.join(" · ")) }
             }
             // The assistant that writes draws on the whole library and writes into the manuscript beside it.
             None if talk == Talk::Write => tf!("读文献库的 {} 篇文献{textless_note}，写进右边的稿件", "Reads the library's {} papers{textless_note} and writes into the manuscript at the right", lib.papers.len()),
@@ -1011,7 +1020,7 @@ impl Workspace {
         // A citation clicked where it stands in the text.
         let workspace = cx.entity().downgrade();
         let cite: crate::markdown::OnCite = std::rc::Rc::new(move |citation, window, cx| {
-            workspace.update(cx, |this, cx| this.run(Cmd::GotoCited(talk, citation.label.clone(), citation.page, citation.quote.clone()), window, cx)).ok();
+            workspace.update(cx, |this, cx| this.run(Cmd::GotoCited(talk, citation.label.clone(), citation.file, citation.page, citation.quote.clone()), window, cx)).ok();
         });
         let picker = cx.entity().downgrade();
         // The bar by a selection is drawn over everything after it: it gives way to what floats over the conversation, the right-click menu (which holds the same actions) among them.
@@ -1102,7 +1111,7 @@ impl Workspace {
             // Its size is known from the frame before; the first time, that of the bar with its two buttons.
             let bar = chat.spot.filter(|_| picked.is_some() && !holding && !covered).and_then(|spot| Some((spot.bar_at(chat.scroll.offset(), chat.bar_size.unwrap_or(size(px(156.), px(30.))))?, spot.view.width - px(12.))));
             // Each cited label, once, in the order the answer uses it.
-            let cited: Vec<(&ai::Source, Option<usize>, String)> = ai::citations(content).into_iter().filter_map(|cited| chat.sources().iter().find(|s| s.label == cited.label).map(|s| (s, cited.page, cited.quote))).collect();
+            let cited: Vec<(&ai::Source, Option<usize>, Option<usize>, String)> = ai::citations(content).into_iter().filter_map(|cited| chat.sources().iter().find(|s| s.label == cited.label).map(|s| (s, cited.file, cited.page, cited.quote))).collect();
             // An answer that surveys the library cites dozens of papers: the first few are shown, the rest on request.
             let (total, open) = (cited.len(), chat.sources_open.contains(&i));
             let shown = if open || total <= SOURCES_SHOWN + 2 { total } else { SOURCES_SHOWN };
@@ -1110,15 +1119,21 @@ impl Workspace {
                 .into_iter()
                 .take(shown)
                 .enumerate()
-                .map(|(n, (source, page, quote))| {
+                .map(|(n, (source, file, page, quote))| {
+                    // An attachment is named on the chip, by its number and its file's name; the main text is not.
+                    let attachment = file.and_then(|n| { let found = self.lib.as_ref()?.attachments(&source.paper_id).get(n - 1).map(|f| (f.id.clone(), f.title.clone()))?; Some((n, found.0, found.1)) });
+                    let label = match &attachment {
+                        Some((n, _, title)) => tf!("{} 附件 S{n} {title}", "{} Attachment S{n} {title}", source.label),
+                        None => source.label.clone(),
+                    };
                     let text = match page {
                         // A quoted sentence is what the click will look for in the PDF.
-                        _ if !quote.is_empty() => format!("{}{} · “{quote}”", source.label, page.map(|page| format!(" p.{page}")).unwrap_or_default()),
-                        Some(page) => format!("{} p.{page} · {}", source.label, source.title),
-                        None => format!("{} · {}", source.label, source.title),
+                        _ if !quote.is_empty() => format!("{label}{} · “{quote}”", page.map(|page| format!(" p.{page}")).unwrap_or_default()),
+                        Some(page) => format!("{label} p.{page} · {}", source.title),
+                        None => format!("{label} · {}", source.title),
                     };
                     // What looking the quotation up in the paper's text came to: said on the chip, not left to trust.
-                    let check = chat.checks.get(&(source.label.clone(), page, quote.clone()));
+                    let check = chat.checks.get(&(source.label.clone(), file, page, quote.clone()));
                     let (mark, verdict, color) = quote_verdict(check).unwrap_or(("file-text", String::new(), Theme::accent()));
                     // The click leads to where the sentence really is.
                     let page = match check {
@@ -1127,7 +1142,7 @@ impl Workspace {
                     };
                     source_chip(SharedString::from(format!("cite-{side}-{i}-{n}")), if quote.is_empty() { 300. } else { 520. })
                         .text_color(Theme::text_secondary())
-                        .on_click(self.on(Cmd::GotoSource(source.paper_id.clone(), page, quote), cx))
+                        .on_click(self.on(Cmd::GotoFile(source.paper_id.clone(), attachment.map(|(_, id, _)| id), page, quote), cx))
                         .child(ui::icon(mark, 12., color))
                         .child(div().min_w_0().truncate().child(text))
                         .when(!verdict.is_empty(), |d| d.child(div().flex_none().text_color(color).child(verdict)))

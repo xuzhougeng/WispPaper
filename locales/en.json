@@ -1440,5 +1440,21 @@
   "清空回收站": "Empty trash",
   "清空之后，它们不再阻止重复导入：以后的检索可能会把它们再导入进来。": "Once emptied, they no longer block re-import: a later search may import them again.",
   "我已知晓": "I understand",
-  "全部恢复": "Restore all"
+  "全部恢复": "Restore all",
+  "便签": "Note",
+  "写下想法…": "Write a thought…",
+  "切换文件": "Switch file",
+  "删除方框": "Delete box",
+  "在页面上拖出方框，框住图表或文字": "Drag on the page to draw a box around a figure or text",
+  "方框": "Box",
+  "橙色": "Orange",
+  "红色": "Red",
+  "正文 PDF": "Main text PDF",
+  "添加正文 PDF": "Add main text PDF",
+  "添加附件": "Add attachment",
+  "点击页面任意位置添加便签": "Click anywhere on the page to add a note",
+  "补图、补表、补充方法等文件放在这里；PDF 附件可以在阅读器里打开，提问时会和正文一起读。": "Supplementary figures, tables and methods go here. PDF attachments open in the reader and are read together with the main text when you ask questions.",
+  "选中 PDF 文字后，可添加下划线或高亮；工具栏的「方框」「便签」可以框出区域、在任意位置记笔记。": "Select PDF text to underline or highlight it. Use Box and Note in the toolbar to frame an area or add a note anywhere.",
+  "附件／补充材料": "Attachments / supplementary material",
+  "（空白便签）": "(Empty note)"
 }

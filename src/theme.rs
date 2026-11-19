@@ -168,6 +168,10 @@ impl Theme {
     pub fn highlight_swatch(key: &str) -> Hsla { let (h, s, l) = highlight_hue(key); hsla(h / 360., s, l + if dark() { 0.04 } else { 0. }, 1.) }
     /// An underline on a PDF page.
     pub fn underline_mark() -> Hsla { hsla(215. / 360., 0.85, 0.48, 0.9) }
+    /// A sticky note folded on a PDF page: soft paper, a darker edge and mark. The page is white in either set.
+    pub fn note_paper() -> Hsla { hsla(46. / 360., 0.95, 0.78, 1.) }
+    pub fn note_edge() -> Hsla { hsla(40. / 360., 0.6, 0.45, 0.55) }
+    pub fn note_ink() -> Hsla { hsla(35. / 360., 0.7, 0.25, 1.) }
     /// The off state of a switch and the groove of a segmented control.
     pub fn groove() -> Hsla { if dark() { hsla(0., 0., 1., 0.12) } else { hsla(0., 0., 0., 0.07) } }
     /// The chosen segment of a segmented control, lighter than its groove.
@@ -181,6 +185,8 @@ fn highlight_hue(key: &str) -> (f32, f32, f32) {
         "blue" => (205., 0.85, 0.55),
         "pink" => (335., 0.85, 0.62),
         "purple" => (270., 0.6, 0.62),
+        "red" => (2., 0.8, 0.55),
+        "orange" => (26., 0.95, 0.55),
         _ => (48., 1., 0.5),
     }
 }
