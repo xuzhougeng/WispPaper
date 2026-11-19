@@ -58,7 +58,7 @@ impl Workspace {
                 .child(choice("guide-search", "search", t("从检索文献开始"), t("写下主题或关键词，助手为 PubMed 等数据库拟出几条检索式并逐条试检索；你挑出靠谱的，一次导入，之后还能定期运行。"), true).on_click(self.on(Cmd::GuideSearch, cx)))
                 .child(choice("guide-import", "folder-open", t("导入已有的文献"), t("从 Zotero、EndNote 等导出的 BibTeX / RIS 文件，一批 PDF，或整个文件夹（子文件夹的名字成为标签）。"), false).on_click(self.on(Cmd::ImportReferences, cx)))
                 .child(choice("guide-zotero", "folder-open", t("从 Zotero 导入"), t("读取本机 Zotero 数据库，带入文献信息、标签、笔记和已下载的 PDF。"), false).on_click(self.on(Cmd::ImportZotero, cx)))
-                .child(choice("guide-empty", "plus", t("先空着，自己添加"), t("通过 DOI / PMID 逐篇添加，或者手动录入。"), false).on_click(self.on(Cmd::SetPage(Page::Papers), cx)))
+                .child(choice("guide-empty", "plus", t("先空着，自己添加"), t("通过 DOI / PMID 添加，或者手动录入。"), false).on_click(self.on(Cmd::SetPage(Page::Papers), cx)))
                 .into_any_element();
         }
 
