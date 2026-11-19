@@ -24,7 +24,7 @@ use wisp_core::screening::{Before, Confirming, Round};
 use wisp_core::settings::{Language, Session, Settings, Task, session_file, settings_file};
 use wisp_core::store::{Conversation, ConversationInfo, ImportBatch, SavedSearch, Store, StructureInfo, Suggestion, TrashEntry};
 use wisp_core::manuscript::{Manuscript, Snapshot};
-use wisp_core::{complete, export, fulltext, import, pdftext, structure, time, tools, zotero};
+use wisp_core::{archive, complete, export, fulltext, import, pdftext, structure, time, tools, zotero};
 pub use crate::manuscripts::ManuscriptExport;
 
 /// What the middle of an open library shows.
@@ -265,6 +265,10 @@ pub enum Cmd {
     EditLibrary(String),
     AskRemoveLibrary(String),
     RemoveLibrary(String),
+    /// The whole library as a `.wisppaper` file, with its PDFs and other attachments or without.
+    ExportLibrary(String, bool),
+    /// A `.wisppaper` file from another Wisp Paper, taken in as a new library.
+    ImportLibrary,
     GoHome,
     RevealFolder,
     OpenUrl(String),
@@ -2021,10 +2025,16 @@ impl Workspace {
             MenuKind::Export => {
                 items.push(item("BibTeX（.bib）", Cmd::Export(ExportKind::Bibtex)));
                 items.push(item(t("表格（.csv）"), Cmd::Export(ExportKind::Csv)));
+                if let Some(id) = self.lib.as_ref().map(|l| l.info.id.clone()) {
+                    items.push(item(t("整个文献库，含 PDF（.wisppaper）…"), Cmd::ExportLibrary(id.clone(), true)));
+                    items.push(item(t("整个文献库，不含 PDF（.wisppaper）…"), Cmd::ExportLibrary(id, false)));
+                }
             }
             MenuKind::LibraryCard(id) => {
                 items.push(item(t("打开"), Cmd::OpenLibrary(id.clone())));
                 items.push(item(t("编辑名称与主题…"), Cmd::EditLibrary(id.clone())));
+                items.push(item(t("导出文献库，含 PDF…"), Cmd::ExportLibrary(id.clone(), true)));
+                items.push(item(t("导出文献库，不含 PDF…"), Cmd::ExportLibrary(id.clone(), false)));
                 items.push(item(t("移除文献库…"), Cmd::AskRemoveLibrary(id)));
             }
             MenuKind::PdfZoom => {
@@ -2200,6 +2210,8 @@ impl Workspace {
                 }
                 self.libraries = libraries::list(&self.root);
             }
+            Cmd::ExportLibrary(id, attachments) => self.export_library(&id, attachments, cx),
+            Cmd::ImportLibrary => self.pick_library_file(cx),
             Cmd::RevealFolder => {
                 let path = self.lib.as_ref().map_or(self.root.clone(), |l| l.info.dir.clone());
                 cx.open_with_system(&path);
@@ -3771,6 +3783,10 @@ impl Workspace {
     /// imported, and a folder gives every PDF under it, tagged with the
     /// folders between it and the file (`import::folder_pdfs`).
     pub fn import_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        // A library from another Wisp Paper becomes a library of its own, wherever it is dropped.
+        let (archives, paths): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|path| path.is_file() && path.extension().is_some_and(|e| e.eq_ignore_ascii_case(archive::EXTENSION)));
+        for path in archives { self.import_library(path, cx) }
+        if paths.is_empty() { return }
         if self.lib.is_none() { return self.fail(t("请先打开一个文献库，再拖入文件。"), cx) }
         // A Word file is a manuscript to go on with, wherever it is dropped; Markdown and plain text are, on the writing page.
         let writing = self.lib.as_ref().is_some_and(|lib| lib.page == Page::Write);
@@ -4081,6 +4097,61 @@ impl Workspace {
             })
             .detach();
         }
+    }
+
+    /// The whole library in one `.wisppaper` file, for another Wisp Paper.
+    fn export_library(&mut self, id: &str, attachments: bool, cx: &mut Context<Self>) {
+        // The open library's own description is the newest.
+        let Some(info) = self.lib.as_ref().map(|l| &l.info).filter(|i| i.id == id).or_else(|| self.libraries.iter().find(|l| l.id == id)).cloned() else { return };
+        let directory = dirs::document_dir().or_else(dirs::home_dir).unwrap_or_else(|| self.root.clone());
+        let picked = cx.prompt_for_new_path(&directory, Some(&archive::file_name(&info.name)));
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(mut path))) = picked.await else { return };
+            if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case(archive::EXTENSION)) {
+                let mut named = path.into_os_string();
+                named.push(format!(".{}", archive::EXTENSION));
+                path = PathBuf::from(named);
+            }
+            this.update(cx, |this, cx| this.say(tf!("正在导出「{}」…", "Exporting “{}”…", info.name), cx)).ok();
+            let target = path.clone();
+            let result = cx.background_executor().spawn(async move { archive::export(&info, &target, attachments) }).await;
+            this.update(cx, |this, cx| match result {
+                Ok(manifest) if attachments => this.say(tf!("已导出 {} 篇文献和 {} 个文件到 {}", "Exported {} papers and {} files to {}", manifest.papers, manifest.files, path.display()), cx),
+                Ok(manifest) => this.say(tf!("已导出 {} 篇文献（不含 PDF）到 {}", "Exported {} papers (without PDFs) to {}", manifest.papers, path.display()), cx),
+                Err(err) => this.fail(format!("{err:#}"), cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn pick_library_file(&mut self, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some(t("导入").into()), extensions: Some(vec![archive::EXTENSION.into()]) });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = picked.await else { return };
+            this.update(cx, |this, cx| for path in paths { this.import_library(path, cx) }).ok();
+        })
+        .detach();
+    }
+
+    /// A `.wisppaper` file taken in as a new library; the home page shows it once it is whole.
+    pub fn import_library(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let root = self.root.clone();
+        let file = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        self.say(tf!("正在导入 {file}…", "Importing {file}…"), cx);
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_executor().spawn(async move { archive::import(&root, &path) }).await;
+            this.update(cx, |this, cx| {
+                this.libraries = libraries::list(&this.root);
+                match result {
+                    Ok(info) => this.say(tf!("已导入文献库「{}」，{} 篇文献", "Imported library “{}” with {} papers", info.name, info.paper_count), cx),
+                    Err(err) => this.fail(tf!("无法导入 {file}：{}", "Cannot import {file}: {}", format!("{err:#}")), cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn export(&mut self, kind: ExportKind, cx: &mut Context<Self>) {

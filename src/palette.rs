@@ -130,6 +130,7 @@ impl Workspace {
             fixed.push(("arrow-left", "回到所有文献库", "home", Cmd::GoHome));
         } else {
             fixed.push(("plus", "新建文献库", "new-library", Cmd::NewLibrary));
+            fixed.push(("library", "导入文献库", "", Cmd::ImportLibrary));
         }
         fixed.push(("folder-open", "数据目录", "", Cmd::RevealFolder));
         // Typed in either language, a fixed label is found.
@@ -141,6 +142,10 @@ impl Workspace {
         if self.lib.is_some() {
             made("export", tf!("导出：{}", "Export: {}", "BibTeX（.bib）"), "导出 export", "", Cmd::Export(ExportKind::Bibtex));
             made("export", tf!("导出：{}", "Export: {}", t("表格（.csv）")), "导出 表格 export spreadsheet", "", Cmd::Export(ExportKind::Csv));
+            if let Some(id) = self.lib.as_ref().map(|lib| lib.info.id.clone()) {
+                made("export", tf!("导出：{}", "Export: {}", t("整个文献库，含 PDF（.wisppaper）…")), "导出 文献库 export library wisppaper", "", Cmd::ExportLibrary(id.clone(), true));
+                made("export", tf!("导出：{}", "Export: {}", t("整个文献库，不含 PDF（.wisppaper）…")), "导出 文献库 export library wisppaper", "", Cmd::ExportLibrary(id, false));
+            }
         }
         let open = self.lib.as_ref().map(|lib| lib.info.id.as_str());
         for info in self.libraries.iter().filter(|info| Some(info.id.as_str()) != open) { made("library", tf!("打开文献库：{}", "Open library: {}", info.name), "打开文献库 open library", "", Cmd::OpenLibrary(info.id.clone())) }
