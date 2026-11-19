@@ -1273,7 +1273,12 @@ mod tests {
         store.db.execute("INSERT INTO conversations(id, paper_id, created_at, updated_at) VALUES ('C-1', ?1, '', '')", [&asked.id]).unwrap();
         for manuscript in [&titled, &written, &shaped, &emptied, &asked] { assert!(!store.manuscript_blank(&manuscript.id).unwrap(), "{}", manuscript.id) }
         let blank = fresh(&mut store);
-        assert_eq!(store.retire_blank_manuscripts("").unwrap(), [real.id.clone(), blank.id.clone()]);
+        // Made in the same millisecond (Windows' clock is coarse), the two come in the order of their ids' random tail.
+        let mut retired = store.retire_blank_manuscripts("").unwrap();
+        let mut expected = vec![real.id.clone(), blank.id.clone()];
+        retired.sort();
+        expected.sort();
+        assert_eq!(retired, expected);
         assert_eq!(store.manuscripts().unwrap().len(), 5);
     }
 
