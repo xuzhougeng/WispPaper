@@ -280,15 +280,24 @@ impl Workspace {
                     .child(footer(if editing.is_some() { t("保存") } else { t("创建") }, false, self, cx))
             }
 
-            Modal::AddById { input, busy } => ui::dialog(480.)
+            Modal::AddById { input, run } => ui::dialog(480.)
                 .child(ui::dialog_title(t("通过 DOI / PMID 添加")))
                 .child(
                     body()
                         .child(ui::form_row(t("DOI 或 PMID"), ui::field(input, window, cx)))
-                        .child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(t("题目、作者、期刊、年份和摘要会从 Crossref 与 Europe PMC 查询后填入。查询会把这个编号发送给这两个服务。")))
+                        .child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(t("可以一次粘贴多个。题目、作者、期刊、年份和摘要会从 Crossref 与 Europe PMC 查询后填入，已有的文献会跳过。查询会把这些编号发送给这两个服务。")))
                         .child(error),
                 )
-                .child(footer(if *busy { t("正在查询…") } else { t("查询并添加") }, false, self, cx)),
+                .child(footer(
+                    &match run {
+                        Some(run) if run.total > 1 => tf!("正在查询 {}/{}…", "Looking up {}/{}…", run.done, run.total),
+                        Some(_) => t("正在查询…").to_string(),
+                        None => t("查询并添加").to_string(),
+                    },
+                    false,
+                    self,
+                    cx,
+                )),
 
             Modal::Complete(form) => {
                 let lib = self.lib.as_ref()?;

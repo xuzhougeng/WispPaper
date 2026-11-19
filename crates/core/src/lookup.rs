@@ -20,6 +20,32 @@ pub fn parse_identifier(value: &str) -> Option<Identifier> {
     (!pmid.is_empty() && pmid.len() <= 9 && pmid.bytes().all(|b| b.is_ascii_digit())).then_some(Identifier::Pmid(pmid))
 }
 
+/// Every DOI and PMID of a pasted list, each once and in the order written, and the words that are neither. A line
+/// is one identifier ("PMID: 32939066"), or several apart by spaces; the Chinese comma, semicolon and 、 part them too.
+pub fn parse_identifiers(text: &str) -> (Vec<Identifier>, Vec<String>) {
+    let (mut found, mut unknown) = (vec![], vec![]);
+    // ponytail: "a,b" without a space stays one word, since a DOI may hold a comma or a semicolon itself; the lookup
+    // then says that it found nothing under it. Split there too if pasted CSV rows turn out to be common.
+    for line in text.split(['\n', '\r', '，', '；', '、']).map(str::trim).filter(|line| !line.is_empty()) {
+        let words: Vec<&str> = if parse_identifier(line).is_some() { vec![line] } else { line.split_whitespace().collect() };
+        // A label apart from its number ("PMID: 32939066" after another identifier) is read with the word after it.
+        let mut label = "";
+        for word in words {
+            match parse_identifier(format!("{label} {word}").trim()) {
+                Some(id) if found.contains(&id) => {}
+                Some(id) => found.push(id),
+                None if matches!(word.trim_end_matches([':', '：']).to_lowercase().as_str(), "doi" | "pmid") => {
+                    label = word;
+                    continue;
+                }
+                None => unknown.push(word.to_string()),
+            }
+            label = "";
+        }
+    }
+    (found, unknown)
+}
+
 pub(crate) fn encode(value: &str) -> String {
     let mut out = String::new();
     for b in value.bytes() {
@@ -197,6 +223,9 @@ mod tests {
         assert_eq!(parse_identifier("PMID: 32939066"), Some(Identifier::Pmid("32939066".into())));
         assert_eq!(parse_identifier("32939066"), Some(Identifier::Pmid("32939066".into())));
         assert_eq!(parse_identifier("hello"), None);
+        let (found, unknown) = parse_identifiers("https://doi.org/10.1000/A, 10.1000/b\tPMID: 32939066\n\n10.1000/a；doi:10.1002/(sici)1097-4571(199009)41:6<391::aid-asi1>3.0.co;2-9\nhello 32939066");
+        assert_eq!(found, vec![Identifier::Doi("10.1000/a".into()), Identifier::Doi("10.1000/b".into()), Identifier::Pmid("32939066".into()), Identifier::Doi("10.1002/(sici)1097-4571(199009)41:6<391::aid-asi1>3.0.co;2-9".into())]);
+        assert_eq!(unknown, vec!["hello"]);
         assert_eq!(crossref_url("10.1000/a b"), "https://api.crossref.org/works/10.1000/a%20b");
         assert!(europepmc_url(&Identifier::Pmid("1".into())).contains("EXT_ID%3A1%20AND%20SRC%3AMED"));
     }

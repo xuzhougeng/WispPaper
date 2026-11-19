@@ -1229,10 +1229,24 @@ pub struct PaperForm {
     pub selects: BTreeMap<String, String>,
 }
 
+/// 通过 DOI / PMID 添加 at work on what was typed: how far it is, and what came of each identifier.
+#[derive(Default)]
+pub struct IdRun {
+    pub total: usize,
+    pub done: usize,
+    /// Ids of the papers added.
+    added: Vec<String>,
+    /// A sentence for each paper the library (or its trash) already held.
+    skipped: Vec<String>,
+    /// The identifiers nothing came of, each with the reason.
+    failed: Vec<(String, String)>,
+}
+
 pub enum Modal {
     ExportNote(Box<crate::notes::Form>),
     Library { editing: Option<String>, name: Entity<TextInput>, topic: Entity<TextInput>, color: String },
-    AddById { input: Entity<TextInput>, busy: bool },
+    /// `run` while the identifiers are looked up.
+    AddById { input: Entity<TextInput>, run: Option<IdRun> },
     Paper(Box<PaperForm>),
     Complete(Box<CompleteForm>),
     Fields { editing: Option<String>, name: Entity<TextInput>, options: Entity<TextInput>, hint: Entity<TextInput>, kind: FieldKind, in_table: bool },
@@ -2313,10 +2327,14 @@ impl Workspace {
             }
 
             Cmd::AddById => {
-                let input = self.modal_input("10.1038/s41586-020-2649-2、PMID 或它们的链接", "", false, window, cx);
+                let input = self.modal_input("DOI、PMID 或它们的链接；多个时一行一个，或用空格分开", "", true, window, cx);
+                // Enter looks them up, as when the field held one line; a pasted list brings its own line breaks.
+                input.update(cx, |input, _| input.submit_on_enter = true);
+                let submit = cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| if *event == InputEvent::Submit { this.run(Cmd::SubmitModal, window, cx) });
+                self.modal_subscriptions.push(submit);
                 input.read(cx).focus(window);
                 self.modal_error.clear();
-                self.modal = Some(Modal::AddById { input, busy: false });
+                self.modal = Some(Modal::AddById { input, run: None });
             }
             Cmd::AddManual => self.paper_dialog(None, window, cx),
             Cmd::EditPaper(id) => self.paper_dialog(Some(id), window, cx),
@@ -5130,6 +5148,54 @@ impl Workspace {
         .detach();
     }
 
+    /// One identifier of 通过 DOI / PMID 添加 looked up: its paper joins the library unless it is held already. With
+    /// the last one the dialog closes and says what came of them; those nothing came of stay in it with the reasons,
+    /// to be mended and tried again. `false` when the dialog that asked is no longer open on this library.
+    fn added_by_id(&mut self, asked: EntityId, library: &str, id: Identifier, found: Result<Paper, String>, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !matches!(&self.modal, Some(Modal::AddById { input, run: Some(_) }) if input.entity_id() == asked) { return false }
+        let Some(lib) = self.lib.as_mut().filter(|l| l.info.id == library) else { return false };
+        let stored = found.and_then(|paper| lib.store.import_papers(vec![paper]).and_then(|result| lib.reload().map(|()| result)).map_err(|e| format!("{e:#}")));
+        let Some(Modal::AddById { input, run }) = self.modal.as_mut() else { return false };
+        let Some(going) = run.as_mut() else { return false };
+        let (Identifier::Doi(name) | Identifier::Pmid(name)) = id;
+        going.done += 1;
+        match stored.map(|result| (result.added.into_iter().next(), result.skipped.into_iter().next())) {
+            Ok((Some(paper), _)) => going.added.push(paper.id),
+            Ok((None, Some(held))) => going.skipped.push(if held.in_trash { tf!("「{}」在回收站中。", "“{}” is in the trash.", held.title) } else { tf!("「{}」已在文献库中。", "“{}” is already in this library.", held.title) }),
+            Ok((None, None)) => {}
+            Err(err) => going.failed.push((name, err)),
+        }
+        cx.notify();
+        if going.done < going.total { return true }
+        let (input, run) = (input.clone(), run.take().unwrap_or_default());
+        let single = run.total == 1;
+        // One paper says its title, a list how many: 「导入 5 篇，跳过 2 篇已有的。」
+        let summary = match (run.added.as_slice(), run.skipped.as_slice()) {
+            ([], []) => String::new(),
+            ([only], []) if single => tf!("已添加：{}", "Added: {}", self.lib.as_ref().and_then(|l| l.paper(only)).map(|p| p.title.clone()).unwrap_or_default()),
+            ([], [only]) => only.clone(),
+            (added, skipped) => tf!("导入 {} 篇{}。", "Imported {} papers{}.", added.len(), if skipped.is_empty() { String::new() } else { tf!("，跳过 {} 篇已有的", ", skipped {} existing", skipped.len()) }),
+        };
+        // The one paper asked for and already held is said in the dialog, where the identifier still is.
+        if run.failed.is_empty() && !(single && run.added.is_empty()) {
+            self.run(Cmd::CloseModal, window, cx);
+            if let [only] = run.added.as_slice() { self.select(Some(only.clone()), window, cx) }
+            self.say(summary, cx);
+            return false;
+        }
+        let mut lines = vec![];
+        if !single {
+            input.update(cx, |input, cx| input.set_text(&run.failed.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>().join("\n"), cx));
+            if !summary.is_empty() { lines.push(summary.clone()) }
+            lines.push(tf!("{} 个没有添加，留在了上面，可以改好再试：", "{} not added. They are left above to fix and try again:", run.failed.len()));
+        } else if run.failed.is_empty() {
+            lines.push(summary);
+        }
+        lines.extend(run.failed.iter().map(|(name, err)| if single { err.clone() } else { format!("{name}：{err}") }));
+        self.modal_error = lines.join("\n");
+        false
+    }
+
     fn submit_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = |input: &Entity<TextInput>, cx: &App| input.read(cx).text().trim().to_string();
         self.modal_error.clear();
@@ -5234,37 +5300,37 @@ impl Workspace {
                 self.run(Cmd::CloseModal, window, cx);
                 self.say(t("已记到这篇文献的「我的笔记」里。"), cx);
             }
-            Modal::AddById { input, busy } => {
-                if *busy { return }
-                let Some(id) = lookup::parse_identifier(&text(input, cx)) else {
+            Modal::AddById { input, run } => {
+                if run.is_some() { return }
+                let (ids, unknown) = lookup::parse_identifiers(&text(input, cx));
+                if ids.is_empty() {
                     self.modal_error = t("没有认出 DOI 或 PMID。DOI 形如 10.1038/s41586-020-2649-2，PMID 是一串数字。").into();
                     return;
-                };
-                *busy = true;
-                // The dialog that asked, told by its field: closed meanwhile, its answer is dropped, and it is not
-                // taken for a dialog opened after it (which it would close, adding a paper nobody is waiting for).
+                }
+                if !unknown.is_empty() {
+                    self.modal_error = tf!("没有认出：{}。改好或删去后再试。", "Not recognized: {}. Fix or remove them and try again.", unknown.join("、"));
+                    return;
+                }
+                *run = Some(IdRun { total: ids.len(), ..Default::default() });
+                // The dialog that asked, told by its field: closed meanwhile, its answers are dropped, and it is not
+                // taken for a dialog opened after it (which it would close, adding papers nobody is waiting for).
                 let asked = input.entity_id();
                 let library = self.lib.as_ref().map(|l| l.info.id.clone()).unwrap_or_default();
-                cx.spawn_in(window, async move |this, cx| {
-                    let found = cx.background_executor().spawn(async move { wisp_net::lookup_paper(&id) }).await;
-                    this.update_in(cx, |this, window, cx| {
-                        if !matches!(&this.modal, Some(Modal::AddById { input, .. }) if input.entity_id() == asked) || this.lib.as_ref().is_none_or(|l| l.info.id != library) { return }
-                        if let Some(Modal::AddById { busy, .. }) = this.modal.as_mut() { *busy = false }
-                        let added = found.and_then(|paper| this.lib.as_mut().unwrap().store.add_paper(paper).map_err(|e| format!("{e:#}")));
-                        match added {
-                            Ok(paper) => {
-                                this.change(cx, |_| Ok(()));
-                                this.run(Cmd::CloseModal, window, cx);
-                                this.select(Some(paper.id), window, cx);
-                                this.say(tf!("已添加：{}", "Added: {}", paper.title), cx);
-                            }
-                            Err(err) => this.modal_error = err,
+                // The wait is the two services asked about each identifier: a few are asked side by side.
+                let queue = std::rc::Rc::new(std::cell::RefCell::new(ids.into_iter().rev().collect::<Vec<_>>()));
+                for _ in 0..IMPORT_WORKERS.min(queue.borrow().len()) {
+                    let (queue, library) = (queue.clone(), library.clone());
+                    cx.spawn_in(window, async move |this, cx| {
+                        loop {
+                            let Some(id) = queue.borrow_mut().pop() else { break };
+                            let looked = id.clone();
+                            let found = cx.background_executor().spawn(async move { wisp_net::lookup_paper(&looked) }).await;
+                            let open = this.update_in(cx, |this, window, cx| this.added_by_id(asked, &library, id, found, window, cx));
+                            if !matches!(open, Ok(true)) { break }
                         }
-                        cx.notify();
                     })
-                    .ok();
-                })
-                .detach();
+                    .detach();
+                }
             }
             Modal::Paper(form) => {
                 let Some(lib) = self.lib.as_mut() else { return };
