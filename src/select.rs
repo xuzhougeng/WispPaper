@@ -46,16 +46,8 @@ fn floor(text: &str, index: usize) -> usize {
     (0..=index.min(text.len())).rev().find(|at| text.is_char_boundary(*at)).unwrap_or(0)
 }
 
-/// The word around a byte: letters and digits with the marks that join them.
-pub fn word_at(text: &str, index: usize) -> Range<usize> {
-    let index = floor(text, index);
-    let part = |c: char| c.is_alphanumeric() || matches!(c, '-' | '_' | '\'' | '’');
-    let start = text[..index].char_indices().rev().take_while(|(_, c)| part(*c)).last().map_or(index, |(at, _)| at);
-    let end = index + text[index..].char_indices().find(|(_, c)| !part(*c)).map_or(text.len() - index, |(at, _)| at);
-    // On a space or a mark: that one character.
-    if start == end { return index..index + text[index..].chars().next().map_or(0, char::len_utf8) }
-    start..end
-}
+/// The word a double click picks: the same in every text read, and on a PDF page (`pdftext::word_marks`).
+pub use wisp_core::selection::word_at;
 
 impl Workspace {
     /// `text` drawn so that it can be selected. `key` tells this text from the others on show.
@@ -123,26 +115,5 @@ impl Workspace {
         picked.held = false;
         if picked.range().is_empty() { self.picked = None }
         cx.notify();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    // Not `super::*`: that would bring in gpui's own `test` attribute.
-    use super::word_at;
-
-    #[test]
-    fn words() {
-        let text = "Single-cell RNA-seq（单细胞）of root, 2024.";
-        assert_eq!(&text[word_at(text, 3)], "Single-cell");
-        assert_eq!(&text[word_at(text, 0)], "Single-cell");
-        // Just after a word: that word. On a mark between two others: the mark.
-        assert_eq!(&text[word_at(text, 11)], "Single-cell");
-        assert_eq!(&"a, b"[word_at("a, b", 2)], " ");
-        // Inside a Chinese letter: the run it stands in.
-        let at = text.find('细').unwrap() + 1;
-        assert_eq!(&text[word_at(text, at)], "单细胞");
-        assert_eq!(&text[word_at(text, text.len())], "");
-        assert_eq!(&text[word_at(text, text.find("2024").unwrap() + 4)], "2024");
     }
 }

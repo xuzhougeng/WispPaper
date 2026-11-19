@@ -768,8 +768,15 @@ impl PdfView {
             Zoom::Percent(percent) => Zoom::Percent(percent.clamp(ZOOM_MIN, ZOOM_MAX)),
             fit => fit,
         };
-        if zoom == self.zoom { return }
-        self.resize(anchor.unwrap_or((self.pane_size().0 / 2., 0.)), |this| this.zoom = zoom);
+        if zoom == self.zoom && zoom != Zoom::FitPage { return }
+        if zoom != self.zoom { self.resize(anchor.unwrap_or((self.pane_size().0 / 2., 0.)), |this| this.zoom = zoom) }
+        // The whole page: the one each half is on comes to its top, so all four edges are in view; asked again, it comes back there.
+        if zoom == Zoom::FitPage {
+            for pane in &mut self.panes {
+                let page = pane.list.logical_scroll_top().item_ix;
+                pane.list.scroll_to(ListOffset { item_ix: page, offset_in_item: px(0.) });
+            }
+        }
         cx.notify();
     }
 
@@ -1044,9 +1051,16 @@ impl PdfView {
         }
         let Some((page, x, y)) = self.locate(pane, event.position) else { return cx.notify() };
         self.pressed_mark = self.highlight_at(page, x, y).map(|(id, line)| (MarkMenu { id, page, x, line }, event.position));
-        if let Some(at) = self.marks.get(&page).and_then(|marks| pdftext::mark_at(marks, x, y)) {
+        if let Some((marks, at)) = self.marks.get(&page).and_then(|marks| Some((marks, pdftext::mark_at(marks, x, y)?))) {
             self.selection = Some(Selection { page, anchor: at, focus: at });
             self.selecting = true;
+            // A double click takes the word, done at once: its bar shows, and no highlight's menu opens.
+            if event.click_count == 2 {
+                let (anchor, focus) = pdftext::word_marks(marks, at);
+                // A space alone is nothing to select.
+                let word = (!pdftext::marks_text(&marks[anchor..=focus]).is_empty()).then_some(Selection { page, anchor, focus });
+                (self.selection, self.selecting, self.pressed_mark) = (word, false, None);
+            }
         }
         cx.notify();
     }
@@ -1617,7 +1631,7 @@ impl Render for PdfView {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that would bring in gpui's own `test` attribute.
-    use super::{BAR_INSET, BAR_THUMB_MIN, CARD_EDGE, CardPlace, CitationFocus, CitationStatus, DIVIDER, MARGIN, POINT_PX, Split, Zoom, bar_thumb, card_place, page_scale, pane_at, pane_size, picture_serves, render_scale, zoom_step};
+    use super::{BAR_INSET, BAR_THUMB_MIN, CARD_EDGE, CardPlace, CitationFocus, CitationStatus, DIVIDER, MARGIN, PAGE_GAP, POINT_PX, Split, Zoom, bar_thumb, card_place, page_scale, pane_at, pane_size, picture_serves, render_scale, zoom_step};
 
     #[test]
     fn a_split_viewer_has_two_equal_halves() {
@@ -1633,6 +1647,14 @@ mod tests {
         let a4 = (595., 842.);
         assert_eq!(page_scale(Zoom::FitWidth, a4, pane_size(Split::Side, view)), (400. - 2. * MARGIN) / 595.);
         assert_eq!(page_scale(Zoom::Percent(150.), a4, pane_size(Split::Side, view)), page_scale(Zoom::Percent(150.), a4, view));
+        // The whole page in each half: with the gap above and below it, a page is no taller and no wider than its half.
+        for split in [Split::Off, Split::Side, Split::Stacked] {
+            let half = pane_size(split, view);
+            let scale = page_scale(Zoom::FitPage, a4, half);
+            assert!(a4.1 * scale + 2. * PAGE_GAP <= half.1 + 0.01 && a4.0 * scale + 2. * MARGIN <= half.0 + 0.01, "{split:?}");
+        }
+        // One over the other, the height decides, and the page fills it.
+        assert!((page_scale(Zoom::FitPage, a4, pane_size(Split::Stacked, view)) * 842. + 2. * PAGE_GAP - 300.).abs() < 0.01);
     }
 
     #[test]

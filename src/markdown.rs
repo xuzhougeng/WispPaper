@@ -22,6 +22,8 @@ pub enum Pointer {
     /// Moved with the button held.
     Drag,
     Up,
+    /// A double click: the word there is selected at once.
+    Word,
 }
 
 /// Where a selection was drawn, in the window: the top left of its first
@@ -83,6 +85,10 @@ pub fn render(id: &str, text: &str, cite: Option<OnCite>, selecting: Option<Sele
         nearest.map(|(_, place)| place)
     };
     // Where the selection came to be drawn, worked out after the text is laid out: the bar beside it goes by this.
+    // The div hears the pointer only over itself, and a drag from the end back to the start easily
+    // overshoots the text's left or top edge: while this answer holds the selection, the pointer is
+    // also heard outside it, so the selection still follows and the release still ends it (#142).
+    let (place_out, pointer_out) = (place.clone(), selecting.pointer.clone());
     let measure = selecting.selected.map(|(from, to)| {
         let (layouts, told) = (drawn_layouts, selecting.drawn.clone());
         canvas(
@@ -93,7 +99,16 @@ pub fn render(id: &str, text: &str, cite: Option<OnCite>, selecting: Option<Sele
                 };
                 if let (Some((start, _)), Some((end, line))) = (at(from), at(to)) { told(Drawn { start, end, line, origin: bounds.origin }, window, cx) }
             },
-            |_, _, _, _| {},
+            move |bounds, _, window, _| {
+                let (place_moved, pointer_moved) = (place_out.clone(), pointer_out.clone());
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                    if phase == DispatchPhase::Bubble && event.pressed_button == Some(MouseButton::Left) && !bounds.contains(&event.position) && let Some(place) = place_moved(event.position) { pointer_moved(Pointer::Drag, place, window, cx) }
+                });
+                let (place_up, pointer_up) = (place_out.clone(), pointer_out.clone());
+                window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+                    if phase == DispatchPhase::Bubble && event.button == MouseButton::Left && !bounds.contains(&event.position) && let Some(place) = place_up(event.position) { pointer_up(Pointer::Up, place, window, cx) }
+                });
+            },
         )
         .absolute()
         .top_0()
@@ -106,7 +121,11 @@ pub fn render(id: &str, text: &str, cite: Option<OnCite>, selecting: Option<Sele
         .children(measure)
         .cursor_text()
         .on_mouse_down(MouseButton::Left, move |event, window, cx| {
-            if let Some(place) = place_down(event.position) { down(Pointer::Down, place, window, cx) }
+            let Some(place) = place_down(event.position) else { return };
+            if event.click_count != 2 { return down(Pointer::Down, place, window, cx) }
+            down(Pointer::Word, place, window, cx);
+            // The word is selected and done: the window's own press handler, which ends a selection that is done, is not to hear of this press.
+            cx.stop_propagation();
         })
         .on_mouse_move(move |event, window, cx| {
             if event.pressed_button == Some(MouseButton::Left) && let Some(place) = place_drag(event.position) { drag(Pointer::Drag, place, window, cx) }

@@ -171,14 +171,37 @@ pub fn marks_text(marks: &[Mark]) -> String {
                 // `devel-` / `opment`: one word. `single-` / `Cell`, or a dash after a space, stays as set.
                 let broken = text.ends_with('-') && text.chars().rev().nth(1).is_some_and(char::is_alphabetic) && mark.text.chars().next().is_some_and(char::is_lowercase);
                 if broken { text.pop(); } else if !text.ends_with(' ') { text.push(' ') }
-            } else {
-                let gap = mark.x0 - last.x1;
-                if (gap > last.size.max(mark.size) * 0.11 || gap < -last.size) && !text.ends_with(' ') && !mark.text.starts_with(' ') { text.push(' ') }
+            } else if spaced(last, mark) && !text.ends_with(' ') && !mark.text.starts_with(' ') {
+                text.push(' ')
             }
         }
         text.push_str(&mark.text);
     }
     text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Whether the page sets two marks of a line apart by a gap, not by a space glyph.
+fn spaced(last: &Mark, next: &Mark) -> bool {
+    let gap = next.x0 - last.x1;
+    gap > last.size.max(next.size) * 0.11 || gap < -last.size
+}
+
+/// The first and last mark of the word mark `at` is in, by the rule of a
+/// double click in any text (`selection::word_at`). A word ends with its line.
+pub fn word_marks(marks: &[Mark], at: usize) -> (usize, usize) {
+    let mut text = String::new();
+    let mut starts = Vec::with_capacity(marks.len());
+    for (i, mark) in marks.iter().enumerate() {
+        if i > 0 && (starts_line(&marks[i - 1], mark) || spaced(&marks[i - 1], mark)) { text.push(' ') }
+        starts.push(text.len());
+        text.push_str(&mark.text);
+    }
+    let Some(&start) = starts.get(at) else { return (at, at) };
+    let word = crate::selection::word_at(&text, start);
+    // The marks whose text the word touches.
+    let first = starts.partition_point(|s| *s <= word.start).saturating_sub(1);
+    let last = starts.partition_point(|s| *s < word.end).saturating_sub(1).max(first);
+    (first, last)
 }
 
 /// A line of a page: its text, where it stands and how it is set.
@@ -428,6 +451,24 @@ mod tests {
         let plain: Vec<Mark> = (0..8).flat_map(|row| set("Roots take up water and anchor the plant.", 50., 100. + row as f32 * 12., 9., false)).collect();
         assert_eq!(title_of(&plain), None);
         assert_eq!((title_of(&[]), title_guess(b"not a pdf".to_vec())), (None, None));
+    }
+
+    #[test]
+    fn a_word_of_a_page() {
+        let mut marks = set("the inflammation, of", 50., 100., 10., false);
+        // A word set apart by a gap, and one on the next line.
+        marks.extend(set("Single-cell", 160., 100., 10., false));
+        marks.extend(set("roots", 50., 114., 10., false));
+        let word = |at: usize| { let (a, b) = word_marks(&marks, at); marks_text(&marks[a..=b]) };
+        assert_eq!(word(6), "inflammation");
+        assert_eq!(word(4), "inflammation");
+        // On the comma just after it: the word before; on the space after the comma, that space.
+        assert_eq!(word(16), "inflammation");
+        assert_eq!(word_marks(&marks, 17), (17, 17));
+        assert_eq!(word(23), "Single-cell");
+        assert_eq!(word(20), "Single-cell");
+        assert_eq!(word(marks.len() - 1), "roots");
+        assert_eq!(word_marks(&marks, 99), (99, 99));
     }
 
     #[test]
