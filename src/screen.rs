@@ -101,6 +101,10 @@ impl Workspace {
         let differs = all.len() - pending;
         let waiting = lib.screen_unasked(false).len();
         let unchecked = lib.screen_unasked(true).len();
+        // 继续筛: the included papers not yet asked about under the goal as it is now.
+        let narrowing = lib.screen_unasked(true).iter().filter(|p| p.screening == "included").count();
+        let unincluded = lib.unincluded().len();
+        let confirmable = lib.confirmable();
         let (queue, filter) = lib.screen_view();
         // The parts of the queue: one per suggested verdict, the decided papers seen otherwise, the suggestions made for an earlier goal, and the papers without a suggestion.
         let parts: Vec<(&str, &str, usize)> = SCREENINGS.iter().filter(|(key, _)| *key != "pending").map(|(key, name)| (*key, t(name))).chain([("differs", t("与你的判断不同")), ("stale", t("按旧目标的建议")), ("none", t("还没有建议"))]).map(|(key, name)| (key, name, all.iter().filter(|p| lib.screen_group(&p.id) == key).count())).filter(|(_, _, count)| *count > 0).collect();
@@ -115,8 +119,8 @@ impl Workspace {
         };
         let mut bar: Vec<AnyElement> = vec![part(0, "", tf!("全部 {}", "All {}", all.len()), self, cx).into_any_element()];
         bar.extend(parts.iter().enumerate().map(|(n, (key, name, count))| part(n + 1, key, format!("{name} {count}"), self, cx).into_any_element()));
-        // The suggestions are confirmed together on a page of their own: all of them, or the verdict on show.
-        let confirming = if SCREENINGS.iter().any(|(key, _)| *key == filter) { queue.len() } else { suggested };
+        // The suggestions are confirmed together on a page of their own: all of them (the decided papers back in the queue too), or the verdict on show.
+        let confirming = if SCREENINGS.iter().any(|(key, _)| *key == filter) { confirmable.iter().filter(|(_, s)| s.verdict == filter).count() } else { confirmable.len() };
         let confirm = (confirming > 0 && !screen.running()).then(|| {
             let text = if SCREENINGS.iter().any(|(key, _)| *key == filter) { tf!("确认这 {confirming} 条「{}」", "Confirm {confirming} “{}” suggestions", label(&SCREENINGS, filter)) } else { tf!("确认 {confirming} 条建议", "Confirm {confirming} suggestions") };
             // Once the assistant has nothing left to read, confirming is what comes next.
@@ -127,7 +131,7 @@ impl Workspace {
         let configured = self.screen_configured();
         let mut status = if pending == 0 { t("没有待判断的文献。").to_string() } else { tf!("待判断 {pending} 篇，其中 {suggested} 篇已有按当前目标的建议。", "{pending} pending papers, {suggested} with suggestions under the current criteria.") };
         if stale > 0 { status.push_str(&tf!("{stale} 篇的建议是按旧目标给出的。", "{stale} suggestions were made under previous criteria.")) }
-        if differs > 0 { status.push_str(&tf!("已判断的文献里，{differs} 篇按当前目标看与你的判断不同。", "The assistant disagrees with your decisions on {differs} papers under the current criteria.")) }
+        if differs > 0 { status.push_str(&tf!("已判断的文献里，{differs} 篇按当前目标看与你的判断不同，可以和建议一起确认。", "The assistant disagrees with your decisions on {differs} papers under the current criteria; they can be confirmed with the suggestions.")) }
         let start = match (waiting, stale) {
             (0, _) => t("让助手判断").to_string(),
             (_, 0) => tf!("让助手判断 {waiting} 篇", "Ask assistant to screen {waiting} papers"),
@@ -164,7 +168,8 @@ impl Workspace {
                             .flex_col()
                             .gap(px(6.))
                             .child(div().flex().items_baseline().gap(px(8.)).child(div().flex_none().text_size(text_px(13.)).font_weight(FontWeight::MEDIUM).child(t("筛选目标"))).child(ui::hint("criteria-hint", t("随时可以换一个目标：已有的建议会标为「按旧目标」，再让助手按新目标判断一遍；已判断的文献也可以复核，你的判断不会被改动。"))).child(div().flex_1().min_w_0().truncate().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(if lib.info.criteria.is_empty() && !lib.info.topic.trim().is_empty() { tf!("留空时按主题判断：{}", "Leave blank to use the topic: {}", lib.info.topic.trim()) } else { t("什么样的文献应当收进这个文献库").to_string() })))
-                            .child(ui::field(&screen.criteria, window, cx)),
+                            .child(ui::field(&screen.criteria, window, cx))
+                            .children(self.render_funnel(cx)),
                     )
                     .child(
                         div()
@@ -175,7 +180,9 @@ impl Workspace {
                             .child(div().flex_1().min_w(px(200.)).text_size(text_px(12.)).text_color(Theme::text_secondary()).child(status))
                             .when(!configured, |d| d.child(self.screen_setup_button(cx)))
                             // The decided papers looked at again against the goal as it is now; only those seen otherwise come back.
-                            .when(!screen.running() && unchecked > 0, |d| d.child(ui::secondary_button("screen-recheck", tf!("复核已判断的 {unchecked} 篇", "Review {unchecked} screened papers")).on_click(self.on(Cmd::ScreenRecheck, cx))))
+                            .when(!screen.running() && unchecked > 0, |d| d.child(ui::secondary_button("screen-recheck", tf!("复核已判断的 {unchecked} 篇", "Review {unchecked} screened papers")).on_click(self.on(Cmd::ScreenRecheck(false), cx))))
+                            // The next round of the funnel: only the included papers, against the goal as it is now.
+                            .when(!screen.running() && narrowing > 0, |d| d.child(ui::secondary_button("screen-narrow", tf!("在已纳入的 {narrowing} 篇里继续筛", "Screen within {narrowing} included papers")).on_click(self.on(Cmd::ScreenRecheck(true), cx))))
                             .child(if screen.running() {
                                 ui::secondary_button("screen-stop", t("停止")).on_click(self.on(Cmd::ScreenStop, cx))
                             } else if waiting == 0 && confirm.is_some() {
@@ -191,7 +198,9 @@ impl Workspace {
                     .when(parts.len() > 1 || parts.first().is_some_and(|(key, _, _)| *key != "none"), |d| d.child(div().flex().items_center().flex_wrap().gap(px(6.)).pt(px(2.)).children(bar).child(div().flex_1()).when(!queue.is_empty(), |d| d.child(div().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(t("点开一篇，按 Y / R / U / N 判断，A 采纳建议")))))),
             )
             .child(if rows.is_empty() {
-                ui::empty_state("check", t("都判断过了"), t("新导入的文献会出现在这里。")).into_any_element()
+                // What was not included can go to the trash in one go.
+                let trash = (unincluded > 0).then(|| ui::secondary_button("screen-trash-rest", tf!("把未纳入的 {unincluded} 篇移到回收站…", "Move {unincluded} papers not included to trash…")).on_click(self.on(Cmd::AskTrashUnincluded, cx)));
+                div().flex().flex_col().flex_1().items_center().justify_center().gap(px(4.)).child(ui::empty_state("check", t("都判断过了"), t("新导入的文献会出现在这里。要收得更紧：先改上面的筛选目标，再在已纳入的文献里继续筛。")).flex_none()).children(trash).into_any_element()
             } else {
                 div()
                     .id("screen-queue")
@@ -207,6 +216,21 @@ impl Workspace {
                     .into_any_element()
             }))
             .into_any_element()
+    }
+
+    /// The rounds of screening as one quiet line under the goal: 「第 3 轮 ·
+    /// 540 → 100 → 23 篇已纳入」, each round in full on hover. Nothing before the first round.
+    fn render_funnel(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        let lib = self.lib.as_ref()?;
+        let stages = screening::funnel(&lib.rounds, screening::tally(lib.papers.iter().map(|p| p.screening.as_str())));
+        let first = stages.first()?;
+        let chain: Vec<String> = std::iter::once(first.entered).chain(stages.iter().map(|s| s.included)).map(|n| n.to_string()).collect();
+        let line = tf!("第 {} 轮 · {} 篇已纳入", "Round {} · {} included", stages.len(), chain.join(" → "));
+        let detail: Vec<String> = stages.iter().enumerate().map(|(n, s)| {
+            let goal = if s.criteria.trim().is_empty() { t("按文献库的主题").to_string() } else { format!("「{}」", s.criteria.trim()) };
+            tf!("第 {} 轮 · {} · {goal} · {} → {}", "Round {} · {} · {goal} · {} → {}", n + 1, wisp_core::time::date_text(&s.started_at), s.entered, s.included)
+        }).collect();
+        Some(div().id("screen-funnel").flex().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(self.selectable("screen-funnel-text", line, cx)).tooltip(ui::tip(detail.join("\n"))))
     }
 
     /// The run of the assistant, under way or over: how far it got, and the

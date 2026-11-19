@@ -166,6 +166,18 @@ CREATE TABLE IF NOT EXISTS screening_suggestions (
     criteria TEXT
 );
 
+-- 筛选's rounds: a stretch of screening under one goal, from the first run
+-- of the assistant under it. `counts` is the tally by status of the papers
+-- outside the trash when it began (JSON, in the order of `SCREENINGS`), so a
+-- finished round keeps its numbers whatever happens to the papers later.
+CREATE TABLE IF NOT EXISTS screening_rounds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL,
+    criteria TEXT NOT NULL DEFAULT '',
+    scope TEXT NOT NULL CHECK (scope IN ('pending', 'included', 'decided')),
+    counts TEXT NOT NULL DEFAULT '[0,0,0,0,0]'
+);
+
 -- Translations already made, so that a title or an abstract is translated
 -- once. The key is `translation_key`: the source text and the instructions.
 CREATE TABLE IF NOT EXISTS translations (
@@ -488,6 +500,24 @@ fn check_schema_version(found: i32, supported: i32) -> Result<()> {
     Ok(())
 }
 
+/// What deleting a paper for good takes from the database: its row, with
+/// the rows that refer to it, and its conversations.
+fn delete_rows(db: &Connection, id: &str) -> Result<()> {
+    db.execute("DELETE FROM papers WHERE id = ?1", [id])?;
+    db.execute("DELETE FROM conversations WHERE paper_id = ?1", [id])?;
+    Ok(())
+}
+
+/// One round of screening as it began (`Store::begin_round`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ScreeningRound {
+    pub started_at: String,
+    pub criteria: String,
+    pub scope: String,
+    /// The papers outside the trash by status when it began, in the order of `SCREENINGS`.
+    pub counts: [usize; 5],
+}
+
 impl Store {
     /// Open (creating it when new) the library in `root`.
     pub fn open(root: &Path) -> Result<Store> {
@@ -699,14 +729,78 @@ impl Store {
     /// Remove a paper and its records for good. Its files move to `removed/`
     /// inside the library folder rather than being unlinked.
     pub fn delete_paper(&mut self, id: &str) -> Result<()> {
-        let files = self.paper_files(id)?;
-        let pictures = self.figure_files(id)?;
-        self.db.execute("DELETE FROM papers WHERE id = ?1", [id])?;
-        self.db.execute("DELETE FROM conversations WHERE paper_id = ?1", [id])?;
-        for path in files.iter().map(|file| &file.local_path).chain(&pictures) {
+        let paths = self.paper_paths(id)?;
+        delete_rows(&self.db, id)?;
+        for path in &paths {
             self.set_aside(path);
         }
         Ok(())
+    }
+
+    /// Empty the trash: every paper in it goes for good (`purge`). How many papers went.
+    pub fn empty_trash(&mut self) -> Result<usize> {
+        let ids: Vec<String> = self.db.prepare("SELECT paper_id FROM trashed_papers")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        self.purge(&ids)
+    }
+
+    /// 彻底删除: one paper of the trash goes as all of them do when it is
+    /// emptied. A paper that is not in the trash is left alone.
+    pub fn purge_trashed(&mut self, id: &str) -> Result<()> {
+        let trashed = self.db.query_row("SELECT 1 FROM trashed_papers WHERE paper_id = ?1", [id], |_| Ok(())).optional()?.is_some();
+        if !trashed { bail!("这篇文献不在回收站里：{id}") }
+        self.purge(&[id.to_string()]).map(|_| ())
+    }
+
+    /// Papers leave the trash for good: their records go as with
+    /// `delete_paper`, but their files and pictures are unlinked from disk
+    /// instead of moved to `removed/`. The rows go in one transaction; a file
+    /// is unlinked only after that, only inside the library folder and only
+    /// when no remaining paper holds it, and one that cannot be is left.
+    fn purge(&mut self, ids: &[String]) -> Result<usize> {
+        let mut paths = vec![];
+        for id in ids { paths.extend(self.paper_paths(id)?) }
+        let tx = self.db.transaction()?;
+        for id in ids { delete_rows(&tx, id)? }
+        tx.commit()?;
+        for path in paths {
+            let inside = !path.is_empty() && Path::new(&path).components().all(|c| matches!(c, std::path::Component::Normal(_)));
+            // A file another paper or picture still names stays; when that cannot be told, it stays too.
+            let held = self.db.query_row("SELECT EXISTS(SELECT 1 FROM resources WHERE local_path = ?1) OR EXISTS(SELECT 1 FROM figures WHERE local_path = ?1)", [&path], |r| r.get::<_, bool>(0)).unwrap_or(true);
+            if inside && !held { let _ = std::fs::remove_file(self.root.join(path.replace('/', std::path::MAIN_SEPARATOR_STR))); }
+        }
+        Ok(ids.len())
+    }
+
+    /// The files and pictures of a paper, relative to the library folder.
+    fn paper_paths(&self, id: &str) -> Result<Vec<String>> {
+        let mut paths: Vec<String> = self.paper_files(id)?.into_iter().map(|file| file.local_path).collect();
+        paths.extend(self.figure_files(id)?);
+        Ok(paths)
+    }
+
+    // ---- screening rounds
+
+    /// A run of the assistant over `scope` (`pending`, `included` or
+    /// `decided`) under the goal `criteria` begins: a new round, unless the
+    /// latest one has the same goal, which is that round going on. Whether a round was added.
+    pub fn begin_round(&mut self, criteria: &str, scope: &str) -> Result<bool> {
+        let last: Option<String> = self.db.query_row("SELECT criteria FROM screening_rounds ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).optional()?;
+        if last.as_deref() == Some(criteria) { return Ok(false) }
+        let mut counts = [0usize; 5];
+        let mut stmt = self.db.prepare("SELECT screening_status, count(*) FROM papers WHERE id NOT IN (SELECT paper_id FROM trashed_papers) GROUP BY screening_status")?;
+        for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
+            let (status, n) = row?;
+            if let Some(at) = SCREENINGS.iter().position(|(key, _)| *key == status) { counts[at] = n as usize }
+        }
+        self.db.execute("INSERT INTO screening_rounds(started_at, criteria, scope, counts) VALUES (?1, ?2, ?3, ?4)", params![now_iso(), criteria, scope, serde_json::to_string(&counts)?])?;
+        Ok(true)
+    }
+
+    /// The rounds of screening, oldest first.
+    pub fn screening_rounds(&self) -> Result<Vec<ScreeningRound>> {
+        let mut stmt = self.db.prepare("SELECT started_at, criteria, scope, counts FROM screening_rounds ORDER BY id")?;
+        let rounds = stmt.query_map([], |r| Ok(ScreeningRound { started_at: r.get(0)?, criteria: r.get(1)?, scope: r.get(2)?, counts: serde_json::from_str(&r.get::<_, String>(3)?).unwrap_or_default() }))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rounds)
     }
 
     // ---- custom fields
@@ -1829,5 +1923,59 @@ mod tests {
         assert!(dir.join("removed").read_dir().unwrap().count() == 1);
         assert!(store.list_files().unwrap().is_empty());
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn emptying_the_trash_deletes_from_disk() {
+        let dir = temp_dir("empty-trash");
+        let mut store = Store::open(&dir).unwrap();
+        let (gone, kept) = (store.add_paper(paper("Gone", "")).unwrap(), store.add_paper(paper("Kept", "")).unwrap());
+        let (a, b) = (dir.join("a.pdf"), dir.join("b.pdf"));
+        std::fs::write(&a, b"%PDF-1.4 gone").unwrap();
+        std::fs::write(&b, b"%PDF-1.4 kept").unwrap();
+        let (gone_file, kept_file) = (store.import_file(&gone.id, &a, "fulltext").unwrap(), store.import_file(&kept.id, &b, "fulltext").unwrap());
+        let mut figure = crate::figure::Figure { paper_id: gone.id.clone(), ..Default::default() };
+        store.add_figure(&mut figure, b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01").unwrap();
+        let picture = dir.join(&figure.local_path);
+        assert!(picture.exists());
+        // 彻底删除 is for the trash only, and deletes one paper as emptying deletes all.
+        assert!(store.purge_trashed(&kept.id).is_err());
+        let alone = store.add_paper(paper("Alone", "")).unwrap();
+        let c = dir.join("c.pdf");
+        std::fs::write(&c, b"%PDF-1.4 alone").unwrap();
+        let alone_file = store.import_file(&alone.id, &c, "fulltext").unwrap();
+        store.trash_paper(&alone.id).unwrap();
+        store.purge_trashed(&alone.id).unwrap();
+        assert!(store.get_paper(&alone.id).is_err() && !store.file_path(&alone_file).exists() && !dir.join("removed").exists());
+        store.trash_paper(&gone.id).unwrap();
+        assert_eq!(store.empty_trash().unwrap(), 1);
+        // The trashed paper, its rows and its files are gone; nothing was set aside.
+        assert!(store.list_trash().unwrap().is_empty() && store.get_paper(&gone.id).is_err());
+        assert!(!store.file_path(&gone_file).exists() && !picture.exists() && !dir.join("removed").exists());
+        assert!(store.list_figures().unwrap().is_empty());
+        // The paper outside the trash keeps everything.
+        assert!(store.file_path(&kept_file).exists());
+        assert_eq!((store.list_papers().unwrap().len(), store.list_files().unwrap().len()), (1, 1));
+        assert_eq!(store.empty_trash().unwrap(), 0);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn screening_rounds() {
+        let mut store = Store::in_memory(&temp_dir("rounds")).unwrap();
+        store.add_paper(paper("One", "")).unwrap();
+        let mut two = store.add_paper(paper("Two", "")).unwrap();
+        two.decide("included", "");
+        store.save_paper(&mut two).unwrap();
+        let three = store.add_paper(paper("Three", "")).unwrap();
+        store.trash_paper(&three.id).unwrap();
+        assert!(store.begin_round("", "pending").unwrap());
+        // The same goal is the same round going on, whatever is asked about.
+        assert!(!store.begin_round("", "included").unwrap());
+        assert!(store.begin_round("RCTs only", "included").unwrap());
+        let rounds = store.screening_rounds().unwrap();
+        assert_eq!(rounds.iter().map(|r| (r.criteria.as_str(), r.scope.as_str())).collect::<Vec<_>>(), [("", "pending"), ("RCTs only", "included")]);
+        // The trashed paper is not counted.
+        assert_eq!(rounds[0].counts, [1, 1, 0, 0, 0]);
     }
 }

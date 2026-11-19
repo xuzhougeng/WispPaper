@@ -117,7 +117,7 @@ impl Workspace {
             }
             Cmd::ScreenAskOne(id) => {
                 if self.lib.as_ref().is_some_and(|lib| lib.screen.running()) { return self.say(t("助手正在判断别的文献，等这一轮结束。"), cx) }
-                self.screen_start(false, Some(vec![id]), cx);
+                self.screen_start("pending", Some(vec![id]), cx);
             }
             Cmd::ScreenBeside => {
                 let Some(lib) = self.lib.as_ref() else { return };

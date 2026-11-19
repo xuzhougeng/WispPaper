@@ -295,7 +295,6 @@
   "随时可以换一个目标：已有的建议会标为「按旧目标」，再让助手按新目标判断一遍；已判断的文献也可以复核，你的判断不会被改动。": "You can change criteria at any time. Existing suggestions are marked as outdated and can be refreshed. Previously screened papers can be reviewed without changing your decisions.",
   "点开一篇，按 Y / R / U / N 判断，A 采纳建议": "Open a paper · Y / R / U / N to decide · A to accept suggestion",
   "都判断过了": "All screened",
-  "新导入的文献会出现在这里。": "Newly imported papers will appear here.",
   "助手正在阅读": "Assistant reading",
   "这一轮判断完了": "Round complete",
   "这一轮停在了这里": "Round stopped here",
@@ -1434,5 +1433,12 @@
   "写下一节": "Write next section",
   "请按大纲写下一节：接着已保存的章节往下写；各节都已保存时照实说明。": "Write the next section of the outline, after the sections already saved. If every section is saved, say so.",
   "核对全文": "Verify all",
-  "/verify 已保存的各节正文": "/verify the saved sections"
+  "/verify 已保存的各节正文": "/verify the saved sections",
+  "已纳入的文献都有按当前目标的建议了。": "Every included paper already has a suggestion under the current criteria.",
+  "新导入的文献会出现在这里。要收得更紧：先改上面的筛选目标，再在已纳入的文献里继续筛。": "Newly imported papers will appear here. To narrow further, change the criteria above, then screen within the included papers.",
+  "清空回收站？": "Empty the trash?",
+  "清空回收站": "Empty trash",
+  "清空之后，它们不再阻止重复导入：以后的检索可能会把它们再导入进来。": "Once emptied, they no longer block re-import: a later search may import them again.",
+  "我已知晓": "I understand",
+  "全部恢复": "Restore all"
 }
