@@ -165,6 +165,11 @@ unsafe fn build_classes() {
                     sel!(scrollWheel:),
                     handle_view_event as extern "C" fn(&Object, Sel, id),
                 );
+                // quiet.md: a pinch on the trackpad (events.rs makes it a turn of the wheel with Ctrl).
+                decl.add_method(
+                    sel!(magnifyWithEvent:),
+                    handle_view_event as extern "C" fn(&Object, Sel, id),
+                );
                 decl.add_method(
                     sel!(swipeWithEvent:),
                     handle_view_event as extern "C" fn(&Object, Sel, id),
