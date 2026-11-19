@@ -243,6 +243,22 @@ impl PlatformInput {
                         modifiers: read_modifiers(native_event),
                     })
                 }),
+                // quiet.md: a pinch on the trackpad comes as the wheel with Ctrl held, the way browsers
+                // and Windows hand it on. The wheel is turned 240 px for each e-fold of the fingers.
+                NSEventType::NSEventTypeMagnify => window_height.map(|window_height| {
+                    let mut modifiers = read_modifiers(native_event);
+                    modifiers.control = true;
+                    let turned = 240. * (1. + native_event.magnification() as f32).max(0.01).ln();
+                    Self::ScrollWheel(ScrollWheelEvent {
+                        position: point(
+                            px(native_event.locationInWindow().x as f32),
+                            window_height - px(native_event.locationInWindow().y as f32),
+                        ),
+                        delta: ScrollDelta::Pixels(point(px(0.), px(turned))),
+                        touch_phase: TouchPhase::Moved,
+                        modifiers,
+                    })
+                }),
                 NSEventType::NSLeftMouseDragged
                 | NSEventType::NSRightMouseDragged
                 | NSEventType::NSOtherMouseDragged => {

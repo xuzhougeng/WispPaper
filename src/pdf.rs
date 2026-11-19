@@ -255,6 +255,21 @@ fn picture_serves(at: f32, wanted: f32, shown: f32) -> bool {
 }
 
 /// The next size up or down from this one, in percent.
+/// The bar that moves pages wider than their view sideways: how far its
+/// track stands in from the view's edges, how tall the strip that hears the
+/// pointer is, and the shortest its thumb gets.
+const BAR_INSET: f32 = 8.;
+const BAR_HEIGHT: f32 = 14.;
+const BAR_THUMB_MIN: f32 = 36.;
+
+/// The thumb of the sideways bar in a view `width` wide whose pages can go
+/// `max_x` to the left: its length, and how far along the track it stands.
+fn bar_thumb(width: f32, max_x: f32, scroll_x: f32) -> (f32, f32) {
+    let track = (width - 2. * BAR_INSET).max(1.);
+    let thumb = (track * width / (width + max_x)).max(BAR_THUMB_MIN).min(track);
+    (thumb, (track - thumb) * (scroll_x / max_x.max(1.)).clamp(0., 1.))
+}
+
 fn zoom_step(percent: f32, up: bool) -> f32 {
     if up { ZOOM_STEPS.into_iter().find(|step| *step > percent + 0.5).unwrap_or(ZOOM_MAX) } else { ZOOM_STEPS.into_iter().rev().find(|step| *step < percent - 0.5).unwrap_or(ZOOM_MIN) }
 }
@@ -531,6 +546,8 @@ pub struct PdfView {
     zoom: Zoom,
     /// How far the pages can be moved to the left, when they are wider than the view.
     max_x: f32,
+    /// The sideways bar held by the pointer: its view, and how far from the thumb's left end it is held.
+    sliding: Option<(usize, f32)>,
     /// Device pixels per logical pixel of the window the viewer is in.
     device_scale: f32,
     /// A page to jump to once the file has opened.
@@ -599,6 +616,7 @@ impl PdfView {
             height: 0.,
             zoom,
             max_x: 0.,
+            sliding: None,
             device_scale: 2.,
             goto: None,
             citation: CitationFocus::default(),
@@ -800,6 +818,42 @@ impl PdfView {
     }
 
     /// Scroll to a 1-based page.
+    /// The pointer went down on a view's sideways bar: the thumb is held where it was pressed,
+    /// and a press beside it brings its middle under the pointer first.
+    fn bar_press(&mut self, pane: usize, x: Pixels, cx: &mut Context<Self>) {
+        let (thumb, left) = bar_thumb(self.pane_size().0, self.max_x, self.panes[pane].scroll_x);
+        let at = f32::from(x - self.panes[pane].list.viewport_bounds().left()) - BAR_INSET;
+        self.sliding = Some((pane, if at >= left && at <= left + thumb { at - left } else { thumb / 2. }));
+        self.slide(x, cx);
+    }
+
+    /// The thumb of the bar held follows the pointer, at `x` in the window, and the pages go the other way.
+    fn slide(&mut self, x: Pixels, cx: &mut Context<Self>) {
+        let Some((pane, grab)) = self.sliding else { return };
+        let width = self.pane_size().0;
+        let room = (width - 2. * BAR_INSET - bar_thumb(width, self.max_x, 0.).0).max(1.);
+        let left = f32::from(x - self.panes[pane].list.viewport_bounds().left()) - BAR_INSET - grab;
+        self.panes[pane].scroll_x = (left / room * self.max_x).clamp(0., self.max_x);
+        cx.notify();
+    }
+
+    /// The bar at the foot of a view whose pages are wider than it: it shows that there is more
+    /// to either side and how much, and its thumb is dragged to get there.
+    fn sideways_bar(&self, pane: usize, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        if self.max_x <= 0. { return None }
+        let (thumb, left) = bar_thumb(self.pane_size().0, self.max_x, self.panes[pane].scroll_x);
+        let held = self.sliding.is_some_and(|(held, _)| held == pane);
+        Some(
+            div().id(("pdf-sideways", pane)).group("pdf-sideways").absolute().left(px(BAR_INSET)).right(px(BAR_INSET)).bottom(px(2.)).h(px(BAR_HEIGHT)).cursor_default()
+                // The pages under the bar hear nothing of the press: no selection starts there.
+                .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.bar_press(pane, event.position.x, cx);
+                }))
+                .child(div().absolute().left(px(left)).top(px(3.)).w(px(thumb)).h(px(BAR_HEIGHT - 6.)).rounded(px((BAR_HEIGHT - 6.) / 2.)).bg(Theme::text_tertiary().opacity(if held { 1. } else { 0.55 })).group_hover("pdf-sideways", |s| s.bg(Theme::text_tertiary()))),
+        )
+    }
+
     pub fn go_to(&mut self, page: usize, cx: &mut Context<Self>) {
         self.citation.clear();
         self.scroll_to_page(page, cx);
@@ -1482,16 +1536,20 @@ impl Render for PdfView {
             return ui::empty_state("file-text", t("正在打开 PDF…"), "").size_full().into_any_element();
         }
         self.device_scale = window.scale_factor();
-        let (measured, wheel) = (cx.entity(), cx.entity());
-        let pane = |pane: usize| {
+        let (measured, wheel, slid) = (cx.entity(), cx.entity(), cx.entity());
+        let bars = [0, 1].map(|pane| self.sideways_bar(pane, cx));
+        let mut bars = bars.into_iter();
+        // A view's pages, with its sideways bar over their foot.
+        let mut pane = |pane: usize| {
             let entity = cx.entity();
-            list(self.panes[pane].list.clone(), move |index, _, cx| entity.update(cx, |this, _| this.page(pane, index))).size_full().pt(px(PAGE_GAP))
+            let pages = list(self.panes[pane].list.clone(), move |index, _, cx| entity.update(cx, |this, _| this.page(pane, index))).size_full().pt(px(PAGE_GAP));
+            div().size_full().relative().child(pages).children(bars.next().flatten())
         };
         // The pages once, or twice with a line between: each half scrolls on its own.
         let pages = match self.split {
             Split::Off => pane(0).into_any_element(),
             split => {
-                let half = |pane| div().flex_1().min_w_0().min_h_0().overflow_hidden().child(pane);
+                let half = |pane: Div| div().flex_1().min_w_0().min_h_0().overflow_hidden().child(pane);
                 let line = div().flex_none().bg(Theme::line_strong());
                 let line = if split == Split::Side { line.w(px(DIVIDER)).h_full() } else { line.h(px(DIVIDER)).w_full() };
                 div().size_full().flex().when(split == Split::Stacked, |d| d.flex_col()).child(half(pane(0))).child(line).child(half(pane(1))).into_any_element()
@@ -1532,6 +1590,14 @@ impl Render for PdfView {
                         window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
                             if phase == DispatchPhase::Capture && hitbox.is_hovered(window) && wheel.update(cx, |this, cx| this.wheel(event, bounds, cx)) { cx.stop_propagation() }
                         });
+                        // A sideways bar held is heard wherever the pointer goes, until the button comes up.
+                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                            if phase != DispatchPhase::Capture { return }
+                            slid.update(cx, |this, cx| {
+                                if this.sliding.is_none() { return }
+                                if event.pressed_button == Some(MouseButton::Left) { this.slide(event.position.x, cx) } else { this.sliding = None; cx.notify() }
+                            });
+                        });
                     },
                 )
                 .absolute()
@@ -1551,7 +1617,7 @@ impl Render for PdfView {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that would bring in gpui's own `test` attribute.
-    use super::{CARD_EDGE, CardPlace, CitationFocus, CitationStatus, DIVIDER, MARGIN, POINT_PX, Split, Zoom, card_place, page_scale, pane_at, pane_size, picture_serves, render_scale, zoom_step};
+    use super::{BAR_INSET, BAR_THUMB_MIN, CARD_EDGE, CardPlace, CitationFocus, CitationStatus, DIVIDER, MARGIN, POINT_PX, Split, Zoom, bar_thumb, card_place, page_scale, pane_at, pane_size, picture_serves, render_scale, zoom_step};
 
     #[test]
     fn a_split_viewer_has_two_equal_halves() {
@@ -1650,6 +1716,18 @@ mod tests {
         let low = card_place([100., 0., 300., 290.], 360., 280., (800., 300.));
         let bottom = low.bottom.map(|b| 300. - b).or(low.top).unwrap();
         assert!(low.max_height >= 80. && bottom - CARD_EDGE >= 0. && bottom <= 300. - CARD_EDGE);
+    }
+
+    #[test]
+    fn the_sideways_bar_shows_how_much_is_out_of_view() {
+        // A view 800 wide over pages twice as wide: the thumb is half the track, and runs its whole length.
+        let track = 800. - 2. * BAR_INSET;
+        assert_eq!(bar_thumb(800., 800., 0.), (track / 2., 0.));
+        assert_eq!(bar_thumb(800., 800., 400.), (track / 2., track / 4.));
+        assert_eq!(bar_thumb(800., 800., 800.), (track / 2., track / 2.));
+        // Zoomed far in, the thumb stays long enough to take hold of, and inside its track.
+        let (thumb, left) = bar_thumb(300., 30000., 30000.);
+        assert_eq!((thumb, left), (BAR_THUMB_MIN, 300. - 2. * BAR_INSET - BAR_THUMB_MIN));
     }
 
     #[test]
