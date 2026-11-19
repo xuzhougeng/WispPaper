@@ -143,6 +143,20 @@ pub struct Context {
     pub pages_omitted: usize,
     /// What each paper in scope was given as, in the library's order.
     pub given: Vec<Given>,
+    /// For one paper read in full: its files handed over, the main text first, then its attachments by label.
+    pub files: Vec<GivenFile>,
+}
+
+/// One file of the paper in scope, as handed to the model.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GivenFile {
+    pub file_id: String,
+    pub title: String,
+    /// The attachment's number, `1` for `S1`; `None` for the main text.
+    pub attachment: Option<usize>,
+    /// Pages handed over, and pages that did not fit.
+    pub pages: usize,
+    pub pages_omitted: usize,
 }
 
 /// How much of a paper in scope the model was handed.
@@ -205,7 +219,10 @@ fn record(label_text: &str, p: &Paper, fields: &[FieldDef]) -> String {
 /// the labels of an earlier part of the conversation name (one reopened
 /// from the history): those papers keep their labels, so what was cited
 /// before still points at the same paper, and the others are numbered on.
-pub fn build_context(library_name: &str, topic: &str, papers: &[&Paper], fields: &[FieldDef], fulltext: &BTreeMap<String, (PaperFile, Vec<String>)>, scope: &Scope, question: &str, known: &[Source]) -> Context {
+///
+/// `attachments` are the PDF attachments of the paper in `Scope::Paper`, in their order (`S1`, `S2`, …), each with
+/// its pages (none when no text came of it); the library's scope reads only main texts.
+pub fn build_context(library_name: &str, topic: &str, papers: &[&Paper], fields: &[FieldDef], fulltext: &BTreeMap<String, (PaperFile, Vec<String>)>, attachments: &[(PaperFile, Vec<String>)], scope: &Scope, question: &str, known: &[Source]) -> Context {
     let mut ctx = Context::default();
     let words = terms(question);
     let mut next = known.iter().filter_map(|s| s.label.get(1..).and_then(|n| n.parse::<usize>().ok())).max().unwrap_or(0);
@@ -230,22 +247,35 @@ pub fn build_context(library_name: &str, topic: &str, papers: &[&Paper], fields:
                 documents.push_str("## 文献记录\n\n");
                 documents.push_str(&record(tag, p, fields));
                 ctx.full = 1;
-                match fulltext.get(id) {
-                    Some((_, pages)) => {
-                        documents.push_str("\n## 全文（逐页）\n");
-                        let mut used = 0;
-                        for (i, page) in pages.iter().enumerate() {
-                            if used + page.len() > PAPER_BUDGET {
-                                ctx.pages_omitted = pages.len() - i;
-                                break;
-                            }
-                            used += page.len();
-                            documents.push_str(&format!("\n[{tag} p.{}]\n{}\n", i + 1, page.trim()));
-                            ctx.pages += 1;
+                // The main text first, then each attachment, from one budget: a page that does not fit ends its file.
+                let mut used = 0;
+                let mut give = |documents: &mut String, file: &PaperFile, attachment: Option<usize>, pages: &[String]| {
+                    let mark = attachment.map(|n| format!(" S{n}")).unwrap_or_default();
+                    let mut given = GivenFile { file_id: file.id.clone(), title: file.title.clone(), attachment, pages: 0, pages_omitted: 0 };
+                    for (i, page) in pages.iter().enumerate() {
+                        if used + page.len() > PAPER_BUDGET {
+                            given.pages_omitted = pages.len() - i;
+                            break;
                         }
+                        used += page.len();
+                        documents.push_str(&format!("\n[{tag}{mark} p.{}]\n{}\n", i + 1, page.trim()));
+                        given.pages += 1;
+                    }
+                    given
+                };
+                match fulltext.get(id) {
+                    Some((file, pages)) => {
+                        documents.push_str("\n## 全文（逐页）\n");
+                        ctx.files.push(give(&mut documents, file, None, pages));
                     }
                     None => documents.push_str("\n（这篇文献没有可读取的全文，只有上面的记录。）\n"),
                 }
+                for (n, (file, pages)) in attachments.iter().enumerate() {
+                    documents.push_str(&format!("\n## 附件 S{}：{}（逐页）\n", n + 1, file.title));
+                    if pages.is_empty() { documents.push_str("（这个附件没有读出文字。）\n") }
+                    ctx.files.push(give(&mut documents, file, Some(n + 1), pages));
+                }
+                (ctx.pages, ctx.pages_omitted) = ctx.files.iter().fold((0, 0), |(given, left), file| (given + file.pages, left + file.pages_omitted));
             }
             ctx.sources.retain(|s| &s.paper_id == id);
         }
@@ -329,7 +359,12 @@ pub fn build_context(library_name: &str, topic: &str, papers: &[&Paper], fields:
 
     let about = if topic.trim().is_empty() { String::new() } else { format!("这个文献库的主题：{}\n", topic.trim()) };
     let scope_line = match scope {
-        Scope::Paper(_) => "用户正在阅读其中一篇文献，下面是它的记录和全文。".to_string(),
+        Scope::Paper(_) if attachments.is_empty() => "用户正在阅读其中一篇文献，下面是它的记录和全文。".to_string(),
+        // The attachments are part of the paper: a supplementary figure or method is cited from its own file.
+        Scope::Paper(id) => {
+            let tag = ctx.sources.iter().find(|s| &s.paper_id == id).map_or("P1", |s| s.label.as_str());
+            format!("用户正在阅读其中一篇文献，下面是它的记录、正文和 {} 个附件（补充材料）。附件的页面标为 [{tag} S1 p.2]：S1 是第一个附件，页码是附件自己的页码；正文的页面不带 S。回答时把正文和附件一起考虑，引用附件时照这样写出附件编号，例如 [{tag} S1 p.2 \"附件中的一句原文\"]。", attachments.len())
+        }
         Scope::Library => {
             let mut line = format!("下面是文献库中 {} 篇文献的记录", ctx.full);
             if ctx.titles_only > 0 { line.push_str(&format!("，另有 {} 篇只列出题目", ctx.titles_only)) }
@@ -351,7 +386,7 @@ pub fn build_context(library_name: &str, topic: &str, papers: &[&Paper], fields:
 - 上面的材料不够时使用工具：search_fulltext 在已保存的全文里找短语或关键词，read_fulltext 按页读原文核对上下文，list_papers 和 get_paper 查文献记录。工具查的是整个文献库，不限于上面列出的文献。\n\
 - search_online 可以在 PubMed、Europe PMC、Crossref、arXiv 里试检索，不写入文献库。保存或删除检索式、运行导入、撤销导入会改动文献库：只在用户明确要求时使用，并说明做了什么。收录判断由用户本人做出：你可以用 suggest_screening 提出建议，它会出现在筛选页等用户确认。自定义词条也一样由用户写入：你可以用 suggest_field 为一篇文献的一个词条提出取值和原文依据，它会出现在提取页等用户确认。\n\
 - 用户要求整理文献（打标签、加星标、改阅读状态、记一段笔记）时用 organise_papers，一次调用写全所有要改的文献；用户会先看到每一篇要改什么再决定是否允许。标签优先用文献库已有的。没有被要求时不要整理。\n\
-- list_pdf_annotations 读取用户在 PDF 上的下划线、高亮和笔记；用户提到划线、标注、阅读重点时主动读取。quote 是用户选中的原文，note 是用户自己的理解，不能把笔记当作论文结论。用 resourceId 区分同一文献的不同附件，页码属于该附件；引用前核对原文上下文。\n\
+- list_pdf_annotations 读取用户在 PDF 上的下划线、高亮、方框、便签和笔记；用户提到划线、标注、阅读重点时主动读取。quote 是用户选中的原文，note 是用户自己的理解，不能把笔记当作论文结论。用 resourceId 区分同一文献的不同附件，页码属于该附件；引用前核对原文上下文。\n\
 - list_manuscripts 和 read_manuscript 读用户在写作页的稿件，只读：稿件由用户自己修改，你给出建议或可以直接采用的段落即可。\n\
 - 工具结果里每篇文献带有 label，就是引用它时用的标签；工具的 paperId、id 和 paper 参数可以直接填标签（如 P3）。没有保存全文的文献只有记录和摘要，回答依据的只是摘要时要说明。\n\
 - 用用户提问的语言回答，直接回答问题，不必复述材料。"
@@ -369,6 +404,8 @@ pub fn build_context(library_name: &str, topic: &str, papers: &[&Paper], fields:
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Citation {
     pub label: String,
+    /// The paper's attachment the page is of (`S2` is 2); `None` for its main text.
+    pub file: Option<usize>,
     pub page: Option<usize>,
     /// The quoted sentence; empty when the answer gave none.
     pub quote: String,
@@ -424,7 +461,11 @@ pub fn citation_spans(answer: &str) -> Vec<(std::ops::Range<usize>, Vec<Citation
             let Some(first) = words.next() else { continue };
             let page = |word: &str| word.trim_start_matches("p.").trim_start_matches('p').parse::<usize>().ok();
             if first.starts_with('P') && first.len() > 1 && first[1..].bytes().all(|b| b.is_ascii_digit()) {
-                found.push(Citation { label: first.to_string(), page: words.next().and_then(page), quote: String::new() });
+                // "[P3 S2 p.4]": page 4 of the paper's second attachment.
+                let mut next = words.next();
+                let file = next.and_then(|word| word.strip_prefix('S')).and_then(|n| n.parse::<usize>().ok()).filter(|n| *n > 0);
+                if file.is_some() { next = words.next() }
+                found.push(Citation { label: first.to_string(), file, page: next.and_then(page), quote: String::new() });
             } else if first.starts_with("p.") && words.next().is_none() && let (Some(page), Some(last)) = (page(first), found.last_mut()) {
                 // "[P3, p.5]": the page belongs to the label before the comma.
                 if last.page.is_none() { last.page = Some(page) }
@@ -441,9 +482,10 @@ pub fn citation_spans(answer: &str) -> Vec<(std::ops::Range<usize>, Vec<Citation
 /// A passage of a paper as a question hands it to the model: written the
 /// way answers cite, so that an answer can point back at it. The marks a
 /// quotation is closed by are taken out of the passage.
-pub fn quoted_passage(label: &str, page: usize, text: &str) -> String {
+pub fn quoted_passage(label: &str, file: Option<usize>, page: usize, text: &str) -> String {
     let text: String = text.split_whitespace().collect::<Vec<_>>().join(" ").chars().map(|c| if matches!(c, '"' | '“' | '”') { '\'' } else { c }).collect();
-    format!("[{label} p.{page} \"{text}\"]")
+    let file = file.map(|n| format!(" S{n}")).unwrap_or_default();
+    format!("[{label}{file} p.{page} \"{text}\"]")
 }
 
 /// How a quotation in an answer stands against the text of the paper it names.
@@ -1748,7 +1790,7 @@ mod tests {
         let answer = "根尖 [P3] 用了 [P1 p.2 \"Libraries [12] were prepared.\"]，见 [1] 和 [P2, p.7]。";
         let spans = citation_spans(answer);
         assert_eq!(spans.iter().map(|(range, _)| &answer[range.clone()]).collect::<Vec<_>>(), ["[P3]", "[P1 p.2 \"Libraries [12] were prepared.\"]", "[P2, p.7]"]);
-        assert_eq!(spans[1].1, [Citation { label: "P1".into(), page: Some(2), quote: "Libraries [12] were prepared.".into() }]);
+        assert_eq!(spans[1].1, [Citation { label: "P1".into(), file: None, page: Some(2), quote: "Libraries [12] were prepared.".into() }]);
     }
 
 
@@ -1780,7 +1822,7 @@ mod tests {
         let mut a2 = a.clone();
         a2.fields.insert("F1".into(), vec!["Arabidopsis".into()]);
         let text = fulltext("a", &["Introduction about leaves.", "WOX5 expression in the root tip."]);
-        let ctx = build_context("根", "根尖发育", &[&a2, &b], &fields, &text, &Scope::Library, "What does WOX5 do in the root?", &[]);
+        let ctx = build_context("根", "根尖发育", &[&a2, &b], &fields, &text, &[], &Scope::Library, "What does WOX5 do in the root?", &[]);
         assert_eq!((ctx.full, ctx.titles_only, ctx.omitted, ctx.pages), (2, 0, 0, 1));
         assert!(ctx.instructions.contains("「根」") && ctx.instructions.contains("根尖发育") && ctx.instructions.contains("2 篇"));
         assert!(ctx.documents.contains("[P1] Root stem cell niche\n"));
@@ -1797,12 +1839,32 @@ mod tests {
         let a = paper("a", "Root", "Abs");
         let b = paper("b", "Leaf", "Abs");
         let text = fulltext("b", &["one", "two"]);
-        let ctx = build_context("L", "", &[&a, &b], &[], &text, &Scope::Paper("b".into()), "summarise", &[]);
+        let ctx = build_context("L", "", &[&a, &b], &[], &text, &[], &Scope::Paper("b".into()), "summarise", &[]);
         assert_eq!((ctx.full, ctx.pages, ctx.pages_omitted, ctx.sources.len()), (1, 2, 0, 1));
         assert!(ctx.documents.contains("[P2 p.1]\none") && ctx.documents.contains("[P2 p.2]\ntwo"));
         assert!(!ctx.documents.contains("Root"));
-        let none = build_context("L", "", &[&a], &[], &BTreeMap::new(), &Scope::Paper("a".into()), "q", &[]);
+        let none = build_context("L", "", &[&a], &[], &BTreeMap::new(), &[], &Scope::Paper("a".into()), "q", &[]);
         assert!(none.documents.contains("没有可读取的全文"));
+    }
+
+    #[test]
+    fn a_paper_is_read_with_its_attachments_and_cited_by_file() {
+        let b = paper("b", "Leaf", "Abs");
+        let mut text = fulltext("b", &["main one"]);
+        text.get_mut("b").unwrap().0 = PaperFile { id: "F0".into(), title: "leaf.pdf".into(), ..Default::default() };
+        let attachment = |id: &str, title: &str| PaperFile { id: id.into(), title: title.into(), kind: "supplement".into(), ..Default::default() };
+        let attachments = [(attachment("F1", "figures.pdf"), vec!["Figure S1. Roots".to_string(), "Table S2".to_string()]), (attachment("F2", "scan.pdf"), vec![])];
+        let ctx = build_context("L", "", &[&b], &[], &text, &attachments, &Scope::Paper("b".into()), "q", &[]);
+        assert!(ctx.documents.contains("[P1 p.1]\nmain one") && ctx.documents.contains("附件 S1：figures.pdf") && ctx.documents.contains("[P1 S1 p.2]\nTable S2"));
+        assert!(ctx.documents.contains("附件 S2：scan.pdf") && ctx.instructions.contains("[P1 S1 p.2"));
+        let files: Vec<_> = ctx.files.iter().map(|f| (f.file_id.as_str(), f.attachment, f.pages)).collect();
+        assert_eq!(files, [("F0", None, 1), ("F1", Some(1), 2), ("F2", Some(2), 0)]);
+        assert_eq!(ctx.pages, 3);
+        // Cited back: the attachment by its number, the main text without one.
+        let cited = citations("见 [P1 S1 p.2 \"Table S2\"]，以及 [P1 p.1]。");
+        assert_eq!(cited.iter().map(|c| (c.file, c.page)).collect::<Vec<_>>(), [(Some(1), Some(2)), (None, Some(1))]);
+        assert_eq!(quoted_passage("P1", Some(1), 2, "Table S2"), "[P1 S1 p.2 \"Table S2\"]");
+        assert_eq!(citations(&quoted_passage("P1", None, 3, "x")).first().map(|c| (c.file, c.page)), Some((None, Some(3))));
     }
 
     #[test]
@@ -1810,7 +1872,7 @@ mod tests {
         let big = "x".repeat(150_000);
         let papers: Vec<Paper> = (0..4).map(|i| paper(&format!("p{i}"), &format!("Paper {i}"), &big)).collect();
         let refs: Vec<&Paper> = papers.iter().collect();
-        let ctx = build_context("L", "", &refs, &[], &BTreeMap::new(), &Scope::Library, "anything", &[]);
+        let ctx = build_context("L", "", &refs, &[], &BTreeMap::new(), &[], &Scope::Library, "anything", &[]);
         assert_eq!((ctx.full, ctx.titles_only), (2, 2));
         assert!(ctx.documents.contains("仅列出题目"));
         assert!(ctx.instructions.contains("另有 2 篇只列出题目"));
@@ -1818,7 +1880,7 @@ mod tests {
 
     #[test]
     fn cited_labels() {
-        let cite = |label: &str, page: Option<usize>, quote: &str| Citation { label: label.into(), page, quote: quote.into() };
+        let cite = |label: &str, page: Option<usize>, quote: &str| Citation { label: label.into(), file: None, page, quote: quote.into() };
         assert_eq!(citations("根尖 [P3] 与 [P1 p.5]；另见 [P2, p.7] 和 [P4、P3]，[1] 不是标签。"), [cite("P3", None, ""), cite("P1", Some(5), ""), cite("P2", Some(7), ""), cite("P4", None, "")]);
         // A quoted sentence, with a comma and brackets of its own, in either kind of quotation mark.
         assert_eq!(
@@ -2155,11 +2217,11 @@ mod tests {
         let b = paper("b", "Leaf", "");
         let c = paper("c", "Stem", "");
         // The list in view is a and b; the library also holds c.
-        let mut ctx = build_context("L", "", &[&a, &b], &[], &BTreeMap::new(), &Scope::Library, "q", &[]);
+        let mut ctx = build_context("L", "", &[&a, &b], &[], &BTreeMap::new(), &[], &Scope::Library, "q", &[]);
         ctx.add_sources(&[a.clone(), c.clone()]);
         assert_eq!(ctx.sources.iter().map(|s| (s.label.as_str(), s.paper_id.as_str())).collect::<Vec<_>>(), [("P1", "a"), ("P2", "b"), ("P3", "c")]);
         // One paper keeps the label it has in the whole list; the others follow the highest.
-        let mut one = build_context("L", "", &[&a, &b], &[], &BTreeMap::new(), &Scope::Paper("b".into()), "q", &[]);
+        let mut one = build_context("L", "", &[&a, &b], &[], &BTreeMap::new(), &[], &Scope::Paper("b".into()), "q", &[]);
         one.add_sources(&[a.clone(), b.clone(), c.clone()]);
         assert_eq!(one.sources.iter().map(|s| s.label.as_str()).collect::<Vec<_>>(), ["P2", "P3", "P4"]);
 
@@ -2335,12 +2397,12 @@ mod tests {
         let (a, b, c) = (paper("a", "Alpha", ""), paper("b", "Beta", ""), paper("c", "Gamma", ""));
         // The earlier conversation knew b as P1 and a paper since removed from the list as P4.
         let known = [Source { label: "P1".into(), paper_id: "b".into(), title: "Beta".into() }, Source { label: "P4".into(), paper_id: "gone".into(), title: "Gone".into() }];
-        let ctx = build_context("L", "", &[&a, &b, &c], &[], &BTreeMap::new(), &Scope::Library, "q", &known);
+        let ctx = build_context("L", "", &[&a, &b, &c], &[], &BTreeMap::new(), &[], &Scope::Library, "q", &known);
         let label = |id: &str| ctx.sources.iter().find(|s| s.paper_id == id).map(|s| s.label.as_str());
         assert_eq!((label("a"), label("b"), label("c"), label("gone")), (Some("P5"), Some("P1"), Some("P6"), Some("P4")));
         assert!(ctx.documents.contains("[P1] Beta") && ctx.documents.contains("[P5] Alpha"));
         // A question about one paper keeps the others' labels as well.
-        let one = build_context("L", "", &[&a, &b, &c], &[], &BTreeMap::new(), &Scope::Paper("a".into()), "q", &known);
+        let one = build_context("L", "", &[&a, &b, &c], &[], &BTreeMap::new(), &[], &Scope::Paper("a".into()), "q", &known);
         assert_eq!(one.sources.iter().map(|s| s.label.as_str()).collect::<Vec<_>>(), ["P5", "P1", "P4"]);
     }
 

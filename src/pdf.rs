@@ -31,16 +31,49 @@ pub enum PdfEvent {
     /// Reading metadata, saved by the owner before the viewer redraws it.
     Annotate { paper: String, resource: String, page: usize, kind: Kind, quote: String, boxes: Vec<[f32; 4]> },
     AnnotationNote { resource: String, id: String, note: String },
-    /// A highlight takes another colour, a key of `annotation::COLORS`; its range stays.
+    /// A highlight or a box takes another colour, a key of `annotation::COLORS`; its range stays.
     RecolorAnnotation { resource: String, id: String, color: &'static str },
     RemoveAnnotation { resource: String, id: String },
+    /// A box drawn on a page, or a sticky note placed there (`rect` its spot twice) with its text.
+    AddShape { paper: String, resource: String, page: usize, kind: Kind, rect: [f32; 4], note: String },
+    /// A box moved or sized, a note moved, on its page.
+    MoveShape { resource: String, id: String, rect: [f32; 4] },
 }
 
-/// The names of the highlight colours, in the order of `annotation::COLORS`.
-const COLOR_NAMES: [&str; 5] = ["黄色", "绿色", "蓝色", "粉色", "紫色"];
+/// The names of the colours, in the order of `annotation::COLORS`.
+const COLOR_NAMES: [&str; 7] = ["黄色", "绿色", "蓝色", "粉色", "紫色", "红色", "橙色"];
+
+/// What the pointer does on a page besides selecting text and cutting pieces out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tool {
+    Select,
+    /// Drag out a hollow box round a figure or a passage.
+    Box,
+    /// Click to put a sticky note there.
+    Note,
+}
+
+/// The side of a sticky note's icon on screen, whatever the zoom.
+const NOTE_ICON: f32 = 22.;
+/// How near the pointer must be to a box's edge, or to one of its corners, in screen pixels.
+const EDGE_REACH: f32 = 5.;
+const GRIP: f32 = 8.;
+/// The note card's width.
+const NOTE_W: f32 = 280.;
+
+/// A box or a note held by the pointer: its id, 0-based page and place when it was taken, the corner held
+/// (none: the whole of it moves), where on the page it was taken, and whether it has moved yet.
+struct ShapeDrag {
+    id: String,
+    page: usize,
+    rect: [f32; 4],
+    corner: Option<usize>,
+    from: (f32, f32),
+    moved: bool,
+}
 
 /// A highlight that was clicked, and the menu beside it: the highlight's id, its 0-based page, and in that page's points
-/// where the click was across and the top and bottom of the line clicked.
+/// where the click was across and the top and bottom of the line clicked. A box clicked has the same menu.
 struct MarkMenu {
     id: String,
     page: usize,
@@ -552,6 +585,8 @@ pub struct PdfView {
     device_scale: f32,
     /// A page to jump to once the file has opened.
     goto: Option<usize>,
+    /// A reading place to come back to once the file has opened (`place`).
+    resume: Option<(usize, f32)>,
     /// The glyphs of the pages seen lately, and the pages they were asked for.
     marks: HashMap<usize, Arc<Vec<Mark>>>,
     marks_pending: HashSet<usize>,
@@ -576,8 +611,21 @@ pub struct PdfView {
     annotation_note: Entity<TextInput>,
     /// The highlight the pointer went down on, and where in the window: a release close by is a click on it.
     pressed_mark: Option<(MarkMenu, Point<Pixels>)>,
-    /// The menu of a highlight clicked: its colours and 删除高亮.
+    /// The menu of a highlight or a box clicked: its colours and 删除.
     mark_menu: Option<MarkMenu>,
+    /// What the pointer does on a page; cutting is apart from it (`cutting`).
+    tool: Tool,
+    /// The box being drawn: its page, and two corners in the page's points.
+    drawing: Option<(usize, [f32; 4])>,
+    /// A box or note held by the pointer, and where it is shown meanwhile (until the owner saves it).
+    shape_drag: Option<ShapeDrag>,
+    shape_shown: Option<(String, [f32; 4])>,
+    /// The sticky note whose card is open, and the one being written before it is kept: its page and spot.
+    note_open: Option<String>,
+    note_draft: Option<(usize, f32, f32)>,
+    /// The open card's text is being written.
+    note_editing: bool,
+    note_input: Entity<TextInput>,
     focus: FocusHandle,
 }
 
@@ -619,6 +667,7 @@ impl PdfView {
             sliding: None,
             device_scale: 2.,
             goto: None,
+            resume: None,
             citation: CitationFocus::default(),
             marks: HashMap::new(),
             marks_pending: HashSet::new(),
@@ -637,8 +686,169 @@ impl PdfView {
             annotation_note: cx.new(|cx| TextInput::new("写下这段原文的笔记…", cx).multiline(3)),
             pressed_mark: None,
             mark_menu: None,
+            tool: Tool::Select,
+            drawing: None,
+            shape_drag: None,
+            shape_shown: None,
+            note_open: None,
+            note_draft: None,
+            note_editing: false,
+            note_input: cx.new(|cx| TextInput::new("写下想法…", cx).multiline(4)),
             focus: cx.focus_handle(),
         }
+    }
+
+    pub fn tool(&self) -> Tool {
+        self.tool
+    }
+
+    /// Draw boxes, place notes, or go back to selecting text; a second click on the same tool goes back too.
+    pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
+        self.tool = if self.tool == tool { Tool::Select } else { tool };
+        (self.cutting, self.cut, self.drawing, self.selection, self.selecting, self.translation, self.mark_menu) = (false, None, None, None, false, None, None);
+        self.close_note();
+        cx.notify();
+    }
+
+    /// Where a box or note stands now: moved by the pointer, or as kept.
+    fn rect_of(&self, a: &Annotation) -> [f32; 4] {
+        match &self.shape_shown {
+            Some((id, rect)) if *id == a.id => *rect,
+            _ => a.boxes.first().copied().unwrap_or_default(),
+        }
+    }
+
+    /// The note or box under a point of a 0-based page, and the corner of a box held when it is the one chosen.
+    /// A note is its icon; a box is its edge, or anywhere within it once chosen. The last made is on top.
+    fn shape_at(&self, page: usize, x: f32, y: f32) -> Option<(String, Option<usize>)> {
+        let scale = self.scale_of(page);
+        let chosen = self.mark_menu.as_ref().map(|menu| menu.id.as_str());
+        self.annotations.iter().rev().filter(|a| a.page == page + 1 && a.kind.shape()).find_map(|a| {
+            let [x0, y0, x1, y1] = self.rect_of(a);
+            if a.kind == Kind::Note {
+                let side = NOTE_ICON / scale;
+                return (x >= x0 && x <= x0 + side && y >= y0 && y <= y0 + side).then(|| (a.id.clone(), None));
+            }
+            let (reach, grip) = (EDGE_REACH / scale, GRIP / scale);
+            if chosen == Some(a.id.as_str()) {
+                let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)];
+                if let Some(corner) = corners.iter().position(|(cx, cy)| (x - cx).abs() <= grip && (y - cy).abs() <= grip) { return Some((a.id.clone(), Some(corner))) }
+                if x >= x0 - reach && x <= x1 + reach && y >= y0 - reach && y <= y1 + reach { return Some((a.id.clone(), None)) }
+                return None;
+            }
+            let inside = |x: f32, y: f32, grow: f32| x >= x0 - grow && x <= x1 + grow && y >= y0 - grow && y <= y1 + grow;
+            (inside(x, y, reach) && !inside(x, y, -reach)).then(|| (a.id.clone(), None))
+        })
+    }
+
+    /// Put the note card away, and a note not yet kept with it.
+    fn close_note(&mut self) {
+        (self.note_open, self.note_draft, self.note_editing) = (None, None, false);
+    }
+
+    /// Open a note's card, to read or (`edit`) to write.
+    fn open_note(&mut self, id: String, edit: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.annotations.iter().find(|a| a.id == id).map(|a| a.note.clone()).unwrap_or_default();
+        (self.note_open, self.note_draft, self.note_editing, self.mark_menu) = (Some(id), None, edit, None);
+        self.note_input.update(cx, |input, cx| input.set_text(&text, cx));
+        if edit { self.note_input.read(cx).focus(window) }
+        cx.notify();
+    }
+
+    /// Keep what the open card says: a new note, or the text of one there.
+    fn save_note(&mut self, cx: &mut Context<Self>) {
+        let note = self.note_input.read(cx).text().trim().to_string();
+        match (self.note_draft, self.note_open.clone()) {
+            (Some((page, x, y)), _) => {
+                // A note with nothing written is not kept.
+                if note.is_empty() { return self.close_note() }
+                cx.emit(PdfEvent::AddShape { paper: self.paper_id.clone(), resource: self.resource_id.clone(), page: page + 1, kind: Kind::Note, rect: [x, y, x, y], note });
+            }
+            (None, Some(id)) => cx.emit(PdfEvent::AnnotationNote { resource: self.resource_id.clone(), id, note }),
+            (None, None) => {}
+        }
+        cx.notify();
+    }
+
+    /// The sticky note's card: beside the page where there is room, so it covers no text, else beside its icon.
+    fn note_card(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (page, spot, text) = match (self.note_draft, &self.note_open) {
+            (Some((page, x, y)), _) => (page, (x, y), String::new()),
+            (None, Some(id)) => {
+                let a = self.annotations.iter().find(|a| &a.id == id)?;
+                let [x, y, ..] = self.rect_of(a);
+                (a.page - 1, (x, y), a.note.clone())
+            }
+            (None, None) => return None,
+        };
+        let scale = self.scale_of(page);
+        let (sheet_x, sheet_y) = self.sheet_place(page)?;
+        let sheet_w = self.sizes.get(page)?.0 * scale;
+        let (icon_x, icon_y) = (sheet_x + spot.0 * scale, sheet_y + spot.1 * scale);
+        let room_right = self.width - (sheet_x + sheet_w);
+        let left = if room_right >= NOTE_W + 16. {
+            sheet_x + sheet_w + 8.
+        } else if sheet_x >= NOTE_W + 16. {
+            sheet_x - NOTE_W - 8.
+        } else if icon_x + NOTE_ICON + 6. + NOTE_W <= self.width - 8. {
+            icon_x + NOTE_ICON + 6.
+        } else {
+            icon_x - NOTE_W - 6.
+        };
+        let left = left.clamp(8., (self.width - NOTE_W - 8.).max(8.));
+        let top = icon_y.clamp(8., (self.height - 200.).max(8.));
+        let button = |id: &'static str, label: &'static str| div().id(id).flex().flex_none().items_center().h(text_px(24.)).px(px(8.)).rounded(px(6.)).cursor_pointer().hover(|s| s.bg(Theme::hover())).child(label);
+        let existing = self.note_open.clone().filter(|_| self.note_draft.is_none());
+        let body = if self.note_editing {
+            div().flex().flex_col().gap(px(8.))
+                .child(ui::field(&self.note_input, window, cx))
+                .child(div().flex().items_center().gap(px(4.))
+                    .child(button("pdf-note-save", t("保存")).text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.save_note(cx))))
+                    .child(button("pdf-note-cancel", t("取消")).on_click(cx.listener(|this, _, _, cx| {
+                        if this.note_draft.is_some() { this.close_note() } else { this.note_editing = false }
+                        cx.notify();
+                    }))))
+        } else {
+            let edit = existing.clone();
+            div().flex().flex_col().gap(px(8.))
+                .child(div().line_height(text_px(20.)).text_color(if text.is_empty() { Theme::text_placeholder() } else { Theme::text() }).child(if text.is_empty() { t("（空白便签）").to_string() } else { text }))
+                .child(div().flex().items_center().gap(px(4.))
+                    .child(button("pdf-note-edit", t("编辑")).text_color(Theme::accent()).on_click(cx.listener(move |this, _, window, cx| if let Some(id) = edit.clone() { this.open_note(id, true, window, cx) })))
+                    .child(div().flex_1())
+                    .when_some(existing.clone(), |d, id| d.child(button("pdf-note-remove", t("删除")).text_color(Theme::danger()).on_click(cx.listener(move |this, _, _, cx| {
+                        this.close_note();
+                        cx.emit(PdfEvent::RemoveAnnotation { resource: this.resource_id.clone(), id: id.clone() });
+                        cx.notify();
+                    })))))
+        };
+        Some(
+            div()
+                .id("pdf-note-card")
+                .absolute()
+                .left(px(left))
+                .top(px(top))
+                .w(px(NOTE_W))
+                .max_h(px((self.height - 16.).max(0.)))
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .p(px(12.))
+                .rounded(px(10.))
+                .bg(Theme::bg_body())
+                .border_1()
+                .border_color(Theme::line_strong())
+                .shadow(crate::theme::shadow_card())
+                .text_size(text_px(13.))
+                .occlude()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(div().flex().items_center().gap(px(6.)).text_size(text_px(12.)).text_color(Theme::text_tertiary())
+                    .child(ui::icon("sticky-note", 14., Theme::warning()))
+                    .child(div().flex_1().child(tf!("第 {} 页 · 便签", "Page {} · Note", page + 1)))
+                    .child(ui::ghost_button("pdf-note-close", Some("x"), None).h(text_px(20.)).on_click(cx.listener(|this, _, _, cx| { this.close_note(); cx.notify(); }))))
+                .child(body)
+                .into_any_element(),
+        )
     }
 
     pub fn page_count(&self) -> usize {
@@ -652,6 +862,10 @@ impl PdfView {
         self.selection = None;
         self.annotation_edit = None;
         self.mark_menu = None;
+        (self.shape_drag, self.shape_shown, self.drawing) = (None, None, None);
+        // A note just kept, or one whose text was saved, stays open to read; one gone goes with its card.
+        if self.note_open.as_ref().is_some_and(|id| !self.annotations.iter().any(|a| &a.id == id)) { self.note_open = None }
+        (self.note_draft, self.note_editing) = (None, false);
         cx.notify();
     }
 
@@ -875,6 +1089,26 @@ impl PdfView {
         cx.notify();
     }
 
+    /// Where the view is read at: the 0-based page at its top, and how far down that page in its points.
+    /// Kept by the owner when another file of the paper is shown, and handed back by `resume`.
+    pub fn place(&self) -> (usize, f32) {
+        let top = self.list().logical_scroll_top();
+        (top.item_ix, f32::from(top.offset_in_item) / self.scale_of(top.item_ix).max(0.01))
+    }
+
+    /// Come back to a place `place` gave, now or once the file has opened.
+    pub fn resume(&mut self, (index, down): (usize, f32), cx: &mut Context<Self>) {
+        if self.sizes.is_empty() { return self.resume = Some((index, down)) }
+        let index = index.min(self.sizes.len() - 1);
+        self.list().scroll_to(ListOffset { item_ix: index, offset_in_item: px(down * self.scale_of(index)) });
+        cx.notify();
+    }
+
+    /// The file on show.
+    pub fn resource_id(&self) -> &str {
+        &self.resource_id
+    }
+
     /// Go to a place on a 1-based page: what stands `top` points below the page's top comes a little under the top of the view.
     pub fn go_to_place(&mut self, page: usize, top: f32, cx: &mut Context<Self>) {
         self.citation.clear();
@@ -891,6 +1125,7 @@ impl PdfView {
                 for pane in &self.panes { pane.list.reset(self.sizes.len()) }
                 self.resize((0., 0.), |_| {});
                 if let Some(page) = self.goto.take() { self.scroll_to_page(page, cx) }
+                if let Some(place) = self.resume.take() { self.resume(place, cx) }
             }
             Reply::Failed(error) => self.error = Some(error),
             Reply::Skipped(index) => {
@@ -977,13 +1212,36 @@ impl PdfView {
         // Metadata is painted over the current raster at the same scale as
         // the glyphs, independently of both selection and citation marks.
         // A highlight can be clicked for its menu, so the pointer says so over it.
-        let annotations: Vec<Div> = self.annotations.iter().filter(|a| a.page == index + 1).flat_map(|a| a.boxes.iter().map(move |line| {
+        let annotations: Vec<Div> = self.annotations.iter().filter(|a| a.page == index + 1 && !a.kind.shape()).flat_map(|a| a.boxes.iter().map(move |line| {
             let (top, height, color) = match a.kind {
                 Kind::Underline => (line[3] * scale - (1.3 * scale).max(1.), (1.3 * scale).max(1.), Theme::underline_mark()),
-                Kind::Highlight => (line[1] * scale, (line[3] - line[1]) * scale, Theme::highlight(&a.color)),
+                _ => (line[1] * scale, (line[3] - line[1]) * scale, Theme::highlight(&a.color)),
             };
             div().absolute().left(px(line[0] * scale)).top(px(top)).w(px((line[2] - line[0]) * scale)).h(px(height)).bg(color).when(a.kind == Kind::Highlight && !cutting, |d| d.cursor_pointer())
         })).collect();
+        // Boxes, hollow so what they frame stays clear; the one chosen with its four corners to size it by.
+        let chosen = self.mark_menu.as_ref().map(|menu| menu.id.clone());
+        let free = self.tool == Tool::Select && !cutting;
+        let shapes: Vec<Div> = self.annotations.iter().filter(|a| a.page == index + 1 && a.kind == Kind::Box).map(|a| {
+            let [x0, y0, x1, y1] = self.rect_of(a);
+            let color = Theme::highlight_swatch(&a.color);
+            let picked = chosen.as_deref() == Some(a.id.as_str());
+            let grips = picked.then(|| [(0., 0.), (1., 0.), (1., 1.), (0., 1.)].map(|(fx, fy)| {
+                div().absolute().left(px((x1 - x0) * scale * fx - GRIP / 2. + 1.)).top(px((y1 - y0) * scale * fy - GRIP / 2. + 1.)).size(px(GRIP)).rounded(px(2.)).bg(gpui::white()).border_1().border_color(color)
+            }));
+            div().absolute().left(px(x0 * scale - 1.)).top(px(y0 * scale - 1.)).w(px((x1 - x0) * scale + 2.)).h(px((y1 - y0) * scale + 2.)).border_2().border_color(color).rounded(px(2.))
+                .children(grips.into_iter().flatten())
+        }).collect();
+        // A box being drawn.
+        let drawing = self.drawing.filter(|(page, _)| *page == index).map(|(_, [x0, y0, x1, y1])| div().absolute().left(px(x0.min(x1) * scale)).top(px(y0.min(y1) * scale)).w(px((x1 - x0).abs() * scale)).h(px((y1 - y0).abs() * scale)).border_2().border_color(Theme::highlight_swatch(wisp_core::annotation::BOX_COLOR)).rounded(px(2.)));
+        // Sticky notes, folded to an icon at their spot; the open one ringed. A note being written shows where it will go.
+        let open = self.note_open.clone();
+        let mut notes: Vec<Div> = self.annotations.iter().filter(|a| a.page == index + 1 && a.kind == Kind::Note).map(|a| {
+            let [x, y, ..] = self.rect_of(a);
+            let lit = open.as_deref() == Some(a.id.as_str());
+            note_icon(x * scale, y * scale, lit).when(free, |d| d.cursor_pointer())
+        }).collect();
+        if let Some((page, x, y)) = self.note_draft && page == index { notes.push(note_icon(x * scale, y * scale, true)) }
         // The quotation on this page: a translucent marker over each of its lines.
         let cited = self.citation.index(self.sizes.len()) == Some(index);
         let marks: Vec<Div> = self
@@ -994,7 +1252,7 @@ impl PdfView {
             .collect();
         let sheet = div().relative().flex_none().ml(px(self.sheet_left(pane, width))).w(px(width)).h(px(height)).bg(gpui::white()).border_1().border_color(Theme::line()).overflow_hidden();
         let sheet = match image {
-            Some((image, _)) => sheet.when(cutting, |d| d.cursor_crosshair()).when(!cutting, |d| d.cursor_text()).child(img(image).w(px(width)).h(px(height))).children(annotations).children(selected).children(marks).children(cut),
+            Some((image, _)) => sheet.when(cutting || !free, |d| d.cursor_crosshair()).when(free, |d| d.cursor_text()).child(img(image).w(px(width)).h(px(height))).children(annotations).children(selected).children(marks).children(cut).children(shapes).children(drawing).children(notes),
             None => sheet.flex().items_center().justify_center().text_size(text_px(12.)).text_color(Theme::text_placeholder()).child(if self.broken.contains(&index) { tf!("第 {} 页无法渲染", "Cannot render page {}", index + 1) } else { tf!("第 {} 页", "Page {}", index + 1) }),
         };
         // Draw over the image without changing its size or covering the text.
@@ -1033,10 +1291,12 @@ impl PdfView {
         })
     }
 
-    /// The pointer went down on a page: a selection starts at the glyph under it.
+    /// The pointer went down on a page: a selection starts at the glyph under it; with a tool, a box or a note
+    /// starts there; on a box or a note, that is taken hold of.
     fn press(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus);
-        (self.selection, self.selecting, self.translation, self.mark_menu, self.pressed_mark) = (None, false, None, None, None);
+        let chosen = self.mark_menu.take();
+        (self.selection, self.selecting, self.translation, self.pressed_mark, self.shape_drag) = (None, false, None, None, None);
         // The half pressed in is the one worked in; a drag stays in it. The line between the two is neither.
         let Some(pane) = self.pane_under(event.position) else {
             if self.cutting { self.cut = None }
@@ -1049,7 +1309,37 @@ impl PdfView {
             self.selecting = self.cut.is_some();
             return cx.notify();
         }
-        let Some((page, x, y)) = self.locate(pane, event.position) else { return cx.notify() };
+        let Some((page, x, y)) = self.locate(pane, event.position) else {
+            self.close_note();
+            return cx.notify();
+        };
+        match self.tool {
+            Tool::Box => {
+                self.drawing = Some((page, [x, y, x, y]));
+                self.selecting = true;
+                return cx.notify();
+            }
+            Tool::Note => {
+                // The icon's top left at the pointer, the card open to write in. One note a click of the tool:
+                // a click on the page afterwards is for reading again, not for another note.
+                (self.note_open, self.note_draft, self.note_editing, self.tool) = (None, Some((page, x, y)), true, Tool::Select);
+                self.note_input.update(cx, |input, cx| input.set_text("", cx));
+                self.note_input.read(cx).focus(window);
+                return cx.notify();
+            }
+            Tool::Select => {}
+        }
+        // A box or a note is taken hold of: dragged it moves (or, by a corner, changes size), clicked it opens.
+        self.mark_menu = chosen;
+        if let Some((id, corner)) = self.shape_at(page, x, y) && let Some(a) = self.annotations.iter().find(|a| a.id == id) {
+            let rect = self.rect_of(a);
+            if self.mark_menu.as_ref().is_none_or(|menu| menu.id != id) { self.mark_menu = None }
+            self.shape_drag = Some(ShapeDrag { id, page, rect, corner, from: (x, y), moved: false });
+            self.selecting = true;
+            return cx.notify();
+        }
+        self.mark_menu = None;
+        if self.note_draft.is_none() && !self.note_editing { self.note_open = None }
         self.pressed_mark = self.highlight_at(page, x, y).map(|(id, line)| (MarkMenu { id, page, x, line }, event.position));
         if let Some((marks, at)) = self.marks.get(&page).and_then(|marks| Some((marks, pdftext::mark_at(marks, x, y)?))) {
             self.selection = Some(Selection { page, anchor: at, focus: at });
@@ -1079,6 +1369,36 @@ impl PdfView {
         if !self.selecting { return }
         if event.pressed_button != Some(MouseButton::Left) { return self.release(None, cx) }
         let Some((page, x, y)) = self.locate(self.held, event.position) else { return };
+        // A box or note held follows the pointer on its own page, kept inside the page.
+        let (scale, (w, h)) = (self.scale_of(page), self.sizes.get(page).copied().unwrap_or((595., 842.)));
+        if let Some(held) = self.shape_drag.as_mut() {
+            if page != held.page { return }
+            let (dx, dy) = (x - held.from.0, y - held.from.1);
+            if !held.moved && dx.abs().max(dy.abs()) * scale < 3. { return }
+            held.moved = true;
+            let [x0, y0, x1, y1] = held.rect;
+            let rect = match held.corner {
+                // The corner held goes with the pointer, the one across from it stays.
+                Some(corner) => {
+                    let (x, y) = (x.clamp(0., w), y.clamp(0., h));
+                    match corner { 0 => [x, y, x1, y1], 1 => [x0, y, x, y1], 2 => [x0, y0, x, y], _ => [x, y0, x1, y] }
+                }
+                None => {
+                    let dx = dx.clamp(-x0, (w - x1).max(-x0));
+                    let dy = dy.clamp(-y0, (h - y1).max(-y0));
+                    [x0 + dx, y0 + dy, x1 + dx, y1 + dy]
+                }
+            };
+            self.shape_shown = Some((held.id.clone(), [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])]));
+            return cx.notify();
+        }
+        if let Some((draw_page, corners)) = self.drawing.as_mut() {
+            if *draw_page == page {
+                (corners[2], corners[3]) = (x, y);
+                cx.notify();
+            }
+            return;
+        }
         if let Some((cut_page, corners)) = self.cut.as_mut() {
             if *cut_page == page {
                 (corners[2], corners[3]) = (x, y);
@@ -1098,6 +1418,30 @@ impl PdfView {
     fn release(&mut self, at: Option<Point<Pixels>>, cx: &mut Context<Self>) {
         let pressed = self.pressed_mark.take();
         if !std::mem::take(&mut self.selecting) && pressed.is_none() { return }
+        // A box or note let go of: moved, it is kept where it is now (shown there until the owner has saved it);
+        // clicked, a note opens and a box shows its menu.
+        if let Some(held) = self.shape_drag.take() {
+            match (held.moved, self.shape_shown.clone()) {
+                (true, Some((id, rect))) if id == held.id => cx.emit(PdfEvent::MoveShape { resource: self.resource_id.clone(), id, rect }),
+                (true, _) => {}
+                (false, _) => match self.annotations.iter().find(|a| a.id == held.id).map(|a| a.kind) {
+                    Some(Kind::Note) => {
+                        if self.note_open.as_deref() == Some(held.id.as_str()) { self.close_note() } else { (self.note_open, self.note_draft, self.note_editing) = (Some(held.id.clone()), None, false) }
+                    }
+                    Some(_) => {
+                        let [x0, y0, _, y1] = held.rect;
+                        self.mark_menu = Some(MarkMenu { id: held.id, page: held.page, x: x0, line: (y0, y1) });
+                    }
+                    None => {}
+                },
+            }
+            return cx.notify();
+        }
+        // A box drawn: one too small to frame anything was a slip of the hand. The tool stays on for the next one.
+        if let Some((page, [x0, y0, x1, y1])) = self.drawing.take() && (x1 - x0).abs() >= 8. && (y1 - y0).abs() >= 8. {
+            cx.emit(PdfEvent::AddShape { paper: self.paper_id.clone(), resource: self.resource_id.clone(), page: page + 1, kind: Kind::Box, rect: [x0, y0, x1, y1], note: String::new() });
+            return cx.notify();
+        }
         if self.selection.is_some_and(|selection| selection.anchor == selection.focus) { self.selection = None }
         // A piece too small to show anything was a slip of the hand.
         if self.cut.is_some_and(|(_, [x0, y0, x1, y1])| (x1 - x0).abs() < 8. || (y1 - y0).abs() < 8.) { self.cut = None }
@@ -1126,6 +1470,8 @@ impl PdfView {
     /// Cut pieces out of pages with the pointer, or go back to selecting text.
     pub fn toggle_cutting(&mut self, cx: &mut Context<Self>) {
         self.cutting = !self.cutting;
+        (self.tool, self.drawing, self.mark_menu) = (Tool::Select, None, None);
+        self.close_note();
         (self.cut, self.selection, self.selecting, self.translation) = (None, None, false, None);
         cx.notify();
     }
@@ -1479,7 +1825,7 @@ impl PdfView {
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| if this.mark_menu.take().is_some() { cx.notify() }))
                 .children(swatches)
                 .child(div().flex_none().w(px(1.)).h(px(16.)).mx(px(4.)).bg(Theme::line()))
-                .child(div().id("pdf-mark-remove").flex().flex_none().items_center().h(text_px(26.)).px(px(9.)).rounded(px(6.)).cursor_pointer().text_color(Theme::danger()).hover(|s| s.bg(Theme::hover())).child(t("删除高亮")).on_click(cx.listener(|this, _, _, cx| this.remove_mark(cx))))
+                .child(div().id("pdf-mark-remove").flex().flex_none().items_center().h(text_px(26.)).px(px(9.)).rounded(px(6.)).cursor_pointer().text_color(Theme::danger()).hover(|s| s.bg(Theme::hover())).child(if mark.kind == Kind::Box { t("删除方框") } else { t("删除高亮") }).on_click(cx.listener(|this, _, _, cx| this.remove_mark(cx))))
                 .into_any_element(),
         )
     }
@@ -1495,10 +1841,10 @@ impl PdfView {
                 let (page, top) = (annotation.page, annotation.boxes.first().map(|b| b[1]).unwrap_or(0.));
                 let note = annotation.note.clone();
                 let editing = self.annotation_edit.as_deref() == Some(id.as_str());
-                let kind = match annotation.kind { Kind::Underline => t("下划线"), Kind::Highlight => t("高亮") };
+                let kind = match annotation.kind { Kind::Underline => t("下划线"), Kind::Highlight => t("高亮"), Kind::Box => t("方框"), Kind::Note => t("便签") };
                 div().id(SharedString::from(id)).p(px(10.)).border_b_1().border_color(Theme::line()).flex().flex_col().gap(px(7.))
                     .child(div().flex().flex_wrap().items_center().gap(px(4.))
-                        .children((annotation.kind == Kind::Highlight).then(|| div().flex_none().size(px(8.)).mr(px(2.)).rounded_full().bg(Theme::highlight_swatch(&annotation.color))))
+                        .children(matches!(annotation.kind, Kind::Highlight | Kind::Box).then(|| div().flex_none().size(px(8.)).mr(px(2.)).rounded_full().bg(Theme::highlight_swatch(&annotation.color))))
                         .child(div().flex_1().text_color(Theme::text_secondary()).child(tf!("第 {page} 页 · {kind}", "Page {page} · {kind}")))
                         .child(button("annotation-locate", t("定位")).on_click(cx.listener(move |this, _, _, cx| this.go_to_place(page, top, cx))))
                         .child(button("annotation-edit", t("笔记")).on_click(cx.listener(move |this, _, _, cx| {
@@ -1507,7 +1853,7 @@ impl PdfView {
                             cx.notify();
                         })))
                         .child(button("annotation-delete", t("删除")).on_click(cx.listener(move |this, _, _, cx| cx.emit(PdfEvent::RemoveAnnotation { resource: this.resource_id.clone(), id: remove_id.clone() })))))
-                    .child(div().max_h(px(100.)).overflow_hidden().child(annotation.quote.clone()))
+                    .when(!annotation.quote.is_empty(), |d| d.child(div().max_h(px(100.)).overflow_hidden().child(annotation.quote.clone())))
                     .when(!editing && !annotation.note.is_empty(), |d| d.child(div().text_color(Theme::text_secondary()).child(annotation.note.clone())))
                     .when(editing, |d| d.child(ui::field(&self.annotation_note, window, cx)).child(div().flex().gap(px(5.))
                         .child(button("annotation-save", t("保存笔记")).text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| {
@@ -1516,7 +1862,7 @@ impl PdfView {
                         .child(button("annotation-cancel", t("取消")).on_click(cx.listener(|this, _, _, cx| { this.annotation_edit = None; cx.notify(); })))))
             });
             div().id("pdf-annotations-list").w_full().max_h(px((self.height - 70.).max(0.))).overflow_y_scroll().bg(Theme::bg_body()).border_1().border_color(Theme::line_strong()).rounded(px(8.))
-                .when(self.annotations.is_empty(), |d| d.child(div().p(px(12.)).text_color(Theme::text_secondary()).child(t("选中 PDF 文字后，可添加下划线或高亮。"))))
+                .when(self.annotations.is_empty(), |d| d.child(div().p(px(12.)).text_color(Theme::text_secondary()).child(t("选中 PDF 文字后，可添加下划线或高亮；工具栏的「方框」「便签」可以框出区域、在任意位置记笔记。"))))
                 .children(rows)
         });
         div().absolute().top(px(8.)).right(px(8.)).max_w(px(width)).flex().flex_col().items_end().gap(px(6.)).text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text()).occlude()
@@ -1539,6 +1885,25 @@ impl PdfView {
         self.resize((0., 0.), |this| this.height = height);
         cx.notify();
     }
+}
+
+/// A sticky note folded to its icon, at a spot of a page in screen pixels; `lit` while its card is open.
+fn note_icon(left: f32, top: f32, lit: bool) -> Div {
+    div()
+        .absolute()
+        .left(px(left))
+        .top(px(top))
+        .size(px(NOTE_ICON))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(5.))
+        .bg(Theme::note_paper())
+        .border_1()
+        .border_color(if lit { Theme::accent() } else { Theme::note_edge() })
+        .when(lit, |d| d.border_2())
+        .shadow(crate::theme::shadow_card())
+        .child(ui::icon("sticky-note", 13., Theme::note_ink()))
 }
 
 impl Render for PdfView {
@@ -1574,6 +1939,7 @@ impl Render for PdfView {
         let bar = self.selection_bar(cx);
         let card = self.translation_card(cx);
         let mark_menu = self.mark_menu(cx);
+        let note_card = self.note_card(window, cx);
         let notice = match self.citation.status {
             CitationStatus::PageOnly => Some(t("此引用仅提供页码，已标出引用页。")),
             CitationStatus::Searching => Some(t("正在定位引用原文…")),
@@ -1593,7 +1959,18 @@ impl Render for PdfView {
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| this.drag(event, cx)))
             .on_mouse_up(MouseButton::Left, cx.listener(|this, event: &MouseUpEvent, _, cx| this.release(Some(event.position), cx)))
             // Esc puts a highlight's menu away before it does anything else.
-            .on_action(cx.listener(|this, _: &crate::shortcuts::Dismiss, _, cx| if this.mark_menu.take().is_some() { cx.notify() } else { cx.propagate() }))
+            // Then a note's card, then a tool in use.
+            .on_action(cx.listener(|this, _: &crate::shortcuts::Dismiss, _, cx| {
+                if this.mark_menu.take().is_some() {
+                } else if this.note_open.is_some() || this.note_draft.is_some() {
+                    this.close_note();
+                } else if this.tool != Tool::Select {
+                    (this.tool, this.drawing) = (Tool::Select, None);
+                } else {
+                    return cx.propagate();
+                }
+                cx.notify();
+            }))
             // Under the pages: it learns the viewer's height, and hears the wheel before the list does.
             .child(
                 canvas(
@@ -1622,6 +1999,7 @@ impl Render for PdfView {
             .children(bar)
             .children(card)
             .children(mark_menu)
+            .children(note_card)
             .children(notice.map(|notice| div().absolute().top(px(8.)).left_0().w_full().px(px(8.)).flex().justify_center().child(div().px(px(10.)).py(px(5.)).rounded(px(6.)).bg(Theme::bg_body()).border_1().border_color(Theme::line()).text_size(text_px(12.)).text_color(Theme::text_secondary()).child(notice))))
             .child(self.annotation_panel(window, cx))
             .into_any_element()

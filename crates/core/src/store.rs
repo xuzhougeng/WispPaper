@@ -1213,6 +1213,17 @@ impl Store {
         Ok(None)
     }
 
+    /// A paper's PDF attachments (not its main text), in their order, each with the pages read off it: none
+    /// until it has been read or when no text came of it. Their order is what `S1`, `S2`, … count.
+    pub fn attachment_pages(&self, paper_id: &str) -> Result<Vec<(PaperFile, Vec<String>)>> {
+        let mut out = vec![];
+        for file in self.paper_files(paper_id)?.into_iter().filter(|f| f.kind != "fulltext" && f.format == "pdf") {
+            let pages = self.fulltext_pages(&file.id)?.and_then(|pages| pages.ok()).unwrap_or_default();
+            out.push((file, pages));
+        }
+        Ok(out)
+    }
+
     // ---- full text
 
     /// The cached page text of a file: `None` until it has been extracted,

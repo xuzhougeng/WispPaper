@@ -127,12 +127,12 @@ pub fn catalog() -> Vec<ToolDef> {
         scoped(
             "list_pdf_annotations",
             "读取 PDF 标注",
-            "读取用户在 PDF 上保存的下划线、高亮及笔记。quote 是选中的原文，note 是用户的笔记，不是论文结论。返回文献和附件 ID、1-based 页码、每行的 boxes（从页面左上角起的 PDF 点坐标 [left, top, right, bottom]）、类型、高亮的颜色（color：yellow、green、blue、pink、purple，是用户自己的分类；下划线为空）和时间。回收站中的文献不返回。",
+            "读取用户在 PDF 上保存的下划线、高亮、方框、便签及笔记。quote 是选中的原文（方框和便签为空），note 是用户的笔记或便签内容，不是论文结论。返回文献和附件 ID、1-based 页码、boxes（从页面左上角起的 PDF 点坐标 [left, top, right, bottom]：下划线和高亮每行一个，方框是框住的区域，便签是它所在的点）、类型、颜色（color：yellow、green、blue、pink、purple、red、orange，是用户自己的分类；下划线和便签为空）和时间。回收站中的文献不返回。",
             json!({
                 "paperId": {"type": "string", "description": "只返回这篇文献的标注。"},
                 "resourceId": {"type": "string", "description": "只返回这个 PDF 附件的标注，附件 ID 见 get_paper 的 files。"},
                 "page": {"type": "integer", "minimum": 1, "description": "只返回 PDF 的这一页（从 1 开始）。"},
-                "kind": {"type": "string", "enum": ["underline", "highlight"], "description": "只返回下划线或高亮。"},
+                "kind": {"type": "string", "enum": ["underline", "highlight", "box", "note"], "description": "只返回下划线、高亮、方框或便签。"},
                 "query": {"type": "string", "description": "在原文摘录和用户笔记中搜索；空格分开的每个词都必须出现。"},
                 "limit": {"type": "integer", "description": "最多返回多少条，默认 50，最多 500。"},
                 "offset": {"type": "integer", "description": "跳过多少条，用于翻页。"},
@@ -714,7 +714,7 @@ fn list_figures(store: &mut Store, info: &LibraryInfo, args: &Value) -> Result<V
 
 fn list_pdf_annotations(store: &Store, args: &Value) -> Result<Value> {
     let (paper, resource, kind) = (text(args, "paperId")?, text(args, "resourceId")?, text(args, "kind")?);
-    if !["", "underline", "highlight"].contains(&kind) { bail!("不支持的标注类型：{kind}") }
+    if !["", "underline", "highlight", "box", "note"].contains(&kind) { bail!("不支持的标注类型：{kind}") }
     let page = number(args, "page", 0, usize::MAX)?;
     if !args["page"].is_null() && page == 0 { bail!("页码从 1 开始。") }
     let words = crate::figure::search_words(text(args, "query")?);

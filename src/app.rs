@@ -193,6 +193,8 @@ pub enum MenuKind {
     PdfZoom,
     /// Whether the PDF is shown twice, side by side or one over the other.
     PdfSplit,
+    /// Which of the paper's PDFs is read: its main text or one of its attachments.
+    PdfFiles,
     /// 写作: the library's manuscripts, one section's own, export, and the language.
     Manuscripts,
     Section(String),
@@ -418,6 +420,12 @@ pub enum Cmd {
     PdfSplit(Split),
     /// Cut a piece out of a page as a picture for a question, or stop doing so.
     PdfCut,
+    /// Draw boxes or place sticky notes on the pages, or go back to selecting text.
+    PdfTool(crate::pdf::Tool),
+    /// Show this file of the selected paper in the viewer (its main text or an attachment).
+    ReadFile(String),
+    /// Add files to a paper as its main text (`fulltext`) or as attachments (`supplement`).
+    AttachAs(String, &'static str),
     /// Show the paper's PDF to the right of its conversation, or put it away.
     BesidePdf(bool),
     /// The paper's PDF and its conversation change places (`Settings::pdf_first`).
@@ -517,8 +525,10 @@ pub enum Cmd {
     ToggleSources(Talk, usize),
     /// Open a paper; with a page, its PDF there; with a quoted sentence too, that sentence highlighted.
     GotoSource(String, Option<usize>, String),
-    /// The same for a citation as an answer writes it: the label of a conversation, a page, a quotation.
-    GotoCited(Talk, String, Option<usize>, String),
+    /// The same in one file of the paper: an attachment by its id, or (`None`) the main text.
+    GotoFile(String, Option<String>, Option<usize>, String),
+    /// The same for a citation as an answer writes it: the label of a conversation, an attachment's number, a page, a quotation.
+    GotoCited(Talk, String, Option<usize>, Option<usize>, String),
     // Searches and imports
     NewSearch,
     EditSearch(String),
@@ -1145,6 +1155,8 @@ const FETCH_WORKERS: usize = 2;
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChatQuote {
     pub paper_id: String,
+    /// The file it was selected in: the paper's main text or an attachment.
+    pub file_id: String,
     /// The 1-based page it stands on.
     pub page: usize,
     pub text: String,
@@ -1216,7 +1228,7 @@ pub struct Chat {
     pub spot: Option<crate::chat::Spot>,
     pub bar_size: Option<Size<Pixels>>,
     /// The quotations of the answers looked up in the papers they name, by label, page and quotation.
-    pub checks: HashMap<(String, Option<usize>, String), ai::Quoted>,
+    pub checks: HashMap<(String, Option<usize>, Option<usize>, String), ai::Quoted>,
     /// When the question being answered was asked.
     pub started: Option<Instant>,
 }
@@ -1375,6 +1387,10 @@ pub struct Library {
     pub detail_scroll: ScrollHandle,
     /// Files whose text is being extracted.
     pub extracting: HashSet<String>,
+    /// The file of each paper chosen to read, when it is not the main text (`Cmd::ReadFile`).
+    pub read_file: HashMap<String, String>,
+    /// Where each file was read at when another took its place (`PdfView::place`).
+    pub file_places: HashMap<String, (usize, f32)>,
     pub guide: Guide,
     pub screen: Screen,
     /// The assistant's suggestion for each paper that has one.
@@ -1704,10 +1720,27 @@ impl Library {
         self.files.iter().filter(|f| f.paper_id == id).collect()
     }
 
-    /// The stored PDF to preview and read: the first full-text PDF, else any PDF.
+    /// The stored PDF to preview and read: the one chosen (`read_file`), else the first full-text PDF, else any PDF.
     pub fn pdf_file(&self, id: &str) -> Option<&PaperFile> {
         let files = self.paper_files(id);
+        let chosen = self.read_file.get(id).and_then(|chosen| files.iter().find(|f| &f.id == chosen && f.format == "pdf"));
+        chosen.or(files.iter().find(|f| f.kind == "fulltext" && f.format == "pdf")).or(files.iter().find(|f| f.format == "pdf")).copied()
+    }
+
+    /// The paper's main-text PDF, whatever is read now.
+    pub fn main_pdf(&self, id: &str) -> Option<&PaperFile> {
+        let files = self.paper_files(id);
         files.iter().find(|f| f.kind == "fulltext" && f.format == "pdf").or(files.iter().find(|f| f.format == "pdf")).copied()
+    }
+
+    /// The paper's PDF attachments, in the order `S1`, `S2`, … count them (`Store::attachment_pages`).
+    pub fn attachments(&self, id: &str) -> Vec<&PaperFile> {
+        self.paper_files(id).into_iter().filter(|f| f.kind != "fulltext" && f.format == "pdf").collect()
+    }
+
+    /// The number an attachment is cited by (`S2` is 2); `None` for the main text.
+    pub fn attachment_number(&self, paper: &str, file: &str) -> Option<usize> {
+        self.attachments(paper).iter().position(|f| f.id == file).map(|i| i + 1)
     }
 
     /// The suggestion that counts for a paper: one made against the
@@ -1790,7 +1823,7 @@ impl Library {
         for item in &chat.messages[..finished] {
             let ChatItem::Answer(text) = item else { continue };
             for citation in ai::citations(text) {
-                if citation.quote.is_empty() || chat.checks.contains_key(&(citation.label.clone(), citation.page, citation.quote.clone())) { continue }
+                if citation.quote.is_empty() || chat.checks.contains_key(&(citation.label.clone(), citation.file, citation.page, citation.quote.clone())) { continue }
                 let Some(source) = chat.sources().iter().find(|source| source.label == citation.label) else { continue };
                 wanted.push((citation, source.paper_id.clone()));
             }
@@ -1798,12 +1831,17 @@ impl Library {
         if wanted.is_empty() { return }
         // Each paper's pages are read once, however often it is quoted.
         let mut texts: HashMap<String, Option<Vec<String>>> = HashMap::new();
+        let mut attachment_texts: HashMap<(String, usize), Option<Vec<String>>> = HashMap::new();
         let mut checks = vec![];
         for (citation, paper_id) in wanted {
             let Some(paper) = self.papers.iter().find(|paper| paper.id == paper_id) else { continue };
-            let pages = texts.entry(paper_id.clone()).or_insert_with(|| self.store.paper_pages(&paper_id).ok().flatten());
+            // A quotation from an attachment is looked up in that attachment's pages.
+            let pages = match citation.file {
+                Some(n) => attachment_texts.entry((paper_id.clone(), n)).or_insert_with(|| self.store.attachment_pages(&paper_id).ok().and_then(|files| files.into_iter().nth(n - 1)).map(|(_, pages)| pages).filter(|pages| !pages.is_empty())),
+                None => texts.entry(paper_id.clone()).or_insert_with(|| self.store.paper_pages(&paper_id).ok().flatten()),
+            };
             let found = ai::check_quote(&citation.quote, citation.page, paper, pages.as_deref());
-            checks.push(((citation.label, citation.page, citation.quote), found));
+            checks.push(((citation.label, citation.file, citation.page, citation.quote), found));
         }
         self.chat_mut(talk).checks.extend(checks);
     }
@@ -2051,6 +2089,17 @@ impl Workspace {
                 let Some(current) = self.lib.as_ref().and_then(|lib| lib.pdf.as_ref()).map(|pdf| pdf.read(cx).split()) else { return };
                 for (label, split) in [("不分屏", Split::Off), ("左右分屏", Split::Side), ("上下分屏", Split::Stacked)] {
                     items.push(MenuItem { label: t(label).into(), checked: current == split, note: None, cmd: Cmd::PdfSplit(split) });
+                }
+            }
+            MenuKind::PdfFiles => {
+                // The paper's main text and each PDF attachment, the one read ticked.
+                let Some(lib) = &self.lib else { return };
+                let Some(paper) = lib.selected.clone() else { return };
+                let shown = lib.pdf_file(&paper).map(|f| f.id.clone());
+                let main = lib.main_pdf(&paper).map(|f| (f.id.clone(), tf!("正文 · {}", "Main text · {}", f.title)));
+                let attachments = lib.attachments(&paper).into_iter().enumerate().map(|(i, f)| (f.id.clone(), tf!("附件 S{} · {}", "Attachment S{} · {}", i + 1, f.title)));
+                for (id, label) in main.into_iter().chain(attachments) {
+                    items.push(MenuItem { label: label.into(), checked: shown.as_ref() == Some(&id), note: None, cmd: Cmd::ReadFile(id) });
                 }
             }
             MenuKind::Columns => {
@@ -2621,7 +2670,7 @@ impl Workspace {
                     cx.open_url(&link);
                 }
             }
-            Cmd::AttachPdf(id) => self.pick_attachment(id, cx),
+            Cmd::AttachPdf(id) => self.pick_attachment(id, None, cx),
             Cmd::OpenFile(id) => {
                 if let Some(lib) = &self.lib && let Some(file) = lib.files.iter().find(|f| f.id == id) {
                     cx.open_with_system(&lib.store.file_path(file));
@@ -2680,6 +2729,21 @@ impl Workspace {
             Cmd::PdfCut => {
                 if let Some(pdf) = self.lib.as_ref().and_then(|lib| lib.pdf.clone()) { pdf.update(cx, |pdf, cx| pdf.toggle_cutting(cx)) }
             }
+            Cmd::PdfTool(tool) => {
+                if let Some(pdf) = self.lib.as_ref().and_then(|lib| lib.pdf.clone()) { pdf.update(cx, |pdf, cx| pdf.set_tool(tool, cx)) }
+            }
+            Cmd::ReadFile(file) => {
+                let Some(lib) = self.lib.as_mut() else { return };
+                let Some(paper) = lib.files.iter().find(|f| f.id == file).map(|f| f.paper_id.clone()) else { return };
+                if lib.selected.as_deref() != Some(paper.as_str()) { self.select(Some(paper.clone()), window, cx) }
+                let Some(lib) = self.lib.as_mut() else { return };
+                // Read where there is room: beside the paper's conversation when it is open, else on the PDF tab.
+                if !(lib.tab == Tab::Ask && lib.split) { lib.tab = Tab::Pdf }
+                let main = lib.main_pdf(&paper).map(|f| f.id.clone());
+                self.show_file(&paper, (main.as_deref() != Some(file.as_str())).then_some(file), cx);
+                cx.notify();
+            }
+            Cmd::AttachAs(paper, kind) => self.pick_attachment(paper, Some(kind), cx),
             Cmd::PdfSplit(split) => {
                 // It is for this paper: the next one opens whole.
                 if let Some(pdf) = self.lib.as_ref().and_then(|lib| lib.pdf.clone()) { pdf.update(cx, |pdf, cx| pdf.set_split(split, cx)) }
@@ -3019,18 +3083,22 @@ impl Workspace {
                     if !chat.sources_open.remove(&at) { chat.sources_open.insert(at); }
                 }
             }
-            Cmd::GotoCited(paper, label, page, quote) => {
+            Cmd::GotoCited(paper, label, file, page, quote) => {
                 let Some(lib) = self.lib.as_ref() else { return };
                 let chat = lib.chat(paper);
                 let Some(id) = chat.sources().iter().find(|source| source.label == label).map(|source| source.paper_id.clone()) else { return self.fail(tf!("这次对话里没有 {label} 这篇文献。", "Paper {label} is not in this conversation."), cx) };
                 // Where the sentence was found, when it is not where the answer says.
-                let page = match chat.checks.get(&(label, page, quote.clone())) {
+                let page = match chat.checks.get(&(label, file, page, quote.clone())) {
                     Some(ai::Quoted::Elsewhere(at) | ai::Quoted::Begins(at, _)) => Some(*at),
                     _ => page,
                 };
-                self.run(Cmd::GotoSource(id, page, quote), window, cx);
+                let file = file.and_then(|n| lib.attachments(&id).get(n - 1).map(|f| f.id.clone()));
+                self.run(Cmd::GotoFile(id, file, page, quote), window, cx);
             }
-            Cmd::GotoSource(id, page, quote) => {
+            Cmd::GotoSource(id, page, quote) => self.run(Cmd::GotoFile(id, None, page, quote), window, cx),
+            Cmd::GotoFile(id, file, page, quote) => {
+                // The file cited is the one shown: the main text, unless an attachment is named.
+                if page.is_some() { self.show_file(&id, file, cx) }
                 // Cited from the paper's own conversation: the PDF opens to its right, where the window has room.
                 let mut beside = self.lib.as_ref().is_some_and(|lib| lib.tab == Tab::Ask && lib.selected.as_deref() == Some(id.as_str()) && lib.pdf_file(&id).is_some()) && page.is_some();
                 self.select(Some(id), window, cx);
@@ -3449,6 +3517,8 @@ impl Workspace {
             table_scroll: UniformListScrollHandle::new(),
             detail_scroll: ScrollHandle::new(),
             extracting: HashSet::new(),
+            read_file: HashMap::new(),
+            file_places: HashMap::new(),
             guide,
             screen,
             suggestions: HashMap::new(),
@@ -3551,9 +3621,35 @@ impl Workspace {
             Err(error) => return self.fail(format!("{error:#}"), cx),
         };
         let zoom = lib.zoom;
-        let pdf = cx.new(|cx| PdfView::new(&path, zoom, &file, annotations, cx));
+        let place = lib.file_places.get(&file.id).copied();
+        let pdf = cx.new(|cx| {
+            let mut pdf = PdfView::new(&path, zoom, &file, annotations, cx);
+            // A file read before, of this paper, opens where it was left.
+            if let Some(place) = place { pdf.resume(place, cx) }
+            pdf
+        });
         lib.pdf_events = Some(cx.subscribe(&pdf, |this, _, event: &PdfEvent, cx| this.pdf_event(event, cx)));
         lib.pdf = Some(pdf);
+    }
+
+    /// Show a file of a paper in the viewer: an attachment by its id, or (`None`) the main text. The file on
+    /// show keeps its place for when it is come back to, and each file has its own marks.
+    fn show_file(&mut self, paper: &str, file: Option<String>, cx: &mut Context<Self>) {
+        let Some(lib) = self.lib.as_mut() else { return };
+        match file {
+            Some(file) => lib.read_file.insert(paper.to_string(), file),
+            None => lib.read_file.remove(paper),
+        };
+        let wanted = lib.pdf_file(paper).map(|f| f.id.clone());
+        if let Some(pdf) = lib.pdf.clone() {
+            let (shown, place) = { let view = pdf.read(cx); (view.resource_id().to_string(), view.place()) };
+            if Some(&shown) != wanted.as_ref() {
+                lib.file_places.insert(shown, place);
+                (lib.pdf, lib.pdf_events) = (None, None);
+            }
+        }
+        self.ensure_pdf(cx);
+        cx.notify();
     }
 
     /// What the PDF viewer reports: its selection copied, or handed to a conversation.
@@ -3566,6 +3662,8 @@ impl Workspace {
             PdfEvent::AnnotationNote { resource, id, note } => self.change_pdf_annotation(resource, |store| store.update_pdf_annotation_note(resource, id, note), cx),
             PdfEvent::RecolorAnnotation { resource, id, color } => self.change_pdf_annotation(resource, |store| store.recolor_pdf_annotation(resource, id, color), cx),
             PdfEvent::RemoveAnnotation { resource, id } => self.change_pdf_annotation(resource, |store| store.remove_pdf_annotation(resource, id), cx),
+            PdfEvent::AddShape { paper, resource, page, kind, rect, note } => self.change_pdf_annotation(resource, |store| store.add_pdf_shape(paper, resource, *page, *kind, *rect, note).map(|_| ()), cx),
+            PdfEvent::MoveShape { resource, id, rect } => self.change_pdf_annotation(resource, |store| store.move_pdf_shape(resource, id, *rect), cx),
             PdfEvent::Picture(png, to_library) => {
                 self.attach_images(if *to_library { Talk::Library } else { Talk::Paper }, vec![Picture::Bytes(png.clone())], cx);
                 if *to_library { self.say(t("截图已加到文献库对话的输入框上方。"), cx) } else { self.show_paper_chat(cx) }
@@ -3573,7 +3671,8 @@ impl Workspace {
             PdfEvent::Quote(page, text, to_library) => {
                 let Some(lib) = self.lib.as_mut() else { return };
                 let Some(paper_id) = lib.selected.clone() else { return };
-                let quote = ChatQuote { paper_id, page: *page, text: text.clone() };
+                let file_id = lib.pdf.as_ref().map(|pdf| pdf.read(cx).resource_id().to_string()).unwrap_or_default();
+                let quote = ChatQuote { paper_id, file_id, page: *page, text: text.clone() };
                 let chat = lib.chat_mut(if *to_library { Talk::Library } else { Talk::Paper });
                 if chat.quotes.len() >= MAX_QUOTES { return self.fail(tf!("一个问题最多带 {MAX_QUOTES} 段原文。先发出去，或者去掉一段。", "A question can include at most {MAX_QUOTES} passages. Send it first or remove one."), cx) }
                 if !chat.quotes.contains(&quote) { chat.quotes.push(quote) }
@@ -3748,7 +3847,9 @@ impl Workspace {
         .detach();
     }
 
-    fn pick_attachment(&mut self, paper_id: String, cx: &mut Context<Self>) {
+    /// Files picked for a paper: as `kind` (`fulltext` or `supplement`), or, without one, the first PDF its main text
+    /// when it has none yet and the rest attachments.
+    fn pick_attachment(&mut self, paper_id: String, kind: Option<&'static str>, cx: &mut Context<Self>) {
         let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some(t("添加").into()), extensions: None });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = picked.await {
@@ -3759,7 +3860,7 @@ impl Workspace {
                         for path in &paths {
                             let is_pdf = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
                             // The first PDF of a paper is its full text; the rest are supplements.
-                            let kind = if is_pdf && !has_fulltext { "fulltext" } else { "supplement" };
+                            let kind = kind.unwrap_or(if is_pdf && !has_fulltext { "fulltext" } else { "supplement" });
                             has_fulltext |= is_pdf;
                             lib.store.import_file(&paper_id, path, kind)?;
                             added += 1;
@@ -4063,8 +4164,10 @@ impl Workspace {
         let _ = lib.store.restructure_outdated();
         let mut todo = vec![];
         for file in &lib.files {
-            if file.kind != "fulltext" || lib.extracting.contains(&file.id) { continue }
-            if matches!(lib.store.needs_structure(&file.id), Ok(true)) {
+            if lib.extracting.contains(&file.id) { continue }
+            // A PDF attachment is read once, for the paper's conversation; a main text also whenever it is to be sorted again.
+            let unread = file.kind != "fulltext" && file.format == "pdf" && matches!(lib.store.fulltext_pages(&file.id), Ok(None));
+            if (file.kind == "fulltext" && matches!(lib.store.needs_structure(&file.id), Ok(true))) || unread {
                 todo.push((file.id.clone(), lib.store.file_path(file), lib.store.fulltext_pages(&file.id).ok().flatten()));
             }
         }
@@ -4337,7 +4440,12 @@ impl Workspace {
                 return cx.notify();
             }
             // A conversation taken up from the history keeps the labels its answers already use.
-            let mut ctx = ai::build_context(&lib.info.name, &lib.info.topic, &papers, &lib.fields, &fulltext, &scope, &prompt, &chat.known);
+            // A paper is read with its attachments: supplementary figures, tables and methods are part of it.
+            let attachments = match &scope {
+                Scope::Paper(id) => lib.store.attachment_pages(id).unwrap_or_default(),
+                Scope::Library => vec![],
+            };
+            let mut ctx = ai::build_context(&lib.info.name, &lib.info.topic, &papers, &lib.fields, &fulltext, &attachments, &scope, &prompt, &chat.known);
             // The tools reach every paper of the library, so every paper can be cited.
             ctx.add_sources(&lib.papers);
             chat.ctx = Some(ctx);
@@ -4372,7 +4480,10 @@ impl Workspace {
         }
         // The passages selected in a PDF go first, written as the answers cite: the labels are known by now.
         let quotes = std::mem::take(&mut chat.quotes);
-        let quoted: Vec<String> = quotes.iter().filter_map(|quote| Some(ai::quoted_passage(&chat.sources().iter().find(|source| source.paper_id == quote.paper_id)?.label, quote.page, &quote.text))).collect();
+        // A passage of an attachment is written with its number, as the answers cite it.
+        let numbers: Vec<Option<usize>> = quotes.iter().map(|quote| lib.attachment_number(&quote.paper_id, &quote.file_id)).collect();
+        let chat = chat_of!(lib, talk);
+        let quoted: Vec<String> = quotes.iter().zip(numbers).filter_map(|(quote, file)| Some(ai::quoted_passage(&chat.sources().iter().find(|source| source.paper_id == quote.paper_id)?.label, file, quote.page, &quote.text))).collect();
         let (prompt, question) = if quoted.is_empty() {
             (prompt, question)
         } else {
@@ -6137,6 +6248,14 @@ impl Workspace {
                 "try" => self.lib.as_ref().and_then(|l| l.searches.get(arg.parse::<usize>().unwrap_or(0)).map(|s| Cmd::TrySearch(s.id.clone()))),
                 "wide" => Some(Cmd::ToggleWide),
                 "cut" => Some(Cmd::PdfCut),
+                // `pdftool:box` / `pdftool:note` draw boxes / place a note on the PDF on show; again, or `pdftool:off`, selects text.
+                "pdftool" => Some(Cmd::PdfTool(match arg { "box" => crate::pdf::Tool::Box, "note" => crate::pdf::Tool::Note, _ => crate::pdf::Tool::Select })),
+                // `readfile:<n>` reads the n-th PDF of the selected paper (0 its main text, then its attachments) in the viewer.
+                "readfile" => self.lib.as_ref().and_then(|lib| {
+                    let paper = lib.selected.as_deref()?;
+                    let files: Vec<String> = lib.main_pdf(paper).into_iter().chain(lib.attachments(paper)).map(|f| f.id.clone()).collect();
+                    files.get(arg.parse::<usize>().unwrap_or(0)).cloned().map(Cmd::ReadFile)
+                }),
                 // `pdfcut:<page>;<x0>;<y0>;<x1>;<y1>` marks a piece of a 1-based page of the PDF on show as cut out, in the page's
                 // points (after a `shot:` has drawn the page); `collect` hands it to the figure library, as 收藏到图片库 does.
                 "pdfcut" => {

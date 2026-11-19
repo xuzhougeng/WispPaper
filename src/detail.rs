@@ -3,7 +3,7 @@
 
 use crate::i18n::{label, t};
 use crate::app::{Cmd, Edge, MenuKind, Tab, Talk, Translated, Workspace};
-use crate::pdf::{Split, Zoom, ZoomTo};
+use crate::pdf::{Split, Tool, Zoom, ZoomTo};
 use crate::theme::{self, Theme, text_px};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
@@ -274,7 +274,9 @@ impl Workspace {
             .collect();
         let field_rows = self.render_field_rows(p, cx);
         let files = lib.paper_files(&id);
-        let file_rows: Vec<AnyElement> = files
+        // The file read in the viewer, and the numbers the attachments are cited by.
+        let (shown, attachments) = (lib.pdf_file(&id).map(|f| f.id.clone()), lib.attachments(&id).iter().map(|f| f.id.clone()).collect::<Vec<_>>());
+        let (main_rows, attachment_rows): (Vec<(bool, AnyElement)>, Vec<(bool, AnyElement)>) = files
             .iter()
             .enumerate()
             .map(|(i, file)| {
@@ -308,7 +310,7 @@ impl Workspace {
                     None => note,
                 };
                 let small = |id: (&'static str, usize), text: &'static str| ui::secondary_button(id, text).h(text_px(24.)).px(px(8.)).text_size(text_px(12.));
-                div()
+                let row = div()
                     .flex()
                     .flex_col()
                     .gap(px(6.))
@@ -316,6 +318,7 @@ impl Workspace {
                     .rounded(px(8.))
                     .border_1()
                     .border_color(Theme::line())
+                    .when(shown.as_deref() == Some(file.id.as_str()) && files.iter().filter(|f| f.format == "pdf").count() > 1, |d| d.border_color(Theme::accent()))
                     .on_mouse_down(MouseButton::Right, self.on_context(MenuKind::File(file.id.clone()), cx))
                     .child(
                         div()
@@ -330,9 +333,11 @@ impl Workspace {
                                     .flex_1()
                                     .min_w_0()
                                     .child(div().truncate().child(file.title.clone()))
-                                    .child(div().truncate().text_size(text_px(12.)).text_color(if failure.is_some() { Theme::warning() } else { Theme::text_tertiary() }).child(format!("{} · {}{}", if file.kind == "fulltext" { t("全文") } else { t("附件") }, file_size(file.size_bytes), if note.is_empty() { String::new() } else { format!(" · {note}") }))),
+                                    .child(div().truncate().text_size(text_px(12.)).text_color(if failure.is_some() { Theme::warning() } else { Theme::text_tertiary() }).child(format!("{} · {}{}", match attachments.iter().position(|a| a == &file.id) { Some(n) => format!("S{}", n + 1), None if file.kind == "fulltext" => t("正文").to_string(), None => t("附件").to_string() }, file_size(file.size_bytes), if note.is_empty() { String::new() } else { format!(" · {note}") }))),
                             )
-                            .child(ui::ghost_button(("file-open", i), Some("link"), None).on_click(self.on(Cmd::OpenFile(file.id.clone()), cx)))
+                            // A PDF is read in the viewer here, an attachment as well as the main text.
+                            .when(file.format == "pdf", |d| d.child(small(("file-read", i), t("阅读")).on_click(self.on(Cmd::ReadFile(file.id.clone()), cx))))
+                            .child(ui::ghost_button(("file-open", i), Some("link"), None).tooltip(ui::tip(t("用系统应用打开"))).on_click(self.on(Cmd::OpenFile(file.id.clone()), cx)))
                             .child(ui::ghost_button(("file-remove", i), Some("x"), None).on_click(self.on(Cmd::RemoveFile(file.id.clone()), cx))),
                     )
                     // A file without text: why, what it means for questions, and the two things to try.
@@ -350,9 +355,11 @@ impl Workspace {
                     })
                     // Pages a model read in part: the rest are read from where it stopped.
                     .when(!by_eye && file.format == "pdf" && lib.writing.structures.get(&file.id).is_some_and(|info| info.read_in_part()), |d| d.child(div().flex().child(small(("file-read-rest", i), t("读完剩下的页面")).on_click(self.on(Cmd::ReadPages(file.id.clone()), cx)))))
-                    .into_any_element()
+                    .into_any_element();
+                (file.kind == "fulltext", row)
             })
-            .collect();
+            .partition(|(main, _)| *main);
+        let (main_rows, attachment_rows): (Vec<AnyElement>, Vec<AnyElement>) = (main_rows.into_iter().map(|(_, row)| row).collect(), attachment_rows.into_iter().map(|(_, row)| row).collect());
         let has_fields = !lib.fields.is_empty();
         let translating = lib.show_translation;
         let abstract_body = self.render_translation(p, cx).unwrap_or_else(|| {
@@ -430,7 +437,9 @@ impl Workspace {
             }))
             .child(div().flex().flex_col().gap(px(6.)).child(abstract_head).child(abstract_body))
             .child(div().flex().flex_col().gap(px(6.)).child(notes_head).child(ui::field(&lib.notes, window, cx)))
-            .child(section(t("文件")).child(div().flex().flex_col().gap(px(6.)).children(file_rows).child(ui::secondary_button("attach", if files.is_empty() { t("添加 PDF 或附件") } else { t("再添加一个文件") }).on_click(self.on(Cmd::AttachPdf(id.clone()), cx)))))
+            // The paper itself and what comes with it, each with its own way to add one.
+            .child(section(t("正文 PDF")).child(div().flex().flex_col().gap(px(6.)).children(main_rows).child(div().flex().child(ui::secondary_button("attach-main", t("添加正文 PDF")).on_click(self.on(Cmd::AttachAs(id.clone(), "fulltext"), cx))))))
+            .child(section(t("附件／补充材料")).child(div().flex().flex_col().gap(px(6.)).children(attachment_rows).when(files.iter().all(|f| f.kind == "fulltext"), |d| d.child(div().text_size(text_px(12.)).text_color(Theme::text_placeholder()).child(t("补图、补表、补充方法等文件放在这里；PDF 附件可以在阅读器里打开，提问时会和正文一起读。")))).child(div().flex().child(ui::secondary_button("attach-more", t("添加附件")).on_click(self.on(Cmd::AttachAs(id.clone(), "supplement"), cx))))))
             .child(div().text_size(text_px(12.)).text_color(Theme::text_placeholder()).child(tf!("来源：{} · 添加于 {}", "Source: {} · Added {}", p.source, time::date_text(&p.added_at))))
             .into_any_element()
     }
@@ -449,6 +458,15 @@ impl Workspace {
         };
         let Some(pdf) = lib.pdf.clone() else { return div().into_any_element() };
         let (file_id, file_title) = (file.id.clone(), file.title.clone());
+        // The paper's PDFs beyond the one on show: the title becomes a menu of them, saying which is read.
+        let attachments = lib.attachments(&p.id);
+        let number = attachments.iter().position(|f| f.id == file_id).map(|i| i + 1);
+        let others = lib.paper_files(&p.id).iter().filter(|f| f.format == "pdf").count() > 1;
+        let file_title = match number {
+            Some(n) => tf!("附件 S{n} · {file_title}", "Attachment S{n} · {file_title}"),
+            None if others => tf!("正文 · {file_title}", "Main text · {file_title}"),
+            None => file_title,
+        };
         let beside = lib.split && lib.tab == Tab::Ask;
         let reading = lib.reading;
         // With the library's conversation on show as well, a selection can go to either.
@@ -457,9 +475,9 @@ impl Workspace {
             pdf.set_width(width);
             pdf.library_chat = library_chat;
         });
-        let (page, count, percent, zoom, cutting, split) = {
+        let (page, count, percent, zoom, cutting, split, pen) = {
             let view = pdf.read(cx);
-            (view.current_page(), view.page_count(), view.percent(), view.zoom(), view.cutting(), view.split())
+            (view.current_page(), view.page_count(), view.percent(), view.zoom(), view.cutting(), view.split(), view.tool())
         };
         let split_label = match split { Split::Off => t("分屏"), Split::Side => t("左右分屏"), Split::Stacked => t("上下分屏") };
         // The fit the reader reads at, which a zoom by hand goes back to.
@@ -484,7 +502,14 @@ impl Workspace {
                     .border_color(Theme::line())
                     .text_size(text_px(12.))
                     .text_color(Theme::text_tertiary())
-                    .child(div().flex_1().min_w_0().truncate().child(file_title))
+                    .child(if others {
+                        // Which file is read, and the way to the others: 正文 and each attachment.
+                        div().id("pdf-files").flex().flex_shrink().min_w_0().max_w(px(320.)).items_center().gap(px(4.)).cursor_pointer().rounded(px(5.)).hover(|s| s.text_color(Theme::text_secondary())).child(div().min_w_0().truncate().child(file_title)).child(ui::icon("chevron-down", 11., Theme::text_tertiary())).tooltip(ui::tip(t("切换文件"))).on_click(self.on_menu(MenuKind::PdfFiles, cx))
+                    } else {
+                        div().id("pdf-files").flex_shrink().min_w_0().truncate().child(file_title)
+                    })
+                    // The title is only as wide as it reads; the space after it is no button.
+                    .child(div().flex_1())
                     .when(count > 0, |d| d.child(div().flex_none().child(tf!("{page} / {count} 页", "{page} / {count} pages"))))
                     // Smaller, the size in force (a menu of sizes), larger.
                     .when(count > 0, |d| {
@@ -506,6 +531,9 @@ impl Workspace {
                     .when(count > 0, |d| d.child(ui::ghost_button("pdf-split", None, Some(split_label.into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).when(split != Split::Off, |d| d.text_color(Theme::accent())).on_click(self.on_menu(MenuKind::PdfSplit, cx))))
                     // Cut a piece out of a page (a figure, a table): to keep in the figure library, or as a picture for the next question.
                     .when(count > 0, |d| d.child(ui::ghost_button("pdf-cut", None, Some(if cutting { t("取消截图").into() } else { t("截图").into() })).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).when(cutting, |d| d.text_color(Theme::accent())).on_click(self.on(Cmd::PdfCut, cx))))
+                    // Marks placed on the page rather than its text: a box round a figure or a passage, a sticky note anywhere.
+                    .when(count > 0, |d| d.child(ui::ghost_button("pdf-box", Some("square"), Some(t("方框").into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).when(pen == Tool::Box, |d| d.text_color(Theme::accent())).tooltip(ui::tip(t("在页面上拖出方框，框住图表或文字"))).on_click(self.on(Cmd::PdfTool(Tool::Box), cx))))
+                    .when(count > 0, |d| d.child(ui::ghost_button("pdf-note", Some("sticky-note"), Some(t("便签").into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).when(pen == Tool::Note, |d| d.text_color(Theme::accent())).tooltip(ui::tip(t("点击页面任意位置添加便签"))).on_click(self.on(Cmd::PdfTool(Tool::Note), cx))))
                     // The whole window for this paper; in reading mode the way back is at the top.
                     .when(!reading, |d| d.child(ui::ghost_button("pdf-reading", None, Some(t("阅读模式").into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).on_click(self.on(Cmd::ToggleReading, cx))))
                     .child(ui::ghost_button("pdf-open", Some("link"), (width >= 700.).then(|| t("用系统应用打开").into())).h(text_px(24.)).on_click(self.on(Cmd::OpenFile(file_id), cx)))
