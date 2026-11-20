@@ -64,6 +64,7 @@ impl Workspace {
     /// (`agent`) the actions on a paragraph and the box of 改稿 are left out: what is to change is said there.
     pub(crate) fn render_manuscript_column(&mut self, width: f32, agent: bool, stacked: bool, window: &mut Window, cx: &mut Context<Self>) -> Div {
         self.comment_reveal(window, cx);
+        self.seek_reveal(window, cx);
         let lib = self.lib.as_ref().unwrap();
         let writing = &lib.writing;
         let text = writing.editor.read(cx).text().to_string();
@@ -78,9 +79,11 @@ impl Workspace {
         if moving { window.request_animation_frame() }
         let bars = self.render_revise_bars(&bars, cx);
         let links = self.citation_links();
+        // What the search over the manuscript found here, last: a click on words is a comment's before it is anything else.
+        let found = self.seek_marks(&text, cx);
         let lib = self.lib.as_ref().unwrap();
         lib.writing.editor.update(cx, |input, _| {
-            input.set_marks(noted.into_iter().chain(changed).collect());
+            input.set_marks(noted.into_iter().chain(changed).chain(found).collect());
             input.set_links(links);
             input.set_placeholder(if agent { PLACEHOLDER_AGENT } else { PLACEHOLDER });
         });
@@ -100,6 +103,9 @@ impl Workspace {
         // room is left beside the sheet, not inside its frame, and the boxes under it keep its edges.
         let sheet = f32::from(theme::manuscript_width()) + 2. * SHEET_MARGIN + 2. + 32.;
         let inner = width.min(sheet);
+        let seek = self.render_seek(window, cx);
+        let lib = self.lib.as_ref().unwrap();
+        let writing = &lib.writing;
 
         let body = div()
             .flex()
@@ -109,6 +115,7 @@ impl Workspace {
             .w_full()
             .max_w(px(sheet))
             .mx_auto()
+            .children(seek)
             .child(
                 div().flex().flex_col().flex_1().min_h_0().px(px(16.)).pt(px(12.)).pb(px(8.)).child(if writing.reading { self.render_manuscript_reading(cx) } else if let Some(version) = version { self.render_version(version, cx) } else {
                     let page = div().relative().w_full().max_w(theme::manuscript_width()).mx_auto().pl(px(18.)).pr(px(if markers.is_empty() { 18. } else { MARGIN })).py(px(14.)).text_size(text_px(15.)).line_height(theme::body_line(26.)).text_color(Theme::text());

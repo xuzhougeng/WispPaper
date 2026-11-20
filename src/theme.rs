@@ -163,6 +163,9 @@ impl Theme {
     pub fn note() -> Hsla { if dark() { hsla(0.11, 0.85, 0.6, 0.22) } else { hsla(0.11, 0.95, 0.55, 0.2) } }
     pub fn note_strong() -> Hsla { if dark() { hsla(0.11, 0.85, 0.6, 0.38) } else { hsla(0.11, 0.95, 0.55, 0.36) } }
     pub fn note_line() -> Hsla { pick(0xE0A100, 0xE8B92E) }
+    /// Under words a search found, in the manuscript and on a PDF page; stronger on the one gone to.
+    pub fn found() -> Hsla { if dark() { hsla(0.15, 0.9, 0.55, 0.26) } else { hsla(0.15, 1., 0.5, 0.3) } }
+    pub fn found_current() -> Hsla { if dark() { hsla(0.07, 0.95, 0.55, 0.5) } else { hsla(0.07, 1., 0.55, 0.5) } }
     pub fn selection() -> Hsla { Self::accent().opacity(if dark() { 0.36 } else { 0.22 }) }
     /// A highlight on a PDF page, by a key of `annotation::COLORS` (anything else as the first): the page is white in either set, so the same in both.
     pub fn highlight(key: &str) -> Hsla { let (h, s, l) = highlight_hue(key); hsla(h / 360., s, l, 0.32) }

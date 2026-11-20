@@ -43,6 +43,7 @@ mod ui;
 mod updater;
 mod write;
 mod write_find;
+mod write_seek;
 mod write_agent;
 mod write_assist;
 mod write_cite;

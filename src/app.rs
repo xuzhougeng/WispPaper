@@ -665,6 +665,8 @@ pub enum Cmd {
     Revise(crate::revise::Do),
     /// 写作's other mode, where the assistant writes (`write_agent.rs`).
     Agent(crate::write_agent::Do),
+    /// Looking for words in the manuscript (`write_seek.rs`).
+    Seek(crate::write_seek::Do),
     // The figure library (`src/figures.rs`)
     /// Only the figures with this tag; the tag chosen already, or none, shows all of them.
     FigureTag(String),
@@ -898,6 +900,8 @@ pub struct Writing {
     pub side: Side,
     /// The other mode, where the assistant writes: which manuscript its conversation is about, what it changed, the versions to step through (`write_agent.rs`).
     pub agent: crate::write_agent::Agent,
+    /// Looking for words in the manuscript (`write_seek.rs`).
+    pub seek: crate::write_seek::Seek,
 }
 
 /// The pages of the panel beside the manuscript: what there is to draw on, what was said about the text, what it cites.
@@ -2616,6 +2620,7 @@ impl Workspace {
             Cmd::WriteAssistUse(how) => self.assist_use(how, window, cx),
             Cmd::WriteCited(what) => self.cite_do(what, window, cx),
             Cmd::Revise(what) => self.run_revise(what, cx),
+            Cmd::Seek(what) => self.run_seek(what, window, cx),
             Cmd::Agent(what) => self.run_agent(what, window, cx),
             Cmd::WriteStop => {
                 if let Some(lib) = self.lib.as_mut() {
@@ -3391,6 +3396,9 @@ impl Workspace {
         } else if self.dismiss_font_picker(window, cx) {
         } else if self.settings_view.is_some() {
             self.close_settings(window, cx);
+        } else if self.lib.as_ref().is_some_and(|l| l.page == Page::Write && l.writing.seek.open) {
+            // The search over the manuscript, from its own field or the manuscript: before a paper beside it is closed.
+            self.run(Cmd::Seek(crate::write_seek::Do::Close), window, cx);
         } else if self.picked.take().is_some() || self.lib.as_mut().is_some_and(Library::unpick) {
         } else if self.lib.as_ref().is_some_and(|l| l.materials_shown()) {
             // The panel floating over the conversation is put away first; what it searched for stays.
@@ -3429,6 +3437,8 @@ impl Workspace {
             "new-library" if !in_settings && self.lib.is_none() => Cmd::NewLibrary,
             // The rest act on the open library, when it is the one in view.
             _ if in_settings || self.lib.is_none() => return,
+            // On the writing page the words are looked for in the manuscript, not among the papers (a PDF with the keyboard looks in itself, pdf.rs).
+            "search" if self.lib.as_ref().is_some_and(|l| l.page == Page::Write && !l.reading) => return self.seek_open(window, cx),
             "search" => {
                 if let Some(lib) = self.lib.as_mut() {
                     lib.page = Page::Papers;
@@ -3447,6 +3457,8 @@ impl Workspace {
             "ask" => Cmd::SetPage(Page::Ask),
             "detail" if self.lib.as_ref().is_some_and(|l| l.selected.is_some()) => Cmd::ToggleWide,
             "sidebar" => Cmd::ToggleSidebar,
+            // On the writing page with no paper beside it, the manuscript's own reading view: 预览.
+            "reading" if self.lib.as_ref().is_some_and(|l| l.page == Page::Write && !l.reading) && self.detail_width(window) <= 0. => Cmd::WriteReading(!self.lib.as_ref().is_some_and(|l| l.writing.reading)),
             "reading" if self.lib.as_ref().is_some_and(|l| l.selected.is_some()) => Cmd::ToggleReading,
             // The PDF's size, while a PDF is on show.
             "zoom-in" => Cmd::PdfZoom(ZoomTo::In),
@@ -3547,7 +3559,8 @@ impl Workspace {
         let (comments, heard) = crate::comments::Commenting::new(store.comments(&manuscript).unwrap_or_default(), store.manuscript_source(&manuscript).ok().flatten(), cx);
         subscriptions.extend(heard);
         let revise = crate::revise::Revising::new(&mut subscriptions, cx);
-        let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new(), assist: Default::default(), revise, comments, editor_scroll: ScrollHandle::new(), side: Side::default(), agent: Default::default() };
+        let seek = crate::write_seek::Seek::new(&mut subscriptions, cx);
+        let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new(), assist: Default::default(), revise, comments, editor_scroll: ScrollHandle::new(), side: Side::default(), agent: Default::default(), seek };
         let citing = crate::cite::Citing::new(&store, &writing.manuscript, &mut subscriptions, cx);
         let gallery = crate::figures::Gallery::new(&mut subscriptions, cx);
         let filters = Filters { sort: info.sort.clone(), ..Default::default() };

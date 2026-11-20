@@ -271,6 +271,8 @@ impl TextInput {
         self.sel = self.text.len()..self.text.len();
         self.marked = None;
         self.scroll_x = px(0.);
+        // What was laid out was the old text: nothing is placed by it until this one is drawn (`top_of`).
+        self.layout = None;
         // Another text altogether (a draft of another part): its changes are not this one's.
         (self.undo, self.redo, self.typing) = (vec![], vec![], false);
         cx.notify();
