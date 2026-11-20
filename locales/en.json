@@ -1558,5 +1558,7 @@
   "把稿件放回对话右边": "Put the manuscript back beside the conversation",
   "关闭稿件：对话占满页面，稿件留在对话里，点对话上方的「稿件」再打开": "Close the manuscript: the conversation takes the page. The manuscript stays with the conversation; click “Manuscript” above it to open it again.",
   "回答中": "Answering",
-  "等你同意": "Waiting for you"
+  "等你同意": "Waiting for you",
+  "放到后台的那段对话答完了，在「历史」里可以找到": "The conversation left answering in the background has finished; find it in History",
+  "上一段对话还在后台回答，在「历史」里可以找到。": "The previous conversation is still answering in the background. Find it in History."
 }
