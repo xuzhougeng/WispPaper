@@ -104,7 +104,7 @@ pub struct Inspected {
 /// What the assistant is told with a question that came with Word files: where they are and what it can do with them.
 pub fn note(paths: &[String]) -> String {
     let files: Vec<String> = paths.iter().map(|path| format!("- {path}")).collect();
-    format!("用户随这个问题附上了 Word 文件（本机路径）：\n{}\n这是在别处写好的稿件，不是写作页的稿件，不要用稿件工具去读写它。按用户的话决定做什么。用户要把它参考文献表里的文献收进来（建一个文献库）时，用 import_docx_references（导入前用户会在窗口里确认），再如实告诉用户收进了多少篇、跳过了多少篇、哪些条目没能识别；没能识别的条目你读得懂时，用 entries 给出它们再调用一次。用户只交来文件、没说做什么时，多半想重排它的引用格式：先用 read_docx_citations 读出它引用了什么，把识别结果如实告诉用户（引用来自 Zotero 域还是按文字识别、参考文献多少条、哪些没能识别、哪些引用会保持原样）；用户没说用哪个样式时问清楚（list_cite_styles 有可用的样式）；要在某个样式上改动时用 read_cite_style 读出它、改好、用 try_cite_style 试排给用户看，再把改好的 CSL 交给 restyle_docx。restyle_docx 写出一个新文件，保存位置由用户在保存对话框里选，原文件不会改动；不要自己填 output。", files.join("\n"))
+    format!("用户随这个问题附上了 Word 文件（本机路径）：\n{}\n这是在别处写好的稿件，还不是写作页的稿件：read_manuscript、edit_section 这些稿件工具读写不到它。按用户的话决定做什么。用户要把它放进写作页（添加到写作、当作稿件接着写、请你审阅或留批注）时，用 import_manuscript（导入前用户会在窗口里确认）：原文件不动，正文按标题分节，文件里的批注一起带进来；导入后它就是写作页的稿件，再用稿件工具读它、给它留批注。用户要把它参考文献表里的文献收进来（建一个文献库）时，用 import_docx_references（导入前用户会在窗口里确认），再如实告诉用户收进了多少篇、跳过了多少篇、哪些条目没能识别；没能识别的条目你读得懂时，用 entries 给出它们再调用一次。用户只交来文件、没说做什么时，多半想重排它的引用格式：先用 read_docx_citations 读出它引用了什么，把识别结果如实告诉用户（引用来自 Zotero 域还是按文字识别、参考文献多少条、哪些没能识别、哪些引用会保持原样）；用户没说用哪个样式时问清楚（list_cite_styles 有可用的样式）；要在某个样式上改动时用 read_cite_style 读出它、改好、用 try_cite_style 试排给用户看，再把改好的 CSL 交给 restyle_docx。restyle_docx 写出一个新文件，保存位置由用户在保存对话框里选，原文件不会改动；不要自己填 output。", files.join("\n"))
 }
 
 // ---- small readers of text

@@ -990,6 +990,9 @@ const RESTYLE: &str = "restyle_docx";
 /// The tool that leaves the assistant's remarks on a manuscript as comments: they are read again after it ran (`comments_arrived`).
 const COMMENT: &str = "comment_manuscript";
 
+/// The tool that takes a file in as a manuscript: the writing page shows it once it ran (`manuscript_arrived`).
+const TAKE_IN: &str = "import_manuscript";
+
 /// What the person says to the assistant wanting to change the library.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Consent {
@@ -5325,6 +5328,7 @@ impl Workspace {
         let wrote = calls.iter().any(|call| call.writes && (allowed || !call.confirm));
         let composed = calls.iter().any(|call| tools::MANUSCRIPT.contains(&call.name.as_str()) && (allowed || !call.confirm));
         let commented = calls.iter().any(|call| call.name == COMMENT);
+        let taken_in = calls.iter().any(|call| call.name == TAKE_IN && call.outside.is_none() && (allowed || !call.confirm));
         let library = info.id.clone();
         let executor = cx.background_executor().clone();
         let tasks: Vec<gpui::Task<Vec<(String, String, bool, String)>>> = if wrote || calls.len() == 1 {
@@ -5350,6 +5354,8 @@ impl Workspace {
                 // And the manuscripts, when one was written: the editor follows, and what changed is shown.
                 if composed { this.manuscripts_synced(cx) }
                 // Comments left on a manuscript: they are shown on it, the section on show first.
+                // A file taken in as a manuscript: it is listed in 写作 and shown there.
+                if taken_in { this.manuscript_arrived(cx) }
                 if commented { this.comments_arrived(cx) }
                 // The rest is the conversation's, in its place or set aside (`in_chat`).
                 this.in_chat(talk, key, cx, |this, cx| {

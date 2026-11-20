@@ -109,6 +109,7 @@ wisp search_fulltext --help             # 一个工具的参数
 | `import_docx_references` | 把一个 Word 文件参考文献表里的文献收进文献库（`--path a.docx`），不改文件：识别方式同 `read_docx_citations`；默认联网查 Crossref（`--lookup=false` 不查），没有 DOI 的条目按文字查、题目和年份相符才补上 DOI。按 DOI、PMID、题目去重，可以重复运行；没能识别的条目列在 `unresolved`，不收进来，`--entries` 给出它们的 CSL-JSON 后只收这几条 |
 | `restyle_docx` | 把 Word 文件的引用和参考文献表按一个 CSL 样式重排，写成新文件（`--path a.docx --style csl:nature`，或 `--csl` 一份 CSL 定义；`--output b.docx`，省略时写在原文件旁边、文件名加 `-restyled`；`--track` 把改动写成修订）。引用是能跳到条目的域；原文件不改，已有文件不覆盖 |
 | `save_cite_style` | 把一份 CSL 定义存为自己的引用样式（`--name my-journal.csl --csl …`），写在数据文件夹的 `styles/` 下，之后可在写作页「导出」菜单里选用 |
+| `import_manuscript` | 把一个在别处写好的稿件文件导入写作页，成为一份新稿件（`--path a.docx`，也可以是 `.md`、`.txt`），等同于写作页的「导入」：原文件不改，正文按标题分节（Word 文件没有用标题样式时按看起来像标题的段落分，结果的 `guessedHeadings` 列出它们），Word 里的批注一起带进来，表格和图片留在文件的副本里。正文里的引用保持文件里的写法。同一个文件已经是稿件时不再导入一份（`already`） |
 | `list_manuscripts` | 列出写作页的稿件：题目、语言、各节的名称和字数 |
 | `read_manuscript` | 读取一份稿件的正文，可以只读一节；只读 |
 | `edit_section` | 写或修改稿件的一节：`--edits` 是一个 JSON 数组，每项是 `old`（从这一节逐字摘出的原文，留空表示加在末尾）和 `new`（改成的文字，留空表示删去）；或用 `--text` 给出这一节的全部新正文。引用写作 `[@Key]` 或 `[@文献ID]`。改动前的文字留作这一节的一个历史版本（会改动稿件） |

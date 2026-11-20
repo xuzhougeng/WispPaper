@@ -40,7 +40,7 @@ pub struct ToolDef {
 }
 
 /// The tools that change the library.
-const WRITING: [&str; 25] = ["create_library", "import_library", "export_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "suggest_field", "sync_searches", "find_pdf", "import_url", "organise_papers", "edit_section", "set_outline", "comment_manuscript", "export_note", "save_note_to_notion", "resolve_note_save", "save_cite_style", "restyle_docx", "import_docx_references"];
+const WRITING: [&str; 26] = ["create_library", "import_library", "export_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "suggest_field", "sync_searches", "find_pdf", "import_url", "organise_papers", "edit_section", "set_outline", "comment_manuscript", "export_note", "save_note_to_notion", "resolve_note_save", "save_cite_style", "restyle_docx", "import_docx_references", "import_manuscript"];
 /// Of those, the ones the window's assistant runs only with the person's
 /// consent. Saving a search, suggesting a screening decision or proposing
 /// a field's value changes nothing a person has not yet to act on, so they
@@ -48,7 +48,7 @@ const WRITING: [&str; 25] = ["create_library", "import_library", "export_library
 /// about everywhere but in the conversation that writes that manuscript,
 /// where the person has handed the pen over. `comment_manuscript` is not among them: a comment changes no
 /// word of the manuscript, it waits for the person like a screening suggestion.
-const CONFIRMING: [&str; 18] = ["import_library", "export_library", "import_pdf", "import_references", "import_zotero", "run_search", "undo_import", "remove_search", "find_pdf", "import_url", "organise_papers", "edit_section", "set_outline", "export_note", "save_note_to_notion", "resolve_note_save", "restyle_docx", "import_docx_references"];
+const CONFIRMING: [&str; 19] = ["import_library", "export_library", "import_pdf", "import_references", "import_zotero", "run_search", "undo_import", "remove_search", "find_pdf", "import_url", "organise_papers", "edit_section", "set_outline", "export_note", "save_note_to_notion", "resolve_note_save", "restyle_docx", "import_docx_references", "import_manuscript"];
 /// The tools that write a manuscript (`compose`).
 pub const MANUSCRIPT: [&str; 2] = ["edit_section", "set_outline"];
 
@@ -427,6 +427,15 @@ pub fn catalog() -> Vec<ToolDef> {
             }),
             &["path"],
         ),
+        scoped(
+            "import_manuscript",
+            "导入稿件",
+            "把一个在别处写好的稿件文件导入写作页，成为一份新稿件，等同于用户在写作页点「导入」：Word（.docx）、Markdown（.md）或纯文本（.txt）。原文件不改。正文按文件的标题分节（Word 文件没有用标题样式时，按看起来像标题的段落分节，结果的 guessedHeadings 列出它们，用户可以在写作页调整）；Word 文件里的批注一起带进来，表格和图片留在文件的副本里，从写作页导出 Word 时还在原处。正文里的引用保持文件里的写法，不会变成文献库的引用；要把文件参考文献表里的文献收进文献库，另用 import_docx_references。同一个文件已经是稿件时不会再导入一份（already 为 true）。导入后用 read_manuscript 读它、comment_manuscript 留审阅意见、edit_section 改它。",
+            json!({
+                "path": {"type": "string", "description": "本机稿件文件的路径：.docx、.md、.markdown 或 .txt。"}
+            }),
+            &["path"],
+        ),
         scoped("list_manuscripts", "稿件列表", "列出用户在写作页的稿件：题目、语言、各节的名称、属于论文的哪一部分和字数。只读。", json!({}), &[]),
         scoped(
             "read_manuscript",
@@ -595,6 +604,9 @@ pub fn describe_result(result: &Result<Value, String>) -> String {
                     (0, _) => format!("「{name}」的 {missed} 处没有对上原文，没有改"),
                     _ => format!("已写入「{name}」，另有 {missed} 处没有对上原文"),
                 }
+            } else if let (Some(file), Some(sections)) = (value["file"].as_str(), value["manuscript"]["sections"].as_array()) {
+                let title = value["manuscript"]["title"].as_str().unwrap_or("");
+                if value["already"] == true { format!("「{file}」已经是稿件《{title}》") } else { format!("已导入「{file}」：{} 节", sections.len()) }
             } else if let (Some(sections), Some(_)) = (value["sections"].as_array(), value["added"].as_array()) {
                 format!("大纲现有 {} 节", sections.len())
             } else if let Some(manuscripts) = value["manuscripts"].as_array() {
@@ -706,6 +718,7 @@ fn dispatch(store: &mut Store, info: &LibraryInfo, name: &str, args: &Value, fet
         "read_docx_citations" => local::read_docx_citations(store, args, fetch),
         "restyle_docx" => local::restyle_docx(store, info, args, fetch),
         "import_docx_references" => local::import_docx_references(store, args, fetch),
+        "import_manuscript" => local::import_manuscript(store, args),
         "list_manuscripts" => list_manuscripts(store),
         "read_manuscript" => read_manuscript(store, args),
         "comment_manuscript" => comment_manuscript(store, args),
@@ -1595,6 +1608,7 @@ pub fn preview_call(store: &Store, name: &str, args: &Value) -> Result<Vec<Strin
         }
         "resolve_note_save" => Ok(vec![format!("仅在已手动核对 Notion 后确认：{}。", if args["saved"] == true { "笔记已成功写入" } else { "完全没有写入（不是部分写入）" }), format!("记录：{}；页面：{}", args["id"].as_str().unwrap_or(""), args["page"].as_str().unwrap_or(""))]),
         "edit_section" | "set_outline" => crate::compose::preview(store, name, args).map_err(|e| format!("{e:#}")),
+        "import_manuscript" => local::preview_manuscript(store, args).map_err(|e| format!("{e:#}")),
         _ => Ok(vec![]),
     }
 }
@@ -2649,7 +2663,7 @@ pub(crate) mod tests {
             // Only a tool that changes the library has anything to ask the person about.
             assert!(tool.writes || !tool.confirm, "{}", tool.name);
         }
-        assert_eq!(library_catalog().iter().filter(|tool| tool.confirm).map(|tool| tool.name).collect::<Vec<_>>().len(), 17);
+        assert_eq!(library_catalog().iter().filter(|tool| tool.confirm).map(|tool| tool.name).collect::<Vec<_>>().len(), 18);
         // The tools that write a manuscript are asked about outside the conversation that writes it.
         assert!(MANUSCRIPT.iter().all(|name| catalog().iter().any(|tool| tool.name == *name && tool.writes && tool.confirm)));
         std::fs::remove_dir_all(root).ok();
@@ -2684,6 +2698,56 @@ pub(crate) mod tests {
         assert!(call(&root, "restyle_docx", &json!({"path": path, "style": "numeric"})).unwrap_err().contains("csl:nature"));
         assert!(call(&root, "read_docx_citations", &json!({"path": root.join("x.pdf")})).is_err());
         assert!(catalog().iter().any(|tool| tool.name == "restyle_docx" && tool.writes && tool.confirm) && catalog().iter().any(|tool| tool.name == "read_docx_citations" && !tool.writes));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_file_written_elsewhere_becomes_a_manuscript_of_the_writing_page() {
+        let (root, _) = sample();
+        let dir = crate::libraries::list(&root)[0].dir.clone();
+        // The empty manuscript 写作 opens a library with.
+        let blank = Store::open(&dir).unwrap().create_manuscript("", crate::manuscript::DEFAULT_LANGUAGE).unwrap();
+        let p = |text: &str| format!("<w:p><w:r><w:t xml:space=\"preserve\">{text}</w:t></w:r></w:p>");
+        let h = |text: &str| format!("<w:p><w:pPr><w:pStyle w:val=\"1\"/></w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>");
+        let source = crate::docx::tests::file(&format!("{}{}{}{}{}{}", h("Introduction"), p("Roots grow down [1]."), h("Results"), p("Stem cells stay put."), h("References"), p("[1] Zhang W. Root hairs take up water. Plant Cell. 2021.")), "");
+        let path = root.join("Roots v3.docx");
+        std::fs::write(&path, &source).unwrap();
+        let card = preview_call(&Store::open(&dir).unwrap(), "import_manuscript", &json!({"path": path})).unwrap();
+        assert!(card[0].contains("Roots v3.docx") && card[1].starts_with("3 节：Introduction、Results、References"), "{card:?}");
+        let done = call(&root, "import_manuscript", &json!({"path": path})).unwrap();
+        assert_eq!((done["file"].as_str(), done["manuscript"]["sections"].as_array().map(Vec::len), done["retiredBlank"].as_u64(), done["guessedHeadings"].clone()), (Some("Roots v3.docx"), Some(3), Some(1), json!([])));
+        assert_eq!(describe_result(&Ok(done.clone())), "已导入「Roots v3.docx」：3 节");
+        // It is a manuscript like any other from then on, the blank one gave way, and the file is as it was.
+        let listed = call(&root, "list_manuscripts", &json!({})).unwrap();
+        assert_eq!((listed["manuscripts"].as_array().map(Vec::len), listed["manuscripts"][0]["id"].clone()), (Some(1), done["manuscript"]["id"].clone()));
+        assert!(listed["manuscripts"].as_array().unwrap().iter().all(|m| m["id"] != json!(blank.id)));
+        assert_eq!(call(&root, "read_manuscript", &json!({"section": "Introduction"})).unwrap()["sections"][0]["body"], "Roots grow down [1].");
+        assert_eq!(std::fs::read(&path).unwrap(), source);
+        // The same file is not taken in twice, under whatever name.
+        let copy = root.join("copy.docx");
+        std::fs::write(&copy, &source).unwrap();
+        let again = call(&root, "import_manuscript", &json!({"path": copy})).unwrap();
+        assert_eq!((again["already"].as_bool(), again["manuscript"]["id"].clone()), (Some(true), done["manuscript"]["id"].clone()));
+        assert!(preview_call(&Store::open(&dir).unwrap(), "import_manuscript", &json!({"path": copy})).unwrap()[0].contains("已经是写作页的稿件"));
+        assert_eq!(call(&root, "list_manuscripts", &json!({})).unwrap()["manuscripts"].as_array().map(Vec::len), Some(1));
+        // Markdown and plain text too; a file without heading styles is cut at what looks like headings, and said so.
+        let notes = root.join("notes.md");
+        std::fs::write(&notes, "# 根的综述\n\n## 引言\n\n根向下生长，吸收水分。\n\n## 讨论\n\n还有很多不清楚的地方。\n").unwrap();
+        let taken = call(&root, "import_manuscript", &json!({"path": notes})).unwrap();
+        assert_eq!((taken["manuscript"]["title"].as_str(), taken["manuscript"]["sections"].as_array().map(Vec::len)), (Some("根的综述"), Some(2)));
+        assert_eq!(call(&root, "import_manuscript", &json!({"path": notes})).unwrap()["already"], true);
+        let plain = crate::docx::tests::file(&format!("{}{}{}{}{}", p("根尖干细胞的研究进展"), p("一、引言"), p("根向下生长，吸收水分，这是一段足够长的正文，用来和标题区分开。"), p("二、结果"), p("干细胞留在原处，这也是一段足够长的正文，用来和标题区分开。")), "");
+        let unstyled = root.join("无样式.docx");
+        std::fs::write(&unstyled, &plain).unwrap();
+        let guessed = call(&root, "import_manuscript", &json!({"path": unstyled})).unwrap();
+        assert_eq!(guessed["guessedHeadings"], json!(["一、引言", "二、结果"]));
+        assert!(guessed["notes"].as_array().unwrap().iter().any(|note| note.as_str().unwrap().contains("没有用标题样式")));
+        // What is no manuscript file is said, an old .doc with what to do about it.
+        std::fs::write(root.join("old.doc"), b"x").unwrap();
+        assert!(call(&root, "import_manuscript", &json!({"path": root.join("old.doc")})).unwrap_err().contains("另存为 .docx"));
+        std::fs::write(root.join("x.pdf"), b"x").unwrap();
+        assert!(call(&root, "import_manuscript", &json!({"path": root.join("x.pdf")})).unwrap_err().contains(".docx"));
+        assert!(catalog().iter().any(|tool| tool.name == "import_manuscript" && tool.writes && tool.confirm) && !MANUSCRIPT.contains(&"import_manuscript"));
         std::fs::remove_dir_all(root).ok();
     }
 

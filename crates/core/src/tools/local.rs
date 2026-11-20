@@ -208,6 +208,109 @@ pub(super) fn import_docx_references(store: &mut Store, args: &Value, fetch: cra
     Ok(out)
 }
 
+/// A file a manuscript starts from, read as the window reads one handed to 写作 (`manuscript::from_word`,
+/// `from_markdown`): a Word file is kept whole beside the manuscript, any other only as its words.
+struct ManuscriptFile {
+    name: String,
+    draft: crate::manuscript::Draft,
+    kind: &'static str,
+    bytes: Option<Vec<u8>>,
+}
+
+fn manuscript_file(args: &Value) -> Result<ManuscriptFile> {
+    let path = input_path(args)?;
+    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    match extension.as_str() {
+        "docx" | "md" | "markdown" | "txt" => {}
+        "doc" => bail!("旧的 .doc 文件读不了：请先在 Word 里另存为 .docx。"),
+        _ => bail!("稿件可以从 Word（.docx）、Markdown（.md）或纯文本（.txt）文件导入：{}", path.display()),
+    }
+    let bytes = std::fs::read(&path).with_context(|| format!("无法读取 {}", path.display()))?;
+    if extension == "docx" {
+        let read = crate::docx::read(&bytes)?;
+        return Ok(ManuscriptFile { draft: crate::manuscript::from_word(&read, &name), name, kind: "docx", bytes: Some(bytes) });
+    }
+    Ok(ManuscriptFile { draft: crate::manuscript::from_markdown(&String::from_utf8_lossy(&bytes), &name), name, kind: "markdown", bytes: None })
+}
+
+impl ManuscriptFile {
+    /// The headings of a Word file without heading styles that it is cut at: those that look most like ones.
+    fn guessed(&self) -> Vec<&str> {
+        self.draft.headings.iter().filter(|guess| guess.likely).map(|guess| guess.text.as_str()).collect()
+    }
+
+    /// What the file holds besides its sections, as the window says it after taking one in.
+    fn besides(&self) -> Vec<String> {
+        let draft = &self.draft;
+        let mut lines = vec![];
+        if !draft.comments.is_empty() { lines.push(format!("文件里的 {} 条批注一起带进来。", draft.comments.len())) }
+        let kept: Vec<String> = [(draft.tables, "个表格"), (draft.pictures, "张图")].iter().filter(|(count, _)| *count > 0).map(|(count, what)| format!("{count} {what}")).collect();
+        if !kept.is_empty() { lines.push(format!("{}留在 Word 文件里，导出时还在原处。", kept.join("、"))) }
+        if draft.tracked { lines.push("文件里未接受的修订按接受后的文字读入。".to_string()) }
+        if !draft.headings.is_empty() { lines.push("这个 Word 文件没有用标题样式：按看起来像标题的段落分节，导入后可以在写作页用「设为标题」「并入上一节」调整。".to_string()) }
+        lines
+    }
+
+    /// The manuscript of the writing page that already is this file: a Word file by its bytes, any other by its
+    /// name while not a word of it was changed.
+    fn already(&self, store: &Store) -> Result<Option<crate::manuscript::Manuscript>> {
+        for manuscript in store.manuscripts()? {
+            let Some(source) = store.manuscript_source(&manuscript.id)? else { continue };
+            let same = match &self.bytes {
+                Some(bytes) => {
+                    let kept = store.source_file(&source);
+                    source.kind == self.kind && std::fs::metadata(&kept).is_ok_and(|kept| kept.len() == bytes.len() as u64) && std::fs::read(&kept).is_ok_and(|kept| kept == *bytes)
+                }
+                None => source.kind == self.kind && source.name == self.name && manuscript.sections.len() == self.draft.sections.len() && manuscript.sections.iter().zip(&self.draft.sections).all(|(kept, read)| kept.body == read.paragraphs.join("\n\n")),
+            };
+            if same { return Ok(Some(manuscript)) }
+        }
+        Ok(None)
+    }
+}
+
+fn manuscript_json(manuscript: &crate::manuscript::Manuscript) -> Value {
+    json!({
+        "id": manuscript.id, "title": manuscript.shown_title(), "language": manuscript.language,
+        "sections": manuscript.sections.iter().map(|s| json!({"id": s.id, "name": s.name, "kind": s.kind, "characters": s.body.chars().count()})).collect::<Vec<_>>(),
+    })
+}
+
+/// What `import_manuscript` would bring to the writing page, for the card that asks the person.
+pub(super) fn preview_manuscript(store: &Store, args: &Value) -> Result<Vec<String>> {
+    let file = manuscript_file(args)?;
+    if let Some(manuscript) = file.already(store)? { return Ok(vec![format!("「{}」已经是写作页的稿件《{}》，不会再导入一份。", file.name, manuscript.shown_title())]) }
+    let names: Vec<&str> = file.draft.sections.iter().map(|section| section.name.as_str()).collect();
+    let (shown, more) = (names.iter().take(12).copied().collect::<Vec<_>>().join("、"), names.len().saturating_sub(12));
+    let mut lines = vec![format!("把「{}」导入写作页，成为一份新稿件；原文件不会改动。", file.name), format!("{} 节：{shown}{}", names.len(), if more > 0 { "…" } else { "" })];
+    lines.extend(file.besides());
+    Ok(lines)
+}
+
+/// A manuscript of the writing page made of a file written elsewhere (`Store::import_manuscript`), as 写作's own
+/// 导入 makes one: sections at the file's headings, its comments, a Word file's copy to export from. The file is
+/// not changed, and one that already is a manuscript is not taken in again.
+pub(super) fn import_manuscript(store: &mut Store, args: &Value) -> Result<Value> {
+    let file = manuscript_file(args)?;
+    if let Some(manuscript) = file.already(store)? {
+        return Ok(json!({"already": true, "file": file.name, "manuscript": manuscript_json(&manuscript), "next": "这个文件已经是写作页的稿件，没有再导入一份。告诉用户它在写作页；要读它用 read_manuscript，要留审阅意见用 comment_manuscript。"}));
+    }
+    let made = store.import_manuscript(&file.draft, file.kind, &file.name, file.bytes.as_deref())?;
+    // The empty manuscript 写作 opened the library with gives way to the real one.
+    let retired = store.retire_blank_manuscripts(&made.id)?;
+    let draft = &file.draft;
+    Ok(json!({
+        "file": file.name,
+        "manuscript": manuscript_json(&made),
+        "comments": draft.comments.len(), "tables": draft.tables, "pictures": draft.pictures, "trackedChanges": draft.tracked,
+        "guessedHeadings": file.guessed(),
+        "retiredBlank": retired.len(),
+        "notes": file.besides(),
+        "next": "稿件已在写作页，原文件没有改动。告诉用户题目、分了几节和 notes 里的情况；正文里的引用还是文件里写的文字，没有变成文献库的引用。之后它是写作页的稿件：读它用 read_manuscript，留审阅意见用 comment_manuscript，改它用 edit_section。",
+    }))
+}
+
 pub(super) fn restyle_docx(store: &Store, info: &LibraryInfo, args: &Value, fetch: crate::sources::Fetch) -> Result<Value> {
     let root = info.dir.parent().map(Path::to_path_buf).unwrap_or_else(|| info.dir.clone());
     let style = match (text(args, "csl")?, text(args, "style")?) {
