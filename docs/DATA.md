@@ -8,6 +8,7 @@
 | 历史对话（问题、回答、随问题发出的图片） | 各文献库的 `wisp-paper.sqlite` 里，随文献库文件夹一起走；在「历史」里删除一条对话是真的删除 |
 | Notion 笔记保存记录 | 各文献库的 `wisp-paper.sqlite` 中 `note_saves` 表，保存父页面、笔记页面 ID、草稿指纹及写入状态；不保存另一份笔记正文或令牌 |
 | PDF 标注（下划线、高亮、原文、页码、坐标、笔记） | 文献库的 `wisp-paper.sqlite` 中 `pdf_annotations` 表；原 PDF 不改写，备份时需连同数据库一起保存；删除标注或移除其附件会删除对应标注记录 |
+| 自己添加的引用样式（CSL，Zotero 用的 `.csl` 文件） | `文档/WispPaper/styles/`；被同名文件替换掉的旧内容留在 `styles/removed/` |
 | 被移除的文献库、附件、图片 | 同目录下的 `removed/`（只移动，不删除）；唯一的例外是回收站：从回收站「彻底删除」或「清空回收站」的文献，PDF 和图片直接从磁盘删除 |
 | 筛选的每一轮（目标、开始时间、当时各状态的篇数） | 文献库的 `wisp-paper.sqlite` 中 `screening_rounds` 表 |
 | 撤销一次导入时移出的文献记录 | 文献库文件夹里的 `removed/undone-import-<批次号>.bib`（BibTeX，可以再导入）；处理过的文献不移出 |

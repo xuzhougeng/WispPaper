@@ -39,7 +39,7 @@ pub struct ToolDef {
 }
 
 /// The tools that change the library.
-const WRITING: [&str; 20] = ["create_library", "import_library", "export_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "suggest_field", "sync_searches", "find_pdf", "organise_papers", "edit_section", "set_outline", "export_note", "save_note_to_notion", "resolve_note_save"];
+const WRITING: [&str; 21] = ["create_library", "import_library", "export_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "suggest_field", "sync_searches", "find_pdf", "organise_papers", "edit_section", "set_outline", "export_note", "save_note_to_notion", "resolve_note_save", "save_cite_style"];
 /// Of those, the ones the window's assistant runs only with the person's
 /// consent. Saving a search, suggesting a screening decision or proposing
 /// a field's value changes nothing a person has not yet to act on, so they
@@ -349,6 +349,36 @@ pub fn catalog() -> Vec<ToolDef> {
             }),
             &["changes"],
         ),
+        scoped("list_cite_styles", "引用样式列表", "列出导出 Word 时可用的引用样式（CSL，与 Zotero 用的是同一种定义文件）：common 是常用的内置样式，added 是用户添加的和 Zotero 里装的，builtin 是全部内置样式。每个样式有 key 和名称。只读。", json!({}), &[]),
+        scoped(
+            "read_cite_style",
+            "读取引用样式",
+            "读取一个引用样式的 CSL 定义（XML）。用户想要一个内置样式稍作改动的版本时，先读最接近的那个，在它的基础上改，再用 try_cite_style 试排、save_cite_style 保存。只读。",
+            json!({"style": {"type": "string", "description": "样式的 key，来自 list_cite_styles，例如 csl:nature、file:my-journal.csl。"}}),
+            &["style"],
+        ),
+        scoped(
+            "try_cite_style",
+            "试排引用样式",
+            "用文献库里的文献试排一个引用样式，不保存：返回正文里的引用（单篇、多篇）和参考文献条目各是什么样子，italic、bold、superscript 标出斜体、粗体、上标的文字。改 CSL 时每改一次都先试排，把结果给用户看。CSL 写错时返回错误所在。只读。文献记录里没有卷、期、页码，试排结果里也不会有。",
+            json!({
+                "csl": {"type": "string", "description": "要试的 CSL 定义（完整的 XML）。与 style 二选一。"},
+                "style": {"type": "string", "description": "已有样式的 key。与 csl 二选一。"},
+                "paperIds": {"type": "array", "items": {"type": "string"}, "description": "用哪些文献试排；省略时取文献库里最近的几篇。"},
+                "language": {"type": "string", "description": "稿件的语言代码（en、zh…），决定 et al. 与「等」这类用语；省略为 en。"}
+            }),
+            &[],
+        ),
+        scoped(
+            "save_cite_style",
+            "保存引用样式",
+            "把一份 CSL 定义保存为用户的引用样式（数据文件夹的 styles/ 下），之后出现在写作页「导出」菜单的引用样式里，由用户自己选用。保存前先用 try_cite_style 试排并得到用户认可。<info> 里的 <title> 是菜单里显示的名称，<id> 要与原样式不同。同名文件会被替换，原来的内容留在 styles/removed/。返回样式的 key 和试排结果。",
+            json!({
+                "name": {"type": "string", "description": "文件名，例如 my-journal.csl；只用字母、数字和连字符。"},
+                "csl": {"type": "string", "description": "完整的 CSL 定义（XML）。"}
+            }),
+            &["name", "csl"],
+        ),
         scoped("list_manuscripts", "稿件列表", "列出用户在写作页的稿件：题目、语言、各节的名称、属于论文的哪一部分和字数。只读。", json!({}), &[]),
         scoped(
             "read_manuscript",
@@ -570,6 +600,32 @@ fn dispatch(store: &mut Store, info: &LibraryInfo, name: &str, args: &Value, fet
         "suggest_screening" => suggest_screening(store, info, args),
         "suggest_field" => suggest_field(store, args),
         "organise_papers" => Ok(organise::report(&store.organise(&organise::parse(args).map_err(|e| anyhow!(e))?)?)),
+        "list_cite_styles" => Ok(cite_styles(&data_root(info))),
+        "read_cite_style" => {
+            let key = text(args, "style")?;
+            if key.is_empty() { bail!("需要 style：样式的 key，见 list_cite_styles。") }
+            Ok(json!({"style": key, "csl": crate::csl::xml_of(key, &data_root(info))?}))
+        }
+        "try_cite_style" => {
+            let root = data_root(info);
+            let style = match (text(args, "csl")?, text(args, "style")?) {
+                ("", "") => bail!("需要 csl（一份 CSL 定义）或 style（已有样式的 key）。"),
+                ("", key) => crate::csl::load(key, &root)?,
+                (xml, _) => crate::csl::parse(xml, &root)?,
+            };
+            cite_preview(store, &style, args)
+        }
+        "save_cite_style" => {
+            let (name, xml) = (text(args, "name")?, text(args, "csl")?);
+            if name.is_empty() || xml.is_empty() { bail!("需要 name（文件名）和 csl（完整的 CSL 定义）。") }
+            let root = data_root(info);
+            let saved = crate::csl::save(&root, name, xml)?;
+            let mut out = cite_preview(store, &crate::csl::load(&saved.key, &root)?, args)?;
+            out["style"] = json!(saved.key);
+            out["name"] = json!(saved.name);
+            out["next"] = json!("已保存。请告诉用户：在写作页「导出」菜单的引用样式里选它，导出 Word 时就按它写引用。");
+            Ok(out)
+        }
         "list_manuscripts" => list_manuscripts(store),
         "read_manuscript" => read_manuscript(store, args),
         "edit_section" => crate::compose::edit(store, args),
@@ -1433,6 +1489,46 @@ pub fn preview_call(store: &Store, name: &str, args: &Value) -> Result<Vec<Strin
         "edit_section" | "set_outline" => crate::compose::preview(store, name, args).map_err(|e| format!("{e:#}")),
         _ => Ok(vec![]),
     }
+}
+
+/// The folder that holds the libraries: the citation styles the person added are kept beside them (`csl::FOLDER`).
+fn data_root(info: &LibraryInfo) -> std::path::PathBuf {
+    info.dir.parent().map(Path::to_path_buf).unwrap_or_else(|| info.dir.clone())
+}
+
+fn cite_styles(root: &Path) -> Value {
+    let listed = |styles: Vec<crate::csl::Listed>| styles.into_iter().map(|style| json!({"key": style.key, "name": style.name})).collect::<Vec<_>>();
+    json!({"common": listed(crate::csl::common()), "added": listed(crate::csl::added(root)), "builtin": listed(crate::csl::bundled()), "simple": [{"key": "author-year", "name": "作者-年份"}, {"key": "numeric", "name": "编号"}]})
+}
+
+/// A style tried on papers of the library: one cited alone, several together, and their entries in the list.
+fn cite_preview(store: &mut Store, style: &crate::csl::Loaded, args: &Value) -> Result<Value> {
+    let asked: Vec<&str> = args["paperIds"].as_array().map(|ids| ids.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+    let mut papers = store.list_papers()?;
+    if asked.is_empty() {
+        // The latest few that have what an entry is made of.
+        papers.retain(|paper| !paper.authors.trim().is_empty() && paper.year.is_some());
+        papers.sort_by(|a, b| b.added_at.cmp(&a.added_at));
+        papers.truncate(4);
+    } else {
+        papers.retain(|paper| asked.contains(&paper.id.as_str()));
+    }
+    if papers.is_empty() { bail!("文献库里没有可以用来试排的文献（需要有作者和年份）。") }
+    let all: Vec<&Paper> = papers.iter().collect();
+    let groups: Vec<Vec<&Paper>> = [vec![all[0]], all.clone()].into_iter().take(if all.len() > 1 { 2 } else { 1 }).collect();
+    let (cited, list) = crate::csl::render(style, &groups, match text(args, "language")? { "" => "en", language => language });
+    let shown = |rich: &crate::cite::Rich| {
+        let mut out = json!({"text": rich.text});
+        for (name, has) in [("italic", (|look: &crate::docx::Look| look.italic) as fn(&crate::docx::Look) -> bool), ("bold", |look| look.bold), ("superscript", |look| look.sup), ("subscript", |look| look.sub), ("smallCaps", |look| look.small_caps), ("underline", |look| look.underline)] {
+            let words: Vec<&str> = rich.looks.iter().filter(|(_, look)| has(look)).map(|(range, _)| &rich.text[range.clone()]).collect();
+            if !words.is_empty() { out[name] = json!(words) }
+        }
+        out
+    };
+    Ok(json!({
+        "citations": cited.iter().zip(&groups).map(|(rich, group)| { let mut out = shown(rich); out["papers"] = json!(group.len()); out }).collect::<Vec<_>>(),
+        "references": list.iter().map(|(_, rich)| shown(rich)).collect::<Vec<_>>(),
+    }))
 }
 
 fn list_manuscripts(store: &mut Store) -> Result<Value> {
@@ -2372,6 +2468,35 @@ pub(crate) mod tests {
         assert_eq!(library_catalog().iter().filter(|tool| tool.confirm).map(|tool| tool.name).collect::<Vec<_>>().len(), 14);
         // The tools that write a manuscript are asked about outside the conversation that writes it.
         assert!(MANUSCRIPT.iter().all(|name| catalog().iter().any(|tool| tool.name == *name && tool.writes && tool.confirm)));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_cite_style_is_read_tried_and_saved_for_the_person_to_choose() {
+        let (root, _) = sample();
+        let listed = call(&root, "list_cite_styles", &json!({})).unwrap();
+        assert!(listed["common"].as_array().unwrap().iter().any(|style| style["key"] == "csl:nature") && listed["added"].as_array().unwrap().iter().all(|style| !style["key"].as_str().unwrap().starts_with("file:")));
+        // A built-in style is written out as the XML a changed one starts from.
+        let xml = call(&root, "read_cite_style", &json!({"style": "csl:nature"})).unwrap()["csl"].as_str().unwrap().to_string();
+        assert!(xml.contains("<citation") && xml.contains("vertical-align=\"sup\""), "{}", &xml[..xml.len().min(600)]);
+        let tried = call(&root, "try_cite_style", &json!({"style": "csl:nature"})).unwrap();
+        assert_eq!((tried["citations"][0]["text"].as_str(), tried["citations"][0]["superscript"][0].as_str()), (Some("1"), Some("1")));
+        assert!(tried["references"][0]["text"].as_str().unwrap().starts_with("1. "), "{tried}");
+        // Changed: brackets on the line instead of a raised number. Tried without being kept, then saved.
+        let mine = xml.replace("vertical-align=\"sup\"", "prefix=\"[\" suffix=\"]\"").replace("<title>Nature</title>", "<title>Nature, in brackets</title>");
+        assert_ne!(mine, xml);
+        let tried = call(&root, "try_cite_style", &json!({"csl": mine})).unwrap();
+        assert_eq!((tried["citations"][0]["text"].as_str(), tried["citations"][0].get("superscript")), (Some("[1]"), None), "{tried}");
+        assert!(crate::csl::added(&root).iter().all(|style| !style.key.starts_with("file:")));
+        assert!(call(&root, "try_cite_style", &json!({"csl": "<style>"})).unwrap_err().contains("CSL"));
+        let saved = call(&root, "save_cite_style", &json!({"name": "nature-brackets", "csl": mine})).unwrap();
+        assert_eq!((saved["style"].as_str(), saved["name"].as_str(), saved["citations"][0]["text"].as_str()), (Some("file:nature-brackets.csl"), Some("Nature, in brackets"), Some("[1]")));
+        assert!(crate::csl::added(&root).iter().any(|style| style.key == "file:nature-brackets.csl"));
+        // Saved again saying something else: what it said before is kept.
+        call(&root, "save_cite_style", &json!({"name": "nature-brackets.csl", "csl": mine.replace("in brackets", "bracketed")})).unwrap();
+        assert_eq!(std::fs::read_dir(root.join("styles/removed")).unwrap().count(), 1);
+        assert!(call(&root, "save_cite_style", &json!({"name": "../x", "csl": mine})).unwrap_err().contains("文件名"));
+        assert!(catalog().iter().any(|tool| tool.name == "save_cite_style" && tool.writes && !tool.confirm));
         std::fs::remove_dir_all(root).ok();
     }
 }

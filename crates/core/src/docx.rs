@@ -549,7 +549,9 @@ fn width(items: &[Item]) -> usize {
 }
 
 /// Put `xml` at byte `at` of the text these items hold, cutting a run where it falls inside one. Whether it found the place.
-fn place(items: &mut Vec<Item>, pos: &mut usize, at: usize, xml: &str, end: bool) -> bool {
+///
+/// `through`: the thing is a field's mark, which stands inside an insertion like the words it is about.
+fn place(items: &mut Vec<Item>, pos: &mut usize, at: usize, xml: &str, end: bool, through: bool) -> bool {
     let mut n = 0;
     while n < items.len() {
         let mut cut = None;
@@ -558,13 +560,13 @@ fn place(items: &mut Vec<Item>, pos: &mut usize, at: usize, xml: &str, end: bool
             // A revision is not cut by a range: one that starts or ends in another's insertion or in one just made
             // stands before or after all of it. A mark inside `w:ins` is itself read as inserted, and some readers
             // (LibreOffice) then take the words the range covers before the insertion as inserted too.
-            Item::Wrap { items: inner, ins: true, .. } => {
+            Item::Wrap { items: inner, ins: true, .. } if !through => {
                 let (from, to) = (*pos, *pos + width(inner));
                 *pos = to;
                 if if end { from < at && at <= to } else { from <= at && at < to } { cut = Some((if end { n + 1 } else { n }, None)) }
             }
             Item::Wrap { items: inner, .. } => {
-                if place(inner, pos, at, xml, end) { return true }
+                if place(inner, pos, at, xml, end, through) { return true }
             }
             Item::Run(run) => {
                 let (from, to) = (*pos, *pos + run.len());
@@ -634,8 +636,12 @@ impl Para {
 
     /// Put something without width at byte `at` of the text: where a comment's range starts, or (`end`) where it ends.
     fn insert(&mut self, at: usize, xml: &str, end: bool) {
+        self.insert_as(at, xml, end, false)
+    }
+
+    fn insert_as(&mut self, at: usize, xml: &str, end: bool, through: bool) {
         let mut pos = 0;
-        if place(&mut self.items, &mut pos, at, xml, end) { return }
+        if place(&mut self.items, &mut pos, at, xml, end, through) { return }
         // Before all text, or after all of it.
         if end && at == 0 { self.items.insert(0, Item::Raw(xml.to_string())) } else { self.items.push(Item::Raw(xml.to_string())) }
     }
@@ -1262,11 +1268,32 @@ pub fn read(bytes: &[u8]) -> Result<Read> {
 // ---- writing again
 
 /// What a paragraph of the manuscript is in the document.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Role {
     Title,
     Heading,
+    #[default]
     Body,
+}
+
+/// How some words are set apart from those around them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Look {
+    pub italic: bool,
+    pub bold: bool,
+    pub sup: bool,
+    pub sub: bool,
+    pub small_caps: bool,
+    pub underline: bool,
+}
+
+/// Words that lead to another paragraph when clicked: a citation, to its entry in the reference list.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Link {
+    /// In bytes of the paragraph's text.
+    pub range: Range<usize>,
+    /// The `anchor` of the paragraph it leads to.
+    pub to: String,
 }
 
 /// A comment to put on a paragraph.
@@ -1281,11 +1308,16 @@ pub struct Note {
 }
 
 /// A paragraph of the manuscript as it stands now.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Wanted {
     pub text: String,
     pub role: Role,
     pub notes: Vec<Note>,
+    /// What links lead here by: the paragraph is bookmarked under a name made for it.
+    pub anchor: Option<String>,
+    /// Written as Word's fields (`HYPERLINK \l`), which jump to the bookmark; one whose anchor no paragraph has is left out.
+    pub links: Vec<Link>,
+    pub looks: Vec<(Range<usize>, Look)>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1361,6 +1393,89 @@ fn noted(xml: String, notes: &[Note], comments: &mut Comments) -> String {
     para.xml()
 }
 
+/// The children of `w:rPr` in the order the format wants them, as far as a look sets one.
+const RPR_ORDER: [&str; 24] = ["w:rStyle", "w:rFonts", "w:b", "w:bCs", "w:i", "w:iCs", "w:caps", "w:smallCaps", "w:strike", "w:dstrike", "w:outline", "w:shadow", "w:emboss", "w:imprint", "w:noProof", "w:snapToGrid", "w:vanish", "w:webHidden", "w:color", "w:spacing", "w:w", "w:kern", "w:position", "w:sz"];
+const RPR_LATE: [&str; 9] = ["w:szCs", "w:highlight", "w:u", "w:effect", "w:bdr", "w:shd", "w:fitText", "w:vertAlign", "w:rtl"];
+
+/// A run's properties with a look added: each of its settings in the place the format gives it, instead of one the run had.
+fn with_look(rpr: &str, look: Look) -> String {
+    let rank = |name: &str| RPR_ORDER.iter().chain(&RPR_LATE).position(|known| *known == name).unwrap_or(usize::MAX);
+    let mut kids: Vec<(String, String)> = children(inside(rpr)).into_iter().map(|(name, piece)| (name.to_string(), piece.to_string())).collect();
+    let align = if look.sup { Some("superscript") } else if look.sub { Some("subscript") } else { None };
+    let add = [(look.bold, "w:b", "<w:b/>".to_string()), (look.italic, "w:i", "<w:i/>".to_string()), (look.small_caps, "w:smallCaps", "<w:smallCaps/>".to_string()), (look.underline, "w:u", "<w:u w:val=\"single\"/>".to_string()), (align.is_some(), "w:vertAlign", format!("<w:vertAlign w:val=\"{}\"/>", align.unwrap_or_default()))];
+    for (on, name, xml) in add {
+        if !on { continue }
+        kids.retain(|(kid, _)| kid != name);
+        let at = kids.iter().position(|(kid, _)| !kid.is_empty() && rank(kid) > rank(name)).unwrap_or(kids.len());
+        kids.insert(at, (name.to_string(), xml));
+    }
+    format!("<w:rPr>{}</w:rPr>", kids.into_iter().map(|(_, xml)| xml).collect::<String>())
+}
+
+/// Give the text of `range` a look, cutting the runs it starts and ends in.
+fn restyle(items: &mut Vec<Item>, pos: &mut usize, range: &Range<usize>, look: Look) {
+    let mut n = 0;
+    while n < items.len() {
+        let mut cut = None;
+        match &mut items[n] {
+            Item::Raw(_) => {}
+            Item::Wrap { items: inner, .. } => restyle(inner, pos, range, look),
+            Item::Run(run) => {
+                let (from, to) = (*pos, *pos + run.len());
+                if from < range.end && range.start < to {
+                    if range.start > from {
+                        // What is before the range stays as it is; the rest is looked at again.
+                        cut = Some(run.split(range.start - from));
+                        *pos = range.start;
+                    } else {
+                        if range.end < to { cut = Some(run.split(range.end - from)) }
+                        run.rpr = with_look(&run.rpr, look);
+                        *pos += run.len();
+                    }
+                } else {
+                    *pos = to;
+                }
+            }
+        }
+        // A run that cannot be cut there (a tab) keeps what it has: nothing comes of the cut.
+        if let Some(right) = cut.filter(|right| !right.parts.is_empty()) { items.insert(n + 1, Item::Run(right)) }
+        n += 1;
+    }
+}
+
+/// The bookmarks links lead to, by the anchor of the paragraph each is on: its number among the document's marks, and its name.
+type Anchors = BTreeMap<String, (u32, String)>;
+
+/// A bookmark's name begins so: with `_`, Word keeps it out of the list of bookmarks a person made.
+const BOOKMARK: &str = "_WPREF_";
+
+/// A paragraph with its looks, its links as fields and its bookmark. `xml` says the paragraph's text with the file's own spaces around it.
+fn dressed(xml: String, wanted: &Wanted, anchors: &Anchors) -> String {
+    let anchor = wanted.anchor.as_ref().and_then(|anchor| anchors.get(anchor));
+    if wanted.looks.is_empty() && anchor.is_none() && !wanted.links.iter().any(|link| anchors.contains_key(&link.to)) { return xml }
+    let mut para = Para::parse(&xml);
+    let text = para.text();
+    let lead = text.len() - text.trim_start().len();
+    let length = text.trim().len();
+    let within = |range: &Range<usize>| (text.floor_char_boundary(lead + range.start.min(length)), text.floor_char_boundary(lead + range.end.min(length)));
+    for (range, look) in &wanted.looks {
+        let (start, end) = within(range);
+        if end > start { restyle(&mut para.items, &mut 0, &(start..end), *look) }
+    }
+    for link in &wanted.links {
+        let (Some((_, name)), (start, end)) = (anchors.get(&link.to), within(&link.range)) else { continue };
+        if end <= start { continue }
+        // A field, as Word's own cross-references are: its code, then the words it shows, which stay the paragraph's runs.
+        para.insert_as(start, &format!("<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\"> HYPERLINK \\l \"{name}\" </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>"), false, true);
+        para.insert_as(end, "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>", true, true);
+    }
+    if let Some((id, name)) = anchor {
+        para.items.insert(0, Item::Raw(format!("<w:bookmarkStart w:id=\"{id}\" w:name=\"{name}\"/>")));
+        para.items.push(Item::Raw(format!("<w:bookmarkEnd w:id=\"{id}\"/>")));
+    }
+    para.xml()
+}
+
 /// The Word file `source` saying what `wanted` says, paragraph by
 /// paragraph, with the comments of `wanted`. See the top of this file for
 /// what is kept and how.
@@ -1381,7 +1496,14 @@ pub fn rewrite(source: &[u8], wanted: &[Wanted], options: &Options) -> Result<Re
         None => String::new(),
     };
     let mut comments = Comments { next: largest_id(&comments_xml, &["<w:comment "]).max(largest_id(&xml, &["<w:commentRangeStart", "<w:commentReference"])) + 1, added: String::new(), count: 0 };
-    let mut track = options.track.then(|| Track { author: options.author.clone(), date: options.date.clone(), next: largest_id(&xml, &[]) + 1 });
+    // The bookmarks take the numbers after the file's largest, the revisions those after them; a name is one the file has not got.
+    let named = xml.match_indices(BOOKMARK).filter_map(|(at, _)| xml[at + BOOKMARK.len()..].split(|c: char| !c.is_ascii_digit()).next()?.parse::<u32>().ok()).max().unwrap_or(0);
+    let mut anchors = Anchors::new();
+    for anchor in wanted.iter().filter_map(|wanted| wanted.anchor.as_ref()) {
+        let n = anchors.len() as u32 + 1;
+        anchors.entry(anchor.clone()).or_insert((largest_id(&xml, &[]) + n, format!("{BOOKMARK}{}", named + n)));
+    }
+    let mut track = options.track.then(|| Track { author: options.author.clone(), date: options.date.clone(), next: largest_id(&xml, &[]) + anchors.len() as u32 + 1 });
 
     // What each paragraph of the file is, a heading or text: by its style, and by what the manuscript takes it for. A new paragraph is set like the nearest of its kind.
     let mut heading: Vec<bool> = readable.iter().map(|&block| doc.para(block).outline().is_some() || styles.level(&doc.para(block).style()).is_some() || styles.named(&doc.para(block).style(), "title")).collect();
@@ -1410,12 +1532,12 @@ pub fn rewrite(source: &[u8], wanted: &[Wanted], options: &Options) -> Result<Re
             Step::Same(o, w) => {
                 let block = readable[o];
                 let written = std::mem::take(&mut out[block][0]);
-                out[block] = vec![noted(written, &wanted[w].notes, &mut comments)];
+                out[block] = vec![dressed(noted(written, &wanted[w].notes, &mut comments), &wanted[w], &anchors)];
                 (last, last_old, done.kept) = (Some(block), Some(o), done.kept + 1);
             }
             Step::Changed(o, w) => {
                 let block = readable[o];
-                out[block] = vec![noted(doc.para(block).edited(&wanted[w].text, track.as_mut()), &wanted[w].notes, &mut comments)];
+                out[block] = vec![dressed(noted(doc.para(block).edited(&wanted[w].text, track.as_mut()), &wanted[w].notes, &mut comments), &wanted[w], &anchors)];
                 (last, last_old, done.changed) = (Some(block), Some(o), done.changed + 1);
             }
             Step::Removed(o) => {
@@ -1430,7 +1552,7 @@ pub fn rewrite(source: &[u8], wanted: &[Wanted], options: &Options) -> Result<Re
             }
             Step::Added(w) => {
                 let (ppr, rpr) = template(w, last_old);
-                let para = noted(new_para(&ppr, &rpr, wanted[w].text.trim(), track.as_mut()), &wanted[w].notes, &mut comments);
+                let para = dressed(noted(new_para(&ppr, &rpr, wanted[w].text.trim(), track.as_mut()), &wanted[w].notes, &mut comments), &wanted[w], &anchors);
                 match last {
                     Some(block) => out[block].push(para),
                     None => front.push(para),
@@ -1520,7 +1642,7 @@ mod tests {
     }
 
     fn body(text: &str) -> Wanted {
-        Wanted { text: text.into(), role: Role::Body, notes: vec![] }
+        Wanted { text: text.into(), ..Default::default() }
     }
 
     fn texts(bytes: &[u8]) -> Vec<String> {
@@ -1639,12 +1761,37 @@ mod tests {
     }
 
     #[test]
+    fn a_citation_is_a_field_that_jumps_to_its_entry_also_in_a_file_written_again() {
+        // The file already has a bookmark of an earlier export and a mark numbered 7; the citation comes as a tracked change.
+        let source = file("<w:p><w:bookmarkStart w:id=\"7\" w:name=\"_WPREF_3\"/><w:r><w:rPr><w:sz w:val=\"21\"/></w:rPr><w:t>Roots differ.</w:t></w:r><w:bookmarkEnd w:id=\"7\"/></w:p>", "");
+        let text = "Roots differ [1].";
+        let cited = Wanted { text: text.into(), links: vec![Link { range: 14..15, to: "P1".into() }, Link { range: 0..5, to: "nothing".into() }], looks: vec![(14..15, Look { sup: true, ..Default::default() })], ..Default::default() };
+        let entry = Wanted { text: "[1] Zhang, W. Atlas. Cell.".into(), anchor: Some("P1".into()), looks: vec![(21..25, Look { italic: true, ..Default::default() })], ..Default::default() };
+        let options = Options { track: true, author: "Xu".into(), date: "2026-11-12T00:00:00Z".into() };
+        let done = rewrite(&source, &[cited.clone(), entry.clone()], &options).unwrap();
+        if let Ok(path) = std::env::var("DOCX_DUMP") { std::fs::write(path, &done.bytes).unwrap() }
+        let out = body_of(&done.bytes);
+        let who = "w:author=\"Xu\" w:date=\"2026-11-12T00:00:00Z\"";
+        let field = "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\"> HYPERLINK \\l \"_WPREF_4\" </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>";
+        // The field stands inside the insertion, around the number alone, which is raised and keeps the run's size; a link to nothing is left out.
+        assert!(out.contains(&format!("<w:ins w:id=\"9\" {who}><w:r><w:rPr><w:sz w:val=\"21\"/></w:rPr><w:t xml:space=\"preserve\"> [</w:t></w:r>{field}<w:r><w:rPr><w:sz w:val=\"21\"/><w:vertAlign w:val=\"superscript\"/></w:rPr><w:t xml:space=\"preserve\">1</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r><w:r><w:rPr><w:sz w:val=\"21\"/></w:rPr><w:t xml:space=\"preserve\">]</w:t></w:r></w:ins>")), "{out}");
+        assert_eq!(out.matches("HYPERLINK").count(), 1);
+        // The bookmark has a number and a name the file had not got, and the entry's journal is in italics before its size.
+        assert!(out.contains("<w:bookmarkStart w:id=\"8\" w:name=\"_WPREF_4\"/>") && out.contains("<w:bookmarkEnd w:id=\"8\"/></w:p>"), "{out}");
+        assert!(out.contains("<w:rPr><w:i/><w:sz w:val=\"21\"/></w:rPr><w:t xml:space=\"preserve\">Cell</w:t>"), "{out}");
+        assert_eq!(texts(&done.bytes), [text, "[1] Zhang, W. Atlas. Cell."]);
+        // Written again from what was written: a paragraph that says the same is not given a second field.
+        let plain = rewrite(&source, &[body("Roots differ."), entry], &Options::default()).unwrap();
+        assert!(!body_of(&plain.bytes).contains("fldChar"));
+    }
+
+    #[test]
     fn a_comment_on_a_tracked_insertion_stays_outside_it() {
         // A sentence added after one that stays, with a comment on the paragraph as it now reads (what a change by the assistant leaves).
         let source = file("<w:p><w:r><w:t>Roots grow down into the soil.</w:t></w:r></w:p><w:p><w:r><w:t>Hairs take up water.</w:t></w:r></w:p>", "");
         let text = "Roots grow down into the soil. They branch where water is.";
         let note = |range: std::ops::Range<usize>| Note { range, author: "助手".into(), date: "2026-11-12T00:00:00Z".into(), body: "补了一句".into() };
-        let wanted = vec![Wanted { text: text.into(), role: Role::Body, notes: vec![note(0..text.len())] }, body("Hairs take up water.")];
+        let wanted = vec![Wanted { text: text.into(), notes: vec![note(0..text.len())], ..Default::default() }, body("Hairs take up water.")];
         let options = Options { track: true, author: "Xu".into(), date: "2026-11-12T00:00:00Z".into() };
         let done = rewrite(&source, &wanted, &options).unwrap();
         if let Ok(path) = std::env::var("DOCX_DUMP") { std::fs::write(path, &done.bytes).unwrap() }
@@ -1656,7 +1803,7 @@ mod tests {
         // A comment that starts or ends inside the insertion covers all of it instead: a range mark never stands inside a revision.
         let inside = text.find("branch").unwrap();
         for range in [inside..text.len(), 6..inside + 6, inside..inside + 6] {
-            let wanted = vec![Wanted { text: text.into(), role: Role::Body, notes: vec![note(range.clone())] }, body("Hairs take up water.")];
+            let wanted = vec![Wanted { text: text.into(), notes: vec![note(range.clone())], ..Default::default() }, body("Hairs take up water.")];
             let out = body_of(&rewrite(&source, &wanted, &options).unwrap().bytes);
             let ins = &out[out.find("<w:ins").unwrap()..out.find("</w:ins>").unwrap()];
             assert!(!ins.contains("comment"), "{range:?}: {out}");
@@ -1676,7 +1823,7 @@ mod tests {
         wanted.insert(2, body("Shoots grow up."));
         wanted.insert(3, body("Leaves follow the light."));
         wanted.insert(0, body("A line before all."));
-        wanted.push(Wanted { text: "Outlook".into(), role: Role::Heading, notes: vec![] });
+        wanted.push(Wanted { text: "Outlook".into(), role: Role::Heading, ..Default::default() });
         let done = rewrite(&source, &wanted, &Options::default()).unwrap();
         assert_eq!(texts(&done.bytes), wanted.iter().map(|w| w.text.clone()).collect::<Vec<_>>());
         let out = body_of(&done.bytes);

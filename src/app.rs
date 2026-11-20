@@ -624,6 +624,8 @@ pub enum Cmd {
     ExportManuscript(ManuscriptExport),
     /// How a manuscript exported to Word cites (`cite::Style::key`).
     CiteStyle(String),
+    /// 写作: a `.csl` file to cite by in Word files.
+    AddCiteStyle,
     /// The section's earlier versions.
     WriteHistory,
     HistoryPick(usize),
@@ -2597,6 +2599,7 @@ impl Workspace {
                 self.save_settings(cx);
                 self.say(t("导出 Word 时按这种格式写引用，文末列出参考文献；稿件里仍是引用键"), cx);
             }
+            Cmd::AddCiteStyle => self.add_cite_style(cx),
             Cmd::WriteCopyReferences => self.copy_references(cx),
             Cmd::WriteSide(side) => {
                 // The page on show asked for again folds the panel under a narrow manuscript, or opens it; another page opens it.
