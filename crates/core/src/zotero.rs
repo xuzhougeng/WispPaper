@@ -36,13 +36,33 @@ pub struct Row {
 /// same snapshot. Do not use `immutable=1`, which would ignore Zotero's WAL.
 pub fn read(path: &Path) -> Result<Import> {
     read_snapshot(path).map_err(|error| {
-        let locked = matches!(error.downcast_ref::<rusqlite::Error>(), Some(rusqlite::Error::SqliteFailure(code, _)) if matches!(code.code, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked));
-        if locked {
+        if is_locked(&error) {
             error.context("Zotero 数据库正在被占用。请在 Zotero 中选择「退出」，等待 Zotero 后台进程结束，再重新导入同一个 zotero.sqlite；仅关闭窗口可能仍在后台运行。")
         } else {
             error.context("无法读取 Zotero 数据库，请选择 Zotero 6 / 7 数据目录中的 zotero.sqlite（不是导出文件或 Wisp Paper 数据库）")
         }
     })
+}
+
+fn is_locked(error: &anyhow::Error) -> bool {
+    matches!(error.downcast_ref::<rusqlite::Error>(), Some(rusqlite::Error::SqliteFailure(code, _)) if matches!(code.code, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked))
+}
+
+/// Where Zotero keeps its database unless the person moved it.
+pub fn default_database() -> Option<PathBuf> {
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })?;
+    Some(PathBuf::from(home).join("Zotero").join("zotero.sqlite")).filter(|path| path.is_file())
+}
+
+/// Whether another process holds the database, as a running Zotero does for
+/// as long as it is open. Asked without waiting, and nothing is read.
+pub fn in_use(path: &Path) -> bool {
+    let probe = || -> Result<()> {
+        let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        db.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))?;
+        Ok(())
+    };
+    probe().is_err_and(|error| is_locked(&error))
 }
 
 fn read_snapshot(path: &Path) -> Result<Import> {
@@ -354,7 +374,10 @@ mod tests {
         assert!(message.contains("同一个 zotero.sqlite"));
         assert!(!message.contains("请选择 Zotero 6 / 7"));
         assert!(matches!(error.downcast_ref::<rusqlite::Error>(), Some(rusqlite::Error::SqliteFailure(code, _)) if code.code == ErrorCode::DatabaseBusy));
+        assert!(in_use(&fixture.root.join("zotero.sqlite")));
         fixture.db.execute_batch("ROLLBACK").unwrap();
+        assert!(!in_use(&fixture.root.join("zotero.sqlite")));
+        assert!(!in_use(&fixture.root.join("absent.sqlite")));
         assert_eq!(fixture.read().entries.len(), 2);
     }
 
