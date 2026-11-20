@@ -1468,5 +1468,9 @@
   "没认出、跳过": "Not recognised, skipped",
   "没有查到这篇文献。": "No record was found for this identifier.",
   "文献库里已有这篇，跳过了": "Already in this library, skipped",
-  "正在查询第一批，结果会实时出现在这里。": "Looking up the first ones. Results will appear here as they arrive."
+  "正在查询第一批，结果会实时出现在这里。": "Looking up the first ones. Results will appear here as they arrive.",
+  "撤回：这个问题和之后的对话撤下，原话回到输入框，改了可以再发": "Take back: this question and everything after it leave the conversation; the words return to the box to edit and send again",
+  "重新回答": "Answer again",
+  "从这里分支：到这条回答为止另开一个对话，原对话留在历史里": "Branch from here: a new conversation up to this answer; the original stays in History",
+  "已分支为新对话，原对话仍在「历史」里": "Branched into a new conversation; the original is still in History"
 }

@@ -683,11 +683,11 @@ impl Workspace {
             self.render_review_record(chat, review, cx)
         } else if !configured && chat.messages.is_empty() {
             ui::empty_state("sparkle", t("还没有配置模型"), t("提问需要一个模型服务：Claude API，或任何 OpenAI 兼容的服务。API Key 只保存在本机。以前的对话在右上角的「历史」里，不配置也能看。")).child(ui::primary_button(SharedString::from(format!("chat-settings-{side}")), t("打开设置")).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx))).into_any_element()
-        } else if chat.messages.is_empty() && chat.error.is_empty() && talk == Talk::Write {
+        } else if chat.messages.is_empty() && chat.error.is_empty() && chat.retracted.is_none() && talk == Talk::Write {
             self.render_agent_start(cx)
-        } else if chat.messages.is_empty() && chat.error.is_empty() && talk == Talk::Library {
+        } else if chat.messages.is_empty() && chat.error.is_empty() && chat.retracted.is_none() && talk == Talk::Library {
             self.render_start(window, cx)
-        } else if chat.messages.is_empty() && chat.error.is_empty() {
+        } else if chat.messages.is_empty() && chat.error.is_empty() && chat.retracted.is_none() {
             let suggestions: &[&str] = &[t("这篇文献的研究问题、方法和主要结论是什么？"), t("作者的结论有哪些证据支持？有什么局限？"), t("用三句话向同行介绍这篇文章。")];
             ui::empty_state("sparkle", t("就这篇文献提问"), t("回答依据文献库里的记录、笔记和已存 PDF 的全文，并标出出处。需要时助手会自己检索和翻阅全文。"))
                 .id(SharedString::from(format!("chat-empty-{side}"))).w_full().min_h_0().overflow_y_scroll().justify_start()
@@ -1031,14 +1031,30 @@ impl Workspace {
         while i < chat.messages.len() {
             let content = match &chat.messages[i] {
                 ChatItem::User { text, images, .. } => {
+                    // What can be done with a question shows under it while the pointer is over it: quiet otherwise, and nothing while an answer is on its way.
+                    let group = SharedString::from(format!("asked-row-{side}-{i}"));
                     items.push(
                         div()
+                            .group(group.clone())
                             .flex()
                             .flex_col()
                             .items_end()
                             .gap(px(6.))
                             .when(!images.is_empty(), |d| d.child(div().flex().flex_wrap().justify_end().gap(px(6.)).max_w(relative(0.85)).children(images.iter().map(|picture| thumbnail(picture, 96.)))))
                             .when(!text.is_empty(), |d| d.child(self.selectable(format!("asked-{side}-{i}"), text.clone(), cx).max_w(relative(0.85)).px(px(14.)).py(px(9.)).rounded(px(16.)).bg(Theme::groove()).line_height(theme::body_line(21.))))
+                            .when(!chat.busy, |d| {
+                                d.child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(2.))
+                                        .mt(px(-4.))
+                                        .invisible()
+                                        .group_hover(group, |s| s.visible())
+                                        .when(!text.is_empty(), |d| d.child(ui::icon_action(SharedString::from(format!("asked-copy-{side}-{i}")), "copy", Theme::text_tertiary(), t("复制")).on_click(self.on(Cmd::CopyText(text.clone()), cx))))
+                                        .child(ui::icon_action(SharedString::from(format!("asked-retract-{side}-{i}")), "undo-2", Theme::text_tertiary(), t("撤回：这个问题和之后的对话撤下，原话回到输入框，改了可以再发")).on_click(self.on(Cmd::Retract(talk, i), cx))),
+                                )
+                            })
                             .into_any_element(),
                     );
                     i += 1;
@@ -1226,7 +1242,10 @@ impl Workspace {
                                 .items_center()
                                 .flex_wrap()
                                 .gap(px(2.))
-                                .child(ui::ghost_button(SharedString::from(format!("copy-{side}-{i}")), Some("copy"), None).h(text_px(24.)).min_w(px(24.)).opacity(0.7).on_click(self.on(Cmd::CopyText(whole.clone()), cx)))
+                                .child(ui::ghost_button(SharedString::from(format!("copy-{side}-{i}")), Some("copy"), None).h(text_px(24.)).min_w(px(24.)).opacity(0.7).tooltip(ui::tip(t("复制"))).on_click(self.on(Cmd::CopyText(whole.clone()), cx)))
+                                // The last answer can be asked for again; any answer can start a conversation of its own that goes on from it. A review's conversation is the review's record, and stays one.
+                                .when(last, |d| d.child(ui::ghost_button(SharedString::from(format!("regenerate-{side}-{i}")), Some("refresh-cw"), None).h(text_px(24.)).min_w(px(24.)).opacity(0.7).tooltip(ui::tip(t("重新回答"))).on_click(self.on(Cmd::Regenerate(talk, i), cx))))
+                                .when(!chat.busy && review.is_none(), |d| d.child(ui::ghost_button(SharedString::from(format!("fork-{side}-{i}")), Some("git-branch"), None).h(text_px(24.)).min_w(px(24.)).opacity(0.7).tooltip(ui::tip(t("从这里分支：到这条回答为止另开一个对话，原对话留在历史里"))).on_click(self.on(Cmd::Fork(talk, i), cx))))
                                 // A review's answers go to its record, step by step; any other answer about the library can become a manuscript as it is.
                                 .when(talk == Talk::Library && review.is_none() && !whole.trim().is_empty(), |d| d.child(ui::ghost_button(SharedString::from(format!("manuscript-{side}-{i}")), Some("pen-line"), Some(t("保存为新稿件").into())).h(text_px(24.)).text_size(text_px(12.)).opacity(0.7).on_click(self.on(Cmd::AnswerToManuscript(question.clone(), whole.clone()), cx))))
                                 .when(talk == Talk::Library && review.is_none() && has_manuscript && !whole.trim().is_empty(), |d| d.child(ui::ghost_button(SharedString::from(format!("insert-{side}-{i}")), Some("plus"), Some(t("插入到稿件").into())).h(text_px(24.)).text_size(text_px(12.)).opacity(0.7).on_click(self.on_menu(MenuKind::InsertInto(Some(whole.clone())), cx))))
@@ -1297,6 +1316,21 @@ impl Workspace {
         }
         if !chat.note.is_empty() {
             items.push(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(chat.note.clone()).into_any_element());
+        }
+        // What 撤回 took away can be put back until the next question.
+        if let Some(retracted) = chat.retracted.as_ref().filter(|_| !chat.busy) {
+            let asked = retracted.questions();
+            items.push(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .text_size(text_px(12.))
+                    .text_color(Theme::text_tertiary())
+                    .child(tf!("已撤回 {asked} 个问题及其回答，原话在输入框里。", "{asked} question(s) and their answers taken back; the words are in the box."))
+                    .child(div().id(SharedString::from(format!("unretract-{side}"))).text_color(Theme::accent()).cursor_pointer().hover(|s| s.underline()).child(t("恢复")).on_click(self.on(Cmd::Unretract(talk), cx)))
+                    .into_any_element(),
+            );
         }
         if !chat.error.is_empty() {
             items.push(ui::error_line(&chat.error).into_any_element());

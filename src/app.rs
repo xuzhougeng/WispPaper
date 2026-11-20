@@ -480,6 +480,14 @@ pub enum Cmd {
     /// Unfold or fold the tool calls that start at this place in the conversation.
     ToggleTools(Talk, usize),
     CopyText(String),
+    /// 撤回: the question at this place in the conversation and all after it are taken back; its words and pictures return to the box.
+    Retract(Talk, usize),
+    /// 重新回答: the answer that ends at this place is asked for again, from the question before it.
+    Regenerate(Talk, usize),
+    /// 从这里分支: a new conversation of what was said up to the end of the answer at this place; the one it came from stays in the history.
+    Fork(Talk, usize),
+    /// Put back what the last 撤回 took away.
+    Unretract(Talk),
     /// Save an answer and its source labels to a new manuscript, at the person's request.
     AnswerToManuscript(String, String),
     /// Add this text (an answer, or what is selected in one) at the end of a section of the manuscript.
@@ -1231,6 +1239,23 @@ pub struct Chat {
     pub checks: HashMap<(String, Option<usize>, Option<usize>, String), ai::Quoted>,
     /// When the question being answered was asked.
     pub started: Option<Instant>,
+    /// What the last 撤回 took away, until the next question: it can be put back (`Cmd::Unretract`).
+    pub retracted: Option<Retracted>,
+}
+
+/// What 撤回 took out of a conversation, and what the box held before.
+pub struct Retracted {
+    /// The questions and answers taken away, in order.
+    tail: Vec<ChatItem>,
+    /// The box's text and pictures before the question came back into it.
+    draft: String,
+    attachments: Vec<ChatImage>,
+}
+
+impl Retracted {
+    pub fn questions(&self) -> usize {
+        self.tail.iter().filter(|item| matches!(item, ChatItem::User { .. })).count()
+    }
 }
 
 /// 按题目补全: what is asked, the records found, and the one being
@@ -1512,6 +1537,7 @@ impl Chat {
             bar_size: None,
             checks: HashMap::new(),
             started: None,
+            retracted: None,
         }
     }
 
@@ -1551,6 +1577,24 @@ impl Chat {
     /// An answer piece that never got any text leaves no empty bubble behind.
     fn drop_empty_answer(&mut self) {
         if matches!(self.messages.last(), Some(ChatItem::Answer(text)) if text.is_empty()) { self.messages.pop(); }
+    }
+
+    /// What was said from this place on is gone. The model's turns in
+    /// `wire` belong to the conversation as it was: it is written again
+    /// from what is left (as `ask` replays) with the next question.
+    fn cut(&mut self, at: usize) -> Vec<ChatItem> {
+        let tail = self.messages.split_off(at.min(self.messages.len()));
+        self.sources_open.retain(|&i| i < at);
+        self.tools_open.retain(|&i| i < at);
+        self.review_mark = self.review_mark.min(at);
+        self.picked = None;
+        self.spot = None;
+        self.error.clear();
+        self.note.clear();
+        self.history = None;
+        self.wire.clear();
+        self.protocol = None;
+        tail
     }
 
     /// The question has been answered, or given up on.
@@ -1620,6 +1664,7 @@ impl Chat {
         self.spot = None;
         self.checks.clear();
         self.started = None;
+        self.retracted = None;
         self.input.update(cx, |input, cx| {
             input.choosing = false;
             input.set_text("", cx);
@@ -2987,6 +3032,10 @@ impl Workspace {
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
                 self.say(t("已复制"), cx);
             }
+            Cmd::Retract(talk, at) => self.retract(talk, at, window, cx),
+            Cmd::Regenerate(talk, at) => self.regenerate(talk, at, cx),
+            Cmd::Fork(talk, at) => self.fork_chat(talk, at, cx),
+            Cmd::Unretract(talk) => self.unretract(talk, cx),
             Cmd::CopySelected => {
                 if let Some(text) = self.picked.as_ref().map(|picked| picked.chosen().to_string()).filter(|text| !text.is_empty()) {
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -4373,37 +4422,55 @@ impl Workspace {
     }
 
     fn ask(&mut self, talk: Talk, cx: &mut Context<Self>) {
+        self.send_question(talk, None, cx);
+    }
+
+    /// Ask what is in the box; or, with `again`, a question asked before
+    /// (its words and pictures), leaving the box alone. True when it was sent.
+    fn send_question(&mut self, talk: Talk, again: Option<(String, Vec<ChatImage>)>, cx: &mut Context<Self>) -> bool {
         let profile = self.settings.profile_for_or_default(Task::Chat);
         // The conversation that writes says of its manuscript what it is and where it stands.
         let composing = if talk == Talk::Write {
-            let Some(note) = self.agent_note(cx) else { return self.fail(t("先在写作里打开一份稿件。"), cx) };
+            let Some(note) = self.agent_note(cx) else {
+                self.fail(t("先在写作里打开一份稿件。"), cx);
+                return false;
+            };
             Some(note)
         } else {
             None
         };
-        let Some(lib) = self.lib.as_mut() else { return };
+        let Some(lib) = self.lib.as_mut() else { return false };
         let paper_id = lib.selected.clone();
         let chat = chat_of!(lib, talk);
-        let question = chat.input.read(cx).text().trim().to_string();
-        let begin_review = talk == Talk::Library && question.strip_prefix("/review").is_some_and(|rest| rest.starts_with(char::is_whitespace));
-        if (question.is_empty() && chat.attachments.is_empty() && chat.quotes.is_empty()) || chat.busy { return }
+        let (question, again) = match again {
+            Some((text, images)) => (text, Some(images)),
+            None => (chat.input.read(cx).text().trim().to_string(), None),
+        };
+        let asked_again = again.is_some();
+        // A review is begun once, by the question that first asked for it.
+        let begin_review = !asked_again && talk == Talk::Library && question.strip_prefix("/review").is_some_and(|rest| rest.starts_with(char::is_whitespace));
+        let nothing = match &again { Some(images) => question.is_empty() && images.is_empty(), None => question.is_empty() && chat.attachments.is_empty() && chat.quotes.is_empty() };
+        if nothing || chat.busy { return false }
         chat.error.clear();
         chat.note.clear();
-        if chat.attaching > 0 {
+        if !asked_again && chat.attaching > 0 {
             chat.error = t("图片还在读取，稍等一下再发送。").into();
-            return cx.notify();
+            cx.notify();
+            return false;
         }
         // `/search …` and the like stand for a longer request; the bubble shows what was typed.
-        let prompt = match ai::read_input(if question.is_empty() && !chat.quotes.is_empty() { t("这段原文说了什么？在这篇文献里起什么作用？") } else { &question }, &self.settings.commands) {
+        let prompt = match ai::read_input(if question.is_empty() && !asked_again && !chat.quotes.is_empty() { t("这段原文说了什么？在这篇文献里起什么作用？") } else { &question }, &self.settings.commands) {
             Ok(ai::Input::Ask(prompt)) => prompt,
             Ok(ai::Input::NewChat) => {
                 chat.reset(cx);
                 if talk == Talk::Library { lib.scope_reset(cx) }
-                return cx.notify();
+                cx.notify();
+                return false;
             }
             Err(err) => {
                 chat.error = err;
-                return cx.notify();
+                cx.notify();
+                return false;
             }
         };
         chat.history = None;
@@ -4416,14 +4483,15 @@ impl Workspace {
         if chat.ctx.is_none() {
             let scope = match (talk, &paper_id) {
                 (Talk::Paper, Some(id)) => Scope::Paper(id.clone()),
-                (Talk::Paper, None) => return,
+                (Talk::Paper, None) => return false,
                 _ => Scope::Library,
             };
             let fulltext = match lib.store.all_fulltext() {
                 Ok(fulltext) => fulltext,
                 Err(err) => {
                     chat.error = format!("{err:#}");
-                    return cx.notify();
+                    cx.notify();
+                    return false;
                 }
             };
             // A question about one paper reads that paper; one about the library reads the current list.
@@ -4437,7 +4505,8 @@ impl Workspace {
             };
             if papers.is_empty() && talk != Talk::Write {
                 chat.error = t("当前列表里没有文献。先添加文献，或清空筛选条件。").into();
-                return cx.notify();
+                cx.notify();
+                return false;
             }
             // A conversation taken up from the history keeps the labels its answers already use.
             // A paper is read with its attachments: supplementary figures, tables and methods are part of it.
@@ -4479,7 +4548,8 @@ impl Workspace {
             chat.protocol = Some(profile.protocol);
         }
         // The passages selected in a PDF go first, written as the answers cite: the labels are known by now.
-        let quotes = std::mem::take(&mut chat.quotes);
+        // A question asked again has them in its words already; the box's stay for the box.
+        let quotes = if asked_again { vec![] } else { std::mem::take(&mut chat.quotes) };
         // A passage of an attachment is written with its number, as the answers cite it.
         let numbers: Vec<Option<usize>> = quotes.iter().map(|quote| lib.attachment_number(&quote.paper_id, &quote.file_id)).collect();
         let chat = chat_of!(lib, talk);
@@ -4502,7 +4572,10 @@ impl Workspace {
             Some(note) => format!("{prompt}\n\n{note}"),
             None => prompt,
         };
-        let images = std::mem::take(&mut chat.attachments);
+        let images = match again {
+            Some(images) => images,
+            None => std::mem::take(&mut chat.attachments),
+        };
         chat.wire.push(ai::user_message_with(profile.protocol, &prompt, &wire_images(&images)));
         // Kept with the question, so the conversation taken up later asks what was asked now, whatever the command says by then.
         let sent = if prompt == question { String::new() } else { prompt };
@@ -4518,12 +4591,17 @@ impl Workspace {
         if let Some(lib) = self.lib.as_mut() {
             let chat = chat_of!(lib, talk);
             if sent {
-                chat.input.update(cx, |input, cx| input.set_text("", cx));
+                // What 撤回 took away is not put back after a question that followed it.
+                chat.retracted = None;
+                if !asked_again { chat.input.update(cx, |input, cx| input.set_text("", cx)) }
             } else {
-                // Nothing was sent: the question stays in the box, its pictures beside it, to be asked again.
+                // Nothing was sent: the question stays in the box, its pictures beside it, to be asked again (one asked again goes back to its place, `regenerate`).
                 chat.wire.pop();
-                if let Some(ChatItem::User { images, .. }) = chat.messages.pop() { chat.attachments = images }
-                chat.quotes = quotes;
+                let popped = chat.messages.pop();
+                if !asked_again {
+                    if let Some(ChatItem::User { images, .. }) = popped { chat.attachments = images }
+                    chat.quotes = quotes;
+                }
                 if chat.messages.is_empty() { chat.ctx = None }
             }
         }
@@ -4534,6 +4612,102 @@ impl Workspace {
             // can be associated atomically, including across application restarts.
             if begin_review { self.start_review(cx) }
         }
+        cx.notify();
+        sent
+    }
+
+    /// 撤回: the question at `at` and all that followed are taken out of the
+    /// conversation, and its words and pictures come back to the box, to be
+    /// changed and sent again. Until the next question it can be put back
+    /// (`unretract`). What a tool already did to the library stays done.
+    fn retract(&mut self, talk: Talk, at: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(lib) = self.lib.as_mut() else { return };
+        let chat = chat_of!(lib, talk);
+        if chat.busy || !matches!(chat.messages.get(at), Some(ChatItem::User { .. })) { return }
+        let mut tail = chat.cut(at);
+        // Nothing left: the material is chosen again with the next first question.
+        if chat.messages.is_empty() { chat.forget_context() }
+        let Some(ChatItem::User { text, images, .. }) = tail.first() else { return };
+        let (text, images) = (text.clone(), images.clone());
+        // A second 撤回 further up takes the first's along: both are put back together, with the box as it was before the first.
+        let (draft, attachments) = match chat.retracted.take() {
+            Some(earlier) => {
+                tail.extend(earlier.tail);
+                (earlier.draft, earlier.attachments)
+            }
+            None => (chat.input.read(cx).text().to_string(), chat.attachments.clone()),
+        };
+        // What was being typed meanwhile is not lost: it follows the words taken back.
+        let shown = if draft.trim().is_empty() { text } else { format!("{text}\n\n{}", draft.trim()) };
+        chat.input.update(cx, |input, cx| input.set_text(&shown, cx));
+        chat.attachments = images.into_iter().chain(attachments.iter().cloned()).collect();
+        chat.retracted = Some(Retracted { tail, draft, attachments });
+        chat.input.read(cx).focus(window);
+        self.save_chat(talk, cx);
+        cx.notify();
+    }
+
+    /// Put back what the last 撤回 took away, and the box as it was before.
+    fn unretract(&mut self, talk: Talk, cx: &mut Context<Self>) {
+        let Some(lib) = self.lib.as_mut() else { return };
+        let chat = chat_of!(lib, talk);
+        if chat.busy { return }
+        let Some(retracted) = chat.retracted.take() else { return };
+        chat.messages.extend(retracted.tail);
+        // Written again from the text with the next question, as after the cut.
+        chat.wire.clear();
+        chat.protocol = None;
+        chat.error.clear();
+        chat.note.clear();
+        chat.input.update(cx, |input, cx| input.set_text(&retracted.draft, cx));
+        chat.attachments = retracted.attachments;
+        chat.scroll.scroll_to_bottom();
+        self.save_chat(talk, cx);
+        cx.notify();
+    }
+
+    /// 重新回答: the answer that ends at `at` (the conversation's last) is
+    /// asked for again with the question before it, under the material
+    /// the conversation already has.
+    fn regenerate(&mut self, talk: Talk, at: usize, cx: &mut Context<Self>) {
+        let Some(lib) = self.lib.as_mut() else { return };
+        let chat = chat_of!(lib, talk);
+        if chat.busy || at + 1 != chat.messages.len() { return }
+        let Some(asked) = chat.messages[..at].iter().rposition(|item| matches!(item, ChatItem::User { .. })) else { return };
+        let mut tail = chat.cut(asked);
+        let question = tail.remove(0);
+        let ChatItem::User { text, images, .. } = &question else { return };
+        let again = (text.clone(), images.clone());
+        chat.retracted = None;
+        if !self.send_question(talk, Some(again), cx) && let Some(lib) = self.lib.as_mut() {
+            // Not sent (no model, no key): the conversation is as it was, and says why.
+            let chat = chat_of!(lib, talk);
+            chat.messages.push(question);
+            chat.messages.extend(tail);
+            cx.notify();
+        }
+    }
+
+    /// 从这里分支: what was said up to the end of the answer at `at`
+    /// becomes a conversation of its own, the one on show from now on; the
+    /// whole of the one it came from stays in the history.
+    fn fork_chat(&mut self, talk: Talk, at: usize, cx: &mut Context<Self>) {
+        let Some(lib) = self.lib.as_ref() else { return };
+        let chat = lib.chat(talk);
+        if chat.busy || chat.review.is_some() || at >= chat.messages.len() { return }
+        self.save_chat(talk, cx);
+        let Some(lib) = self.lib.as_mut() else { return };
+        let chat = chat_of!(lib, talk);
+        chat.cut(at + 1);
+        chat.retracted = None;
+        // Kept anew under an id of its own, its pictures with it; a yes to every change was said to the other conversation.
+        chat.id.clear();
+        chat.created_at.clear();
+        chat.kept = false;
+        chat.stored_images.clear();
+        chat.allow_changes = false;
+        self.save_chat(talk, cx);
+        self.say(t("已分支为新对话，原对话仍在「历史」里"), cx);
         cx.notify();
     }
 
@@ -6352,6 +6526,20 @@ impl Workspace {
                     if let Some(lib) = self.lib.as_ref() { lib.library_chat.input.update(cx, |input, cx| input.set_text(arg, cx)) }
                     Some(Cmd::Ask(Talk::Library))
                 }
+                // The library's conversation, by places from 0: `retract:<n>` takes back the n-th question, `unretract` puts it back,
+                // `regenerate` asks for the last answer again, `fork:<n>` branches after the n-th answer.
+                "retract" | "regenerate" | "fork" | "unretract" => self.lib.as_ref().and_then(|lib| {
+                    let messages = &lib.library_chat.messages;
+                    let n: usize = arg.parse().unwrap_or(0);
+                    // An answer ends where the next question (or the conversation) begins.
+                    let answer_ends: Vec<usize> = (0..messages.len()).filter(|&i| matches!(messages[i], ChatItem::Answer(_)) && !matches!(messages.get(i + 1), Some(ChatItem::Answer(_) | ChatItem::Tool { .. }))).collect();
+                    match name {
+                        "retract" => messages.iter().enumerate().filter(|(_, item)| matches!(item, ChatItem::User { .. })).nth(n).map(|(at, _)| Cmd::Retract(Talk::Library, at)),
+                        "regenerate" => Some(Cmd::Regenerate(Talk::Library, messages.len().checked_sub(1)?)),
+                        "fork" => answer_ends.get(n).map(|&at| Cmd::Fork(Talk::Library, at)),
+                        _ => Some(Cmd::Unretract(Talk::Library)),
+                    }
+                }),
                 // `agent` / `agent:off` is 写作's other mode, where the assistant writes; `agent:earlier|later|now|restore` steps through the versions of the section on show.
                 "agent" => Some(Cmd::Agent(match arg {
                     "off" => crate::write_agent::Do::Mode(false),
