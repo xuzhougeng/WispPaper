@@ -149,9 +149,9 @@ fn import_one_pdf(store: &mut Store, path: &Path, tags: &[String], target: Optio
     Ok(())
 }
 
-/// A Word file written elsewhere, read for what it cites (`restyle::inspect`): `lookup` asks Crossref about the
+/// A Word file written elsewhere, read for what it cites (`restyle::inspect`): `fetch` asks Crossref about the
 /// entries neither the library nor their own text settles, `entries` are records the caller read better than the rules.
-fn docx_cited(store: &Store, args: &Value, fetch: crate::sources::Fetch) -> Result<(PathBuf, Vec<u8>, crate::restyle::Inspected)> {
+fn docx_cited(store: &Store, args: &Value, fetch: Option<crate::sources::Fetch>) -> Result<(PathBuf, Vec<u8>, crate::restyle::Inspected)> {
     let path = input_path(args)?;
     if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("docx")) { bail!("这里只读 Word 的 .docx 文件：{}", path.display()) }
     let bytes = std::fs::read(&path).with_context(|| format!("无法读取 {}", path.display()))?;
@@ -161,12 +161,12 @@ fn docx_cited(store: &Store, args: &Value, fetch: crate::sources::Fetch) -> Resu
         given.push((n as usize, record.clone()));
     }
     let papers = store.list_papers()?;
-    let inspected = crate::restyle::inspect(&bytes, &papers, &given, args["lookup"].as_bool().unwrap_or(false).then_some(fetch))?;
+    let inspected = crate::restyle::inspect(&bytes, &papers, &given, fetch)?;
     Ok((path, bytes, inspected))
 }
 
 pub(super) fn read_docx_citations(store: &Store, args: &Value, fetch: crate::sources::Fetch) -> Result<Value> {
-    let (path, _, inspected) = docx_cited(store, args, fetch)?;
+    let (path, _, inspected) = docx_cited(store, args, args["lookup"].as_bool().unwrap_or(false).then_some(fetch))?;
     let mut report = inspected.report();
     report["path"] = json!(path);
     let unresolved = report["unresolved"].as_array().map_or(0, Vec::len);
@@ -178,6 +178,36 @@ pub(super) fn read_docx_citations(store: &Store, args: &Value, fetch: crate::sou
     Ok(report)
 }
 
+/// The works a Word file's list cites, taken into the library (`restyle::works`): what could be read becomes a paper,
+/// deduplicated as any import is; what could not is listed with its words for the caller to read and give back.
+pub(super) fn import_docx_references(store: &mut Store, args: &Value, fetch: crate::sources::Fetch) -> Result<Value> {
+    let only: Vec<usize> = args["entries"].as_array().into_iter().flatten().filter_map(|entry| entry["n"].as_u64()).map(|n| n as usize).collect();
+    // Records given anew are taken as they are: nothing else is asked about again.
+    let fetch = (args["lookup"].as_bool().unwrap_or(true) && only.is_empty()).then_some(fetch);
+    let (path, _, inspected) = docx_cited(store, args, fetch)?;
+    let works = crate::restyle::works(&inspected, fetch, &only);
+    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let papers: Vec<Paper> = works.iter().filter_map(|work| work.paper.clone()).map(|paper| Paper { source: format!("导入 · {name}"), ..paper }).collect();
+    let result = store.import_papers(papers)?;
+    let short = |text: &str| if text.chars().count() > 240 { format!("{}…", text.chars().take(240).collect::<String>()) } else { text.to_string() };
+    let unresolved: Vec<Value> = works.iter().filter(|work| work.paper.is_none()).map(|work| json!({"n": work.n, "text": short(&work.text), "why": work.note})).collect();
+    // Read by rule alone and not found anywhere: the person is to look at these.
+    let unchecked: Vec<Value> = works.iter().filter(|work| work.paper.is_some() && work.origin == crate::restyle::TEXT).map(|work| json!({"n": work.n, "title": work.paper.as_ref().map_or("", |paper| paper.title.as_str()), "text": short(&work.text)})).collect();
+    let mut out = json!({
+        "path": path, "source": inspected.source, "entries": inspected.entries.len(),
+        "added": result.added.len(), "skipped": result.skipped.len(),
+        "addedPapers": result.added.iter().map(|p| json!({"id": p.id, "title": p.title, "doi": p.doi})).collect::<Vec<_>>(),
+        "skippedPapers": result.skipped.iter().map(|p| json!({"title": p.title, "existingId": p.existing_id, "inTrash": p.in_trash})).collect::<Vec<_>>(),
+        "unresolved": unresolved, "checkAgainst": unchecked, "notes": inspected.notes,
+    });
+    out["next"] = json!(match (out["unresolved"].as_array().map_or(0, Vec::len), out["checkAgainst"].as_array().map_or(0, Vec::len)) {
+        (0, 0) => "告诉用户收进了多少篇、跳过了多少篇（已在库里的）。",
+        (0, _) => "告诉用户收进了多少篇、跳过了多少篇；checkAgainst 里的条目只按文字读出、没能联网核对，请用户核对。",
+        _ => "告诉用户收进了多少篇、跳过了多少篇，unresolved 里的条目没能识别、没有收进来。你能读懂其中的条目时，用 entries 给出它们的 CSL-JSON 再调用一次（只转写条目里写着的信息）；读不懂的如实告诉用户。checkAgainst 里的条目请用户核对。",
+    });
+    Ok(out)
+}
+
 pub(super) fn restyle_docx(store: &Store, info: &LibraryInfo, args: &Value, fetch: crate::sources::Fetch) -> Result<Value> {
     let root = info.dir.parent().map(Path::to_path_buf).unwrap_or_else(|| info.dir.clone());
     let style = match (text(args, "csl")?, text(args, "style")?) {
@@ -186,7 +216,7 @@ pub(super) fn restyle_docx(store: &Store, info: &LibraryInfo, args: &Value, fetc
         ("", key) => crate::csl::load(key, &root)?,
         (xml, _) => crate::csl::parse(xml, &root)?,
     };
-    let (path, bytes, inspected) = docx_cited(store, args, fetch)?;
+    let (path, bytes, inspected) = docx_cited(store, args, args["lookup"].as_bool().unwrap_or(false).then_some(fetch))?;
     let output = match text(args, "output")? {
         "" => path.with_file_name(format!("{}-restyled.docx", path.file_stem().unwrap_or_default().to_string_lossy())),
         output => PathBuf::from(output),
