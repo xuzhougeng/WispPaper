@@ -76,8 +76,15 @@ Type: files; Name: "{autodesktop}\Wisp Paper.lnk"
 Type: filesandordirs; Name: "{app}\.wisp-paper-update"
 
 [Icons]
-Name: "{autoprograms}\Wisp Study"; Filename: "{app}\WispStudy.exe"
+; The Start menu shortcut is what Windows search finds the app by. (No BOM in this file: keep it ASCII.)
+Name: "{autoprograms}\Wisp Study"; Filename: "{app}\WispStudy.exe"; Comment: "Wisp Study, a literature library"
 Name: "{autodesktop}\Wisp Study"; Filename: "{app}\WispStudy.exe"; Tasks: desktopicon
+
+[Registry]
+; App Paths: Win+R, the search box and `start WispStudy` find the app by its file name without
+; it being on PATH. HKA is HKCU for this per-user setup; the key goes with the app when it is removed.
+Root: HKA; Subkey: "Software\Microsoft\Windows\CurrentVersion\App Paths\WispStudy.exe"; ValueType: string; ValueName: ""; ValueData: "{app}\WispStudy.exe"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Microsoft\Windows\CurrentVersion\App Paths\WispStudy.exe"; ValueType: string; ValueName: "Path"; ValueData: "{app}"
 
 [Run]
 Filename: "{app}\WispStudy.exe"; Description: "{cm:LaunchProgram,Wisp Study}"; Flags: nowait postinstall skipifsilent

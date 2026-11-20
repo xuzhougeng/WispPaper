@@ -3,8 +3,8 @@
 //! screening run, an import, the scheduled searches that `watch_searches`
 //! looks at once a minute) stay as they are, only out of sight: on macOS the
 //! app is hidden and its Dock icon brings it back; on Windows the window is
-//! hidden and an icon in the notification area brings it back or quits. ⌘Q
-//! (macOS) and the tray's 退出 quit. Elsewhere closing quits as before.
+//! hidden and an icon in the notification area brings it back, restarts it or
+//! quits. ⌘Q (macOS) and the tray's 退出 quit. Elsewhere closing quits as before.
 
 use gpui::*;
 
@@ -113,6 +113,7 @@ mod tray {
 
     enum Event {
         Show,
+        Restart,
         Quit,
     }
 
@@ -150,10 +151,11 @@ mod tray {
         }
         let (send, receive) = async_channel::unbounded::<Event>();
         let open = MenuItem::new(crate::i18n::t("打开 Wisp Study"), true, None);
+        let again = MenuItem::new(crate::i18n::t("重启 Wisp Study"), true, None);
         let quit = MenuItem::new(crate::i18n::t("退出 Wisp Study"), true, None);
         let menu = Menu::new();
-        let (open_id, quit_id) = (open.id().clone(), quit.id().clone());
-        if menu.append_items(&[&open, &PredefinedMenuItem::separator(), &quit]).is_err() { return }
+        let (open_id, restart_id, quit_id) = (open.id().clone(), again.id().clone(), quit.id().clone());
+        if menu.append_items(&[&open, &again, &PredefinedMenuItem::separator(), &quit]).is_err() { return }
         let Some(icon) = icon() else { return };
         let Ok(tray) = TrayIconBuilder::new().with_tooltip("Wisp Study").with_icon(icon).with_menu(Box::new(menu)).with_menu_on_left_click(false).build() else { return };
         // The handlers run inside the tray's own window procedure; the app hears them through the channel.
@@ -164,6 +166,7 @@ mod tray {
         }));
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
             if event.id == open_id { send.try_send(Event::Show).ok(); }
+            if event.id == restart_id { send.try_send(Event::Restart).ok(); }
             if event.id == quit_id { send.try_send(Event::Quit).ok(); }
         }));
         cx.spawn(async move |cx| {
@@ -173,6 +176,7 @@ mod tray {
                 let done = cx
                     .update(|cx| match event {
                         Event::Show => show(cx),
+                        Event::Restart => restart(cx),
                         Event::Quit => {
                             std::fs::remove_file(marker()).ok();
                             cx.quit()
@@ -183,6 +187,16 @@ mod tray {
             }
         })
         .detach();
+    }
+
+    /// A new instance of the same program, with the same arguments and environment (`WISP_STUDY_HOME`
+    /// included), then this one quits, as after an update: what was written on disk since (a skill, a
+    /// connector, the settings file) is read anew. The marker goes first, or the new instance would
+    /// hand over to this window.
+    fn restart(cx: &mut App) {
+        let Ok(exe) = std::env::current_exe() else { return };
+        forget();
+        if std::process::Command::new(exe).args(std::env::args_os().skip(1)).spawn().is_ok() { cx.quit() }
     }
 
     fn icon() -> Option<tray_icon::Icon> {
