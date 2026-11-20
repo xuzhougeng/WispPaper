@@ -56,6 +56,8 @@ pub struct Listed {
     offered: Vec<Offer>,
     /// Every citation of the manuscript that names a paper, with the passage kept for it.
     pub standing: Vec<crate::write_source::Standing>,
+    /// The citations of the part being written, as the editor has it: what pointing at one shows (write_source.rs).
+    pub cited_here: Vec<Cited>,
 }
 
 impl Listed {
@@ -191,7 +193,7 @@ fn listed(lib: &Library, cx: &App) -> Listed {
         .map(|paper| Offer { paper_id: paper.id.clone(), key: key_of(&paper.id), title: paper.title.clone(), about: [crate::i18n::short_authors(paper), paper.year.map(|y| y.to_string()).unwrap_or_default()].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" · ") })
         .collect();
     let standing = crate::write_source::standing(found.iter().map(|(id, _, text, cited)| (*id, *text, cited.as_slice())), &lib.citing.sources.kept);
-    Listed { here: entries(&cited_here), whole: entries(&all), unresolved, upgrades, offered, standing }
+    Listed { here: entries(&cited_here), whole: entries(&all), unresolved, upgrades, offered, standing, cited_here }
 }
 
 impl Workspace {
@@ -435,8 +437,9 @@ impl Workspace {
                             .flex()
                             .items_center()
                             .gap(px(6.))
-                            .child(div().flex_none().text_size(text_px(14.)).font_weight(FontWeight::SEMIBOLD).child(t("参考文献")))
-                            .child(ui::hint("cite-about", t("在候选句上点「引用」，或在这里找一篇文献。引用写作 [@Zhang2024]，导出的 Markdown 和 BibTeX 可以直接交给 Pandoc。每篇文献下面是出处：引用它的那句话依据的文献原文，点一下在 PDF 里看。")))
+                            // Beside the conversation the column's head names the list already.
+                            .when(!self.settings.agent_writing, |d| d.child(div().flex_none().text_size(text_px(14.)).font_weight(FontWeight::SEMIBOLD).child(t("参考文献"))))
+                            .child(ui::hint("cite-about", t("在候选句上点「引用」，或在这里找一篇文献。引用写作 [@Zhang2024]，导出的 Markdown 和 BibTeX 可以直接交给 Pandoc；导出 Word 时写成作者-年份或编号（在「导出」里选），文末附参考文献表。每篇文献下面是出处：引用它的那句话依据的文献原文，点一下在 PDF 里看。")))
                             .child(div().flex_1())
                             .child(part)
                             .child(all),

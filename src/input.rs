@@ -52,6 +52,10 @@ pub enum InputEvent {
     Images,
     /// A click (not a drag) inside one of the stretches `set_marks` gave: its place in that list.
     MarkClicked(usize),
+    /// The pointer came onto one of the stretches `set_links` gave, or left it: `hovered_link` says which.
+    LinkHovered,
+    /// ⌘ (Ctrl elsewhere) and a click on a link: its place in that list, and the byte clicked.
+    LinkClicked(usize, usize),
 }
 
 /// What the last paint laid out, for hit-testing and the IME.
@@ -177,6 +181,13 @@ pub struct TextInput {
     marks: Vec<(Range<usize>, Hsla)>,
     /// How far below the top of the text each mark begins, as last drawn.
     mark_tops: Vec<Pixels>,
+    /// Stretches that lead somewhere (a manuscript's citations): the pointer over one is told to the owner,
+    /// and ⌘ or Ctrl with a click follows it instead of selecting a sentence.
+    links: Vec<Range<usize>>,
+    /// Where the links were last drawn, in the window: a box for each line of each, with its place in `links`.
+    link_boxes: Vec<(usize, Bounds<Pixels>)>,
+    /// The link under the pointer, and the box of the line of it the pointer is on.
+    hovered: Option<(usize, Bounds<Pixels>)>,
     /// Updated during prepaint, so a selection toolbar follows wrapping and scrolling in this frame.
     selection_geometry: Option<SelectionGeometry>,
     selection_toolbar_visible: bool,
@@ -223,6 +234,9 @@ impl TextInput {
             typing: false,
             marks: vec![],
             mark_tops: vec![],
+            links: vec![],
+            link_boxes: vec![],
+            hovered: None,
             selection_geometry: None,
             selection_toolbar_visible: false,
             selection_toolbar_dismissed: false,
@@ -265,6 +279,27 @@ impl TextInput {
     /// Draw these stretches of the text on a tint. The owner gives them anew when the text or what they mark changes; nothing is redrawn for it.
     pub fn set_marks(&mut self, marks: Vec<(Range<usize>, Hsla)>) {
         self.marks = marks;
+    }
+
+    /// Stretches that lead somewhere. The owner gives them anew when the text changes; a change lets go of the one under the pointer.
+    pub fn set_links(&mut self, links: Vec<Range<usize>>) {
+        if self.links == links { return }
+        self.links = links;
+        self.hovered = None;
+    }
+
+    /// The link under the pointer (its place in `set_links`'s list) and the box of the line of it the pointer is on, in the window.
+    /// The box reaches down to the link's last line, so what is shown under it never covers the rest of the link.
+    pub fn hovered_link(&self) -> Option<(usize, Bounds<Pixels>)> {
+        let (n, line) = self.hovered?;
+        let bottom = self.link_boxes.iter().filter(|(at, _)| *at == n).map(|(_, b)| b.bottom()).fold(line.bottom(), |a, b| if b > a { b } else { a });
+        Some((n, Bounds::from_corners(line.origin, point(line.right(), bottom))))
+    }
+
+    fn leave_link(&mut self, cx: &mut Context<Self>) {
+        if self.hovered.take().is_none() { return }
+        cx.emit(InputEvent::LinkHovered);
+        cx.notify();
     }
 
     /// How far below the top of the text each stretch `set_marks` gave begins, as last drawn: one per mark,
@@ -398,6 +433,7 @@ impl TextInput {
 
     /// Change the text; `keep` makes it a step to undo (a composition was kept when it began).
     fn edit(&mut self, range: Range<usize>, s: &str, keep: bool, cx: &mut Context<Self>) {
+        self.hovered = None;
         let s = if self.multiline { s.replace("\r\n", "\n").replace('\r', "\n") } else { s.replace(['\n', '\r'], " ") };
         if keep { self.remember(&range, &s) }
         self.text.replace_range(range.clone(), &s);
@@ -648,6 +684,12 @@ impl TextInput {
         self.selection_toolbar_dismissed = false;
         window.focus(&self.focus);
         let i = self.index_for_mouse(ev.position);
+        // ⌘ or Ctrl and a click on a link follows it; the caret stays where it was.
+        if ev.modifiers.secondary() && !ev.modifiers.shift && ev.click_count == 1 && let Some(&(n, _)) = self.link_boxes.iter().find(|(_, b)| b.contains(&ev.position)) {
+            self.leave_link(cx);
+            cx.emit(InputEvent::LinkClicked(n, i));
+            return;
+        }
         self.selecting = true;
         if self.markdown { self.reveal_held = Some(i..i) }
         // Two clicks a word, three a paragraph, ⌘ or Ctrl with one a sentence, as in Word.
@@ -677,6 +719,14 @@ impl TextInput {
     }
 
     fn on_move(&mut self, ev: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.selecting {
+            let hit = self.link_boxes.iter().find(|(_, b)| b.contains(&ev.position)).copied();
+            if hit != self.hovered {
+                self.hovered = hit;
+                cx.emit(InputEvent::LinkHovered);
+                cx.notify();
+            }
+        }
         if self.selecting && ev.pressed_button == Some(MouseButton::Left) {
             let i = self.index_for_mouse(ev.position);
             let Some((unit, first)) = &self.grain else { return self.select_to(i, cx) };
@@ -793,6 +843,7 @@ impl EntityInputHandler for TextInput {
 impl Render for TextInput {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
+            .id("text-input")
             .key_context("TextInput")
             .track_focus(&self.focus)
             .cursor(CursorStyle::IBeam)
@@ -824,6 +875,9 @@ impl Render for TextInput {
             .on_mouse_move(cx.listener(Self::on_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_up))
+            // A link is let go of when the pointer leaves the field, or the text moves under it.
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| if !*hovered { this.leave_link(cx) }))
+            .on_scroll_wheel(cx.listener(|this, _: &ScrollWheelEvent, _, cx| this.leave_link(cx)))
             .child(InputElement { input: cx.entity() })
     }
 }
@@ -1182,7 +1236,21 @@ impl Element for InputElement {
             quads
         };
         let selection = if input.sel.is_empty() { vec![] } else { quads(input.to_display(&probe.map, input.sel.start), input.to_display(&probe.map, input.sel.end), Theme::selection()) };
-        let marks = input.marks.iter().filter(|(range, _)| range.start < range.end && range.end <= input.text.len() && !input.masked).flat_map(|(range, color)| quads(input.to_display(&probe.map, range.start), input.to_display(&probe.map, range.end), *color)).collect();
+        let mut marks: Vec<PaintQuad> = input.marks.iter().filter(|(range, _)| range.start < range.end && range.end <= input.text.len() && !input.masked).flat_map(|(range, color)| quads(input.to_display(&probe.map, range.start), input.to_display(&probe.map, range.end), *color)).collect();
+        // The links where they are drawn and can be pointed at; the one under the pointer on a faint tint.
+        let shown = bounds.intersect(&window.content_mask().bounds);
+        let link_boxes: Vec<(usize, Bounds<Pixels>)> = input
+            .links
+            .iter()
+            .enumerate()
+            .filter(|(_, range)| range.start < range.end && range.end <= input.text.len() && !input.masked)
+            .flat_map(|(n, range)| quads(input.to_display(&probe.map, range.start), input.to_display(&probe.map, range.end), Theme::link_hover()).into_iter().map(move |quad| (n, quad)))
+            .filter(|(_, quad)| !quad.bounds.intersect(&shown).is_empty())
+            .map(|(n, quad)| {
+                if input.hovered.is_some_and(|(at, _)| at == n) { marks.push(quad.clone()) }
+                (n, quad.bounds.intersect(&shown))
+            })
+            .collect();
         let line_height = row_of(&probe, cursor).map_or(window.line_height(), |row| row.line_height);
         let caret = input.sel.is_empty().then(|| fill(Bounds::new(origin + point(caret_at.x, caret_at.y + px(1.)), size(px(1.5), line_height - px(2.))), Theme::text()));
         let decor = probe
@@ -1201,7 +1269,13 @@ impl Element for InputElement {
         let viewport = bounds.intersect(&window.content_mask().bounds);
         let visible: Vec<_> = selection.iter().map(|quad| quad.bounds.intersect(&viewport)).filter(|bounds| !bounds.is_empty()).collect();
         let geometry = visible.first().zip(visible.last()).map(|(&first, &last)| SelectionGeometry { first, last, viewport });
-        self.input.update(cx, |input, _| {
+        self.input.update(cx, |input, cx| {
+            // The text moved under the pointer (the page around it changed): the link is let go of, and the owner's card with it.
+            if input.hovered.is_some_and(|hovered| !link_boxes.contains(&hovered)) {
+                input.hovered = None;
+                cx.emit(InputEvent::LinkHovered);
+            }
+            input.link_boxes = link_boxes;
             input.selection_geometry = geometry;
             input.selection_toolbar_visible = false;
         });

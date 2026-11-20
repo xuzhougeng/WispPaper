@@ -75,9 +75,11 @@ impl Workspace {
         let (changed, bars, moving) = self.revise_marks(&text, std::time::Instant::now());
         if moving { window.request_animation_frame() }
         let bars = self.render_revise_bars(&bars, cx);
+        let links = self.citation_links();
         let lib = self.lib.as_ref().unwrap();
         lib.writing.editor.update(cx, |input, _| {
             input.set_marks(noted.into_iter().chain(changed).collect());
+            input.set_links(links);
             input.set_placeholder(if agent { PLACEHOLDER_AGENT } else { PLACEHOLDER });
         });
         let lib = self.lib.as_ref().unwrap();
@@ -119,6 +121,8 @@ impl Workspace {
                 }),
             )
             .when(!agent && editing && writing.editor.read(cx).selection().is_empty(), |d| d.child(self.render_assist_bar(false, cx)))
+            // The citation the pointer is on: what it names and rests on, in a card under its line.
+            .children(if editing { self.render_citation_hint(cx) } else { None })
             // With the caret in a citation: the paper it names and the passage of that paper its sentence rests on.
             .children(if editing { self.render_source_strip(width - 32., cx) } else { None })
             // Under the manuscript, the box where the assistant is told what to change in this section.
