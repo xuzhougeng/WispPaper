@@ -46,7 +46,7 @@ fn main() -> anyhow::Result<()> {
     let guessed = |n: usize| mode == "guessed" && draft.headings.iter().any(|guess| guess.paragraph == n && guess.likely);
     let mut wanted: Vec<Wanted> = read.paragraphs.iter().enumerate().map(|(n, para)| Wanted { text: para.text.clone(), role: if para.title { Role::Title } else if para.level.is_some() || guessed(n) { Role::Heading } else { Role::Body }, ..Default::default() }).collect();
     if mode != "same" && mode != "guessed" {
-        let author = std::env::var("DOCX_AUTHOR").unwrap_or_else(|_| "Wisp Paper 助手".into());
+        let author = std::env::var("DOCX_AUTHOR").unwrap_or_else(|_| "Wisp Study 助手".into());
         let note = |range: std::ops::Range<usize>, body: &str| Note { range, author: author.clone(), date: "2026-11-12T08:00:00Z".into(), body: body.into() };
         let bodies: Vec<usize> = (0..wanted.len()).filter(|n| wanted[*n].role == Role::Body && wanted[*n].text.chars().count() > 30).collect();
         for (k, &n) in bodies.iter().enumerate().filter(|(k, _)| k % 3 == 0) {

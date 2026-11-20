@@ -10,7 +10,7 @@ use wisp_core::{mcp, tools};
 
 fn overview() -> String {
     let mut out = String::from(
-        "wisp：在命令行里使用 Wisp Paper 的文献库，输出为 JSON。\n\n\
+        "wisp：在命令行里使用 Wisp Study 的文献库，输出为 JSON。\n\n\
 用法：wisp [--data-dir 文件夹] <命令> [参数]\n\n\
 命令：\n  tools                列出全部工具及其参数\n  mcp                  在标准输入输出上提供 MCP 服务，供 AI 客户端连接\n  <工具> --help        查看一个工具的参数\n\n工具：\n",
     );
@@ -187,7 +187,7 @@ mod tests {
         let replies: Vec<Value> = String::from_utf8(output).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect();
         // One line per reply; the notification and the blank line get none.
         assert_eq!(replies.len(), 3);
-        assert_eq!(replies[0]["result"]["serverInfo"]["name"], "wisp-paper");
+        assert_eq!(replies[0]["result"]["serverInfo"]["name"], "wisp-study");
         assert_eq!(replies[1]["error"]["code"], -32700);
         assert_eq!(replies[2]["result"]["structuredContent"]["pages"][0]["text"], "WOX5 marks the quiescent centre.");
         std::fs::remove_dir_all(root).ok();

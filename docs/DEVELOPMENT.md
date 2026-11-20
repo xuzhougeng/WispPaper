@@ -17,7 +17,7 @@ cargo clippy --all-targets          # 应当没有警告
 
 ```sh
 cargo run -p wisp_core --example seed -- /tmp/wisp-demo some.pdf
-WISP_PAPER_HOME=/tmp/wisp-demo cargo run
+WISP_STUDY_HOME=/tmp/wisp-demo cargo run
 ```
 
 手头没有 API Key 时，`cargo run -p wisp_core --example mock_model -- 8787` 是一个假的 Claude 接口；把示例目录 `settings.json` 里的一个模型服务指向 `http://127.0.0.1:8787` 即可。端口后面再写一个毫秒数（`-- 8787 1500`），每个回答就晚这么久，可以看清批量筛选的进度；它会打印每个请求的模型和思考参数，用来核对各个任务用的是哪个模型。提问里带「试试撤销」时，它改为调用 `undo_import`，用来看助手改动文献库前的确认。
@@ -26,10 +26,12 @@ WISP_PAPER_HOME=/tmp/wisp-demo cargo run
 
 | 变量 | 作用 |
 |---|---|
-| `WISP_PAPER_HOME` | 把数据目录和 `settings.json` 一起指到一个文件夹，手动试用时不碰真正的文献库 |
-| `WISP_PAPER_DEV` | 仅调试构建：让窗口启动后直接进入某个状态，如 `open:0,select:0,tab:pdf`、`settings:ai`、`theme:dark`（步骤见 `src/app.rs` 末尾的 `dev_start`） |
-| `WISP_PAPER_UPDATE_URL` | 把检查更新指向别的地址（测试用） |
-| `WISP_PAPER_UPDATE_FILES` | 把更新包和 `SHA256SUMS` 的下载目录指向别的地址（测试用） |
+| `WISP_STUDY_HOME` | 把数据目录和 `settings.json` 一起指到一个文件夹，手动试用时不碰真正的文献库 |
+| `WISP_STUDY_DEV` | 仅调试构建：让窗口启动后直接进入某个状态，如 `open:0,select:0,tab:pdf`、`settings:ai`、`theme:dark`（步骤见 `src/app.rs` 末尾的 `dev_start`） |
+| `WISP_STUDY_UPDATE_URL` | 把检查更新指向别的地址（测试用） |
+| `WISP_STUDY_UPDATE_FILES` | 把更新包和 `SHA256SUMS` 的下载目录指向别的地址（测试用） |
+
+改名前的 `WISP_PAPER_*` 在对应的新变量未设置时仍然有效。
 
 ## 界面布局检查
 
@@ -37,7 +39,7 @@ WISP_PAPER_HOME=/tmp/wisp-demo cargo run
 
 覆盖首页、文献列表与详情、库内及单篇提问、历史与综述记录、检索与建库向导、三种筛选视图、写作及历史版本、图片库、全部设置页，以及新建/编辑文献库、添加/编辑文献、自定义词条、检索式、Zotero、导入进度、证据和确认弹窗。PDF 另检查长文件名、缩放菜单、截图收藏、图片编辑和悬浮提问。
 
-`WISP_PAPER_DEV` 可用 `size:900;560` 调整窗口，`language:en` 切换语言，`ui:clear` 关闭弹窗与设置；`ui:new-library|edit-library|add|manual|edit-paper|fields|new-search|zotero|delete-paper|guide|guide-search` 打开对应界面（每次选一个动作）。同一时刻有多个依赖步骤时，用 `do:ui:clear|page:papers|select:0|tab:info` 顺序执行，再用 `2@shot:/tmp/layout.png` 保存离屏渲染供检查。始终使用单独的 `WISP_PAPER_HOME`，模型交互使用本地 mock。
+`WISP_STUDY_DEV` 可用 `size:900;560` 调整窗口，`language:en` 切换语言，`ui:clear` 关闭弹窗与设置；`ui:new-library|edit-library|add|manual|edit-paper|fields|new-search|zotero|delete-paper|guide|guide-search` 打开对应界面（每次选一个动作）。同一时刻有多个依赖步骤时，用 `do:ui:clear|page:papers|select:0|tab:info` 顺序执行，再用 `2@shot:/tmp/layout.png` 保存离屏渲染供检查。始终使用单独的 `WISP_STUDY_HOME`，模型交互使用本地 mock。
 
 ## 代码结构
 
@@ -75,7 +77,7 @@ HTTP 请求（阻塞的 ureq）：元数据查询、文献检索、流式对话�
 
 可执行文件 `wisp`。把命令行参数按工具的 schema 转成调用，`wisp mcp` 在标准输入输出上收发 MCP 消息。
 
-### 根 crate（`wisp_paper`）
+### 根 crate（`wisp_study`）
 
 GPUI 应用。
 
@@ -100,13 +102,13 @@ GPUI 应用。
 ## 打包与发布
 
 ```sh
-scripts/package-macos.sh                    # dist/Wisp Paper.app 和 DMG，本机架构，ad hoc 签名
+scripts/package-macos.sh                    # dist/Wisp Study.app 和 DMG，本机架构，ad hoc 签名
 scripts/package-macos.sh --arch universal   # Apple 芯片 + Intel（需要两个 rustup target）
 scripts/package-macos.sh --arch arm64       # 只有 Apple 芯片；--arch x64 只有 Intel（发布时这两个各出一个 DMG）
-pwsh -File scripts/package-windows.ps1      # dist/WispPaper-v<版本>-windows-x64.zip（便携版）和 …-setup.exe（安装版），不签名
+pwsh -File scripts/package-windows.ps1      # dist/WispStudy-v<版本>-windows-x64.zip（便携版）和 …-setup.exe（安装版），不签名
 ```
 
-Windows 的安装版由 [Inno Setup 6](https://jrsoftware.org/isinfo.php) 按 `scripts/wisp-paper.iss` 生成（`winget install JRSoftware.InnoSetup`）；没装时加 `-NoInstaller` 只出便携版。
+Windows 的安装版由 [Inno Setup 6](https://jrsoftware.org/isinfo.php) 按 `scripts/wisp-study.iss` 生成（`winget install JRSoftware.InnoSetup`）；没装时加 `-NoInstaller` 只出便携版。
 
 没有签名身份时，macOS 的包只能在本机运行，不适合分发。本机 `cargo` 用不了固定的工具链时，用 `CARGO="cargo +stable"` 指定；Xcode 没装 Metal Toolchain 时脚本会自己改用 `gpui/runtime_shaders`。
 

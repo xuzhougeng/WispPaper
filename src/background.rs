@@ -31,15 +31,15 @@ pub fn set_menus(cx: &mut App) {
     if !cfg!(target_os = "macos") { return }
     use crate::i18n::t;
     cx.set_menus(vec![Menu {
-        name: "Wisp Paper".into(),
+        name: "Wisp Study".into(),
         items: vec![
             MenuItem::action(t("设置…"), crate::shortcuts::ShowSettings),
             MenuItem::separator(),
-            MenuItem::action(t("隐藏 Wisp Paper"), HideApp),
+            MenuItem::action(t("隐藏 Wisp Study"), HideApp),
             MenuItem::action(t("隐藏其他"), HideOthers),
             MenuItem::action(t("全部显示"), ShowAll),
             MenuItem::separator(),
-            MenuItem::action(t("退出 Wisp Paper"), Quit),
+            MenuItem::action(t("退出 Wisp Study"), Quit),
         ],
     }]);
 }
@@ -149,13 +149,13 @@ mod tray {
             std::fs::write(marker(), format!("{} {}", std::process::id(), hwnd as isize)).ok();
         }
         let (send, receive) = async_channel::unbounded::<Event>();
-        let open = MenuItem::new(crate::i18n::t("打开 Wisp Paper"), true, None);
-        let quit = MenuItem::new(crate::i18n::t("退出 Wisp Paper"), true, None);
+        let open = MenuItem::new(crate::i18n::t("打开 Wisp Study"), true, None);
+        let quit = MenuItem::new(crate::i18n::t("退出 Wisp Study"), true, None);
         let menu = Menu::new();
         let (open_id, quit_id) = (open.id().clone(), quit.id().clone());
         if menu.append_items(&[&open, &PredefinedMenuItem::separator(), &quit]).is_err() { return }
         let Some(icon) = icon() else { return };
-        let Ok(tray) = TrayIconBuilder::new().with_tooltip("Wisp Paper").with_icon(icon).with_menu(Box::new(menu)).with_menu_on_left_click(false).build() else { return };
+        let Ok(tray) = TrayIconBuilder::new().with_tooltip("Wisp Study").with_icon(icon).with_menu(Box::new(menu)).with_menu_on_left_click(false).build() else { return };
         // The handlers run inside the tray's own window procedure; the app hears them through the channel.
         let clicks = send.clone();
         TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
@@ -192,12 +192,12 @@ mod tray {
         tray_icon::Icon::from_rgba(small.into_raw(), 32, 32).ok()
     }
 
-    /// One file per settings file (`WISP_PAPER_HOME` makes another), so a demo runs beside the real library.
+    /// One file per settings file (`WISP_STUDY_HOME` makes another), so a demo runs beside the real library.
     fn marker() -> PathBuf {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::hash::DefaultHasher::new();
         wisp_core::settings::settings_file().hash(&mut hasher);
-        std::env::temp_dir().join(format!("wisp-paper-{:016x}.window", hasher.finish()))
+        std::env::temp_dir().join(format!("wisp-study-{:016x}.window", hasher.finish()))
     }
 
     pub fn forget() {

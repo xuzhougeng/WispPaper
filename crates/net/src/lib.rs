@@ -15,7 +15,7 @@ use wisp_core::lookup::{self, Identifier};
 use wisp_core::model::Paper;
 use wisp_core::update::{self, Release};
 
-const USER_AGENT: &str = concat!("WispPaper/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("WispStudy/", env!("CARGO_PKG_VERSION"));
 
 /// The proxy every request of this process goes through, from the settings.
 static PROXY: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
@@ -701,13 +701,13 @@ event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{
 
     #[test]
     fn latest_release_reads_the_redirect() {
-        let (base, server) = serve("HTTP/1.1 302 Found\r\nlocation: https://github.com/xuzhougeng/WispPaper/releases/tag/v9.8.7\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+        let (base, server) = serve("HTTP/1.1 302 Found\r\nlocation: https://github.com/xuzhougeng/WispStudy/releases/tag/v9.8.7\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
         let release = latest_release(&format!("{base}/releases/latest")).unwrap().unwrap();
-        assert_eq!((release.version.as_str(), release.url.as_str()), ("9.8.7", "https://github.com/xuzhougeng/WispPaper/releases/tag/v9.8.7"));
+        assert_eq!((release.version.as_str(), release.url.as_str()), ("9.8.7", "https://github.com/xuzhougeng/WispStudy/releases/tag/v9.8.7"));
         assert!(server.join().unwrap().starts_with("GET /releases/latest "));
 
         // No release published: GitHub redirects to the list. Elsewhere: never offered.
-        for response in ["HTTP/1.1 302 Found\r\nlocation: https://github.com/xuzhougeng/WispPaper/releases\r\ncontent-length: 0\r\nconnection: close\r\n\r\n", "HTTP/1.1 302 Found\r\nlocation: https://example.com/releases/tag/v9.9.9\r\ncontent-length: 0\r\nconnection: close\r\n\r\n", "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"] {
+        for response in ["HTTP/1.1 302 Found\r\nlocation: https://github.com/xuzhougeng/WispStudy/releases\r\ncontent-length: 0\r\nconnection: close\r\n\r\n", "HTTP/1.1 302 Found\r\nlocation: https://example.com/releases/tag/v9.9.9\r\ncontent-length: 0\r\nconnection: close\r\n\r\n", "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"] {
             let (base, server) = serve(response);
             assert_eq!(latest_release(&base), Ok(None));
             server.join().unwrap();

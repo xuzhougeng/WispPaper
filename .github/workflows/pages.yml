@@ -1,6 +1,6 @@
 name: Pages
 
-# The project page, https://xuzhougeng.github.io/WispPaper/. It is site/ plus
+# The project page, https://xuzhougeng.github.io/WispStudy/. It is site/ plus
 # the screenshots under docs/images (site/build.sh), and release.json: the
 # latest release's files, which the download buttons read. So it is deployed
 # again after every release, not only when the page changes.

@@ -375,7 +375,7 @@ pub fn build_context(library_name: &str, topic: &str, papers: &[&Paper], fields:
         }
     };
     ctx.instructions = format!(
-        "你是 Wisp Paper 里的文献助手，帮助用户理解和整理文献库「{library_name}」。\n{about}{scope_line}\n\n\
+        "你是 Wisp Study 里的文献助手，帮助用户理解和整理文献库「{library_name}」。\n{about}{scope_line}\n\n\
 回答时遵循：\n\
 - 依据提供的文献材料作答。材料里没有的内容，明确说明文献库中没有相关信息，不要凭印象补充文献细节；需要用到常识性背景时，说明它不出自文献库。\n\
 - 引用文献时使用材料中的标签，例如 [P3]。标签要紧跟在它支持的那句话后面。\n\

@@ -1,4 +1,4 @@
-//! Wisp Paper: a local-first literature library. Collect papers, organise
+//! Wisp Study: a local-first literature library. Collect papers, organise
 //! them with tags and custom fields, preview PDFs and ask questions over a
 //! library. The engine is `wisp_core` (crates/core, no GPUI); this crate is
 //! the GPUI application.
@@ -51,7 +51,7 @@ mod write_source;
 
 use gpui::*;
 
-pub(crate) const APP_ID: &str = "com.wisp.paper";
+pub(crate) const APP_ID: &str = "com.wisp.study";
 
 fn main() {
     #[cfg(target_os = "windows")]
@@ -65,9 +65,9 @@ fn main() {
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 app_id: Some(APP_ID.into()),
-                titlebar: Some(TitlebarOptions { title: Some("Wisp Paper".into()), appears_transparent: ui::custom_titlebar(), traffic_light_position: Some(point(px(14.), px(11.))) }),
+                titlebar: Some(TitlebarOptions { title: Some("Wisp Study".into()), appears_transparent: ui::custom_titlebar(), traffic_light_position: Some(point(px(14.), px(11.))) }),
                 window_min_size: Some(size(px(900.), px(560.))),
-                focus: std::env::var_os("WISP_PAPER_DEV").is_none(),
+                focus: wisp_core::settings::env("DEV").is_none(),
                 ..Default::default()
             },
             |window, cx| cx.new(|cx| app::Workspace::new(window, cx)),
@@ -85,6 +85,6 @@ fn main() {
         })
         .detach();
         // A scripted debug start must not take the keyboard from whatever the user is doing.
-        if std::env::var_os("WISP_PAPER_DEV").is_none() { cx.activate(true) }
+        if wisp_core::settings::env("DEV").is_none() { cx.activate(true) }
     });
 }

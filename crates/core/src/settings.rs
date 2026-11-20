@@ -252,21 +252,39 @@ impl Tasks {
     }
 }
 
-/// `WISP_PAPER_HOME` keeps the data and the settings of tests and
+/// The environment variable `WISP_STUDY_<name>`, or, while that one is unset,
+/// `WISP_PAPER_<name>`: the name it had before the app was renamed (Wisp Paper).
+pub fn env(name: &str) -> Option<String> {
+    std::env::var(format!("WISP_STUDY_{name}")).or_else(|_| std::env::var(format!("WISP_PAPER_{name}"))).ok()
+}
+
+/// `WISP_STUDY_HOME` keeps the data and the settings of tests and
 /// side-by-side builds in one folder of their own.
 fn home_override() -> Option<PathBuf> {
-    std::env::var("WISP_PAPER_HOME").ok().filter(|home| !home.trim().is_empty()).map(PathBuf::from)
+    env("HOME").filter(|home| !home.trim().is_empty()).map(PathBuf::from)
+}
+
+/// The app's folder in the documents and in the configuration folder.
+const FOLDER: &str = "WispStudy";
+/// What builds from before the rename (Wisp Paper) called it.
+const FORMER_FOLDER: &str = "WispPaper";
+
+/// The app's folder in `base`. A build from before the rename left its own
+/// there: while it is the only one, it stays in use where it is, nothing moved.
+fn app_folder(base: &Path) -> PathBuf {
+    let (folder, former) = (base.join(FOLDER), base.join(FORMER_FOLDER));
+    if !folder.exists() && former.is_dir() { former } else { folder }
 }
 
 /// Where the libraries live unless the settings name another folder.
 pub fn default_root() -> PathBuf {
-    home_override().unwrap_or_else(|| dirs::document_dir().or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from(".")).join("WispPaper"))
+    home_override().unwrap_or_else(|| app_folder(&dirs::document_dir().or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from("."))))
 }
 
 pub fn settings_file() -> PathBuf {
     match home_override() {
         Some(home) => home.join("settings.json"),
-        None => dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("WispPaper").join("settings.json"),
+        None => app_folder(&dirs::config_dir().unwrap_or_else(|| PathBuf::from("."))).join("settings.json"),
     }
 }
 
@@ -579,6 +597,26 @@ fn migrate(legacy: Vec<Profile>, defaults: Vec<Provider>) -> Vec<Provider> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_folder_from_before_the_rename_stays_in_use() {
+        let base = std::env::temp_dir().join(format!("wisp-folder-{}", crate::model::new_id("T")));
+        std::fs::create_dir_all(&base).unwrap();
+        // A first start: the new name.
+        assert_eq!(app_folder(&base), base.join("WispStudy"));
+        // Only the old folder (a file of that name is not one).
+        std::fs::write(base.join("WispPaper"), "").unwrap();
+        assert_eq!(app_folder(&base), base.join("WispStudy"));
+        std::fs::remove_file(base.join("WispPaper")).unwrap();
+        std::fs::create_dir(base.join("WispPaper")).unwrap();
+        assert_eq!(app_folder(&base), base.join("WispPaper"));
+        // Once the new one is there, it is the one.
+        std::fs::create_dir(base.join("WispStudy")).unwrap();
+        assert_eq!(app_folder(&base), base.join("WispStudy"));
+        // Nothing was moved or copied.
+        assert!(base.join("WispPaper").is_dir());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
 
     #[test]
     fn reading_preferences_persist_and_visual_reset_keeps_other_settings() {

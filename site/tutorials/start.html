@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>从一个课题开始 · Wisp Paper 教程</title>
-<meta name="description" content="从一个空的 Wisp Paper 开始：配置模型，建库写主题，让助手拟检索式，从 PubMed 和 Europe PMC 导入 355 篇，由助手读过摘要给出建议，再由你确认收录。">
+<title>从一个课题开始 · Wisp Study 教程</title>
+<meta name="description" content="从一个空的 Wisp Study 开始：配置模型，建库写主题，让助手拟检索式，从 PubMed 和 Europe PMC 导入 355 篇，由助手读过摘要给出建议，再由你确认收录。">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#F5F4F1" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#1A1B1D" media="(prefers-color-scheme: dark)">
@@ -18,14 +18,14 @@
 
 <header class="top">
   <div class="wrap top-in">
-    <a class="brand" href="../index.html" aria-label="Wisp Paper"><img src="../app-icon.svg" width="26" height="26" alt=""><span>Wisp Paper</span></a>
+    <a class="brand" href="../index.html" aria-label="Wisp Study"><img src="../app-icon.svg" width="26" height="26" alt=""><span>Wisp Study</span></a>
     <nav aria-label="站点">
       <a href="index.html" aria-current="page">教程</a>
       <a href="../index.html#ideas">理念</a>
       <a href="../index.html#tools">工具</a>
       <a href="../index.html#download">下载</a>
     </nav>
-    <a class="gh" href="https://github.com/xuzhougeng/WispPaper">GitHub<span aria-hidden="true"> ↗</span></a>
+    <a class="gh" href="https://github.com/xuzhougeng/WispStudy">GitHub<span aria-hidden="true"> ↗</span></a>
   </div>
 </header>
 
@@ -35,10 +35,10 @@
   <header class="doc-head">
     <p class="kicker">教程 01　·　收集</p>
     <h1>从一个课题开始：检索、导入、筛选</h1>
-    <p class="lead">导师给了一个方向「植物单细胞转录组」，手里一篇文献都没有。这一篇从一个空的 Wisp Paper 开始：配置模型，建库，让助手拟检索式，从 PubMed 和 Europe PMC 导入 355 篇，由助手逐篇读过摘要给出建议，最后由你确认收不收。</p>
+    <p class="lead">导师给了一个方向「植物单细胞转录组」，手里一篇文献都没有。这一篇从一个空的 Wisp Study 开始：配置模型，建库，让助手拟检索式，从 PubMed 和 Europe PMC 导入 355 篇，由助手逐篇读过摘要给出建议，最后由你确认收不收。</p>
     <dl class="facts">
       <div><dt>场景</dt><dd>刚接手一个课题，要在一个下午里攒出第一批文献，并分出哪些值得读。</dd></div>
-      <div><dt>需要</dt><dd>Wisp Paper 和一个你自己的模型服务（Claude API、OpenAI 兼容或 OpenAI Responses 接口）。</dd></div>
+      <div><dt>需要</dt><dd>Wisp Study 和一个你自己的模型服务（Claude API、OpenAI 兼容或 OpenAI Responses 接口）。</dd></div>
       <div><dt>用时</dt><dd>约 15 分钟，其中等模型和数据库约 8 分钟。</dd></div>
     </dl>
   </header>
@@ -60,7 +60,7 @@
     <article class="prose">
       <section id="s1">
         <h2><i>1</i>安装，配置模型</h2>
-        <p>从<a href="https://github.com/xuzhougeng/WispPaper/releases/latest">发布页</a>下载：macOS 是 <code>.dmg</code>，打开后把 Wisp Paper 拖进「应用程序」；Windows 有安装版 <code>-setup.exe</code>（装在当前用户名下，不需要管理员权限）和便携版 <code>.zip</code>。拟检索式和筛选都要调用模型，Wisp Paper 不自带模型，先在设置里接上你自己的。</p>
+        <p>从<a href="https://github.com/xuzhougeng/WispStudy/releases/latest">发布页</a>下载：macOS 是 <code>.dmg</code>，打开后把 Wisp Study 拖进「应用程序」；Windows 有安装版 <code>-setup.exe</code>（装在当前用户名下，不需要管理员权限）和便携版 <code>.zip</code>。拟检索式和筛选都要调用模型，Wisp Study 不自带模型，先在设置里接上你自己的。</p>
         <p>点首页右上角的「设置」（<kbd>⌘</kbd> + <kbd>,</kbd>，Windows 上是 <kbd>Ctrl</kbd> + <kbd>,</kbd>），进入「AI」。「模型」一栏左边是模型服务，DeepSeek、Kimi、GLM 已经列着，各标着「缺 API Key」；用其中一家，点开它填上 API Key 即可。用别的服务就点「添加服务」，从列表里选，或选「其他 OpenAI 兼容服务」：</p>
         <ul>
           <li><b>接口</b>：Claude API、OpenAI 兼容、Responses 三选一。</li>
@@ -133,7 +133,7 @@
         <p>点右下角的「保存并导入所选的 2 条」。两条检索式保存到「检索与导入」页并立即运行，约 40 秒：</p>
         <ul>
           <li>PubMed：命中 205 篇，取回 200 篇，新增 200 篇。</li>
-          <li>Europe PMC：命中 635 篇，取回 200 篇，新增 155 篇，跳过已有的 45 篇。两个数据库有重叠，Wisp Paper 按 DOI、PMID、题目去重。</li>
+          <li>Europe PMC：命中 635 篇，取回 200 篇，新增 155 篇，跳过已有的 45 篇。两个数据库有重叠，Wisp Study 按 DOI、PMID、题目去重。</li>
         </ul>
 
         <figure class="shot">
@@ -222,9 +222,9 @@
       <h2>参考</h2>
       <ol>
         <li><a href="index.html">全部教程</a></li>
-        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/FEATURES.md">功能详解：每个页面能做什么</a></li>
-        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/DATA.md">数据与隐私：文件放在哪里，哪些数据会离开本机</a></li>
-        <li><a href="https://github.com/xuzhougeng/WispPaper/issues">问题与想法：Issues</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispStudy/blob/main/docs/FEATURES.md">功能详解：每个页面能做什么</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispStudy/blob/main/docs/DATA.md">数据与隐私：文件放在哪里，哪些数据会离开本机</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispStudy/issues">问题与想法：Issues</a></li>
       </ol>
     </div>
     <div class="colophon">

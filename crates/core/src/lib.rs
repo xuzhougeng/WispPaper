@@ -1,4 +1,4 @@
-//! Wisp Paper's library engine. No GPUI in here: everything can be compiled
+//! Wisp Study's library engine. No GPUI in here: everything can be compiled
 //! and tested on its own (`cargo test -p wisp_core`).
 //!
 //! - `model`    papers, custom field definitions, attachments, normalisation
@@ -8,7 +8,7 @@
 //! - `import`   BibTeX and RIS readers
 //! - `zotero`   read-only local Zotero import, with notes, tags and PDF copies
 //! - `export`   BibTeX and CSV writers
-//! - `archive`  a whole library in one `.wisppaper` file (a gzipped tar) for another Wisp Paper, and taking one in
+//! - `archive`  a whole library in one `.wispstudy` file (a gzipped tar) for another Wisp Study, and taking one in
 //! - `extract`  提取: a model's proposals for the custom fields of a paper, each with a sentence of the source
 //! - `figure`   图片库: pieces of PDF pages kept as pictures, and the caption a page gives each
 //! - `lookup`   Crossref / Europe PMC records → `Paper`

@@ -1,8 +1,8 @@
-# Build Wisp Paper for Windows and package it twice, from the same folder:
-# - dist/WispPaper-v<version>-windows-x64.zip, the portable one: WispPaper.exe
+# Build Wisp Study for Windows and package it twice, from the same folder:
+# - dist/WispStudy-v<version>-windows-x64.zip, the portable one: WispStudy.exe
 #   (the app) and wisp.exe (the command line) in a folder of the same name;
-# - dist/WispPaper-v<version>-windows-x64-setup.exe, the setup that installs
-#   those files for the current user (scripts/wisp-paper.iss, Inno Setup 6).
+# - dist/WispStudy-v<version>-windows-x64-setup.exe, the setup that installs
+#   those files for the current user (scripts/wisp-study.iss, Inno Setup 6).
 #
 #   pwsh -File scripts/package-windows.ps1               # unsigned, for a look on this machine
 #   pwsh -File scripts/package-windows.ps1 -NoInstaller  # the zip only, where Inno Setup is not installed
@@ -31,14 +31,14 @@ $match = Select-String -LiteralPath 'Cargo.toml' -Pattern '^version = "(.*)"$' |
 if (-not $match) { throw 'No version in Cargo.toml' }
 $version = $match.Matches[0].Groups[1].Value
 
-& cargo build --release -p wisp_paper -p wisp_cli
+& cargo build --release -p wisp_study -p wisp_cli
 if ($LASTEXITCODE -ne 0) { throw "cargo build exited $LASTEXITCODE" }
 
 $targetDir = $env:CARGO_TARGET_DIR
 if ([string]::IsNullOrWhiteSpace($targetDir)) { $targetDir = 'target' }
 $release = Join-Path $targetDir 'release'
 
-$name = "WispPaper-v$version-windows-x64"
+$name = "WispStudy-v$version-windows-x64"
 $dist = Join-Path $root 'dist'
 $folder = Join-Path $dist $name
 $zip = Join-Path $dist "$name.zip"
@@ -67,9 +67,9 @@ if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
 New-Item -ItemType Directory -Force -Path $folder | Out-Null
 
 # The app is a GUI-subsystem program; `wisp` beside it is the console one.
-$app = Join-Path $folder 'WispPaper.exe'
+$app = Join-Path $folder 'WispStudy.exe'
 $cli = Join-Path $folder 'wisp.exe'
-Copy-Item -LiteralPath (Join-Path $release 'wisp_paper.exe') -Destination $app
+Copy-Item -LiteralPath (Join-Path $release 'wisp_study.exe') -Destination $app
 Copy-Item -LiteralPath (Join-Path $release 'wisp.exe') -Destination $cli
 Copy-Item -LiteralPath 'LICENSE', 'THIRD_PARTY.md', 'README.md' -Destination $folder
 
@@ -90,7 +90,7 @@ Write-Host "folder: $folder"
 Write-Host ("zip: $zip ({0:N1} MB)" -f ((Get-Item -LiteralPath $zip).Length / 1MB))
 
 if ($NoInstaller) { return }
-& $iscc /Qp "/DAppVersion=$version" "/DSource=$folder" "/DOutput=$dist" "/DBaseName=$name-setup" (Join-Path $PSScriptRoot 'wisp-paper.iss')
+& $iscc /Qp "/DAppVersion=$version" "/DSource=$folder" "/DOutput=$dist" "/DBaseName=$name-setup" (Join-Path $PSScriptRoot 'wisp-study.iss')
 if ($LASTEXITCODE -ne 0) { throw "ISCC exited $LASTEXITCODE" }
 if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) { throw "ISCC wrote no $setup" }
 if ($Sign) { Invoke-Sign $setup }

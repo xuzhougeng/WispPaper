@@ -1,7 +1,7 @@
 //! Putting a downloaded release in place of the running app (自动下载更新).
 //! The package is the one the release page offers (`wisp_core::update::asset`),
 //! already held against its checksum by `wisp_net::download_release`.
-//! `stage` unpacks it into a folder beside the app, `.wisp-paper-update`, on
+//! `stage` unpacks it into a folder beside the app, `.wisp-study-update`, on
 //! the same disk, so that `install` is two renames: the app in use steps
 //! aside into that folder, the new one takes its place, and it is started
 //! once this one has quit. The next start clears the folder (`tidy`).
@@ -9,7 +9,7 @@
 //! macOS replaces the `.app` bundle from the DMG; Windows the files of the
 //! app's folder from the zip (a running program can be renamed, not written
 //! over), whether the folder was unpacked by hand or made by the setup, which
-//! installs into a folder of the person's own (`scripts/wisp-paper.iss`). Elsewhere, and for a build run from `target/`, there is
+//! installs into a folder of the person's own (`scripts/wisp-study.iss`). Elsewhere, and for a build run from `target/`, there is
 //! nothing to replace: the release is only announced.
 
 use std::path::{Path, PathBuf};
@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 /// Whether this platform's package can be installed by the app itself.
 pub const SUPPORTED: bool = cfg!(any(target_os = "macos", target_os = "windows"));
 
-const WORK: &str = ".wisp-paper-update";
+const WORK: &str = ".wisp-study-update";
 
 /// The package of a release that this build would install.
 pub fn asset(version: &str) -> Option<String> {
@@ -25,7 +25,7 @@ pub fn asset(version: &str) -> Option<String> {
 }
 
 /// What a release would replace: the `.app` bundle on macOS, the folder of
-/// `WispPaper.exe` on Windows. `None` when this is not a packaged app, or
+/// `WispStudy.exe` on Windows. `None` when this is not a packaged app, or
 /// when it is where nothing can be written (run off its disk image, a folder
 /// of another user).
 pub fn target() -> Option<PathBuf> {
@@ -68,9 +68,9 @@ mod imp {
     use std::process::Command;
 
     /// The name of the app in the disk image (`scripts/package-macos.sh`).
-    const APP: &str = "Wisp Paper.app";
+    const APP: &str = "Wisp Study.app";
 
-    /// `…/Wisp Paper.app/Contents/MacOS/wisp_paper` is in a bundle; `target/release/wisp_paper` is not.
+    /// `…/Wisp Study.app/Contents/MacOS/wisp_study` is in a bundle; `target/release/wisp_study` is not.
     pub fn place(exe: &Path) -> Option<PathBuf> {
         let bundle = exe.parent()?.parent()?.parent()?;
         (bundle.extension()? == "app" && exe.parent()?.ends_with("Contents/MacOS")).then(|| bundle.to_path_buf())
@@ -126,7 +126,7 @@ mod imp {
         }
         // `open` on an app that is still running only brings it forward: wait for this one to be gone.
         // An app started by `open` has none of this one's environment: the data folder it was pointed at goes along.
-        let _ = Command::new("/bin/sh").args(["-c", r#"while kill -0 "$0" 2>/dev/null; do sleep 0.2; done; open "$1" ${WISP_PAPER_HOME:+--env "WISP_PAPER_HOME=$WISP_PAPER_HOME"}"#]).arg(std::process::id().to_string()).arg(target).spawn();
+        let _ = Command::new("/bin/sh").args(["-c", r#"while kill -0 "$0" 2>/dev/null; do sleep 0.2; done; open "$1" ${WISP_STUDY_HOME:+--env "WISP_STUDY_HOME=$WISP_STUDY_HOME"} ${WISP_PAPER_HOME:+--env "WISP_PAPER_HOME=$WISP_PAPER_HOME"}"#]).arg(std::process::id().to_string()).arg(target).spawn();
         Ok(())
     }
 }
@@ -136,8 +136,8 @@ mod imp {
     use super::{WORK, io, swap};
     use std::path::{Path, PathBuf};
 
-    /// The name the package gives the app (`scripts/package-windows.ps1`); cargo's own is `wisp_paper.exe`.
-    const APP: &str = "WispPaper.exe";
+    /// The name the package gives the app (`scripts/package-windows.ps1`); cargo's own is `wisp_study.exe`.
+    const APP: &str = "WispStudy.exe";
 
     pub fn place(exe: &Path) -> Option<PathBuf> {
         (exe.file_name()?.to_str()?.eq_ignore_ascii_case(APP)).then(|| exe.parent().map(Path::to_path_buf))?
@@ -158,11 +158,12 @@ mod imp {
         Ok(staged)
     }
 
-    /// A copy the setup installed (`scripts/wisp-paper.iss`) is listed among the system's apps with
+    /// A copy the setup installed (`scripts/wisp-study.iss`) is listed among the system's apps with
     /// its version. Right after an update (the app set aside is still in `old`) the entry is made
     /// to say this one's. A portable folder has no entry, and none is made for it.
     pub fn updated(target: &Path) {
         use std::os::windows::process::CommandExt;
+        // The setup keeps the AppId of the app's former name (Wisp Paper), so its entry keeps that key.
         const ENTRY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\WispPaper_is1";
         if !work(target).join("old").is_dir() || !target.join("unins000.exe").is_file() { return }
         // `reg` is a console program: CREATE_NO_WINDOW keeps its window away.
@@ -210,7 +211,7 @@ fn swap(staged: &Path, target: &Path, old: &Path) -> Result<(), String> {
     let _ = std::fs::remove_dir_all(old);
     std::fs::create_dir_all(old).map_err(io)?;
     let mut names: Vec<_> = std::fs::read_dir(staged).map_err(io)?.filter_map(|entry| Some(entry.ok()?.file_name())).collect();
-    names.sort_by_key(|name| name.to_string_lossy().eq_ignore_ascii_case("WispPaper.exe"));
+    names.sort_by_key(|name| name.to_string_lossy().eq_ignore_ascii_case("WispStudy.exe"));
     for name in names {
         let place = target.join(&name);
         if place.exists() { std::fs::rename(&place, old.join(&name)).map_err(io)? }
@@ -227,14 +228,14 @@ mod tests {
     fn new_files_take_the_place_of_the_old_ones() {
         let dir = std::env::temp_dir().join(format!("wisp-updater-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let (staged, old) = (dir.join(".wisp-paper-update/new"), dir.join(".wisp-paper-update/old"));
+        let (staged, old) = (dir.join(".wisp-study-update/new"), dir.join(".wisp-study-update/old"));
         std::fs::create_dir_all(&staged).unwrap();
-        for (name, text) in [("WispPaper.exe", "app 1"), ("wisp.exe", "cli 1"), ("mine.txt", "kept")] { std::fs::write(dir.join(name), text).unwrap() }
-        for (name, text) in [("WispPaper.exe", "app 2"), ("wisp.exe", "cli 2"), ("README.md", "new")] { std::fs::write(staged.join(name), text).unwrap() }
+        for (name, text) in [("WispStudy.exe", "app 1"), ("wisp.exe", "cli 1"), ("mine.txt", "kept")] { std::fs::write(dir.join(name), text).unwrap() }
+        for (name, text) in [("WispStudy.exe", "app 2"), ("wisp.exe", "cli 2"), ("README.md", "new")] { std::fs::write(staged.join(name), text).unwrap() }
         swap(&staged, &dir, &old).unwrap();
         let read = |path: std::path::PathBuf| std::fs::read_to_string(path).unwrap_or_default();
-        assert_eq!([read(dir.join("WispPaper.exe")), read(dir.join("wisp.exe")), read(dir.join("README.md")), read(dir.join("mine.txt"))], ["app 2", "cli 2", "new", "kept"]);
-        assert_eq!([read(old.join("WispPaper.exe")), read(old.join("wisp.exe"))], ["app 1", "cli 1"]);
+        assert_eq!([read(dir.join("WispStudy.exe")), read(dir.join("wisp.exe")), read(dir.join("README.md")), read(dir.join("mine.txt"))], ["app 2", "cli 2", "new", "kept"]);
+        assert_eq!([read(old.join("WispStudy.exe")), read(old.join("wisp.exe"))], ["app 1", "cli 1"]);
         assert!(std::fs::read_dir(&staged).unwrap().next().is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }

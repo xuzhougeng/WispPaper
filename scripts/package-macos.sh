@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build Wisp Paper for macOS and package it: `dist/Wisp Paper.app` and a DMG.
-# The command line travels inside the bundle: "Wisp Paper.app/Contents/MacOS/wisp".
+# Build Wisp Study for macOS and package it: `dist/Wisp Study.app` and a DMG.
+# The command line travels inside the bundle: "Wisp Study.app/Contents/MacOS/wisp".
 #
 #   scripts/package-macos.sh [--arch host|universal|arm64|x64]
 #
@@ -58,10 +58,10 @@ if ! xcrun metal --version >/dev/null 2>&1; then
   features=(--features gpui/runtime_shaders)
 fi
 
-build() { "${cargo[@]}" build --release -p wisp_paper -p wisp_cli ${features[@]+"${features[@]}"} "$@"; }
+build() { "${cargo[@]}" build --release -p wisp_study -p wisp_cli ${features[@]+"${features[@]}"} "$@"; }
 
 dist="${root}/dist"
-app="${dist}/Wisp Paper.app"
+app="${dist}/Wisp Study.app"
 macos_dir="${app}/Contents/MacOS"
 rm -rf "${app}"
 mkdir -p "${macos_dir}" "${app}/Contents/Resources"
@@ -69,14 +69,14 @@ mkdir -p "${macos_dir}" "${app}/Contents/Resources"
 if [[ "${arch}" == universal ]]; then
   label=universal
   for triple in aarch64-apple-darwin x86_64-apple-darwin; do build --target "${triple}"; done
-  for binary in wisp_paper wisp; do
+  for binary in wisp_study wisp; do
     lipo -create -output "${macos_dir}/${binary}" "${target_dir}/aarch64-apple-darwin/release/${binary}" "${target_dir}/x86_64-apple-darwin/release/${binary}"
   done
 elif [[ "${arch}" == arm64 || "${arch}" == x64 ]]; then
   label="${arch}"
   if [[ "${arch}" == arm64 ]]; then triple=aarch64-apple-darwin; else triple=x86_64-apple-darwin; fi
   build --target "${triple}"
-  for binary in wisp_paper wisp; do cp "${target_dir}/${triple}/release/${binary}" "${macos_dir}/${binary}"; done
+  for binary in wisp_study wisp; do cp "${target_dir}/${triple}/release/${binary}" "${macos_dir}/${binary}"; done
 else
   case "$(uname -m)" in
     arm64) label=arm64 ;;
@@ -84,9 +84,9 @@ else
     *) label="$(uname -m)" ;;
   esac
   build
-  for binary in wisp_paper wisp; do cp "${target_dir}/release/${binary}" "${macos_dir}/${binary}"; done
+  for binary in wisp_study wisp; do cp "${target_dir}/release/${binary}" "${macos_dir}/${binary}"; done
 fi
-chmod 755 "${macos_dir}/wisp_paper" "${macos_dir}/wisp"
+chmod 755 "${macos_dir}/wisp_study" "${macos_dir}/wisp"
 
 # The icon: every size of an .icns, scaled from the one PNG.
 work="$(mktemp -d)"
@@ -105,10 +105,10 @@ cat >"${app}/Contents/Info.plist" <<EOF
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>Wisp Paper</string>
-  <key>CFBundleDisplayName</key><string>Wisp Paper</string>
-  <key>CFBundleIdentifier</key><string>com.wisp.paper</string>
-  <key>CFBundleExecutable</key><string>wisp_paper</string>
+  <key>CFBundleName</key><string>Wisp Study</string>
+  <key>CFBundleDisplayName</key><string>Wisp Study</string>
+  <key>CFBundleIdentifier</key><string>com.wisp.study</string>
+  <key>CFBundleExecutable</key><string>wisp_study</string>
   <key>CFBundleIconFile</key><string>app-icon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
@@ -133,7 +133,7 @@ else
   echo "no WISP_MACOS_SIGNING_IDENTITY: signing ad hoc"
 fi
 "${sign[@]}" "${macos_dir}/wisp"
-"${sign[@]}" "${macos_dir}/wisp_paper"
+"${sign[@]}" "${macos_dir}/wisp_study"
 "${sign[@]}" "${app}"
 codesign --verify --strict "${app}"
 
@@ -169,13 +169,13 @@ if [[ -n "${notary_profile}" ]]; then
 fi
 
 # The DMG: the app next to a link to /Applications.
-dmg="${dist}/WispPaper-v${version}-macos-${label}.dmg"
+dmg="${dist}/WispStudy-v${version}-macos-${label}.dmg"
 stage="${work}/dmg"
 mkdir -p "${stage}"
 cp -R "${app}" "${stage}/"
 ln -s /Applications "${stage}/Applications"
 rm -f "${dmg}"
-hdiutil create -volname "Wisp Paper" -srcfolder "${stage}" -ov -format UDZO "${dmg}" >/dev/null
+hdiutil create -volname "Wisp Study" -srcfolder "${stage}" -ov -format UDZO "${dmg}" >/dev/null
 if [[ -n "${identity}" ]]; then
   dmg_sign=(codesign --force --timestamp --sign "${identity}")
   if [[ -n "${CODESIGN_KEYCHAIN:-}" ]]; then dmg_sign+=(--keychain "${CODESIGN_KEYCHAIN}"); fi

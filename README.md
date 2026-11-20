@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="assets/branding/app-icon.png" width="96" alt="Wisp Paper 的应用图标">
+  <img src="assets/branding/app-icon.png" width="96" alt="Wisp Study 的应用图标">
 </p>
 
-<h1 align="center">Wisp Paper</h1>
+<h1 align="center">Wisp Study</h1>
 
 <p align="center">
   <b>本地优先的文献库：收集、筛选、阅读，向你的文献提问。</b><br>
@@ -12,15 +12,15 @@
 <p align="center">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey" alt="Windows 和 macOS">
   <img src="https://img.shields.io/badge/built%20with-Rust%20%2B%20GPUI-dea584?logo=rust" alt="用 Rust 和 GPUI 构建">
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/xuzhougeng/WispPaper?color=green" alt="MIT 许可"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/xuzhougeng/WispStudy?color=green" alt="MIT 许可"></a>
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="Alpha">
 </p>
 
 <p align="center">
-  <a href="https://xuzhougeng.github.io/WispPaper/"><b>主页</b></a> ·
+  <a href="https://xuzhougeng.github.io/WispStudy/"><b>主页</b></a> ·
   <a href="#安装"><b>安装</b></a> ·
   <a href="#功能">功能</a> ·
-  <a href="https://xuzhougeng.github.io/WispPaper/tutorials/">教程</a> ·
+  <a href="https://xuzhougeng.github.io/WispStudy/tutorials/">教程</a> ·
   <a href="docs/ZOTERO.md">Zotero 导入</a> ·
   <a href="docs/CLI.md">命令行与 MCP</a> ·
   <a href="docs/DATA.md">数据与隐私</a> ·
@@ -28,13 +28,13 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/library.png" width="100%" alt="Wisp Paper 的文献库页面：左侧是视图和标签，中间是文献列表，右侧是所选文献的详情和笔记。">
+  <img src="docs/images/library.png" width="100%" alt="Wisp Study 的文献库页面：左侧是视图和标签，中间是文献列表，右侧是所选文献的详情和笔记。">
 </p>
 
 > [!NOTE]
-> Wisp Paper 还在早期，变化很快。支持中文和英文界面，在「设置 › 通用 › 界面语言」中切换（Settings › General › Interface language），立即生效并自动保存。第一次用，可以跟着[教程](https://xuzhougeng.github.io/WispPaper/tutorials/)从零建一个文献库；之后的几篇各讲一个科研场景：精读、提问、提取、写综述、写论文、改稿。遇到问题或有想法，欢迎[提 issue](https://github.com/xuzhougeng/WispPaper/issues)，更欢迎直接发 pull request。
+> Wisp Study 还在早期，变化很快。支持中文和英文界面，在「设置 › 通用 › 界面语言」中切换（Settings › General › Interface language），立即生效并自动保存。第一次用，可以跟着[教程](https://xuzhougeng.github.io/WispStudy/tutorials/)从零建一个文献库；之后的几篇各讲一个科研场景：精读、提问、提取、写综述、写论文、改稿。遇到问题或有想法，欢迎[提 issue](https://github.com/xuzhougeng/WispStudy/issues)，更欢迎直接发 pull request。
 
-## 为什么是 Wisp Paper
+## 为什么是 Wisp Study
 
 **🔒 本地优先，文献是你自己的。** 不需要账号，没有云端。每个文献库是数据目录下的一个独立文件夹，数据库、PDF、自定义词条都在里面，可以单独备份或整个拷走。删除只是移动到 `removed/`，什么都不会真的丢。哪些数据会离开本机，逐条写在[数据与隐私](docs/DATA.md)里。
 
@@ -46,23 +46,25 @@
 
 ## 安装
 
-从[发布页](https://github.com/xuzhougeng/WispPaper/releases/latest)下载：
+从[发布页](https://github.com/xuzhougeng/WispStudy/releases/latest)下载：
 
 | 平台 | 文件 | 说明 |
 |---|---|---|
-| **macOS**，Apple 芯片 | `WispPaper-v<版本>-macos-arm64.dmg` | Developer ID 签名并经 Apple 公证。打开后把 Wisp Paper 拖进「应用程序」 |
-| **macOS**，Intel | `WispPaper-v<版本>-macos-x64.dmg` | 同上 |
-| **Windows** 10 / 11（x64），安装版 | `WispPaper-v<版本>-windows-x64-setup.exe` | 装在当前用户名下（`%LOCALAPPDATA%\Programs\Wisp Paper`），不需要管理员权限，带 Authenticode 签名 |
-| **Windows** 10 / 11（x64），便携版 | `WispPaper-v<版本>-windows-x64.zip` | 解压后运行 `WispPaper.exe`，不写注册表，带 Authenticode 签名 |
-| **Linux**（x64） | `WispPaper-v<版本>-linux-x64.tar.gz` | 解压后运行 `wisp-paper`；没有签名，也没有在真机上测试过 |
+| **macOS**，Apple 芯片 | `WispStudy-v<版本>-macos-arm64.dmg` | Developer ID 签名并经 Apple 公证。打开后把 Wisp Study 拖进「应用程序」 |
+| **macOS**，Intel | `WispStudy-v<版本>-macos-x64.dmg` | 同上 |
+| **Windows** 10 / 11（x64），安装版 | `WispStudy-v<版本>-windows-x64-setup.exe` | 装在当前用户名下（`%LOCALAPPDATA%\Programs\Wisp Study`），不需要管理员权限，带 Authenticode 签名 |
+| **Windows** 10 / 11（x64），便携版 | `WispStudy-v<版本>-windows-x64.zip` | 解压后运行 `WispStudy.exe`，不写注册表，带 Authenticode 签名 |
+| **Linux**（x64） | `WispStudy-v<版本>-linux-x64.tar.gz` | 解压后运行 `wisp-study`；没有签名，也没有在真机上测试过 |
 
-命令行工具 `wisp` 随包附带：Windows 和 Linux 在主程序旁边，macOS 在 `Wisp Paper.app/Contents/MacOS/wisp`。
+Wisp Study 原名 Wisp Paper。旧版的自动更新找不到改名后的版本，请从发布页下载新版安装：Windows 安装版会原地替换旧版；macOS 装好 `Wisp Study.app` 后可删去旧的 `Wisp Paper.app`。文献库和设置原地保留，不用迁移。
+
+命令行工具 `wisp` 随包附带：Windows 和 Linux 在主程序旁边，macOS 在 `Wisp Study.app/Contents/MacOS/wisp`。
 
 从源码构建需要 Rust（版本见 `rust-toolchain.toml`，rustup 会自动安装）；Windows 上还需要 MSVC 构建工具。
 
 ```sh
-git clone https://github.com/xuzhougeng/WispPaper
-cd WispPaper
+git clone https://github.com/xuzhougeng/WispStudy
+cd WispStudy
 cargo run --release
 ```
 
@@ -70,7 +72,7 @@ cargo run --release
 
 ```sh
 cargo run -p wisp_core --example seed -- /tmp/wisp-demo some.pdf
-WISP_PAPER_HOME=/tmp/wisp-demo cargo run
+WISP_STUDY_HOME=/tmp/wisp-demo cargo run
 ```
 
 提问、建库向导、筛选、翻译和写作页的模型分节需要模型服务，在「设置 › AI」里配置：Claude API、OpenAI 兼容的 chat/completions，或 OpenAI 的 Responses 接口。可以放进多个模型，提问、批量筛选、翻译、整理全文各用哪一个、各自思考到什么程度分别指定。
@@ -99,7 +101,7 @@ WISP_PAPER_HOME=/tmp/wisp-demo cargo run
 
 | | |
 |---|---|
-| [教程](https://xuzhougeng.github.io/WispPaper/tutorials/) | 九篇按科研场景写的教程，带截图：建库、迁移、精读、提问、提取、写综述、写论文、改稿、跟进新文献 |
+| [教程](https://xuzhougeng.github.io/WispStudy/tutorials/) | 九篇按科研场景写的教程，带截图：建库、迁移、精读、提问、提取、写综述、写论文、改稿、跟进新文献 |
 | [建库案例](docs/TUTORIAL.md) | 从零建一个「植物单细胞转录组」文献库的原始记录（v0.2.0） |
 | [功能详解](docs/FEATURES.md) | 每个页面能做什么 |
 | [数据与隐私](docs/DATA.md) | 文件放在哪里，哪些数据会离开本机 |

@@ -267,9 +267,9 @@ pub enum Cmd {
     EditLibrary(String),
     AskRemoveLibrary(String),
     RemoveLibrary(String),
-    /// The whole library as a `.wisppaper` file, with its PDFs and other attachments or without.
+    /// The whole library as a `.wispstudy` file, with its PDFs and other attachments or without.
     ExportLibrary(String, bool),
-    /// A `.wisppaper` file from another Wisp Paper, taken in as a new library.
+    /// A `.wispstudy` file from another Wisp Study, taken in as a new library.
     ImportLibrary,
     GoHome,
     RevealFolder,
@@ -2008,7 +2008,7 @@ impl Workspace {
     /// Once the window is there: go back to where it was last (回到上次的界面), and from now on keep where it is.
     pub fn start_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // A scripted debug start says itself where it begins (its `restore` step is this).
-        if self.settings.restore_session && std::env::var_os("WISP_PAPER_DEV").is_none() { self.restore_session(window, cx) }
+        if self.settings.restore_session && wisp_core::settings::env("DEV").is_none() { self.restore_session(window, cx) }
         cx.observe_self(|this, _| this.keep_session()).detach();
     }
 
@@ -2136,8 +2136,8 @@ impl Workspace {
                 items.push(item("BibTeX（.bib）", Cmd::Export(ExportKind::Bibtex)));
                 items.push(item(t("表格（.csv）"), Cmd::Export(ExportKind::Csv)));
                 if let Some(id) = self.lib.as_ref().map(|l| l.info.id.clone()) {
-                    items.push(item(t("整个文献库，含 PDF（.wisppaper）…"), Cmd::ExportLibrary(id.clone(), true)));
-                    items.push(item(t("整个文献库，不含 PDF（.wisppaper）…"), Cmd::ExportLibrary(id, false)));
+                    items.push(item(t("整个文献库，含 PDF（.wispstudy）…"), Cmd::ExportLibrary(id.clone(), true)));
+                    items.push(item(t("整个文献库，不含 PDF（.wispstudy）…"), Cmd::ExportLibrary(id, false)));
                 }
             }
             MenuKind::LibraryCard(id) => {
@@ -2305,7 +2305,7 @@ impl Workspace {
                 self.modal = None;
                 theme::set_accent("blue");
                 self.libraries = libraries::list(&self.root);
-                window.set_window_title("Wisp Paper");
+                window.set_window_title("Wisp Study");
                 window.focus(&self.focus);
             }
             Cmd::NewLibrary => self.library_dialog(None, window, cx),
@@ -3530,7 +3530,7 @@ impl Workspace {
         info.opened_at = time::now_iso();
         let _ = libraries::save(&info);
         theme::set_accent(&info.color);
-        window.set_window_title(&format!("{} — Wisp Paper", info.name));
+        window.set_window_title(&format!("{} — Wisp Study", info.name));
         let search = cx.new(|cx| TextInput::new("搜索题目、作者、DOI、标签、词条、笔记…", cx));
         let notes = cx.new(|cx| TextInput::new("读这篇文献时想到的…", cx).multiline(4));
         let scope_find = cx.new(|cx| TextInput::new("在这些文献里找：题目、作者、标签、摘要…", cx));
@@ -4018,8 +4018,8 @@ impl Workspace {
     /// imported, and a folder gives every PDF under it, tagged with the
     /// folders between it and the file (`import::folder_pdfs`).
     pub fn import_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
-        // A library from another Wisp Paper becomes a library of its own, wherever it is dropped.
-        let (archives, paths): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|path| path.is_file() && path.extension().is_some_and(|e| e.eq_ignore_ascii_case(archive::EXTENSION)));
+        // A library from another Wisp Study becomes a library of its own, wherever it is dropped.
+        let (archives, paths): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|path| path.is_file() && archive::is_archive_name(path));
         for path in archives { self.import_library(path, cx) }
         if paths.is_empty() { return }
         if self.lib.is_none() { return self.fail(t("请先打开一个文献库，再拖入文件。"), cx) }
@@ -4340,7 +4340,7 @@ impl Workspace {
         }
     }
 
-    /// The whole library in one `.wisppaper` file, for another Wisp Paper.
+    /// The whole library in one `.wispstudy` file, for another Wisp Study.
     fn export_library(&mut self, id: &str, attachments: bool, cx: &mut Context<Self>) {
         // The open library's own description is the newest.
         let Some(info) = self.lib.as_ref().map(|l| &l.info).filter(|i| i.id == id).or_else(|| self.libraries.iter().find(|l| l.id == id)).cloned() else { return };
@@ -4367,7 +4367,7 @@ impl Workspace {
     }
 
     fn pick_library_file(&mut self, cx: &mut Context<Self>) {
-        let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some(t("导入").into()), extensions: Some(vec![archive::EXTENSION.into()]) });
+        let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some(t("导入").into()), extensions: Some(vec![archive::EXTENSION.into(), archive::FORMER_EXTENSION.into()]) });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = picked.await else { return };
             this.update(cx, |this, cx| for path in paths { this.import_library(path, cx) }).ok();
@@ -4375,7 +4375,7 @@ impl Workspace {
         .detach();
     }
 
-    /// A `.wisppaper` file taken in as a new library; the home page shows it once it is whole.
+    /// A `.wispstudy` file taken in as a new library; the home page shows it once it is whole.
     pub fn import_library(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         let root = self.root.clone();
         let file = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -4979,7 +4979,7 @@ impl Workspace {
         let name = format!("{}-{style}.docx", source.file_stem().map(|stem| stem.to_string_lossy().to_string()).unwrap_or_else(|| "document".into()));
         let directory = source.parent().filter(|folder| folder.is_dir()).map(std::path::Path::to_path_buf).or_else(dirs::document_dir).or_else(dirs::home_dir).unwrap_or_else(|| self.root.clone());
         // A scripted run has nobody at a dialog: the file goes beside the one given.
-        let scripted = std::env::var("WISP_PAPER_DEV").is_ok();
+        let scripted = wisp_core::settings::env("DEV").is_some();
         let picked = (!scripted).then(|| cx.prompt_for_new_path(&directory, Some(&name)));
         cx.spawn(async move |this, cx| {
             let chosen = match picked {
@@ -5896,7 +5896,7 @@ impl Workspace {
                         libraries::save(&info).map(|_| {
                             if let Some(lib) = self.lib.as_mut().filter(|l| l.info.id == info.id) {
                                 theme::set_accent(&info.color);
-                                window.set_window_title(&format!("{} — Wisp Paper", info.name));
+                                window.set_window_title(&format!("{} — Wisp Study", info.name));
                                 // A changed topic changes what the assistant is told.
                                 lib.library_chat.forget_context();
                                 lib.paper_chat.forget_context();
@@ -6114,12 +6114,12 @@ fn run_tool(info: &LibraryInfo, sources: &[ai::Source], call: PreparedCall, allo
     }
 }
 
-/// Debug builds only: `WISP_PAPER_DEV=open:0,select:1,tab:pdf` puts the
+/// Debug builds only: `WISP_STUDY_DEV=open:0,select:1,tab:pdf` puts the
 /// window into a state at start, for screenshots while developing.
 #[cfg(debug_assertions)]
 impl Workspace {
     pub fn dev_start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Ok(steps) = std::env::var("WISP_PAPER_DEV") else { return };
+        let Some(steps) = wisp_core::settings::env("DEV") else { return };
         for step in steps.split(',') {
             // `8@shot:/tmp/a.png` takes the step eight seconds after the start: what it is
             // to show (an import, an answer) needs that long to come about.

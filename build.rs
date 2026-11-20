@@ -21,7 +21,7 @@ fn main() {
     // The executable's icon and version info (Explorer, taskbar, window corner).
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut resource = winresource::WindowsResource::new();
-        resource.set_icon("assets/branding/app-icon.ico").set("ProductName", "Wisp Paper").set("FileDescription", "Wisp Paper");
+        resource.set_icon("assets/branding/app-icon.ico").set("ProductName", "Wisp Study").set("FileDescription", "Wisp Study");
         resource.compile().expect("Windows resource compilation failed");
     }
 }

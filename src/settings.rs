@@ -466,8 +466,8 @@ impl Workspace {
             self.update = UpdateState::Checking;
             cx.notify();
         }
-        // WISP_PAPER_UPDATE_URL points the check elsewhere (testing).
-        let url = std::env::var("WISP_PAPER_UPDATE_URL").ok().filter(|u| !u.trim().is_empty()).unwrap_or_else(update::latest_url);
+        // WISP_STUDY_UPDATE_URL points the check elsewhere (testing).
+        let url = wisp_core::settings::env("UPDATE_URL").filter(|u| !u.trim().is_empty()).unwrap_or_else(update::latest_url);
         cx.spawn(async move |this, cx| {
             let found = cx.background_executor().spawn(async move { wisp_net::latest_release(&url) }).await;
             this.update(cx, |this, cx| {
@@ -480,7 +480,7 @@ impl Workspace {
                             return this.download_update(release, target, manual, cx);
                         }
                         if !manual && this.update_told.as_ref() != Some(&release.version) {
-                            this.say(tf!("Wisp Paper {} 已发布，可在「设置 › 关于」查看。", "Wisp Paper {} is available. See Settings › About.", release.version), cx);
+                            this.say(tf!("Wisp Study {} 已发布，可在「设置 › 关于」查看。", "Wisp Study {} is available. See Settings › About.", release.version), cx);
                         }
                         this.update_told = Some(release.version.clone());
                         this.update = UpdateState::Available(release, target);
@@ -501,8 +501,8 @@ impl Workspace {
     /// (`updater::stage`); then ask whether to restart into it. Nothing of the running app changes before that answer.
     pub fn download_update(&mut self, release: Release, target: PathBuf, manual: bool, cx: &mut Context<Self>) {
         let Some(name) = crate::updater::asset(&release.version) else { return };
-        // WISP_PAPER_UPDATE_FILES: the folder the package and its SHA256SUMS come from, elsewhere (testing).
-        let base = std::env::var("WISP_PAPER_UPDATE_FILES").ok().filter(|u| !u.trim().is_empty()).unwrap_or_else(|| update::files_url(&release));
+        // WISP_STUDY_UPDATE_FILES: the folder the package and its SHA256SUMS come from, elsewhere (testing).
+        let base = wisp_core::settings::env("UPDATE_FILES").filter(|u| !u.trim().is_empty()).unwrap_or_else(|| update::files_url(&release));
         self.update = UpdateState::Downloading(release.clone());
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -530,7 +530,7 @@ impl Workspace {
     /// The downloaded version is ready: ask once whether to restart into it. A dialog already open is not pushed aside.
     fn offer_update(&mut self, cx: &mut Context<Self>) {
         let UpdateState::Ready(release, ..) = &self.update else { return };
-        let title = tf!("Wisp Paper {} 已下载好", "Wisp Paper {} is ready", release.version);
+        let title = tf!("Wisp Study {} 已下载好", "Wisp Study {} is ready", release.version);
         if self.modal.is_some() { return self.say(tf!("{title}，可在「设置 › 关于」重启并更新。", "{title}. Restart to update in Settings › About."), cx) }
         let back = if self.settings.restore_session { t("重新打开后回到现在的界面。") } else { "" };
         self.modal_error.clear();
@@ -1628,7 +1628,7 @@ impl Workspace {
                     .gap(px(8.))
                     .pt(px(8.))
                     .child(img(about_icon()).size(px(88.)))
-                    .child(div().pt(px(4.)).text_size(text_px(20.)).line_height(text_px(26.)).font_weight(FontWeight::SEMIBOLD).child("Wisp Paper"))
+                    .child(div().pt(px(4.)).text_size(text_px(20.)).line_height(text_px(26.)).font_weight(FontWeight::SEMIBOLD).child("Wisp Study"))
                     .child(div().text_color(Theme::text_secondary()).child(tf!("版本 {}", "Version {}", env!("CARGO_PKG_VERSION"))))
                     .child(div().text_color(Theme::text_tertiary()).child(t("本地优先的文献库：收集文献、整理、预览 PDF、对文献库提问。"))),
             )
@@ -1636,8 +1636,8 @@ impl Workspace {
             .child(group(
                 None,
                 vec![
-                    row(t("项目主页"), Some("github.com/xuzhougeng/WispPaper".into()), open("about-project", t("打开"), update::PROJECT_URL.to_string(), self, cx)).into_any_element(),
-                    row(t("开源许可"), Some(t("Wisp Paper 以 MIT 协议发布；随附的第三方组件见 THIRD_PARTY.md。").into()), open("about-license", t("查看"), format!("{}/blob/main/THIRD_PARTY.md", update::PROJECT_URL), self, cx)).into_any_element(),
+                    row(t("项目主页"), Some("github.com/xuzhougeng/WispStudy".into()), open("about-project", t("打开"), update::PROJECT_URL.to_string(), self, cx)).into_any_element(),
+                    row(t("开源许可"), Some(t("Wisp Study 以 MIT 协议发布；随附的第三方组件见 THIRD_PARTY.md。").into()), open("about-license", t("查看"), format!("{}/blob/main/THIRD_PARTY.md", update::PROJECT_URL), self, cx)).into_any_element(),
                 ],
             ))
             .into_any_element()

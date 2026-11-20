@@ -145,7 +145,7 @@ fn connector_icon() -> Div {
 /// builds) leaves the browser alone and prints where it would have gone.
 fn open_in_browser(address: &str, cx: &mut App) {
     #[cfg(debug_assertions)]
-    if std::env::var_os("WISP_PAPER_DEV").is_some() {
+    if wisp_core::settings::env("DEV").is_some() {
         eprintln!("sign-in: {address}");
         return;
     }
@@ -282,7 +282,7 @@ impl Workspace {
                     Ok(_) => {
                         this.connect_to(connector, false, cx);
                         // Back from the browser to the window that waited.
-                        if std::env::var_os("WISP_PAPER_DEV").is_none() { cx.activate(true) }
+                        if wisp_core::settings::env("DEV").is_none() { cx.activate(true) }
                     }
                     Err(why) => *state = Connection::Failed(why),
                 }
@@ -502,7 +502,7 @@ impl Workspace {
                 button("connector-sign-out", t("退出登录")).on_click(self.on(Cmd::Custom(Do::SignOut(index)), cx)).into_any_element(),
             ),
             None | Some(Connection::SignIn | Connection::Failed(_)) => (
-                t("这个服务需要在浏览器中登录。登录后，Wisp Paper 保存它给的令牌，并在到期前自动续期。").into(),
+                t("这个服务需要在浏览器中登录。登录后，Wisp Study 保存它给的令牌，并在到期前自动续期。").into(),
                 ui::primary_button("connector-sign-in", t("在浏览器中登录")).h(text_px(28.)).on_click(self.on(Cmd::Custom(Do::SignIn(index)), cx)).into_any_element(),
             ),
             Some(Connection::SigningIn { address, .. }) => (

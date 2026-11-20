@@ -2,7 +2,7 @@
 name = "wisp_cli"
 version = "0.12.0"
 edition = "2024"
-description = "wisp: Wisp Paper's libraries from the command line and over MCP, without the window"
+description = "wisp: Wisp Study's libraries from the command line and over MCP, without the window"
 license = "MIT"
 
 [[bin]]

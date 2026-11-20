@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+/// Named after the app's former name (Wisp Paper); kept, since every library folder already holds one.
 pub const DB_FILE: &str = "wisp-paper.sqlite";
 /// Bump when an older build would misread the database.
 pub const SCHEMA_VERSION: i32 = 1;
@@ -498,7 +499,7 @@ fn to_json(values: &[String]) -> String {
 
 fn check_schema_version(found: i32, supported: i32) -> Result<()> {
     if found > supported && found != UNRELEASED_VERSION {
-        bail!("这个文献库由更新版本的 Wisp Paper 创建（数据库版本 {found}），请升级后再打开。");
+        bail!("这个文献库由更新版本的 Wisp Study 创建（数据库版本 {found}），请升级后再打开。");
     }
     Ok(())
 }

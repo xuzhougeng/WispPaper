@@ -10,7 +10,7 @@ use std::path::Path;
 /// Protocol revisions this server speaks, newest first.
 const VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
-const INSTRUCTIONS: &str = "Wisp Paper 的本地文献库。先用 list_libraries 看有哪些文献库，再用 library 参数指定其中一个；需要建库时用 create_library，使用返回的 id。\
+const INSTRUCTIONS: &str = "Wisp Study 的本地文献库。先用 list_libraries 看有哪些文献库，再用 library 参数指定其中一个；需要建库时用 create_library，使用返回的 id。\
 import_pdf 导入本机 PDF 或文件夹，import_references 导入 BibTeX / RIS，import_zotero 读取本机 Zotero 数据库；这些操作不联网，PDF 和 Zotero 导入后必须检查 failed 及 results 中的 problems。\
 查出处时先 search_fulltext，再用 read_fulltext 读命中的页面核对上下文；没有保存全文的文献只有书目信息和摘要。\
 用户提到划线、高亮、方框、便签、标注或阅读重点时用 list_pdf_annotations；quote 是选中原文，note 是用户笔记，不代表论文结论，页码属于 resourceId 指定的附件。\
@@ -37,7 +37,7 @@ pub fn handle(root: &Path, message: &Value, server: &Server) -> Option<Value> {
             Ok(json!({
                 "protocolVersion": VERSIONS.iter().find(|v| **v == asked).unwrap_or(&VERSIONS[0]),
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "wisp-paper", "title": "Wisp Paper", "version": env!("CARGO_PKG_VERSION")},
+                "serverInfo": {"name": "wisp-study", "title": "Wisp Study", "version": env!("CARGO_PKG_VERSION")},
                 "instructions": INSTRUCTIONS,
             }))
         }

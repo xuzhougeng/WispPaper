@@ -91,15 +91,15 @@ pub fn catalog() -> Vec<ToolDef> {
         ToolDef {
             name: "import_library",
             title: "导入文献库文件",
-            description: "把另一个 Wisp Paper 导出的 .wisppaper 文件导入为新的文献库，连同其中的文献、笔记、对话、稿件和附件。总是新建，不与已有文献库合并；同名时名称后加编号。返回新库的 ID、名称和文献数量。",
+            description: "把另一个 Wisp Study 导出的 .wispstudy 文件（或改名前的 Wisp Paper 导出的 .wisppaper 文件）导入为新的文献库，连同其中的文献、笔记、对话、稿件和附件。总是新建，不与已有文献库合并；同名时名称后加编号。返回新库的 ID、名称和文献数量。",
             input_schema: json!({"type": "object", "properties": {
-                "path": {"type": "string", "description": "本机 .wisppaper 文件路径，建议使用绝对路径。"},
+                "path": {"type": "string", "description": "本机 .wispstudy 或 .wisppaper 文件路径，建议使用绝对路径。"},
             }, "required": ["path"], "additionalProperties": false}),
             writes: true,
             confirm: true,
         },
-        scoped("export_library", "导出文献库文件", "把整个文献库导出为一个 .wisppaper 文件，供另一台电脑上的 Wisp Paper 用 import_library 导入：文献、词条、筛选、笔记、对话、稿件和图片库，可选是否包含全文 PDF 等附件。不改文献库；不覆盖已有文件。", json!({
-            "path": {"type": "string", "description": "用户指定的 .wisppaper 文件路径；已有文件不会覆盖。"},
+        scoped("export_library", "导出文献库文件", "把整个文献库导出为一个 .wispstudy 文件，供另一台电脑上的 Wisp Study 用 import_library 导入：文献、词条、筛选、笔记、对话、稿件和图片库，可选是否包含全文 PDF 等附件。不改文献库；不覆盖已有文件。", json!({
+            "path": {"type": "string", "description": "用户指定的 .wispstudy 文件路径；已有文件不会覆盖。"},
             "attachments": {"type": "boolean", "description": "是否包含全文 PDF 和其他附件，默认 true。为 false 时文件小得多，但对方的文献没有全文，PDF 上的标注和读出的全文也不带过去。"},
         }), &["path"]),
         scoped("import_pdf", "导入本地 PDF", "复制本地 PDF 到文献库；path 也可以是文件夹，递归导入其中的 PDF，子文件夹名称转为标签。离线读取前两页中的 DOI，未补全的题目使用文件名；不联网查询元数据。已有文献保留原记录并补附件，回收站条目跳过。返回逐项结果；failed 表示存在导入问题的项数，textless 表示已保存但没有读出全文的项数。", json!({
@@ -400,7 +400,7 @@ pub fn catalog() -> Vec<ToolDef> {
                 "style": {"type": "string", "description": "引用样式的 key，例如 csl:nature、csl:apa、csl:gb-7714-2015-numeric、file:my-journal.csl。与 csl 二选一。"},
                 "csl": {"type": "string", "description": "一份完整的 CSL 定义（XML），不保存。与 style 二选一。"},
                 "track": {"type": "boolean", "description": "为 true 时把改动写成 Word 的修订，用户可以在 Word 里逐处接受或拒绝。默认 false。"},
-                "author": {"type": "string", "description": "修订的作者名；省略为 Wisp Paper。"},
+                "author": {"type": "string", "description": "修订的作者名；省略为 Wisp Study。"},
                 "language": {"type": "string", "description": "样式用语的语言（en、zh…：et al. 与「等」）；省略时按文件正文的语言。"},
                 "lookup": {"type": "boolean", "description": "同 read_docx_citations。"},
                 "entries": {"type": "array", "description": "同 read_docx_citations。", "items": {"type": "object", "properties": {"n": {"type": "integer"}, "csl": {"type": "object"}}, "required": ["n", "csl"]}}
@@ -2472,8 +2472,8 @@ pub(crate) mod tests {
     #[test]
     fn a_library_moves_through_its_file() {
         let (root, _) = sample();
-        let path = root.join("根.wisppaper");
-        assert!(call(&root, "export_library", &json!({"path": root.join("根.zip")})).unwrap_err().contains(".wisppaper"));
+        let path = root.join("根.wispstudy");
+        assert!(call(&root, "export_library", &json!({"path": root.join("根.zip")})).unwrap_err().contains(".wispstudy"));
         let exported = call(&root, "export_library", &json!({"path": path, "attachments": false})).unwrap();
         assert_eq!((exported["papers"].as_u64(), exported["attachments"].as_bool()), (Some(2), Some(false)));
         assert!(call(&root, "export_library", &json!({"path": path})).unwrap_err().contains("不会覆盖"));

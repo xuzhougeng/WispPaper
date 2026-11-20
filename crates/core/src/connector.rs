@@ -58,7 +58,7 @@ pub fn request(id: u64, method: &str, params: Value) -> Value {
 }
 
 pub fn initialize(id: u64) -> Value {
-    request(id, "initialize", json!({"protocolVersion": VERSION, "capabilities": {}, "clientInfo": {"name": "wisp-paper", "title": "Wisp Paper", "version": env!("CARGO_PKG_VERSION")}}))
+    request(id, "initialize", json!({"protocolVersion": VERSION, "capabilities": {}, "clientInfo": {"name": "wisp-study", "title": "Wisp Study", "version": env!("CARGO_PKG_VERSION")}}))
 }
 
 pub fn initialized() -> Value {

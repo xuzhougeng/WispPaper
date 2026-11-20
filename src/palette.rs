@@ -143,8 +143,8 @@ impl Workspace {
             made("export", tf!("导出：{}", "Export: {}", "BibTeX（.bib）"), "导出 export", "", Cmd::Export(ExportKind::Bibtex));
             made("export", tf!("导出：{}", "Export: {}", t("表格（.csv）")), "导出 表格 export spreadsheet", "", Cmd::Export(ExportKind::Csv));
             if let Some(id) = self.lib.as_ref().map(|lib| lib.info.id.clone()) {
-                made("export", tf!("导出：{}", "Export: {}", t("整个文献库，含 PDF（.wisppaper）…")), "导出 文献库 export library wisppaper", "", Cmd::ExportLibrary(id.clone(), true));
-                made("export", tf!("导出：{}", "Export: {}", t("整个文献库，不含 PDF（.wisppaper）…")), "导出 文献库 export library wisppaper", "", Cmd::ExportLibrary(id, false));
+                made("export", tf!("导出：{}", "Export: {}", t("整个文献库，含 PDF（.wispstudy）…")), "导出 文献库 export library wispstudy", "", Cmd::ExportLibrary(id.clone(), true));
+                made("export", tf!("导出：{}", "Export: {}", t("整个文献库，不含 PDF（.wispstudy）…")), "导出 文献库 export library wispstudy", "", Cmd::ExportLibrary(id, false));
             }
         }
         let open = self.lib.as_ref().map(|lib| lib.info.id.as_str());

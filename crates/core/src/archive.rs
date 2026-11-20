@@ -1,6 +1,6 @@
-//! A whole library in one file, for another Wisp Paper: `<name>.wisppaper`.
+//! A whole library in one file, for another Wisp Study: `<name>.wispstudy`.
 //!
-//! The file is a gzipped tar. Its first entry is `wisppaper.json` (what is
+//! The file is a gzipped tar. Its first entry is `wispstudy.json` (what is
 //! inside: the format, the library's name, how many papers and files), so a
 //! file can be told apart and described after reading only its head; then
 //! the library folder under `library/`: `library.json`, a snapshot of the
@@ -20,6 +20,9 @@
 //!
 //! Importing makes a new library with a new id, so the same file can be
 //! taken in twice, and a name already in use gets a number.
+//!
+//! A file from before the app was renamed (Wisp Paper) is `<name>.wisppaper`
+//! with `wisppaper.json` first; it is taken in the same way.
 
 use crate::libraries::{self, COLORS, INFO_FILE, LibraryInfo};
 use crate::model::new_id;
@@ -33,14 +36,18 @@ use serde::{Deserialize, Serialize};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const EXTENSION: &str = "wisppaper";
+pub const EXTENSION: &str = "wispstudy";
+/// The extension of an archive written before the app was renamed (Wisp Paper); still taken in.
+pub const FORMER_EXTENSION: &str = "wisppaper";
 /// The first entry, describing the rest.
-const MANIFEST: &str = "wisppaper.json";
+const MANIFEST: &str = "wispstudy.json";
+/// The first entry of an archive written before the rename.
+const FORMER_MANIFEST: &str = "wisppaper.json";
 /// Where the library folder sits inside the archive.
 const FOLDER: &str = "library";
 /// Bump when an older build would misread an archive.
 pub const FORMAT: u32 = 1;
-const NOT_ARCHIVE: &str = "这不是 Wisp Paper 文献库文件（.wisppaper），或文件已损坏。";
+const NOT_ARCHIVE: &str = "这不是 Wisp Study 文献库文件（.wispstudy），或文件已损坏。";
 /// The largest size an ustar header holds: eleven octal digits.
 const OCTAL_MAX: u64 = 0o77777777777;
 /// The most a manifest, `library.json` or a PAX record may take in memory.
@@ -51,7 +58,7 @@ const SMALL: u64 = 1 << 20;
 #[serde(default, rename_all = "camelCase")]
 pub struct Manifest {
     pub format: u32,
-    /// The Wisp Paper that wrote it.
+    /// The Wisp Study that wrote it.
     pub app_version: String,
     /// `PRAGMA user_version` of the database inside.
     pub schema_version: i32,
@@ -66,6 +73,11 @@ pub struct Manifest {
     /// Whether the full-text PDFs and other attachments came along.
     pub attachments: bool,
     pub exported_at: String,
+}
+
+/// Whether `path` is named as a library archive: `.wispstudy`, or `.wisppaper` from before the rename.
+pub fn is_archive_name(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case(EXTENSION) || e.eq_ignore_ascii_case(FORMER_EXTENSION))
 }
 
 /// A file name for a library's archive: its name, without what a file system refuses.
@@ -185,7 +197,7 @@ pub fn peek(path: &Path) -> Result<Manifest> {
 
 /// Take the archive at `path` in as a new library under `root`. It is
 /// unpacked into a hidden folder there, its database opened once (which
-/// refuses one from a newer Wisp Paper and brings an older one up to date)
+/// refuses one from a newer Wisp Study and brings an older one up to date)
 /// and only then moved to its place, so a failed import leaves nothing on
 /// the home page.
 pub fn import(root: &Path, path: &Path) -> Result<LibraryInfo> {
@@ -218,10 +230,10 @@ fn read_manifest(tar: &mut TarReader<impl Read>) -> Result<Manifest> {
         }
     };
     let Some((path, size)) = first else { bail!(NOT_ARCHIVE) };
-    if inside(&path).as_deref() != Some(MANIFEST) || size > SMALL { bail!(NOT_ARCHIVE) }
+    if !matches!(inside(&path).as_deref(), Some(MANIFEST | FORMER_MANIFEST)) || size > SMALL { bail!(NOT_ARCHIVE) }
     let manifest: Manifest = tar.read_small().ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).ok_or_else(|| anyhow!(NOT_ARCHIVE))?;
     if manifest.format == 0 { bail!(NOT_ARCHIVE) }
-    if manifest.format > FORMAT { bail!("这个文件由更新版本的 Wisp Paper（{}）导出，请升级后再导入。", manifest.app_version) }
+    if manifest.format > FORMAT { bail!("这个文件由更新版本的 Wisp Study（{}）导出，请升级后再导入。", manifest.app_version) }
     Ok(manifest)
 }
 
@@ -548,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    fn a_library_goes_to_another_wisp_paper_whole() {
+    fn a_library_goes_to_another_wisp_study_whole() {
         let (here, there, out) = (folder("here"), folder("there"), folder("out"));
         let mut info = libraries::create(&here, "植物根单细胞", "根尖发育", "green").unwrap();
         info.criteria = "只要单细胞".into();
@@ -556,8 +568,8 @@ mod tests {
         // A name past the 100 bytes of an ustar header, and not ASCII.
         let source = out.join("一篇很长的名字".repeat(8) + ".pdf");
         std::fs::write(&source, b"%PDF-1.4 root").unwrap();
-        let (whole, light) = (out.join(file_name(&info.name)), out.join("light.wisppaper"));
-        assert!(whole.ends_with("植物根单细胞.wisppaper"));
+        let (whole, light) = (out.join(file_name(&info.name)), out.join("light.wispstudy"));
+        assert!(whole.ends_with("植物根单细胞.wispstudy"));
         {
             // The app keeps its database open while it exports.
             let mut store = Store::open(&info.dir).unwrap();
@@ -572,7 +584,7 @@ mod tests {
             std::fs::write(info.dir.join("removed").join("old.pdf"), b"old").unwrap();
             let manifest = export(&info, &whole, true).unwrap();
             assert_eq!((manifest.format, manifest.papers, manifest.files, manifest.attachments, manifest.name.as_str()), (FORMAT, 1, 2, true, "植物根单细胞"));
-            assert!(!out.join("植物根单细胞.wisppaper.part").exists());
+            assert!(!out.join("植物根单细胞.wispstudy.part").exists());
             assert_eq!(peek(&whole).unwrap(), manifest);
             let manifest = export(&info, &light, false).unwrap();
             assert_eq!((manifest.papers, manifest.files, manifest.attachments), (1, 1, false));
@@ -607,32 +619,57 @@ mod tests {
     }
 
     #[test]
+    fn an_archive_from_before_the_rename_is_taken_in() {
+        let (here, there, out) = (folder("former-here"), folder("former-there"), folder("former-out"));
+        let info = libraries::create(&here, "旧名", "", "blue").unwrap();
+        Store::open(&info.dir).unwrap().add_paper(Paper { title: "Root atlas".into(), ..Default::default() }).unwrap();
+        let current = out.join(file_name(&info.name));
+        export(&info, &current, false).unwrap();
+        // The same archive as a Wisp Paper build wrote it: `.wisppaper`, `wisppaper.json` first.
+        let former = out.join("旧名.wisppaper");
+        let mut tar = TarWriter { out: GzEncoder::new(std::fs::File::create(&former).unwrap(), Compression::fast()) };
+        let mut reader = open(&current).unwrap();
+        while let Some((path, _)) = reader.next().unwrap() {
+            let mut bytes = vec![];
+            reader.read_into(&mut bytes).unwrap();
+            tar.add_bytes(if path == MANIFEST { FORMER_MANIFEST } else { path.as_str() }, &bytes).unwrap();
+        }
+        tar.finish().unwrap().finish().unwrap();
+        assert!(is_archive_name(&former) && is_archive_name(&current) && !is_archive_name(&out.join("旧名.zip")));
+        assert_eq!(peek(&former).unwrap().name, "旧名");
+        let taken = import(&there, &former).unwrap();
+        assert_eq!((taken.name.as_str(), taken.paper_count), ("旧名", 1));
+        assert_eq!(Store::open(&taken.dir).unwrap().list_papers().unwrap()[0].title, "Root atlas");
+        for dir in [here, there, out] { std::fs::remove_dir_all(dir).ok(); }
+    }
+
+    #[test]
     fn what_is_not_an_archive_is_refused() {
         let (root, out) = (folder("root"), folder("bad"));
-        let text = out.join("a.wisppaper");
+        let text = out.join("a.wispstudy");
         std::fs::write(&text, "not a library").unwrap();
-        assert!(import(&root, &text).unwrap_err().to_string().contains("不是 Wisp Paper"));
+        assert!(import(&root, &text).unwrap_err().to_string().contains("不是 Wisp Study"));
         // A gzipped tar of something else.
-        let other = out.join("b.wisppaper");
+        let other = out.join("b.wispstudy");
         let mut tar = TarWriter { out: GzEncoder::new(std::fs::File::create(&other).unwrap(), Compression::fast()) };
         tar.add_bytes("readme.txt", b"hi").unwrap();
         tar.finish().unwrap().finish().unwrap();
-        assert!(peek(&other).unwrap_err().to_string().contains("不是 Wisp Paper"));
-        // From a newer Wisp Paper.
-        let newer = out.join("c.wisppaper");
+        assert!(peek(&other).unwrap_err().to_string().contains("不是 Wisp Study"));
+        // From a newer Wisp Study.
+        let newer = out.join("c.wispstudy");
         let mut tar = TarWriter { out: GzEncoder::new(std::fs::File::create(&newer).unwrap(), Compression::fast()) };
         tar.add_bytes(MANIFEST, &serde_json::to_vec(&Manifest { format: FORMAT + 1, app_version: "99.0.0".into(), ..Default::default() }).unwrap()).unwrap();
         tar.finish().unwrap().finish().unwrap();
         assert!(import(&root, &newer).unwrap_err().to_string().contains("99.0.0"));
         // Made by hand with a Mac's tar: a fork before the manifest is passed over.
-        let forked = out.join("e.wisppaper");
+        let forked = out.join("e.wispstudy");
         let mut tar = TarWriter { out: GzEncoder::new(std::fs::File::create(&forked).unwrap(), Compression::fast()) };
-        tar.add_bytes("./._wisppaper.json", b"\0\x05\x16\x07").unwrap();
-        tar.add_bytes("./wisppaper.json", &serde_json::to_vec(&Manifest { format: FORMAT, name: "手工".into(), ..Default::default() }).unwrap()).unwrap();
+        tar.add_bytes("./._wispstudy.json", b"\0\x05\x16\x07").unwrap();
+        tar.add_bytes("./wispstudy.json", &serde_json::to_vec(&Manifest { format: FORMAT, name: "手工".into(), ..Default::default() }).unwrap()).unwrap();
         tar.finish().unwrap().finish().unwrap();
         assert_eq!(peek(&forked).unwrap().name, "手工");
         // A path that would climb out of the folder is not written; without a database there is no library.
-        let climbing = out.join("d.wisppaper");
+        let climbing = out.join("d.wispstudy");
         let mut tar = TarWriter { out: GzEncoder::new(std::fs::File::create(&climbing).unwrap(), Compression::fast()) };
         tar.add_bytes(MANIFEST, &serde_json::to_vec(&Manifest { format: FORMAT, ..Default::default() }).unwrap()).unwrap();
         tar.add_bytes("library/library.json", &serde_json::to_vec(&LibraryInfo { name: "x".into(), ..Default::default() }).unwrap()).unwrap();
@@ -665,7 +702,7 @@ mod tests {
         assert_eq!(inside("./library/a/../b"), None);
         assert_eq!(inside("/library//papers/./a.pdf").as_deref(), Some("library/papers/a.pdf"));
         assert_eq!(inside("library/C:/x"), None);
-        assert_eq!(file_name(" a/b: c? "), "a-b- c-.wisppaper");
-        assert_eq!(file_name("..."), "library.wisppaper");
+        assert_eq!(file_name(" a/b: c? "), "a-b- c-.wispstudy");
+        assert_eq!(file_name("..."), "library.wispstudy");
     }
 }

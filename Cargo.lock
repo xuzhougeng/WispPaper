@@ -7784,7 +7784,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "wisp_paper"
+name = "wisp_study"
 version = "0.12.0"
 dependencies = [
  "anyhow",

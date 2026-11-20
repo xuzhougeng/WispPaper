@@ -1,11 +1,11 @@
 ---
-name: wisp-paper
-description: 使用 Wisp Paper 的 wisp CLI 或 MCP 新建文献库、导入本地 PDF / BibTeX / RIS / Zotero、在线检索并导入文献、获取开放全文、阅读和检索 PDF 文本、查找引用与提交筛选建议。用户提到 Wisp Paper、文献库、批量收集论文或基于本地论文回答问题时使用。
+name: wisp-study
+description: 使用 Wisp Study 的 wisp CLI 或 MCP 新建文献库、导入本地 PDF / BibTeX / RIS / Zotero、在线检索并导入文献、获取开放全文、阅读和检索 PDF 文本、查找引用与提交筛选建议。用户提到 Wisp Study、文献库、批量收集论文或基于本地论文回答问题时使用。
 ---
 
-# Wisp Paper
+# Wisp Study
 
-Wisp Paper 是本地优先的文献管理软件。每个文献库是独立文件夹，包含书目信息、PDF、笔记和全文索引。这里的“建库”指新建文献库，不是创建 Git 仓库。
+Wisp Study 是本地优先的文献管理软件。每个文献库是独立文件夹，包含书目信息、PDF、笔记和全文索引。这里的“建库”指新建文献库，不是创建 Git 仓库。
 
 本说明对应当前源码的工具接口，旧发布包可能尚未包含新增的建库和本地导入命令。运行前用 `wisp tools` 和 `wisp <工具名> --help` 核对当前安装版本；缺少命令时使用包含该功能的版本或从源码构建。CLI 不打开窗口，与桌面应用使用同一份文献数据。
 
@@ -33,12 +33,12 @@ Wisp Paper 是本地优先的文献管理软件。每个文献库是独立文件
 
 ## 找到可执行文件并选择文献库
 
-发布包附带独立的 `wisp`：Windows 是主程序旁的 `wisp.exe`，Linux 是主程序旁的 `wisp`，macOS 是 `Wisp Paper.app/Contents/MacOS/wisp`。它与 GUI 可执行文件不同。
+发布包附带独立的 `wisp`：Windows 是主程序旁的 `wisp.exe`，Linux 是主程序旁的 `wisp`，macOS 是 `Wisp Study.app/Contents/MacOS/wisp`。它与 GUI 可执行文件不同。
 
 以下示例使用 PowerShell。将 `$Wisp` 替换为安装位置；如果 `wisp` 已在 PATH 中，可以直接使用命令名。
 
 ```powershell
-$Wisp = 'C:\Apps\WispPaper\wisp.exe'
+$Wisp = 'C:\Apps\WispStudy\wisp.exe'
 & $Wisp help
 & $Wisp tools
 & $Wisp list_libraries
@@ -55,7 +55,7 @@ $Wisp = (Resolve-Path '.\target\debug\wisp.exe').Path
 macOS / Linux 的等价调用示例：
 
 ```sh
-"/Applications/Wisp Paper.app/Contents/MacOS/wisp" list_libraries
+"/Applications/Wisp Study.app/Contents/MacOS/wisp" list_libraries
 # 或在源码目录中运行
 cargo run -p wisp_cli -- list_libraries
 ```
@@ -68,9 +68,9 @@ $Library = 'L-实际文献库ID'
 ```
 
 - `-l` 等价于 `--library`，接受 ID 或完整名称；只有一个库时可以省略。同名库必须用 ID，不根据列表顺序猜测目标。
-- 默认数据目录来自应用设置，未自定义时为系统「文档」目录下的 `WispPaper`。
-- `--data-dir 'D:\Literature\WispPaper'` 指向包含多个文献库的**数据根目录**，不是某个 `L-…` 子目录；指定目录不会自动建库。使用自定义目录时，每次调用都带上该参数。
-- `--data-dir` 只选择文献数据，仍读取当前设置。隔离测试可用 `WISP_PAPER_HOME` 将设置文件和默认数据目录放到另一处；其中已有 `settings.json` 的 `dataDir` 仍会生效。
+- 默认数据目录来自应用设置，未自定义时为系统「文档」目录下的 `WispStudy`（从改名前的版本升级、只有旧的 `WispPaper` 时沿用它）。
+- `--data-dir 'D:\Literature\WispStudy'` 指向包含多个文献库的**数据根目录**，不是某个 `L-…` 子目录；指定目录不会自动建库。使用自定义目录时，每次调用都带上该参数。
+- `--data-dir` 只选择文献数据，仍读取当前设置。隔离测试可用 `WISP_STUDY_HOME` 将设置文件和默认数据目录放到另一处；其中已有 `settings.json` 的 `dataDir` 仍会生效。
 - 工具成功时向 stdout 输出 JSON；`help` 输出文字。失败时错误写到 stderr，退出码为 1。PowerShell 调用后检查 `$LASTEXITCODE`，不要把错误当成空结果继续执行。
 - CLI 参数使用 `--paper-id`、`--max-results` 等形式；MCP 参数使用 schema 中的 `paperId`、`maxResults` 等名称。
 - 布尔参数开启用 `--force`、`--look-only`；关闭用 `--enabled=false`，不要写成 `--enabled false`。数组和对象参数写成一段 JSON（例如 `--queries '["root hair","auxin"]'`）；只有一项时可以直接写这一项。
@@ -202,9 +202,9 @@ $PaperId = 'P-从查询结果取得的实际ID'
 ```json
 {
   "mcpServers": {
-    "wisp-paper": {
-      "command": "C:\\Apps\\WispPaper\\wisp.exe",
-      "args": ["--data-dir", "D:\\Literature\\WispPaper", "mcp"]
+    "wisp-study": {
+      "command": "C:\\Apps\\WispStudy\\wisp.exe",
+      "args": ["--data-dir", "D:\\Literature\\WispStudy", "mcp"]
     }
   }
 }
@@ -218,4 +218,4 @@ $PaperId = 'P-从查询结果取得的实际ID'
 
 联网操作使用应用「设置 → 网络」的代理，留空时跟随代理环境变量。在线检索会发送检索式，全文查找会发送 DOI / PMID。CLI 查询和导入本身不要求配置 AI 模型；桌面 AI 功能另需模型服务。
 
-更多说明：[命令行与 MCP](docs/CLI.md)、[桌面入门教程](docs/TUTORIAL.md)、[Zotero 迁移](docs/ZOTERO.md)、[数据与隐私](docs/DATA.md)。若仅分发此技能文件，配套文档可从 [Wisp Paper 项目](https://github.com/xuzhougeng/WispPaper) 获取。
+更多说明：[命令行与 MCP](docs/CLI.md)、[桌面入门教程](docs/TUTORIAL.md)、[Zotero 迁移](docs/ZOTERO.md)、[数据与隐私](docs/DATA.md)。若仅分发此技能文件，配套文档可从 [Wisp Study 项目](https://github.com/xuzhougeng/WispStudy) 获取。

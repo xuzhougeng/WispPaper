@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>跟进新文献 · Wisp Paper 教程</title>
+<title>跟进新文献 · Wisp Study 教程</title>
 <meta name="description" content="让保存的检索式定期运行，新文献进来由助手先读一遍、你来确认；再用命令行 wisp 和 MCP，把同一个文献库交给终端里的脚本和外部的 AI 客户端。">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#F5F4F1" media="(prefers-color-scheme: light)">
@@ -18,14 +18,14 @@
 
 <header class="top">
   <div class="wrap top-in">
-    <a class="brand" href="../index.html" aria-label="Wisp Paper"><img src="../app-icon.svg" width="26" height="26" alt=""><span>Wisp Paper</span></a>
+    <a class="brand" href="../index.html" aria-label="Wisp Study"><img src="../app-icon.svg" width="26" height="26" alt=""><span>Wisp Study</span></a>
     <nav aria-label="站点">
       <a href="index.html" aria-current="page">教程</a>
       <a href="../index.html#ideas">理念</a>
       <a href="../index.html#tools">工具</a>
       <a href="../index.html#download">下载</a>
     </nav>
-    <a class="gh" href="https://github.com/xuzhougeng/WispPaper">GitHub<span aria-hidden="true"> ↗</span></a>
+    <a class="gh" href="https://github.com/xuzhougeng/WispStudy">GitHub<span aria-hidden="true"> ↗</span></a>
   </div>
 </header>
 
@@ -93,7 +93,7 @@
 
       <section id="s2">
         <h2><i>2</i>运行、导入记录与自动更新</h2>
-        <p>点「运行并导入」。这次取回 16 篇，新增 12 篇，跳过已有的 4 篇：Wisp Paper 按 DOI、PMID 和题目认出了库里已有的文献，回收站里的也算。紧接着再运行一次，结果是「取回 16 篇，新增 0 篇，跳过已有的 16 篇」。第一次运行把「每次取回」的篇数都取一遍，之后的运行只为库里还没有的文献而来，通常一两次请求就结束。</p>
+        <p>点「运行并导入」。这次取回 16 篇，新增 12 篇，跳过已有的 4 篇：Wisp Study 按 DOI、PMID 和题目认出了库里已有的文献，回收站里的也算。紧接着再运行一次，结果是「取回 16 篇，新增 0 篇，跳过已有的 16 篇」。第一次运行把「每次取回」的篇数都取一遍，之后的运行只为库里还没有的文献而来，通常一两次请求就结束。</p>
         <p>每次运行都在页面下方的「导入记录」里留一行。有新增的那一行右边有「撤销」：它删去这一批新增、还没有人处理过的文献；已经做过收录判断、读过、收藏、写过笔记、加过标签或附件的会保留。撤销前会再问一遍。</p>
         <p>页面顶上的「自动更新」默认是「关闭」，此时只在你点「运行并导入」时访问数据库。本例选了「每周」，旁边的说明随之变成：应用开着时按这个间隔运行已启用的检索式；关着时错过的，下次打开时补上。某条检索式运行失败的，最多一小时后再试。点卡片上的「停用」可以让某一条不参加自动更新和「全部运行」。</p>
 
@@ -132,7 +132,7 @@
 
       <section id="s4">
         <h2><i>4</i>在终端里用 wisp</h2>
-        <p><code>wisp</code> 是不开窗口的入口，随安装包附带：macOS 在 <code>/Applications/Wisp Paper.app/Contents/MacOS/wisp</code>；Windows 在主程序 <code>WispPaper.exe</code> 旁边，安装版在 <code>%LOCALAPPDATA%\Programs\Wisp Paper</code>；Linux 也在主程序旁边。它读写的是应用设置里的同一个数据文件夹，应用开着时也能用；<code>--data-dir 文件夹</code> 可以指定另一个。输出都是 JSON，出错时信息写到 stderr，退出码为 1。下面把它简写为 <code>wisp</code>，<code>wisp help</code> 列出全部命令，<code>wisp 命令 --help</code> 列出一个命令的参数。只有一个文献库时可以省略 <code>-l</code>。</p>
+        <p><code>wisp</code> 是不开窗口的入口，随安装包附带：macOS 在 <code>/Applications/Wisp Study.app/Contents/MacOS/wisp</code>；Windows 在主程序 <code>WispStudy.exe</code> 旁边，安装版在 <code>%LOCALAPPDATA%\Programs\Wisp Study</code>；Linux 也在主程序旁边。它读写的是应用设置里的同一个数据文件夹，应用开着时也能用；<code>--data-dir 文件夹</code> 可以指定另一个。输出都是 JSON，出错时信息写到 stderr，退出码为 1。下面把它简写为 <code>wisp</code>，<code>wisp help</code> 列出全部命令，<code>wisp 命令 --help</code> 列出一个命令的参数。只有一个文献库时可以省略 <code>-l</code>。</p>
 
         <figure class="code">
           <figcaption>命令行 · 库的概况</figcaption>
@@ -187,7 +187,7 @@
         <p>自动更新只在应用开着时运行。窗口不常开的话，让系统的计划任务定期执行 <code>wisp sync_searches</code>：它只运行已到期的检索式，判断「到期」用的正是第 2 节选的间隔，所以计划任务跑得勤一些也不会重复检索。macOS 和 Linux 上用 <code>crontab -e</code> 加一行，每小时看一次：</p>
         <figure class="code">
           <figcaption>crontab</figcaption>
-<pre><code>0 * * * * "/Applications/Wisp Paper.app/Contents/MacOS/wisp" sync_searches &gt;&gt; "$HOME/wisp-sync.log" 2&gt;&amp;1</code></pre>
+<pre><code>0 * * * * "/Applications/Wisp Study.app/Contents/MacOS/wisp" sync_searches &gt;&gt; "$HOME/wisp-sync.log" 2&gt;&amp;1</code></pre>
         </figure>
         <p>macOS 的 launchd、Windows 的任务计划程序可以做同样的事：定时运行这条命令。</p>
         <aside class="note warn"><b>注意</b><code>sync_searches</code> 只处理「自动更新」没有关闭的文献库。自动更新是「关闭」时它什么也不做，返回 <code>{"runs": [], "added": 0, "failed": 0}</code>；加 <code>--force</code> 则不看间隔和开关，运行所有已启用的检索式。部分失败时退出码仍可能是 0，要看 JSON 里的 <code>failed</code> 和 <code>runs[].error</code>。</aside>
@@ -200,8 +200,8 @@
           <figcaption>MCP 配置</figcaption>
 <pre><code>{
   "mcpServers": {
-    "wisp-paper": {
-      "command": "/Applications/Wisp Paper.app/Contents/MacOS/wisp",
+    "wisp-study": {
+      "command": "/Applications/Wisp Study.app/Contents/MacOS/wisp",
       "args": ["mcp", "--read-only"]
     }
   }
@@ -210,7 +210,7 @@
         <p>Claude Code 可以直接用命令添加：</p>
         <figure class="code">
           <figcaption>命令行</figcaption>
-<pre><code><span class="p">$</span> claude mcp add wisp-paper -- "/Applications/Wisp Paper.app/Contents/MacOS/wisp" mcp --read-only</code></pre>
+<pre><code><span class="p">$</span> claude mcp add wisp-study -- "/Applications/Wisp Study.app/Contents/MacOS/wisp" mcp --read-only</code></pre>
         </figure>
         <p>先确认服务能回答：把 <code>initialize</code> 和 <code>tools/list</code> 两个请求送进去。本例的 <code>wisp mcp</code> 列出 37 个工具，<code>wisp mcp --read-only</code> 列出 19 个：</p>
         <figure class="code">
@@ -219,11 +219,11 @@
     '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}' \
     '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
     '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | wisp mcp --read-only
-{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18", … "serverInfo":{"name":"wisp-paper","title":"Wisp Paper","version":"0.10.0"}, …}}
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18", … "serverInfo":{"name":"wisp-study","title":"Wisp Study","version":"0.10.0"}, …}}
 {"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"list_note_sources", … }, …]}}</code></pre>
         </figure>
         <p>接好之后，在客户端里可以这样问：</p>
-        <blockquote><cite>提问</cite><p>在 Wisp Paper 的「植物单细胞转录组」库里，找出全文提到 protoplast isolation 的文献，读出相关的那一页，比较原生质体和细胞核分离两条路线，每条结论给出文献 ID、页码和原句。</p></blockquote>
+        <blockquote><cite>提问</cite><p>在 Wisp Study 的「植物单细胞转录组」库里，找出全文提到 protoplast isolation 的文献，读出相关的那一页，比较原生质体和细胞核分离两条路线，每条结论给出文献 ID、页码和原句。</p></blockquote>
         <p>客户端的回答要自己核对：拿它给的文献 ID 和页码，在窗口里打开 PDF 看原句。</p>
 
         <h3>写入的边界</h3>
@@ -260,9 +260,9 @@
       <h2>参考</h2>
       <ol>
         <li><a href="index.html">全部教程</a></li>
-        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/FEATURES.md">功能详解：每个页面能做什么</a></li>
-        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/DATA.md">数据与隐私：文件放在哪里，哪些数据会离开本机</a></li>
-        <li><a href="https://github.com/xuzhougeng/WispPaper/issues">问题与想法：Issues</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispStudy/blob/main/docs/FEATURES.md">功能详解：每个页面能做什么</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispStudy/blob/main/docs/DATA.md">数据与隐私：文件放在哪里，哪些数据会离开本机</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispStudy/issues">问题与想法：Issues</a></li>
       </ol>
     </div>
     <div class="colophon">

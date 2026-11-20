@@ -302,7 +302,7 @@ impl Workspace {
                                     .flex()
                                     .flex_col()
                                     .gap(px(4.))
-                                    .child(div().text_size(text_px(24.)).line_height(text_px(32.)).font_weight(FontWeight::SEMIBOLD).child("Wisp Paper"))
+                                    .child(div().text_size(text_px(24.)).line_height(text_px(32.)).font_weight(FontWeight::SEMIBOLD).child("Wisp Study"))
                                     .child(div().text_color(Theme::text_secondary()).child(t("每个文献库是一个独立的主题：自己的文献、PDF、词条和提问。"))),
                             )
                             .child(

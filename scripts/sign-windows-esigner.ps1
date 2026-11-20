@@ -1,6 +1,6 @@
 # 用 SSL.com eSigner CodeSignTool 给一个 Windows 可执行文件做 Authenticode 签名。
 #
-# scripts/package-windows.ps1 -Sign 为每个 exe 调用本脚本一次（WispPaper.exe、wisp.exe 和安装程序）。
+# scripts/package-windows.ps1 -Sign 为每个 exe 调用本脚本一次（WispStudy.exe、wisp.exe 和安装程序）。
 # 每次签名都消耗一个 eSigner TOTP，所以连续两次签名之间会等到下一个 30 秒窗口。
 #
 # 用法：
@@ -33,7 +33,7 @@ $script:CodeSignToolVersion = '1.3.2'
 $script:CodeSignToolUrl = 'https://github.com/SSLcom/CodeSignTool/releases/download/v1.3.2/CodeSignTool-v1.3.2-windows.zip'
 $script:CodeSignToolSha256 = '4afc32e8b7f79bbe1de7e4e7049aaad4e0f754357613b9bbec0e3052f06fd36b'
 $script:TimestampUrl = 'http://ts.ssl.com/legacy'
-$script:ProgramName = 'Wisp Paper'
+$script:ProgramName = 'Wisp Study'
 $script:SecretNames = @(
     'ESIGNER_CREDENTIAL_ID',
     'ESIGNER_USERNAME',
@@ -52,7 +52,7 @@ $script:TotpWindowSeconds = 31
 function Get-StateDir {
     $dir = $env:RUNNER_TEMP
     if ([string]::IsNullOrWhiteSpace($dir)) { $dir = [IO.Path]::GetTempPath() }
-    return (Join-Path $dir 'wisppaper-esigner')
+    return (Join-Path $dir 'wispstudy-esigner')
 }
 
 function Hide-Secrets([string]$Text) {

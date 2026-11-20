@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>把已有的文献搬进来 · Wisp Paper 教程</title>
+<title>把已有的文献搬进来 · Wisp Study 教程</title>
 <meta name="description" content="把 Zotero 里的记录、攒了几年的 PDF 文件夹、导师发来的 .bib 和几个 DOI 搬进同一个文献库，再补齐没认出的题录，找回缺的全文。全程不需要模型。">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#F5F4F1" media="(prefers-color-scheme: light)">
@@ -18,14 +18,14 @@
 
 <header class="top">
   <div class="wrap top-in">
-    <a class="brand" href="../index.html" aria-label="Wisp Paper"><img src="../app-icon.svg" width="26" height="26" alt=""><span>Wisp Paper</span></a>
+    <a class="brand" href="../index.html" aria-label="Wisp Study"><img src="../app-icon.svg" width="26" height="26" alt=""><span>Wisp Study</span></a>
     <nav aria-label="站点">
       <a href="index.html" aria-current="page">教程</a>
       <a href="../index.html#ideas">理念</a>
       <a href="../index.html#tools">工具</a>
       <a href="../index.html#download">下载</a>
     </nav>
-    <a class="gh" href="https://github.com/xuzhougeng/WispPaper">GitHub<span aria-hidden="true"> ↗</span></a>
+    <a class="gh" href="https://github.com/xuzhougeng/WispStudy">GitHub<span aria-hidden="true"> ↗</span></a>
   </div>
 </header>
 
@@ -82,7 +82,7 @@
         <p>先搬 Zotero，因为那里的记录最完整，标签和笔记也在那里。</p>
         <ol>
           <li>在 Zotero 里等同步完成，把要带走的 PDF 打开一次，确认已经下载到本机，然后<strong>退出 Zotero</strong>。只关窗口，它可能还在后台占着数据库。</li>
-          <li>在 Wisp Paper 里点「添加文献 › 从 Zotero 导入…」，读一遍说明，点「选择 zotero.sqlite…」，选 Zotero 数据目录里的 <code>zotero.sqlite</code>。数据目录在 Zotero 的「设置 › 高级 › 文件和文件夹」里能打开。</li>
+          <li>在 Wisp Study 里点「添加文献 › 从 Zotero 导入…」，读一遍说明，点「选择 zotero.sqlite…」，选 Zotero 数据目录里的 <code>zotero.sqlite</code>。数据目录在 Zotero 的「设置 › 高级 › 文件和文件夹」里能打开。</li>
         </ol>
         <p>导入用只读方式打开 Zotero 的数据库，PDF 是复制过来的，原文件不动，这一步也不联网。本例的 Zotero 库很小，6 篇，几秒钟就完成了：</p>
 
@@ -93,7 +93,7 @@
 
         <p>这一次的结果是「新增 6 篇 · 已有 0 篇 · 回收站 0 篇 · 失败 0 篇 · 新增 PDF 4 个 · 待处理 1 项」，另有 1 个网页快照没有迁移。看左侧的标签：Zotero 里的标签原样带来（「精读」「数据库」），分类变成了 <code>Zotero/方法/注释</code> 这样带路径的标签，点一下就能筛出那个分类。挂在文献下的笔记合进了文献的笔记，Extra 里的 PMID 也认了出来。</p>
         <p>待处理的那一项是 Multiome 那篇：Zotero 里有附件记录，文件却从没下载过。记录照样进来了，全文留到第 6 步去找。</p>
-        <p>迁移范围、常见报错（比如「数据库正在被占用」）和只搬一部分的办法，见 <a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/ZOTERO.md">从 Zotero 导入文献</a>。</p>
+        <p>迁移范围、常见报错（比如「数据库正在被占用」）和只搬一部分的办法，见 <a href="https://github.com/xuzhougeng/WispStudy/blob/main/docs/ZOTERO.md">从 Zotero 导入文献</a>。</p>
         <aside class="note"><b>提示</b>Zotero 里有一篇讲背根神经节的文献是当年误存的，和植物无关。在详情里点「移到回收站」。下一步的文件夹里也有它的 PDF，等会儿看它会怎样。</aside>
       </section>
 
@@ -172,7 +172,7 @@
         </figure>
 
         <p>保存下来的是芦苇那篇（来自 Springer）和玉米根那篇（来自 Frontiers），PDF 附到了原来的条目上，文字也读了出来。另外 7 篇都是开放获取的文章，地址也找到了，但 MDPI 和牛津大学出版社返回 HTTP 403，其余几家返回的是登录页或验证页，没有被当成 PDF 存下来。「缺 PDF」里还剩 7 篇。</p>
-        <p>剩下的这几篇，在详情里点「打开网页」，用浏览器下载 PDF，再把文件拖进 Wisp Paper 的窗口。它会读出 DOI，认出库里已有这篇，把 PDF 附到原条目上，明细里写「文献库里已有这篇，PDF 附到了原条目」，不会多出一条记录。单篇文献的「PDF」标签里也有「查找开放全文」和「添加 PDF」两个按钮。</p>
+        <p>剩下的这几篇，在详情里点「打开网页」，用浏览器下载 PDF，再把文件拖进 Wisp Study 的窗口。它会读出 DOI，认出库里已有这篇，把 PDF 附到原条目上，明细里写「文献库里已有这篇，PDF 附到了原条目」，不会多出一条记录。单篇文献的「PDF」标签里也有「查找开放全文」和「添加 PDF」两个按钮。</p>
         <aside class="note"><b>提示</b>下载失败不代表这篇没有开放全文，只是这次没能替你取到。过一阵可以在「缺 PDF」里再点一次，按钮只替还没有 PDF 的文献去找。</aside>
       </section>
 
@@ -201,9 +201,9 @@
       <h2>参考</h2>
       <ol>
         <li><a href="index.html">全部教程</a></li>
-        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/FEATURES.md">功能详解：每个页面能做什么</a></li>
-        <li><a href="https://github.com/xuzhougeng/WispPaper/blob/main/docs/DATA.md">数据与隐私：文件放在哪里，哪些数据会离开本机</a></li>
-        <li><a href="https://github.com/xuzhougeng/WispPaper/issues">问题与想法：Issues</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispStudy/blob/main/docs/FEATURES.md">功能详解：每个页面能做什么</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispStudy/blob/main/docs/DATA.md">数据与隐私：文件放在哪里，哪些数据会离开本机</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispStudy/issues">问题与想法：Issues</a></li>
       </ol>
     </div>
     <div class="colophon">

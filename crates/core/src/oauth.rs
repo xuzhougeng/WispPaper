@@ -210,8 +210,8 @@ pub fn redirect_port(uri: &str) -> Option<u16> {
 /// The body that registers the app as a client: a public one, with no secret.
 pub fn registration(redirect_uri: &str, scope: &str) -> Value {
     let mut body = json!({
-        "client_name": "Wisp Paper",
-        "client_uri": "https://xuzhougeng.github.io/WispPaper/",
+        "client_name": "Wisp Study",
+        "client_uri": "https://xuzhougeng.github.io/WispStudy/",
         "redirect_uris": [redirect_uri],
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
@@ -456,10 +456,10 @@ fn escape(text: &str) -> String {
 
 /// The page the browser shows when it comes back: signed in, or why not.
 pub fn page(signed_in: bool, why: &str) -> String {
-    let (title, line, english) = if signed_in { ("已登录", "可以关闭这个页面，回到 Wisp Paper。", "Signed in. You can close this tab and go back to Wisp Paper.") } else { ("没有登录", "回到 Wisp Paper 再试一次。", "Not signed in. Go back to Wisp Paper and try again.") };
+    let (title, line, english) = if signed_in { ("已登录", "可以关闭这个页面，回到 Wisp Study。", "Signed in. You can close this tab and go back to Wisp Study.") } else { ("没有登录", "回到 Wisp Study 再试一次。", "Not signed in. Go back to Wisp Study and try again.") };
     let why = if why.is_empty() { String::new() } else { format!("<p class=\"why\">{}</p>", escape(why)) };
     format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Wisp Paper · {title}</title><style>\
+        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Wisp Study · {title}</title><style>\
          :root{{color-scheme:light dark}}body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#F5F4F1;color:#1F2329;font:15px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif}}\
          main{{max-width:420px;padding:32px;background:#fff;border:1px solid #E7E7E3;border-radius:12px}}h1{{font-size:20px;margin:0 0 8px}}p{{margin:4px 0;color:#5C636E}}.why{{color:#D4483B;word-break:break-word}}\
          @media (prefers-color-scheme:dark){{body{{background:#1A1B1D;color:#E6E7EA}}main{{background:#222326;border-color:#333539}}p{{color:#ABAFB7}}.why{{color:#EB7468}}}}</style></head>\

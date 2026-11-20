@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository. It holds what applies to every change; per-feature detail is in `docs/dev/` (see the table below). Read the matching section there before changing a feature, and put new per-feature detail there, not here.
 
-Wisp Paper is a local-first literature library desktop app (collect papers, organise, preview PDFs, ask an LLM about the library), written in Rust with GPUI. Targets Windows and macOS; Linux compiles but is untested. The desktop UI supports Chinese and English (Settings › General). Use `i18n::t` with Chinese keys in `locales/en.json` for static labels, and `tf!` with both Rust format literals for dynamic messages. Translate shared label tables at display sites; keep stored keys, user content and model prompts unchanged. Code comments are in English.
+Wisp Study is a local-first literature library desktop app (collect papers, organise, preview PDFs, ask an LLM about the library), written in Rust with GPUI. Targets Windows and macOS; Linux compiles but is untested. The desktop UI supports Chinese and English (Settings › General). Use `i18n::t` with Chinese keys in `locales/en.json` for static labels, and `tf!` with both Rust format literals for dynamic messages. Translate shared label tables at display sites; keep stored keys, user content and model prompts unchanged. Code comments are in English.
 
 ## Commands
 
@@ -20,8 +20,8 @@ cargo clippy --all-targets              # expected to be warning-free
 - The toolchain is pinned in `rust-toolchain.toml` (clippy only). There is no rustfmt component and no `rustfmt.toml`: the code is hand-formatted with long lines and one-line `if x { return }` bodies. Do not run `cargo fmt`; match the surrounding style.
 - Windows needs the MSVC build tools.
 - CI runs clippy with `-D warnings` and the tests on Windows and macOS, and the three windowless crates on Linux. A release is a pushed tag `v<version>` matching `Cargo.toml`, always signed. A pull request touching `scripts/` or the workflow rehearses the packaging unsigned, so keep `site/` out of `scripts/`. Details: `docs/dev/release-and-site.md`.
-- `WISP_PAPER_HOME` moves both the data folder and `settings.json` to one directory; use it for any manual run so the real library in `Documents/WispPaper` is not touched.
-- Debugging without the real library, an API key or a screen (demo data with the `seed` example, the `structure` and `docx` examples for files that come out wrong, `mock_model` as a fake model endpoint, `WISP_PAPER_DEV` steps that script a debug window and take `shot:` screenshots): `docs/dev/debugging.md`. A new debug step is added in `dev_start` at the end of `src/app.rs` and listed there.
+- `WISP_STUDY_HOME` moves both the data folder and `settings.json` to one directory; use it for any manual run so the real library in `Documents/WispStudy` is not touched.
+- Debugging without the real library, an API key or a screen (demo data with the `seed` example, the `structure` and `docx` examples for files that come out wrong, `mock_model` as a fake model endpoint, `WISP_STUDY_DEV` steps that script a debug window and take `shot:` screenshots): `docs/dev/debugging.md`. A new debug step is added in `dev_start` at the end of `src/app.rs` and listed there.
 - In a `#[cfg(test)]` module of a file that has `use gpui::*`, do not write `use super::*`: it brings in gpui's `test` attribute, and `#[test]` then fails with "recursion limit reached". Import the names you need.
 
 ## Where the detail is
@@ -46,7 +46,7 @@ A Cargo workspace of four crates. Dependencies point one way only: `wisp_net` de
 
 Everything that can be decided without a window or a socket lives here, and it is where nearly all tests are. That includes the pure halves of networked features: `lookup` builds Crossref / Europe PMC URLs and turns their JSON into a `Paper`; `ai` builds the context, the request body for the three protocols (Anthropic Messages, OpenAI-compatible chat completions, OpenAI Responses) and parses stream lines into `StreamEvent`s. The actual HTTP (blocking `ureq`) is in `crates/net` (`wisp_net`), shared by the app and `wisp`; its tests serve canned responses from a local port. Code in core that needs the network takes the fetching function as an argument (`sources::Fetch`), so core tests pass a closure.
 
-On-disk layout: the data root holds one folder per library, each with `library.json` (`libraries`), `wisp-paper.sqlite` and `papers/` (`store`). Attachment paths in the database are relative to the library folder so a folder can be copied elsewhere. Removing a library or attachment moves it to `removed/`, and the records an undone import takes out of the library are written there as BibTeX first; nothing is deleted, with one exception: a paper leaving the trash (`Store::purge_trashed`, `Store::empty_trash`) has its files unlinked.
+On-disk layout: the data root holds one folder per library, each with `library.json` (`libraries`), `wisp-paper.sqlite` (named before the app was renamed from Wisp Paper; kept) and `papers/` (`store`). A data folder or settings file left under the old name `WispPaper` stays in use where it is (`settings::default_root`, `settings_file`), and `WISP_PAPER_*` variables are read when the `WISP_STUDY_*` one is unset (`settings::env`). Attachment paths in the database are relative to the library folder so a folder can be copied elsewhere. Removing a library or attachment moves it to `removed/`, and the records an undone import takes out of the library are written there as BibTeX first; nothing is deleted, with one exception: a paper leaving the trash (`Store::purge_trashed`, `Store::empty_trash`) has its files unlinked.
 
 `store.rs` notes:
 - The schema is one `CREATE TABLE IF NOT EXISTS` batch guarded by `SCHEMA_VERSION` / `PRAGMA user_version`; a newer database is refused. Bump the version when an older build would misread the data.
@@ -67,7 +67,7 @@ On-disk layout: the data root holds one folder per library, each with `library.j
 
 A thin shell over `tools` and `mcp`: argument words in, JSON out; `wisp mcp` is newline-delimited JSON-RPC on stdin/stdout. It is a separate binary because the app is a Windows GUI-subsystem program with no console. It opens the same data folder as the app (`settings::default_root` / `settings_file`), possibly while the app is running.
 
-### Root crate (`wisp_paper`): the GPUI app
+### Root crate (`wisp_study`): the GPUI app
 
 - `src/app.rs` holds all state in one root view, `Workspace` (`lib: Option<Library>` is the open library, `None` is the home page). Every click is a `Cmd` enum value, wired with `self.on(Cmd::…, cx)` and handled in `Workspace::run`. Popup menus are built from a `MenuKind` in `open_menu`; dialogs are `Modal` variants, built and submitted in `app.rs`.
 - `home.rs`, `library.rs`, `detail.rs`, `chat.rs`, `dialogs.rs` are `impl Workspace` blocks that only render. A new feature usually means: a `Cmd` variant, its arm in `run`, and the element that emits it.

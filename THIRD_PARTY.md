@@ -1,6 +1,6 @@
 # 第三方组件与素材
 
-Wisp Paper 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随仓库一起分发的第三方代码和素材。Cargo 依赖各自的许可见 `cargo metadata`，这里不逐项列出。
+Wisp Study 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随仓库一起分发的第三方代码和素材。Cargo 依赖各自的许可见 `cargo metadata`，这里不逐项列出。
 
 ## vendor/
 

@@ -617,7 +617,7 @@ impl Workspace {
         self.run(Cmd::Extract(Do::Cursor(keys[to].clone())), window, cx);
     }
 
-    /// The steps of `WISP_PAPER_DEV` for 提取, after `extract:`. Rows and fields are named by their place, from 0:
+    /// The steps of `WISP_STUDY_DEV` for 提取, after `extract:`. Rows and fields are named by their place, from 0:
     /// `marked`, `field;<n>`, `again`, `summary`, `stop`, `tick;<n>`, `cursor;<n>`, `choose;<n>;<option>`, `part` / `part;<n>`,
     /// `all`, `none`, `beside`, `apply`, `undo`, `dismiss`, and for the selected paper `ask;<n>`, `take;<n>`, `drop;<n>`.
     #[cfg(debug_assertions)]

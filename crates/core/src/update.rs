@@ -8,8 +8,8 @@
 
 use sha2::{Digest, Sha256};
 
-pub const PROJECT_URL: &str = "https://github.com/xuzhougeng/WispPaper";
-pub const RELEASES_URL: &str = "https://github.com/xuzhougeng/WispPaper/releases";
+pub const PROJECT_URL: &str = "https://github.com/xuzhougeng/WispStudy";
+pub const RELEASES_URL: &str = "https://github.com/xuzhougeng/WispStudy/releases";
 
 /// The address whose redirect names the newest release.
 pub fn latest_url() -> String {
@@ -56,7 +56,7 @@ pub fn asset(version: &str, os: &str, arch: &str) -> Option<String> {
         ("windows", "x86_64") => "windows-x64.zip",
         _ => return None,
     };
-    Some(format!("WispPaper-v{version}-{label}"))
+    Some(format!("WispStudy-v{version}-{label}"))
 }
 
 /// The folder a release's files are downloaded from.
@@ -105,23 +105,23 @@ mod tests {
 
     #[test]
     fn redirects() {
-        let release = release_from_location("https://github.com/xuzhougeng/WispPaper/releases/tag/v0.2.0").unwrap();
-        assert_eq!((release.version.as_str(), release.url.as_str()), ("0.2.0", "https://github.com/xuzhougeng/WispPaper/releases/tag/v0.2.0"));
-        assert_eq!(release_from_location("https://github.com/xuzhougeng/WispPaper/releases/tag/1.3").unwrap().version, "1.3");
+        let release = release_from_location("https://github.com/xuzhougeng/WispStudy/releases/tag/v0.2.0").unwrap();
+        assert_eq!((release.version.as_str(), release.url.as_str()), ("0.2.0", "https://github.com/xuzhougeng/WispStudy/releases/tag/v0.2.0"));
+        assert_eq!(release_from_location("https://github.com/xuzhougeng/WispStudy/releases/tag/1.3").unwrap().version, "1.3");
         // No release yet, another project, a tag that is not a version.
-        for location in ["https://github.com/xuzhougeng/WispPaper/releases", "https://github.com/someone/else/releases/tag/v9.0.0", "https://github.com/xuzhougeng/WispPaper/releases/tag/nightly", "https://github.com/xuzhougeng/WispPaper/releases/tag/v1.0/../../x", ""] {
+        for location in ["https://github.com/xuzhougeng/WispStudy/releases", "https://github.com/someone/else/releases/tag/v9.0.0", "https://github.com/xuzhougeng/WispStudy/releases/tag/nightly", "https://github.com/xuzhougeng/WispStudy/releases/tag/v1.0/../../x", ""] {
             assert_eq!(release_from_location(location), None, "{location}");
         }
     }
 
     #[test]
     fn packages() {
-        assert_eq!(asset("0.9.1", "macos", "aarch64").as_deref(), Some("WispPaper-v0.9.1-macos-arm64.dmg"));
-        assert_eq!(asset("0.9.1", "macos", "x86_64").as_deref(), Some("WispPaper-v0.9.1-macos-x64.dmg"));
-        assert_eq!(asset("0.9.1", "windows", "x86_64").as_deref(), Some("WispPaper-v0.9.1-windows-x64.zip"));
+        assert_eq!(asset("0.9.1", "macos", "aarch64").as_deref(), Some("WispStudy-v0.9.1-macos-arm64.dmg"));
+        assert_eq!(asset("0.9.1", "macos", "x86_64").as_deref(), Some("WispStudy-v0.9.1-macos-x64.dmg"));
+        assert_eq!(asset("0.9.1", "windows", "x86_64").as_deref(), Some("WispStudy-v0.9.1-windows-x64.zip"));
         assert_eq!((asset("0.9.1", "linux", "x86_64"), asset("0.9.1", "windows", "aarch64")), (None, None));
-        let release = release_from_location("https://github.com/xuzhougeng/WispPaper/releases/tag/v0.9.1").unwrap();
-        assert_eq!(files_url(&release), "https://github.com/xuzhougeng/WispPaper/releases/download/v0.9.1");
+        let release = release_from_location("https://github.com/xuzhougeng/WispStudy/releases/tag/v0.9.1").unwrap();
+        assert_eq!(files_url(&release), "https://github.com/xuzhougeng/WispStudy/releases/download/v0.9.1");
 
         // `sha256sum` writes two spaces, or a space and `*` for a binary file.
         let hash = sha256(b"package");
@@ -133,12 +133,12 @@ mod tests {
     #[test]
     fn a_package_is_unpacked_without_its_folder() {
         let mut zip = crate::docx::Zip::default();
-        zip.set("WispPaper-v0.9.1-windows-x64/", b"");
-        zip.set("WispPaper-v0.9.1-windows-x64/WispPaper.exe", &b"app ".repeat(100));
-        zip.set("WispPaper-v0.9.1-windows-x64\\wisp.exe", b"cli");
+        zip.set("WispStudy-v0.9.1-windows-x64/", b"");
+        zip.set("WispStudy-v0.9.1-windows-x64/WispStudy.exe", &b"app ".repeat(100));
+        zip.set("WispStudy-v0.9.1-windows-x64\\wisp.exe", b"cli");
         zip.set("../../outside.txt", b"x");
         let files = unpack(&zip.write()).unwrap();
-        assert_eq!(files.iter().map(|(name, data)| (name.as_str(), data.len())).collect::<Vec<_>>(), [("WispPaper.exe", 400), ("wisp.exe", 3), ("outside.txt", 1)]);
+        assert_eq!(files.iter().map(|(name, data)| (name.as_str(), data.len())).collect::<Vec<_>>(), [("WispStudy.exe", 400), ("wisp.exe", 3), ("outside.txt", 1)]);
         assert!(unpack(b"not a zip").is_err());
     }
 }

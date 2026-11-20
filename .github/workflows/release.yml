@@ -5,13 +5,13 @@ name: Release
 #
 # - macOS: scripts/package-macos.sh builds two DMGs, one for Apple silicon
 #   (arm64) and one for Intel (x64). Each signs
-#   "Wisp Paper.app" with the Developer ID certificate, has Apple notarize the
+#   "Wisp Study.app" with the Developer ID certificate, has Apple notarize the
 #   app and the DMG, and staples the tickets. The certificate lives in a
 #   keychain made for the run.
-# - Windows: scripts/package-windows.ps1 -Sign signs WispPaper.exe and wisp.exe
+# - Windows: scripts/package-windows.ps1 -Sign signs WispStudy.exe and wisp.exe
 #   through SSL.com's eSigner (scripts/sign-windows-esigner.ps1), zips them
 #   (the portable package) and builds the setup from them (Inno Setup,
-#   scripts/wisp-paper.iss), signed as well.
+#   scripts/wisp-study.iss), signed as well.
 # - Linux: a plain tar.gz, not signed.
 #
 # A release is never published unsigned: with one of the secrets missing the
@@ -54,7 +54,7 @@ env:
   BUILD_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
   # The tag being released; empty in a rehearsal.
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || (github.ref_type == 'tag' && github.ref_name || '') }}
-  NOTARY_PROFILE: wisppaper-notary
+  NOTARY_PROFILE: wispstudy-notary
 
 jobs:
   check:
@@ -80,7 +80,7 @@ jobs:
           # A pull request only rehearses the packaging.
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then sign=false; else sign=true; fi
           echo "sign=$sign" >> "$GITHUB_OUTPUT"
-          echo "Wisp Paper $version, signed: $sign"
+          echo "Wisp Study $version, signed: $sign"
       - name: Every signing secret is set
         if: steps.version.outputs.sign == 'true'
         env:
@@ -147,7 +147,7 @@ jobs:
           MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
         run: |
           set -euo pipefail
-          KEYCHAIN_PATH="${RUNNER_TEMP}/wisppaper-build.keychain-db"
+          KEYCHAIN_PATH="${RUNNER_TEMP}/wispstudy-build.keychain-db"
           KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
           python3 -c 'import base64, os; open("cert.p12", "wb").write(base64.b64decode(os.environ["MAC_CERT_P12_BASE64"].strip()))'
 
@@ -202,15 +202,15 @@ jobs:
           OTHER_ARCH: ${{ matrix.other }}
         run: |
           set -euo pipefail
-          dmg="dist/WispPaper-v${VERSION}-macos-${ARCH}.dmg"
-          app="dist/Wisp Paper.app"
+          dmg="dist/WispStudy-v${VERSION}-macos-${ARCH}.dmg"
+          app="dist/Wisp Study.app"
           if [[ ! -f "${dmg}" ]]; then
             echo "::error::Expected ${dmg}" >&2
             ls -la dist || true
             exit 1
           fi
           codesign --verify --strict --verbose=2 "${app}"
-          for binary in wisp_paper wisp; do
+          for binary in wisp_study wisp; do
             lipo "${app}/Contents/MacOS/${binary}" -verify_arch "${LIPO_ARCH}"
             # Each DMG holds its own architecture and nothing else.
             if lipo "${app}/Contents/MacOS/${binary}" -verify_arch "${OTHER_ARCH}" 2>/dev/null; then
@@ -317,7 +317,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $name = "WispPaper-v$($env:VERSION)-windows-x64"
+          $name = "WispStudy-v$($env:VERSION)-windows-x64"
           $zip = Join-Path 'dist' "$name.zip"
           if (-not (Test-Path -LiteralPath $zip -PathType Leaf)) {
             Get-ChildItem -Recurse dist -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
@@ -328,7 +328,7 @@ jobs:
           if (Test-Path -LiteralPath $check) { Remove-Item -LiteralPath $check -Recurse -Force }
           Expand-Archive -LiteralPath $zip -DestinationPath $check
           $folder = Join-Path $check $name
-          foreach ($leaf in @('WispPaper.exe', 'wisp.exe')) {
+          foreach ($leaf in @('WispStudy.exe', 'wisp.exe')) {
             if (-not (Test-Path -LiteralPath (Join-Path $folder $leaf) -PathType Leaf)) { throw "Missing $leaf in $zip" }
           }
           & (Join-Path $folder 'wisp.exe') help | Out-Null
@@ -341,7 +341,7 @@ jobs:
           if (Test-Path -LiteralPath $installed) { Remove-Item -LiteralPath $installed -Recurse -Force }
           $run = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', '/TASKS=""', "/DIR=`"$installed`"" -Wait -PassThru
           if ($run.ExitCode -ne 0) { throw "$setup exited $($run.ExitCode)" }
-          foreach ($leaf in @('WispPaper.exe', 'wisp.exe', 'unins000.exe')) {
+          foreach ($leaf in @('WispStudy.exe', 'wisp.exe', 'unins000.exe')) {
             if (-not (Test-Path -LiteralPath (Join-Path $installed $leaf) -PathType Leaf)) { throw "The setup installed no $leaf" }
           }
           & (Join-Path $installed 'wisp.exe') help | Out-Null
@@ -349,11 +349,11 @@ jobs:
           $run = Start-Process -FilePath (Join-Path $installed 'unins000.exe') -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
           if ($run.ExitCode -ne 0) { throw "The uninstaller exited $($run.ExitCode)" }
           # The uninstaller goes on in a copy of itself after it returns.
-          foreach ($try in 1..20) { if (-not (Test-Path -LiteralPath (Join-Path $installed 'WispPaper.exe'))) { break }; Start-Sleep -Seconds 1 }
-          if (Test-Path -LiteralPath (Join-Path $installed 'WispPaper.exe')) { throw 'The uninstaller left WispPaper.exe' }
+          foreach ($try in 1..20) { if (-not (Test-Path -LiteralPath (Join-Path $installed 'WispStudy.exe'))) { break }; Start-Sleep -Seconds 1 }
+          if (Test-Path -LiteralPath (Join-Path $installed 'WispStudy.exe')) { throw 'The uninstaller left WispStudy.exe' }
           if ($env:SIGNED -ne 'true') { Write-Host 'Rehearsal: not signed'; return }
 
-          foreach ($file in @((Join-Path $folder 'WispPaper.exe'), (Join-Path $folder 'wisp.exe'), $setup)) {
+          foreach ($file in @((Join-Path $folder 'WispStudy.exe'), (Join-Path $folder 'wisp.exe'), $setup)) {
             $leaf = Split-Path -Leaf $file
             $sig = Get-AuthenticodeSignature -LiteralPath $file
             if ("$($sig.Status)" -ne 'Valid') { throw "$leaf Authenticode status $($sig.Status): $($sig.StatusMessage)" }
@@ -364,7 +364,7 @@ jobs:
           $log = Get-Content -LiteralPath $env:ESIGNER_SIGN_LOG
           Write-Host 'eSigner signed:'; $log | ForEach-Object { Write-Host "  $_" }
           # The app, the command line and the setup: all three signatures are in the log.
-          if (@($log | Where-Object { $_ -like 'signed*' }).Count -lt 3) { throw 'Expected at least 3 eSigner signatures (WispPaper.exe, wisp.exe, the setup)' }
+          if (@($log | Where-Object { $_ -like 'signed*' }).Count -lt 3) { throw 'Expected at least 3 eSigner signatures (WispStudy.exe, wisp.exe, the setup)' }
 
       - uses: actions/upload-artifact@v4
         with:
@@ -394,7 +394,7 @@ jobs:
         with:
           key: linux-x64
       - name: Build
-        run: cargo build --release --target "$TARGET" -p wisp_paper -p wisp_cli
+        run: cargo build --release --target "$TARGET" -p wisp_study -p wisp_cli
       - name: Package
         run: scripts/package-linux.sh "$TARGET" "$VERSION" linux-x64
       - uses: actions/upload-artifact@v4
@@ -438,7 +438,7 @@ jobs:
           if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
             gh release upload "${RELEASE_TAG}" "${assets[@]}" --clobber
           elif [[ -f "${notes}" ]]; then
-            gh release create "${RELEASE_TAG}" "${assets[@]}" --verify-tag --title "Wisp Paper ${RELEASE_TAG}" --notes-file "${notes}"
+            gh release create "${RELEASE_TAG}" "${assets[@]}" --verify-tag --title "Wisp Study ${RELEASE_TAG}" --notes-file "${notes}"
           else
-            gh release create "${RELEASE_TAG}" "${assets[@]}" --verify-tag --title "Wisp Paper ${RELEASE_TAG}" --generate-notes
+            gh release create "${RELEASE_TAG}" "${assets[@]}" --verify-tag --title "Wisp Study ${RELEASE_TAG}" --generate-notes
           fi

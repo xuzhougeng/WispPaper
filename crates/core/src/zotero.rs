@@ -39,7 +39,7 @@ pub fn read(path: &Path) -> Result<Import> {
         if is_locked(&error) {
             error.context("Zotero 数据库正在被占用。请在 Zotero 中选择「退出」，等待 Zotero 后台进程结束，再重新导入同一个 zotero.sqlite；仅关闭窗口可能仍在后台运行。")
         } else {
-            error.context("无法读取 Zotero 数据库，请选择 Zotero 6 / 7 数据目录中的 zotero.sqlite（不是导出文件或 Wisp Paper 数据库）")
+            error.context("无法读取 Zotero 数据库，请选择 Zotero 6 / 7 数据目录中的 zotero.sqlite（不是导出文件或 Wisp Study 数据库）")
         }
     })
 }
@@ -157,7 +157,7 @@ fn attachment_path(root: &Path, key: &str, value: &str, mode: i64) -> Result<Pat
         }
         path
     } else if value.starts_with("attachments:") {
-        return Err(format!("相对链接附件需要 Zotero 的链接附件基础目录，请在 Zotero 中改用绝对路径或在 Wisp Paper 中手动添加：{value}"));
+        return Err(format!("相对链接附件需要 Zotero 的链接附件基础目录，请在 Zotero 中改用绝对路径或在 Wisp Study 中手动添加：{value}"));
     } else if mode == 2 && Path::new(value).is_absolute() {
         PathBuf::from(value)
     } else {

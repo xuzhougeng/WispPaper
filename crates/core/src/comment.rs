@@ -56,7 +56,7 @@ pub const APPLIED: &str = "applied";
 pub const DONE: &str = "done";
 
 /// Who the assistant's comments are by, in the manuscript and in an exported file.
-pub const ASSISTANT_NAME: &str = "Wisp Paper 助手";
+pub const ASSISTANT_NAME: &str = "Wisp Study 助手";
 
 /// The most remarks one review is asked for.
 pub const MAX_REMARKS: usize = 12;

@@ -18,17 +18,17 @@ pub(super) fn create_library(root: &Path, args: &Value) -> Result<Value> {
     Ok(json!({"id": info.id, "name": info.name, "topic": info.topic, "color": info.color, "directory": info.dir, "papers": 0}))
 }
 
-/// A `.wisppaper` file from another Wisp Paper, taken in as a new library.
+/// A `.wispstudy` file from another Wisp Study (or `.wisppaper`, from before the rename), taken in as a new library.
 pub(super) fn import_library(root: &Path, args: &Value) -> Result<Value> {
     let path = input_path(args)?;
     let info = crate::archive::import(root, &path)?;
     Ok(json!({"id": info.id, "name": info.name, "topic": info.topic, "color": info.color, "directory": info.dir, "papers": info.paper_count}))
 }
 
-/// The whole library as a `.wisppaper` file at a path the person chose; an existing file is left alone.
+/// The whole library as a `.wispstudy` file at a path the person chose; an existing file is left alone.
 pub(super) fn export_library(info: &LibraryInfo, args: &Value) -> Result<Value> {
     let path = PathBuf::from(text(args, "path")?);
-    if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case(crate::archive::EXTENSION)) { bail!("请选择 .wisppaper 文件路径。") }
+    if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case(crate::archive::EXTENSION)) { bail!("请选择 .wispstudy 文件路径。") }
     if path.exists() { bail!("{} 已存在，不会覆盖。", path.display()) }
     let attachments = args["attachments"].as_bool().unwrap_or(true);
     let manifest = crate::archive::export(info, &path, attachments)?;
@@ -194,7 +194,7 @@ pub(super) fn restyle_docx(store: &Store, info: &LibraryInfo, args: &Value, fetc
     if !output.extension().is_some_and(|e| e.eq_ignore_ascii_case("docx")) { bail!("输出路径应是 .docx 文件：{}", output.display()) }
     // The file the person gave is never written over, nor any other.
     if output.exists() { bail!("{} 已存在，不会覆盖。请换一个文件名。", output.display()) }
-    let options = crate::restyle::Options { track: args["track"].as_bool().unwrap_or(false), author: match text(args, "author")? { "" => "Wisp Paper".into(), author => author.to_string() }, date: crate::time::now_iso(), language: text(args, "language")?.to_string() };
+    let options = crate::restyle::Options { track: args["track"].as_bool().unwrap_or(false), author: match text(args, "author")? { "" => "Wisp Study".into(), author => author.to_string() }, date: crate::time::now_iso(), language: text(args, "language")?.to_string() };
     let done = crate::restyle::restyle(&bytes, &inspected, &style, &options)?;
     std::fs::write(&output, &done.bytes).with_context(|| format!("无法写入 {}", output.display()))?;
     let report = inspected.report();
