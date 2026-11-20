@@ -176,7 +176,7 @@ pub fn find(query: &Query, fetch: Fetch) -> Found {
 // ---- the fields of a record
 
 /// The fields a candidate can give: (key, name shown).
-pub const FIELDS: [(&str, &str); 8] = [("title", "题目"), ("authors", "作者"), ("year", "年份"), ("journal", "期刊"), ("status", "发表状态"), ("doi", "DOI"), ("pmid", "PMID"), ("abstract", "摘要")];
+pub const FIELDS: [(&str, &str); 11] = [("title", "题目"), ("authors", "作者"), ("year", "年份"), ("journal", "期刊"), ("volume", "卷"), ("issue", "期"), ("pages", "起止页码"), ("status", "发表状态"), ("doi", "DOI"), ("pmid", "PMID"), ("abstract", "摘要")];
 
 /// A field of a paper as text; empty when the paper does not say.
 pub fn value(paper: &Paper, key: &str) -> String {
@@ -185,6 +185,9 @@ pub fn value(paper: &Paper, key: &str) -> String {
         "authors" => paper.authors.clone(),
         "year" => paper.year.map(|y| y.to_string()).unwrap_or_default(),
         "journal" => paper.journal.clone(),
+        "volume" => paper.volume.clone(),
+        "issue" => paper.issue.clone(),
+        "pages" => paper.pages.clone(),
         "status" if paper.publication_status != "unknown" => paper.publication_status.clone(),
         "doi" => paper.doi.clone(),
         "pmid" => paper.pmid.clone(),
@@ -233,6 +236,9 @@ pub fn apply(paper: &mut Paper, candidate: &Candidate, keys: &[&str]) {
             "authors" => paper.authors = from.authors.clone(),
             "year" => paper.year = from.year,
             "journal" => paper.journal = from.journal.clone(),
+            "volume" => paper.volume = from.volume.clone(),
+            "issue" => paper.issue = from.issue.clone(),
+            "pages" => paper.pages = from.pages.clone(),
             "status" => paper.publication_status = from.publication_status.clone(),
             "doi" => paper.doi = from.doi.clone(),
             "pmid" => paper.pmid = from.pmid.clone(),
@@ -330,6 +336,13 @@ mod tests {
         apply(&mut paper, candidate, &["title", "authors", "doi"]);
         assert_eq!((paper.title.as_str(), paper.authors.as_str(), paper.doi.as_str(), paper.year, paper.journal.as_str()), (candidate.paper.title.as_str(), "Zhang, Tian-Qi; Wang, Jia-Wei", "10.1104/pp.18.01482", Some(2018), ""));
         assert_eq!(paper.source, "PDF 导入；按题目从 Crossref、Europe PMC 补全");
+        // Where in the journal the paper is, is offered like any field, and taken unasked only where the paper says nothing.
+        let placed = Candidate { paper: Paper { volume: "12".into(), issue: "5".into(), pages: "648-660".into(), ..candidate.paper.clone() }, ..candidate.clone() };
+        let mut held = Paper { volume: "11".into(), ..placed.paper.clone() };
+        (held.issue, held.pages) = (String::new(), String::new());
+        assert_eq!((offered(&held, &placed.paper), suggested(&held, &placed.paper, false)), (vec!["volume", "issue", "pages"], vec!["issue", "pages"]));
+        apply(&mut held, &placed, &["issue", "pages"]);
+        assert_eq!((held.volume.as_str(), held.issue.as_str(), held.pages.as_str()), ("11", "5", "648-660"));
         // Completed again, the note is said once.
         apply(&mut paper, &found.candidates[1], &["year"]);
         assert_eq!((paper.year, paper.source.as_str()), (Some(2018), "PDF 导入；按题目从 Crossref 补全"));

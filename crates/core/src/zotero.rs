@@ -111,6 +111,7 @@ fn read_items(db: &Connection, root: &Path) -> Result<Import> {
             doi: normalize_doi(&if doi.is_empty() { extra_field("DOI") } else { doi }),
             pmid: normalize_pmid(&extra_field("PMID")),
             journal: [get("publicationTitle"), get("bookTitle"), get("proceedingsTitle"), get("university"), get("publisher")].into_iter().find(|v| !v.is_empty()).unwrap_or_default(),
+            volume: get("volume"), issue: get("issue"), pages: crate::model::clean_pages(&get("pages")),
             publication_status: match kind.as_str() { "preprint" => "preprint", "journalArticle" | "conferencePaper" | "book" | "bookSection" => "published", _ => "unknown" }.into(),
             url: get("url"), abstract_text: strip_markup(&get("abstractNote")),
             tags: clean_strings(paper_tags), notes: paper_notes.join("\n\n"), source: "Zotero 本地导入".into(),
@@ -234,9 +235,9 @@ mod tests {
                 INSERT INTO libraries VALUES(1, 'user'), (2, 'group'), (3, 'feed');
                 INSERT INTO itemTypes VALUES(1, 'journalArticle'), (2, 'note'), (3, 'attachment'), (4, 'annotation'), (5, 'preprint');
                 INSERT INTO items VALUES(1, 1, 1, 'PAPER001'), (2, 2, 1, 'NOTE0001'), (3, 3, 1, 'PDFKEY01'), (4, 1, 1, 'TRASH001'), (5, 2, 1, 'LOOSE001'), (6, 3, 1, 'MISSING1'), (7, 3, 1, 'HTML0001'), (8, 4, 1, 'ANNOT001'), (9, 5, 2, 'GROUP001'), (10, 1, 3, 'FEED0001'), (11, 2, 1, 'DELNOTE1'), (12, 3, 1, 'DELPDF01');
-                INSERT INTO fieldsCombined VALUES(101, 'title'), (102, 'DOI'), (103, 'date'), (104, 'publicationTitle'), (105, 'abstractNote'), (106, 'extra'), (107, 'url');
-                INSERT INTO itemDataValues VALUES(1, 'Root <i>atlas</i>'), (2, 'https://doi.org/10.1234/ATLAS'), (3, '2024-03-20'), (4, 'Plant Journal'), (5, 'Cells &amp; roots'), (6, 'PMID: 12345678'), (7, 'https://example.org/paper'), (8, 'Deleted'), (9, 'Group preprint');
-                INSERT INTO itemData VALUES(1,101,1), (1,102,2), (1,103,3), (1,104,4), (1,105,5), (1,106,6), (1,107,7), (4,101,8), (9,101,9), (10,101,1);
+                INSERT INTO fieldsCombined VALUES(101, 'title'), (102, 'DOI'), (103, 'date'), (104, 'publicationTitle'), (105, 'abstractNote'), (106, 'extra'), (107, 'url'), (108, 'volume'), (109, 'issue'), (110, 'pages');
+                INSERT INTO itemDataValues VALUES(1, 'Root <i>atlas</i>'), (2, 'https://doi.org/10.1234/ATLAS'), (3, '2024-03-20'), (4, 'Plant Journal'), (5, 'Cells &amp; roots'), (6, 'PMID: 12345678'), (7, 'https://example.org/paper'), (8, 'Deleted'), (9, 'Group preprint'), (10, '117'), (11, '4'), (12, '1024–1039');
+                INSERT INTO itemData VALUES(1,101,1), (1,102,2), (1,103,3), (1,104,4), (1,105,5), (1,106,6), (1,107,7), (1,108,10), (1,109,11), (1,110,12), (4,101,8), (9,101,9), (10,101,1);
                 INSERT INTO creatorTypes VALUES(8, 'author'), (9, 'editor');
                 INSERT INTO creators VALUES(1, 'Jane', 'Doe', 0), (2, '', 'Atlas Consortium', 1), (3, 'An', 'Editor', 0);
                 INSERT INTO itemCreators VALUES(1,2,8,1), (1,1,8,0), (1,3,9,2);
@@ -293,6 +294,7 @@ mod tests {
         assert_eq!(entry.paper.pmid, "12345678");
         assert_eq!(entry.paper.year, Some(2024));
         assert_eq!(entry.paper.journal, "Plant Journal");
+        assert_eq!((entry.paper.volume.as_str(), entry.paper.issue.as_str(), entry.paper.pages.as_str()), ("117", "4", "1024-1039"));
         assert_eq!(entry.paper.abstract_text, "Cells & roots");
         assert_eq!(entry.paper.tags, ["单细胞", "Zotero/植物/根"]);
         assert_eq!(entry.paper.notes, "Keep & compare\n\nZotero Extra：\nPMID: 12345678");

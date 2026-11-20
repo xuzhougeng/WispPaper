@@ -265,7 +265,8 @@ impl Workspace {
         };
         let link = p.link();
         let mut source_line = vec![];
-        if !p.journal.is_empty() { source_line.push(p.journal.clone()) }
+        // `Nature 585(7825), 357–362`: where in the journal, when the record says.
+        if !p.journal.is_empty() { source_line.push(format!("{} {}", p.journal, p.placed()).trim().to_string()) }
         if let Some(year) = p.year { source_line.push(year.to_string()) }
         if p.publication_status != "unknown" { source_line.push(label(&PUBLICATION_STATUSES, &p.publication_status).to_string()) }
         let identifiers: Vec<AnyElement> = [("DOI", &p.doi, format!("https://doi.org/{}", p.doi)), ("PMID", &p.pmid, format!("https://pubmed.ncbi.nlm.nih.gov/{}/", p.pmid))]

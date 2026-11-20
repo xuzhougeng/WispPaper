@@ -31,6 +31,9 @@ pub fn bibtex_keyed(papers: &[(&str, &Paper)]) -> String {
             ("title", format!("{{{}}}", bib_escape(&p.title))),
             ("author", bib_escape(&bib_authors(&p.authors))),
             ("journal", bib_escape(&p.journal)),
+            ("volume", bib_escape(&p.volume)),
+            ("number", bib_escape(&p.issue)),
+            ("pages", bib_escape(&p.pages.replace('-', "--"))),
             ("year", year),
             ("doi", bib_escape(&p.doi)),
         ];
@@ -127,14 +130,14 @@ pub fn csv_table(header: &[String], rows: &[Vec<String>]) -> String {
 /// One row per paper; multi-valued cells are joined by "; ". Each custom
 /// field is a column named after it.
 pub fn papers_csv(papers: &[&Paper], fields: &[FieldDef]) -> String {
-    let mut header: Vec<String> = ["id", "title", "authors", "journal", "year", "doi", "pmid", "url", "publication_status", "screening", "screening_reason", "reading", "fulltext", "starred", "tags"].map(String::from).to_vec();
+    let mut header: Vec<String> = ["id", "title", "authors", "journal", "volume", "issue", "pages", "year", "doi", "pmid", "url", "publication_status", "screening", "screening_reason", "reading", "fulltext", "starred", "tags"].map(String::from).to_vec();
     header.extend(fields.iter().map(|f| f.name.clone()));
     header.extend(["notes", "abstract", "source", "added_at"].map(String::from));
     let rows: Vec<Vec<String>> = papers
         .iter()
         .map(|p| {
             let mut row = vec![
-                p.id.clone(), p.title.clone(), p.authors.clone(), p.journal.clone(), p.year.map(|y| y.to_string()).unwrap_or_default(),
+                p.id.clone(), p.title.clone(), p.authors.clone(), p.journal.clone(), p.volume.clone(), p.issue.clone(), p.pages.clone(), p.year.map(|y| y.to_string()).unwrap_or_default(),
                 p.doi.clone(), p.pmid.clone(), p.url.clone(), p.publication_status.clone(), p.screening.clone(), p.screening_reason.clone(),
                 p.reading.clone(), p.fulltext.clone(), if p.starred { "yes".into() } else { String::new() }, p.tags.join("; "),
             ];
@@ -171,6 +174,8 @@ mod tests {
         let text = bibtex(&[&p, &p]);
         assert!(text.starts_with("@article{zhang2024singlecell,\n  title = {{Single-cell atlas of Arabidopsis \\& rice roots}},\n  author = {Zhang, Wei and O'Brien, Ann},\n  journal = {Nature Plants},\n  year = {2024},\n  doi = {10.1000/abc\\_1},\n  url = {https://doi.org/10.1000/abc\\_1},\n  keywords = {root, Arabidopsis thaliana},\n}\n"), "{text}");
         assert!(text.contains("@article{zhang2024singlecella,"));
+        let placed = Paper { volume: "10".into(), issue: "3".into(), pages: "357-362".into(), ..paper() };
+        assert!(bibtex(&[&placed]).contains("  journal = {Nature Plants},\n  volume = {10},\n  number = {3},\n  pages = {357--362},\n  year = {2024},\n"));
         // However many papers share a key, no two entries do.
         let many = bibtex(&vec![&p; 300]);
         assert!(many.contains("@article{zhang2024singlecellz,") && many.contains("@article{zhang2024singlecell28,") && many.matches("@article{zhang2024singlecell300,").count() == 1);

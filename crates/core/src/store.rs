@@ -270,7 +270,7 @@ CREATE TABLE IF NOT EXISTS file_origins (
 "#;
 
 const PAPER_COLUMNS: &str = "id, title, abstract, authors_json, journal, year, publication_state, url, source, \
-    screening_status, screening_reason, reviewed_at, reading_status, starred, tags_json, notes, first_seen_at, updated_at";
+    screening_status, screening_reason, reviewed_at, reading_status, starred, tags_json, notes, first_seen_at, updated_at, volume, issue, pages";
 
 /// A record an import left out because the library already holds it.
 #[derive(Clone, Debug, PartialEq)]
@@ -472,6 +472,9 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("manuscript_sections", "bare", "INTEGER NOT NULL DEFAULT 0"),
     ("import_batches", "depth", "INTEGER NOT NULL DEFAULT 0"),
     ("pdf_annotations", "color", "TEXT NOT NULL DEFAULT ''"),
+    ("papers", "volume", "TEXT NOT NULL DEFAULT ''"),
+    ("papers", "issue", "TEXT NOT NULL DEFAULT ''"),
+    ("papers", "pages", "TEXT NOT NULL DEFAULT ''"),
 ];
 
 /// Add the columns added to a table after it was first made: `CREATE TABLE IF NOT
@@ -1437,6 +1440,9 @@ fn row_to_paper(r: &rusqlite::Row) -> rusqlite::Result<Paper> {
         notes: r.get(15)?,
         added_at: r.get(16)?,
         updated_at: r.get(17)?,
+        volume: r.get(18)?,
+        issue: r.get(19)?,
+        pages: r.get(20)?,
         ..Default::default()
     })
 }
@@ -1464,17 +1470,18 @@ fn write_paper(tx: &Transaction, p: &Paper) -> Result<()> {
     let authors: Vec<String> = p.authors.split(';').map(|a| a.trim().to_string()).filter(|a| !a.is_empty()).collect();
     tx.execute(
         "INSERT INTO papers(id, title, title_key, abstract, authors_json, journal, year, publication_state, url, source, \
-            screening_status, screening_reason, reviewed_at, reading_status, starred, tags_json, notes, first_seen_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19) \
+            screening_status, screening_reason, reviewed_at, reading_status, starred, tags_json, notes, first_seen_at, updated_at, volume, issue, pages) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22) \
          ON CONFLICT(id) DO UPDATE SET title = excluded.title, title_key = excluded.title_key, abstract = excluded.abstract, \
             authors_json = excluded.authors_json, journal = excluded.journal, year = excluded.year, \
             publication_state = excluded.publication_state, url = excluded.url, source = excluded.source, \
             screening_status = excluded.screening_status, screening_reason = excluded.screening_reason, reviewed_at = excluded.reviewed_at, \
             reading_status = excluded.reading_status, starred = excluded.starred, tags_json = excluded.tags_json, notes = excluded.notes, \
-            first_seen_at = excluded.first_seen_at, updated_at = excluded.updated_at",
+            first_seen_at = excluded.first_seen_at, updated_at = excluded.updated_at, volume = excluded.volume, issue = excluded.issue, pages = excluded.pages",
         params![
             p.id, p.title, title_key(&p.title), p.abstract_text, to_json(&authors), p.journal, p.year, p.publication_status, p.url, p.source,
-            p.screening, p.screening_reason, p.reviewed_at, p.reading, p.starred as i32, to_json(&p.tags), p.notes, p.added_at, p.updated_at
+            p.screening, p.screening_reason, p.reviewed_at, p.reading, p.starred as i32, to_json(&p.tags), p.notes, p.added_at, p.updated_at,
+            p.volume, p.issue, p.pages
         ],
     )
     .with_context(|| format!("保存文献失败：{}", p.title))?;
@@ -1787,6 +1794,26 @@ mod tests {
         assert!(store.list_suggestions().unwrap().is_empty());
         // Opening it again leaves the column alone.
         add_columns(&store.db).unwrap();
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_paper_keeps_its_volume_issue_and_pages_also_in_a_library_made_before_them() {
+        let dir = temp_dir("placed");
+        let db = Connection::open_in_memory().unwrap();
+        // The table as builds before the three columns made it, with a paper in it.
+        db.execute_batch("CREATE TABLE papers (id TEXT PRIMARY KEY NOT NULL, title TEXT NOT NULL, title_key TEXT NOT NULL DEFAULT '', abstract TEXT NOT NULL DEFAULT '', authors_json TEXT NOT NULL DEFAULT '[]', journal TEXT NOT NULL DEFAULT '', year INTEGER, publication_state TEXT NOT NULL DEFAULT 'unknown', url TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT '', screening_status TEXT NOT NULL DEFAULT 'pending', screening_reason TEXT NOT NULL DEFAULT '', reviewed_at TEXT NOT NULL DEFAULT '', reading_status TEXT NOT NULL DEFAULT 'unread', starred INTEGER NOT NULL DEFAULT 0, tags_json TEXT NOT NULL DEFAULT '[]', notes TEXT NOT NULL DEFAULT '', first_seen_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+            INSERT INTO papers(id, title, journal, first_seen_at, updated_at) VALUES('P-old', 'An older paper', 'Nature', '2025-01-01T00:00:00Z', '2025-01-01T00:00:00Z');").unwrap();
+        let mut store = Store::init(dir.clone(), db).unwrap();
+        let mut old = store.get_paper("P-old").unwrap();
+        assert_eq!((old.journal.as_str(), old.volume.as_str(), old.issue.as_str(), old.pages.as_str()), ("Nature", "", "", ""));
+        (old.volume, old.issue, old.pages) = ("585".into(), "7825".into(), "357–62".into());
+        store.save_paper(&mut old).unwrap();
+        let new = store.add_paper(Paper { volume: "12".into(), pages: "e1234".into(), ..paper("A newer paper", "") }).unwrap();
+        let (old, new) = (store.get_paper("P-old").unwrap(), store.get_paper(&new.id).unwrap());
+        assert_eq!((old.volume.as_str(), old.issue.as_str(), old.pages.as_str()), ("585", "7825", "357-362"));
+        assert_eq!((new.volume.as_str(), new.issue.as_str(), new.pages.as_str()), ("12", "", "e1234"));
+        assert_eq!(store.list_papers().unwrap().iter().filter(|p| !p.pages.is_empty()).count(), 2);
         std::fs::remove_dir_all(dir).ok();
     }
 

@@ -18,6 +18,10 @@ pub struct Paper {
     pub authors: String,
     pub year: Option<i32>,
     pub journal: String,
+    /// Where in the journal: `volume` 585, `issue` 7825, `pages` 357-362 (or an article number). Empty when not known.
+    pub volume: String,
+    pub issue: String,
+    pub pages: String,
     /// unknown, preprint, published or unpublished.
     pub publication_status: String,
     pub url: String,
@@ -261,6 +265,21 @@ pub fn split_list(value: &str) -> Vec<String> {
     clean_strings(value.split([',', '，', ';', '；', '\n']))
 }
 
+/// A page range as it is kept: `357-362`, whatever dash the source wrote and
+/// with the last page in full (`357-62` is PubMed's short form). An article
+/// number (`e1234`) is kept as it is.
+pub fn clean_pages(value: &str) -> String {
+    let value = value.trim().trim_start_matches("pp.").trim_start_matches("p.").trim();
+    let dashed: String = value.replace("--", "-").chars().map(|c| if matches!(c, '–' | '—' | '−' | '‐' | '‑') { '-' } else { c }).collect();
+    let Some((first, last)) = dashed.split_once('-') else { return dashed };
+    let (first, last) = (first.trim(), last.trim());
+    if last.is_empty() || last == first { return first.to_string() }
+    if first.is_empty() { return last.to_string() }
+    let digits = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
+    if digits(first) && digits(last) && last.len() < first.len() { return format!("{first}-{}{last}", &first[..first.len() - last.len()]) }
+    format!("{first}-{last}")
+}
+
 pub fn clean_authors(value: &str) -> String {
     clean_strings(value.split([';', '；'])).join("; ")
 }
@@ -276,6 +295,14 @@ pub fn new_id(prefix: &str) -> String {
 }
 
 impl Paper {
+    /// Where in its journal the paper is, as a reader writes it: `585(7825), 357–362`,
+    /// each part only when the record has it; empty when it has none.
+    pub fn placed(&self) -> String {
+        let (volume, issue, pages) = (self.volume.trim(), self.issue.trim(), self.pages.trim());
+        let issue = if issue.is_empty() { String::new() } else { format!("({issue})") };
+        [format!("{volume}{issue}"), pages.replace('-', "–")].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join(", ")
+    }
+
     /// Bring every field into its stored shape and fill the defaults.
     pub fn normalize(&mut self) {
         self.id = self.id.trim().to_string();
@@ -284,6 +311,9 @@ impl Paper {
         self.pmid = normalize_pmid(&self.pmid);
         self.authors = clean_authors(&self.authors);
         self.journal = self.journal.trim().to_string();
+        self.volume = self.volume.trim().to_string();
+        self.issue = self.issue.trim().to_string();
+        self.pages = clean_pages(&self.pages);
         self.url = self.url.trim().to_string();
         self.abstract_text = self.abstract_text.trim().to_string();
         self.tags = clean_strings(&self.tags);
@@ -452,6 +482,17 @@ mod tests {
         // A `<` that opens no tag stays, however often the title is normalized.
         assert_eq!((strip_markup("IL-6 < 10 pg/mL in <i>Mus</i>"), strip_markup("Tumours <2 cm: a cohort"), strip_markup("a <b")), ("IL-6 < 10 pg/mL in Mus".to_string(), "Tumours <2 cm: a cohort".to_string(), "a <b".to_string()));
         assert_eq!(normalize_pmid("https://pubmed.ncbi.nlm.nih.gov/32939066/"), "32939066");
+    }
+
+    #[test]
+    fn pages_are_kept_in_one_shape() {
+        for (written, kept) in [(" 357–362 ", "357-362"), ("357--362", "357-362"), ("357-62", "357-362"), ("1024 - 1039", "1024-1039"), ("e1234", "e1234"), ("pp. 12-19", "12-19"), ("S12-S15", "S12-S15"), ("840-852.e5", "840-852.e5"), ("7-7", "7"), ("12-", "12"), ("", "")] {
+            assert_eq!(clean_pages(written), kept, "{written}");
+        }
+        let mut paper = Paper { title: "T".into(), volume: " 585 ".into(), issue: "7825".into(), pages: "357—62".into(), ..Default::default() };
+        paper.normalize();
+        assert_eq!((paper.volume.as_str(), paper.pages.as_str(), paper.placed().as_str()), ("585", "357-362", "585(7825), 357–362"));
+        assert_eq!((Paper { pages: "e12".into(), ..Default::default() }.placed(), Paper::default().placed()), ("e12".to_string(), String::new()));
     }
 
     #[test]

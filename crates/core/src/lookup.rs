@@ -114,6 +114,10 @@ pub fn crossref_work(work: &Value) -> Option<Paper> {
         title,
         authors: authors.join("; "),
         journal,
+        volume: text(&work["volume"]),
+        issue: text(&work["issue"]),
+        // An article without pages has its number in the journal instead.
+        pages: crate::model::clean_pages(&Some(text(&work["page"])).filter(|pages| !pages.is_empty()).unwrap_or_else(|| text(&work["article-number"]))),
         year,
         doi: normalize_doi(&text(&work["DOI"])),
         url: text(&work["URL"]),
@@ -153,6 +157,10 @@ pub fn europepmc_hit(hit: &Value) -> Option<Paper> {
         title,
         authors: authors.join("; "),
         journal,
+        // The full record keeps them under `journalInfo`, the short one beside the title.
+        volume: Some(text(&hit["journalInfo"]["volume"])).filter(|v| !v.is_empty()).unwrap_or_else(|| text(&hit["journalVolume"])),
+        issue: Some(text(&hit["journalInfo"]["issue"])).filter(|v| !v.is_empty()).unwrap_or_else(|| text(&hit["issue"])),
+        pages: crate::model::clean_pages(&text(&hit["pageInfo"])),
         year: text(&hit["pubYear"]).parse().ok().filter(|y| (1800..=2200).contains(y)),
         doi: normalize_doi(&text(&hit["doi"])),
         pmid: text(&hit["pmid"]),
@@ -170,6 +178,12 @@ pub fn merge_lookup(mut paper: Paper, extra: Paper) -> Paper {
     }
     fill(&mut paper.title, extra.title);
     fill(&mut paper.authors, extra.authors);
+    // Volume, issue and pages are of the journal the paper names: another source's are taken only when it names the same one, or none.
+    if paper.journal.is_empty() || extra.journal.is_empty() || crate::model::title_key(&paper.journal) == crate::model::title_key(&extra.journal) {
+        fill(&mut paper.volume, extra.volume);
+        fill(&mut paper.issue, extra.issue);
+        fill(&mut paper.pages, extra.pages);
+    }
     fill(&mut paper.journal, extra.journal);
     fill(&mut paper.doi, extra.doi);
     fill(&mut paper.pmid, extra.pmid);
@@ -235,7 +249,7 @@ mod tests {
         let body = json!({"message": {
             "title": ["Array programming with <i>NumPy</i>"], "DOI": "10.1038/S41586-020-2649-2", "type": "journal-article",
             "author": [{"given": "Charles R.", "family": "Harris"}, {"name": "The NumPy Team"}],
-            "container-title": ["Nature"], "issued": {"date-parts": [[2020, 9, 16]]},
+            "container-title": ["Nature"], "issued": {"date-parts": [[2020, 9, 16]]}, "volume": "585", "issue": "7825", "page": "357-362",
             "abstract": "<jats:title>Abstract</jats:title><jats:p>Arrays are &amp; will be.</jats:p>", "URL": "https://doi.org/10.1038/s41586-020-2649-2"
         }});
         let p = crossref_paper(&body).unwrap();
@@ -244,6 +258,10 @@ mod tests {
         assert_eq!((p.journal.as_str(), p.year, p.doi.as_str()), ("Nature", Some(2020), "10.1038/s41586-020-2649-2"));
         assert_eq!(p.abstract_text, "Arrays are & will be.");
         assert_eq!(p.publication_status, "published");
+        assert_eq!((p.volume.as_str(), p.issue.as_str(), p.pages.as_str()), ("585", "7825", "357-362"));
+        // Without pages, the article's number.
+        let numbered = crossref_paper(&json!({"message": {"title": ["T"], "volume": 12, "article-number": "e1234"}})).unwrap();
+        assert_eq!((numbered.volume.as_str(), numbered.issue.as_str(), numbered.pages.as_str()), ("12", "", "e1234"));
         assert!(crossref_paper(&json!({"message": {}})).is_none());
     }
 
@@ -251,12 +269,16 @@ mod tests {
     fn europepmc_and_merge() {
         let body = json!({"resultList": {"result": [{
             "title": "Array programming with NumPy.", "authorString": "Harris CR, Millman KJ.", "pubYear": "2020",
-            "journalInfo": {"journal": {"title": "Nature"}}, "doi": "10.1038/s41586-020-2649-2", "pmid": "32939066", "abstractText": "Text."
+            "journalInfo": {"journal": {"title": "Nature"}, "volume": "585", "issue": "7825"}, "pageInfo": "357-362", "doi": "10.1038/s41586-020-2649-2", "pmid": "32939066", "abstractText": "Text."
         }]}});
         let p = europepmc_paper(&body).unwrap();
         // Names written family name first get their comma, so the family name is not taken for CR.
         assert_eq!((p.title.as_str(), p.authors.as_str(), p.pmid.as_str()), ("Array programming with NumPy", "Harris, CR; Millman, KJ", "32939066"));
         assert_eq!(p.citation(), "Harris and Millman, 2020");
+        assert_eq!((p.volume.as_str(), p.issue.as_str(), p.pages.as_str()), ("585", "7825", "357-362"));
+        // The short record keeps them beside the title.
+        let short = europepmc_hit(&json!({"title": "T", "journalTitle": "Nature", "journalVolume": "585", "issue": "7825", "pageInfo": "357-62"})).unwrap();
+        assert_eq!((short.volume.as_str(), short.issue.as_str(), short.pages.as_str()), ("585", "7825", "357-362"));
         // With the parts of each name, those are kept; a group is named as it is.
         let listed = json!({"title": "T", "authorString": "Harris CR, de Melo AV.", "authorList": {"author": [
             {"fullName": "Harris CR", "firstName": "Charles R", "lastName": "Harris", "initials": "CR"},
@@ -267,6 +289,10 @@ mod tests {
         assert_eq!(europepmc_hit(&listed).unwrap().authors, "Harris, Charles R; de Melo, AV; Marín-Sanz, M; NumPy Team");
         let merged = merge_lookup(Paper { title: "T".into(), doi: "10.1038/s41586-020-2649-2".into(), ..Default::default() }, p);
         assert_eq!((merged.title.as_str(), merged.pmid.as_str(), merged.year), ("T", "32939066", Some(2020)));
+        assert_eq!((merged.journal.as_str(), merged.volume.as_str(), merged.pages.as_str()), ("Nature", "585", "357-362"));
+        // Another journal's volume and pages are not this one's.
+        let other = merge_lookup(Paper { title: "T".into(), journal: "bioRxiv".into(), ..Default::default() }, short);
+        assert_eq!((other.journal.as_str(), other.volume.as_str(), other.pages.as_str()), ("bioRxiv", "", ""));
         assert!(europepmc_paper(&json!({"resultList": {"result": []}})).is_none());
     }
 
