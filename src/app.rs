@@ -994,6 +994,9 @@ const COMMENT: &str = "comment_manuscript";
 /// The tool that puts a card of buttons under the answer: the window keeps its arguments (`Chat::offer`).
 const OFFER: &str = "offer_action";
 
+/// The tool that takes a file in as a manuscript: the writing page shows it once it ran (`manuscript_arrived`).
+const TAKE_IN: &str = "import_manuscript";
+
 /// What the person says to the assistant wanting to change the library.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Consent {
@@ -5347,6 +5350,7 @@ impl Workspace {
         let wrote = calls.iter().any(|call| call.writes && (allowed || !call.confirm));
         let composed = calls.iter().any(|call| tools::MANUSCRIPT.contains(&call.name.as_str()) && (allowed || !call.confirm));
         let commented = calls.iter().any(|call| call.name == COMMENT);
+        let taken_in = calls.iter().any(|call| call.name == TAKE_IN && call.outside.is_none() && (allowed || !call.confirm));
         // The last card offered in this step; arguments that are no card are the tool's to refuse.
         let offer = calls.iter().filter(|call| call.name == OFFER).filter_map(|call| call.args.as_ref().ok().and_then(|args| wisp_core::offer::parse(args).ok())).next_back();
         let library = info.id.clone();
@@ -5374,6 +5378,8 @@ impl Workspace {
                 // And the manuscripts, when one was written: the editor follows, and what changed is shown.
                 if composed { this.manuscripts_synced(cx) }
                 // Comments left on a manuscript: they are shown on it, the section on show first.
+                // A file taken in as a manuscript: it is listed in 写作 and shown there.
+                if taken_in { this.manuscript_arrived(cx) }
                 if commented { this.comments_arrived(cx) }
                 // The rest is the conversation's, in its place or set aside (`in_chat`).
                 this.in_chat(talk, key, cx, |this, cx| {

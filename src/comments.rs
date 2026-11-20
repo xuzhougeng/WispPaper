@@ -21,7 +21,7 @@ use wisp_core::ai;
 use wisp_core::comment::{self, Comment};
 use wisp_core::docx;
 use wisp_core::headings::Sign;
-use wisp_core::manuscript::{self, Draft, Source};
+use wisp_core::manuscript::{self, Draft, Manuscript, Source};
 use wisp_core::settings::Task;
 
 /// The comments of the manuscript on show, and the assistant's review of it.
@@ -139,6 +139,14 @@ fn sign_label(sign: Sign) -> &'static str {
         Sign::Bold => t("加粗"),
         Sign::Alone => t("短句单独成行"),
     }
+}
+
+/// The section a manuscript just taken in is opened at, where there is something to do: the first with a comment,
+/// else the first under a heading that has text.
+fn opening_section(store: &wisp_core::store::Store, made: &Manuscript) -> String {
+    let commented = store.comments(&made.id).unwrap_or_default().first().map(|comment| comment.section_id.clone());
+    let written = made.sections.iter().find(|section| !section.bare && !section.body.trim().is_empty()).or(made.sections.iter().find(|section| !section.body.trim().is_empty())).or(made.sections.first()).map(|section| section.id.clone());
+    commented.or(written).unwrap_or_default()
 }
 
 pub(crate) fn is_word(path: &Path) -> bool {
@@ -567,10 +575,7 @@ impl Workspace {
             }
         };
         let draft = &taken.draft;
-        // Opened where there is something to do: the first section with a comment, else the first under a heading that has text.
-        let commented = lib.store.comments(&made.id).unwrap_or_default().first().map(|comment| comment.section_id.clone());
-        let written = made.sections.iter().find(|section| !section.bare && !section.body.trim().is_empty()).or(made.sections.iter().find(|section| !section.body.trim().is_empty())).or(made.sections.first()).map(|section| section.id.clone());
-        let (id, section) = (made.id.clone(), commented.or(written).unwrap_or_default());
+        let (id, section) = (made.id.clone(), opening_section(&lib.store, &made));
         let mut said = tf!("已导入「{name}」：{} 节", "Imported “{name}”: {} sections", made.sections.len());
         if !draft.comments.is_empty() { said.push_str(&tf!("，{} 条批注", ", {} comments", draft.comments.len())) }
         if draft.tables + draft.pictures > 0 { said.push_str(&tf!("。{} 个表格、{} 张图留在 Word 文件里，导出时还在原处", ". {} tables and {} pictures stay in the Word file and return on export", draft.tables, draft.pictures)) }
@@ -586,6 +591,28 @@ impl Workspace {
         self.write_texts_changed(cx);
         self.say(said, cx);
         self.draft_file_done(library, cx);
+    }
+
+    /// The assistant took a file in as a manuscript (`import_manuscript`): the window reads the manuscripts again and
+    /// 写作 shows the new one, as after its own 导入. The page stays where the person is, and a manuscript they are
+    /// writing in stays on show: the new one is then only listed.
+    pub(crate) fn manuscript_arrived(&mut self, cx: &mut Context<Self>) {
+        let Some(lib) = self.lib.as_mut() else { return };
+        let now = match lib.store.manuscripts() {
+            Ok(list) => list,
+            Err(err) => return self.fail(format!("{err:#}"), cx),
+        };
+        // Nothing new: the file already was a manuscript, or the call was refused.
+        let Some(made) = now.iter().rev().find(|manuscript| !lib.writing.manuscripts.iter().any(|known| known.id == manuscript.id)).cloned() else { return };
+        let writing = lib.page == crate::app::Page::Write && now.iter().any(|manuscript| manuscript.id == lib.writing.manuscript);
+        lib.writing.manuscripts = now;
+        lib.writing.structures = lib.store.structures().unwrap_or_default();
+        if writing { return cx.notify() }
+        let (id, section) = (made.id.clone(), opening_section(&lib.store, &made));
+        lib.writing.reading = false;
+        lib.writing.side = if lib.store.comments(&made.id).unwrap_or_default().is_empty() { Side::Candidates } else { Side::Comments };
+        self.write_show(id, section, cx);
+        self.write_texts_changed(cx);
     }
 
     /// The reviews the assistant wrote sections for, for the manuscripts' menu: (conversation, title, sections).
