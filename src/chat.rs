@@ -230,6 +230,27 @@ fn section_of(text: &str, review: &wisp_core::review::Review) -> (String, String
     (name, body)
 }
 
+/// What a conversation says and the box under it keep to one column of the reading width (设置 › 外观's, the manuscript's),
+/// centred in a page wider than that: a large window leaves its room at the sides, not in longer lines. A maximum,
+/// not a width: in a narrow place (a paper's conversation, the one beside a manuscript) the column is the place.
+/// The column is a row's child with the reading width as its basis, shrinking where there is less room, never a
+/// percentage: a wrapping text field under widths that are all percentages is measured too narrow.
+/// `inset` is the content's own padding at each side, outside the column: the box's card and the answers then share their edges.
+pub(crate) fn reading_column(content: Div, inset: f32) -> Div {
+    // A basis of the column's width that shrinks in a narrow place: one of 0 (`flex_1`) would have its text measured at no width, and the row as tall as that.
+    let width = theme::manuscript_width() + px(2. * inset);
+    div().flex().flex_none().justify_center().child(content.flex_shrink().flex_basis(width).min_w_0().max_w(width))
+}
+
+/// The padding at each side of a conversation's scroll and of its box that keeps what was said to the reading column
+/// (`theme::manuscript_width`), centred in a wider place; 16px in a narrower one, so the column is a maximum, not a
+/// width. It is worked out from the conversation's width as last drawn (`Chat::drawn_width`, `chat_measured`): a column
+/// grown from a row of its own would have the text of the answers measured at another width than it is drawn at, and
+/// the scroll would run past the end. Before the first frame there is no width yet, and the padding is the narrow one.
+pub(crate) fn reading_pad(width: f32) -> f32 {
+    ((width - f32::from(theme::manuscript_width())) / 2.).max(16.)
+}
+
 /// The shell of a chip under an answer: a source, or the one that shows the rest.
 fn source_chip(id: SharedString, max_width: f32) -> Stateful<Div> {
     // In a narrow column a chip gives way rather than run out of it.
@@ -237,7 +258,7 @@ fn source_chip(id: SharedString, max_width: f32) -> Stateful<Div> {
 }
 
 /// A Word file that goes, or went, with a question: its name, quiet.
-fn document_chip(path: &str) -> Div {
+pub(crate) fn document_chip(path: &str) -> Div {
     let name = std::path::Path::new(path).file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
     div().flex().flex_none().items_center().gap(px(6.)).max_w(px(280.)).h(text_px(26.)).pl(px(8.)).pr(px(8.)).rounded(px(8.)).border_1().border_color(Theme::line()).bg(Theme::bg_body()).text_size(text_px(12.)).text_color(Theme::text_secondary()).child(ui::icon("file-text", 13., Theme::text_tertiary())).child(div().min_w_0().truncate().child(ui::one_line(&name)))
 }
@@ -268,6 +289,18 @@ fn tools_summary(calls: &[&str]) -> String {
 }
 
 impl Workspace {
+    /// A conversation was drawn this wide: the next frame keeps its column to the reading width within it (`reading_pad`).
+    pub(crate) fn chat_measured(&mut self, talk: Talk, width: f32, cx: &mut Context<Self>) {
+        let Some(lib) = self.lib.as_mut() else { return };
+        let chat = lib.chat_mut(talk);
+        if (chat.drawn_width - width).abs() < 0.5 { return }
+        // A conversation read at its end stays there while its lines settle to the new width.
+        let at_bottom = chat.scroll.offset().y <= -chat.scroll.max_offset().height + px(40.);
+        chat.drawn_width = width;
+        if at_bottom { chat.scroll.scroll_to_bottom() }
+        cx.notify();
+    }
+
     /// Carry out a change to the review of the conversation with the library, and read the record again.
     pub(crate) fn review_apply(&mut self, action: wisp_core::review::ReviewAction, done: &str, cx: &mut Context<Self>) -> bool {
         let Some(lib) = self.lib.as_mut() else { return false };
@@ -624,6 +657,8 @@ impl Workspace {
         let model = profile.title();
         // Ids of the two conversations' elements must differ: both can be on screen.
         let side = talk.side();
+        // A conversation of the home page not yet made a library: its title, what it has kept, and the way to make it one (`draft.rs`).
+        let draft = talk == Talk::Library && lib.info.draft;
 
         // The papers in scope that have a PDF no text came of: said, so that nobody takes them for read.
         let in_scope = if talk == Talk::Write { lib.papers.iter().collect() } else { lib.scope_papers() };
@@ -678,12 +713,31 @@ impl Workspace {
             None if talk == Talk::Library && chat.messages.is_empty() => tf!("范围：当前列表的 {} 篇", "Scope: {} papers in the current list", lib.shown.len()),
             _ => scope.clone(),
         };
+        let (scope, brief) = if draft {
+            let kept = lib.papers.len();
+            let line = if kept == 0 { t("还没有文献库：需要文献时，助手到文献数据库里检索").to_string() } else { tf!("这次对话收进了 {kept} 篇文献", "{kept} papers kept in this conversation") };
+            (line.clone(), line)
+        } else {
+            (scope, brief)
+        };
         let listing = chat.history.is_some();
+        // What was said and the box under it keep to the reading column, centred: the room a wide page has is left at the sides.
+        let side_pad = reading_pad(chat.drawn_width);
+        // The conversation's width, learned as it is drawn: the padding of the next frame is worked out from it.
+        let entity = cx.entity();
+        let measure = canvas(|_, _, _| (), move |bounds, _, window, cx| {
+            let width = f32::from(bounds.size.width);
+            window.defer(cx, move |_, cx| entity.update(cx, |this, cx| this.chat_measured(talk, width, cx)));
+        })
+        .absolute()
+        .size_full();
         // The review this conversation writes, as last read: drawing asks the library nothing.
         let review = chat.review.as_ref().filter(|_| talk == Talk::Library && !listing);
 
         // What was asked before can be read without a model; only asking needs one.
-        let body = if let Some(history) = &chat.history {
+        let body = if draft && self.home.listing {
+            self.render_draft_history(cx)
+        } else if let Some(history) = &chat.history {
             self.render_history(talk, chat, history, cx)
         } else if let Some(review) = review.filter(|_| chat.review_open) {
             self.render_review_record(chat, review, cx)
@@ -691,6 +745,8 @@ impl Workspace {
             ui::empty_state("sparkle", t("还没有配置模型"), t("提问需要一个模型服务：Claude API，或任何 OpenAI 兼容的服务。API Key 只保存在本机。以前的对话在右上角的「历史」里，不配置也能看。")).child(ui::primary_button(SharedString::from(format!("chat-settings-{side}")), t("打开设置")).on_click(self.on(Cmd::OpenSettings(SettingsPage::Ai), cx))).into_any_element()
         } else if chat.messages.is_empty() && chat.error.is_empty() && chat.retracted.is_none() && talk == Talk::Write {
             self.render_agent_start(cx)
+        } else if chat.messages.is_empty() && chat.error.is_empty() && chat.retracted.is_none() && draft {
+            self.render_draft_start()
         } else if chat.messages.is_empty() && chat.error.is_empty() && chat.retracted.is_none() && talk == Talk::Library {
             self.render_start(window, cx)
         } else if chat.messages.is_empty() && chat.error.is_empty() && chat.retracted.is_none() {
@@ -700,18 +756,22 @@ impl Workspace {
                 .children(suggestions.iter().enumerate().map(|(i, text)| ui::secondary_button(SharedString::from(format!("suggest-{side}-{i}")), "").w_full().h_auto().min_h(px(30.)).py(px(6.)).child(div().flex_1().min_w_0().child(*text)).on_click(self.on(Cmd::Suggest(talk, text.to_string()), cx))))
                 .into_any_element()
         } else {
-            div().id(SharedString::from(format!("chat-{side}"))).flex().flex_col().flex_1().min_h_0().overflow_y_scroll().track_scroll(&chat.scroll).px(px(16.)).py(px(14.)).gap(px(14.)).children(self.render_messages(talk, chat, review, cx)).into_any_element()
+            // The scroll is the page's (the wheel works anywhere over it, the bar is at its edge); what was said keeps to the reading column in it.
+            div().id(SharedString::from(format!("chat-{side}"))).flex().flex_col().flex_1().min_h_0().overflow_y_scroll().track_scroll(&chat.scroll).px(px(side_pad)).py(px(14.)).gap(px(14.)).children(self.render_messages(talk, chat, review, cx)).into_any_element()
         };
 
         // The papers behind the scope line can be looked through: in a conversation whose material was built, or before the first question.
-        let listable = talk == Talk::Library && !listing && (chat.ctx.is_some() || chat.messages.is_empty());
+        // In a conversation not yet made a library the panel lists what it has kept, whenever there is any.
+        let listable = talk == Talk::Library && !listing && if draft { !lib.papers.is_empty() } else { chat.ctx.is_some() || chat.messages.is_empty() };
         let materials = (listable && chat.materials_open).then(|| self.render_materials(chat, window, cx));
         // The first question can still be kept to a few papers: dragged from the panel into the conversation.
-        let pinnable = listable && chat.ctx.is_none();
+        let pinnable = listable && chat.ctx.is_none() && !draft;
         div()
+            .relative()
             .flex()
             .flex_col()
             .size_full()
+            .child(measure)
             .child(
                 ui::column_head()
                     // The paper's conversation sits under the paper's own header: one line is enough there.
@@ -722,7 +782,7 @@ impl Workspace {
                             .flex_col()
                             .flex_1()
                             .min_w_0()
-                            .when(talk == Talk::Library, |d| d.child(div().truncate().text_size(text_px(ui::HEAD_TITLE)).font_weight(FontWeight::SEMIBOLD).child(if listing { t("助手的历史对话") } else { t("助手") })))
+                            .when(talk == Talk::Library, |d| d.child(div().truncate().text_size(text_px(ui::HEAD_TITLE)).font_weight(FontWeight::SEMIBOLD).child(if draft { ui::one_line(&lib.info.name) } else if listing { t("助手的历史对话").to_string() } else { t("助手").to_string() })))
                             .when(talk == Talk::Write, |d| d.child(div().truncate().text_size(text_px(ui::HEAD_TITLE)).font_weight(FontWeight::SEMIBOLD).child(if listing { t("这份稿件的历史对话") } else { t("助手写") })))
                             // The paper's panel has its title above; its history says whose it is.
                             .when(talk == Talk::Paper && listing, |d| d.child(div().font_weight(FontWeight::MEDIUM).child(t("这篇文献的历史对话"))))
@@ -736,10 +796,14 @@ impl Workspace {
                             })),
                     )
                     .children(self.render_float_switch(talk, window, cx))
-                    .when(talk != Talk::Write, |d| d.child(ui::ghost_button(SharedString::from(format!("chat-export-{side}")), Some("file-text"), Some(t("保存 / 导出").into())).on_click(self.on(Cmd::NoteOpen(Some(talk), true), cx))))
-                    .when(listable, |d| d.child(ui::ghost_button("chat-materials", Some(if chat.materials_open { "chevron-up" } else { "list" }), Some(if chat.materials_open { t("收起").into() } else { t("文献").into() })).on_click(self.on(Cmd::ToggleMaterials, cx))))
-                    .child(ui::ghost_button(SharedString::from(format!("chat-history-{side}")), Some(if listing { "arrow-left" } else { "history" }), Some(if listing { t("返回").into() } else { t("历史").into() })).on_click(self.on(Cmd::ToggleHistory(talk), cx)))
-                    .when(!chat.messages.is_empty() && !listing, |d| d.child(ui::ghost_button(SharedString::from(format!("chat-new-{side}")), Some("plus"), Some(t("新对话").into())).on_click(self.on(Cmd::NewChat(talk), cx)))),
+                    .when(talk != Talk::Write && !draft, |d| d.child(ui::ghost_button(SharedString::from(format!("chat-export-{side}")), Some("file-text"), Some(t("保存 / 导出").into())).on_click(self.on(Cmd::NoteOpen(Some(talk), true), cx))))
+                    .when(listable, |d| d.child(ui::ghost_button("chat-materials", Some(if chat.materials_open { "chevron-up" } else { "list" }), Some(if chat.materials_open { t("收起").into() } else if draft { tf!("文献 {}", "Papers {}", lib.papers.len()).into() } else { t("文献").into() })).on_click(self.on(Cmd::ToggleMaterials, cx))))
+                    // In a conversation not yet made a library, 历史 lists the other conversations and 新对话 is the assistant's empty page (`draft.rs`).
+                    .when(!draft, |d| d.child(ui::ghost_button(SharedString::from(format!("chat-history-{side}")), Some(if listing { "arrow-left" } else { "history" }), Some(if listing { t("返回").into() } else { t("历史").into() })).on_click(self.on(Cmd::ToggleHistory(talk), cx))))
+                    .when(draft, |d| d.child(ui::ghost_button(SharedString::from(format!("chat-history-{side}")), Some(if self.home.listing { "arrow-left" } else { "history" }), Some(if self.home.listing { t("返回").into() } else { t("历史").into() })).on_click(self.on(Cmd::Draft(crate::draft::Do::History), cx))))
+                    .when(!chat.messages.is_empty() && !listing && !draft, |d| d.child(ui::ghost_button(SharedString::from(format!("chat-new-{side}")), Some("plus"), Some(t("新对话").into())).on_click(self.on(Cmd::NewChat(talk), cx))))
+                    .when(draft && !self.home.listing, |d| d.child(ui::ghost_button(SharedString::from(format!("chat-new-{side}")), Some("plus"), Some(t("新对话").into())).on_click(self.on(Cmd::Draft(crate::draft::Do::New), cx))))
+                    .when(draft, |d| d.child(ui::secondary_button("draft-promote", t("建成文献库")).h(text_px(28.)).px(px(10.)).ml(px(4.)).text_size(text_px(12.)).on_click(self.on(Cmd::Draft(crate::draft::Do::Promote(lib.info.id.clone())), cx)))),
             )
             // Under the header, everything the panel of papers floats over: it pushes nothing down.
             .child(div().relative().flex().flex_col().flex_1().min_h_0()
@@ -774,7 +838,7 @@ impl Workspace {
                     .child(ui::secondary_button("review-toggle", if chat.review_open { t("返回对话") } else { t("查看记录") }).h(text_px(26.)).on_click(self.on(Cmd::ToggleReview, cx))))
             })
             .child(body)
-            .when(configured, |d| d.child(self.render_composer(talk, chat, &model, window, cx)))
+            .when(configured, |d| d.child(self.render_composer(talk, chat, &model, window, cx).px(px(side_pad))))
             // An old conversation on show without a model: it can be read, and says what asking on needs.
             .when(!configured && !listing && !chat.messages.is_empty(), |d| {
                 d.child(
@@ -877,16 +941,21 @@ impl Workspace {
         const LISTED: usize = 300;
         let lib = self.lib.as_ref().unwrap();
         // (paper, its label in this conversation, how its record was given, pages of its text given)
+        // A conversation not yet made a library lists what it has kept, under the labels its answers use.
+        let draft = lib.info.draft;
         let rows: Vec<(&wisp_core::model::Paper, String, &str, usize)> = match &chat.ctx {
+            _ if draft => lib.papers.iter().map(|paper| (paper, chat.sources().iter().find(|source| source.paper_id == paper.id).map(|source| source.label.clone()).unwrap_or_default(), "", 0)).collect(),
             Some(ctx) => ctx.given.iter().filter(|given| lib.scope_has(&given.paper_id)).filter_map(|given| Some((lib.paper(&given.paper_id)?, ctx.sources.iter().find(|source| source.paper_id == given.paper_id).map(|source| source.label.clone()).unwrap_or_default(), given.record, given.pages))).collect(),
             None => lib.scope_listed().into_iter().map(|paper| (paper, String::new(), "", 0)).collect(),
         };
         let total = rows.len();
-        let all = chat.ctx.as_ref().map_or(lib.shown.len(), |ctx| ctx.given.len());
+        let all = if draft { lib.papers.len() } else { chat.ctx.as_ref().map_or(lib.shown.len(), |ctx| ctx.given.len()) };
         let searching = lib.scope_hits.is_some();
         // Before the material is built a paper can be picked for the first question.
-        let pinnable = chat.ctx.is_none();
-        let note = if chat.ctx.is_some() {
+        let pinnable = chat.ctx.is_none() && !draft;
+        let note = if draft {
+            t("这次对话收进的文献。把对话建成文献库时，它们就是文献库的文献；点一篇在右边打开。").to_string()
+        } else if chat.ctx.is_some() {
             t("这次对话开始时交给模型的材料。助手还能用工具查到库里的其他文献；在这里点开一篇不会改变范围。").to_string()
         } else if !lib.asked.is_empty() {
             tf!("第一个问题只读选定的 {} 篇。再拖进对话可以添加，在输入框上方可以移除。", "The first question reads only the {} picked papers. Drag more into the conversation to add them; remove them above the question box.", lib.asked.len())
@@ -1024,6 +1093,8 @@ impl Workspace {
     fn render_messages(&self, talk: Talk, chat: &Chat, review: Option<&wisp_core::review::Review>, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let side = talk.side();
         let mut items: Vec<AnyElement> = vec![];
+        // A conversation not yet made a library is one conversation: it is not branched.
+        let draft = talk == Talk::Library && self.in_draft();
         // An answer can be added to a manuscript once there is one.
         let has_manuscript = self.lib.as_ref().is_some_and(|lib| !lib.writing.manuscripts.is_empty());
         // A citation clicked where it stands in the text.
@@ -1255,7 +1326,7 @@ impl Workspace {
                                 .child(ui::ghost_button(SharedString::from(format!("copy-{side}-{i}")), Some("copy"), None).h(text_px(24.)).min_w(px(24.)).opacity(0.7).tooltip(ui::tip(t("复制"))).on_click(self.on(Cmd::CopyText(whole.clone()), cx)))
                                 // The last answer can be asked for again; any answer can start a conversation of its own that goes on from it. A review's conversation is the review's record, and stays one.
                                 .when(last, |d| d.child(ui::ghost_button(SharedString::from(format!("regenerate-{side}-{i}")), Some("refresh-cw"), None).h(text_px(24.)).min_w(px(24.)).opacity(0.7).tooltip(ui::tip(t("重新回答"))).on_click(self.on(Cmd::Regenerate(talk, i), cx))))
-                                .when(!chat.busy && review.is_none(), |d| d.child(ui::ghost_button(SharedString::from(format!("fork-{side}-{i}")), Some("git-branch"), None).h(text_px(24.)).min_w(px(24.)).opacity(0.7).tooltip(ui::tip(t("从这里分支：到这条回答为止另开一个对话，原对话留在历史里"))).on_click(self.on(Cmd::Fork(talk, i), cx))))
+                                .when(!chat.busy && review.is_none() && !draft, |d| d.child(ui::ghost_button(SharedString::from(format!("fork-{side}-{i}")), Some("git-branch"), None).h(text_px(24.)).min_w(px(24.)).opacity(0.7).tooltip(ui::tip(t("从这里分支：到这条回答为止另开一个对话，原对话留在历史里"))).on_click(self.on(Cmd::Fork(talk, i), cx))))
                                 // A review's answers go to its record, step by step; any other answer about the library can become a manuscript as it is.
                                 .when(talk == Talk::Library && review.is_none() && !whole.trim().is_empty(), |d| d.child(ui::ghost_button(SharedString::from(format!("manuscript-{side}-{i}")), Some("pen-line"), Some(t("保存为新稿件").into())).h(text_px(24.)).text_size(text_px(12.)).opacity(0.7).on_click(self.on(Cmd::AnswerToManuscript(question.clone(), whole.clone()), cx))))
                                 .when(talk == Talk::Library && review.is_none() && has_manuscript && !whole.trim().is_empty(), |d| d.child(ui::ghost_button(SharedString::from(format!("insert-{side}-{i}")), Some("plus"), Some(t("插入到稿件").into())).h(text_px(24.)).text_size(text_px(12.)).opacity(0.7).on_click(self.on_menu(MenuKind::InsertInto(Some(whole.clone())), cx))))
@@ -1299,7 +1370,7 @@ impl Workspace {
                     .border_1()
                     .border_color(Theme::line_strong())
                     .bg(Theme::bg_sunken())
-                    .child(div().flex().items_center().gap(px(6.)).font_weight(FontWeight::MEDIUM).child(ui::icon("info", 14., Theme::accent())).child(if pending.calls.iter().any(|call| call.confirm && call.outside.is_some()) { t("助手想执行下面的操作，等你同意") } else { t("助手想改动文献库，等你同意") }))
+                    .child(div().flex().items_center().gap(px(6.)).font_weight(FontWeight::MEDIUM).child(ui::icon("info", 14., Theme::accent())).child(if pending.calls.iter().any(|call| call.confirm && call.outside.is_some()) { t("助手想执行下面的操作，等你同意") } else if draft { t("助手想收进或改动这次对话里的文献，等你同意") } else { t("助手想改动文献库，等你同意") }))
                     .children(pending.calls.iter().enumerate().filter(|(_, call)| call.confirm).map(|(n, call)| {
                         let line = div().text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text_secondary()).child(call.line.clone());
                         if call.details.is_empty() { return div().pl(px(20.)).child(line) }
@@ -1515,7 +1586,7 @@ impl Workspace {
     /// The box the next question is written in: its pictures, a button to
     /// add more, the text, and the button that sends it or stops the answer.
     /// Over it, the slash commands that match what is being typed.
-    fn render_composer(&self, talk: Talk, chat: &Chat, model: &str, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_composer(&self, talk: Talk, chat: &Chat, model: &str, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let side = talk.side();
         let focused = chat.input.focus_handle(cx).is_focused(window);
         let commands = if focused { chat.slash_list(&self.settings.commands, cx) } else { vec![] };
@@ -1541,7 +1612,7 @@ impl Workspace {
                 d.child(
                     ui::popover()
                         .absolute()
-                        .left(px(16.))
+                        .left(px(reading_pad(chat.drawn_width)))
                         .bottom_full()
                         .min_w(px(340.))
                         .max_w(px(520.))
@@ -1694,7 +1765,6 @@ impl Workspace {
                     ),
             )
             .child(div().flex().gap(px(8.)).px(px(4.)).text_size(text_px(11.)).text_color(Theme::text_placeholder()).child(div().flex_1().min_w_0().truncate().child(if talk == Talk::Paper { t("Enter 发送 · 回答可能有误，请对照原文") } else { t("Enter 发送，Shift+Enter 换行 · 回答可能有误，请对照原文") })).child(div().flex_none().max_w(relative(0.4)).truncate().child(model.to_string())))
-            .into_any_element()
     }
 }
 

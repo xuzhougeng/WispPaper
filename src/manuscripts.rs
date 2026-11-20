@@ -870,12 +870,14 @@ impl Workspace {
                             .when(!outlined, |d| d.text_size(text_px(ui::HEAD_TITLE)).font_weight(FontWeight::SEMIBOLD))
                             .child(writing.title.clone()),
                     )
-                    .when(!outlined, |d| d.child(self.render_mode_switch(cx)).child(tool("write-manuscripts", "list", Some(tf!("稿件 {}", "Manuscript {}", writing.manuscripts.len()).into())).on_click(self.on_menu(MenuKind::Manuscripts, cx))))
+                    // Beside the conversation of a draft the manuscript is one to review: there is no other mode to switch to.
+                    .when(!outlined && !self.in_draft(), |d| d.child(self.render_mode_switch(cx)))
+                    .when(!outlined, |d| d.child(tool("write-manuscripts", "list", Some(tf!("稿件 {}", "Manuscript {}", writing.manuscripts.len()).into())).on_click(self.on_menu(MenuKind::Manuscripts, cx))))
                     // 预览 shows the whole manuscript as it reads, Markdown drawn; lit while it does, a click goes back to writing.
                     .child(preview)
                     // The language is said even in a narrow column: there is no icon that says it.
                     .child(ui::ghost_button("write-language", Some("chevron-down"), Some(language.to_string().into())).h(text_px(26.)).px(px(7.)).text_size(text_px(12.)).on_click(self.on_menu(MenuKind::WriteLanguage, cx)))
-                    .children(if self.settings.agent_writing { self.render_version_stepper(cx) } else { None })
+                    .children(if self.settings.agent_writing && !self.in_draft() { self.render_version_stepper(cx) } else { None })
                     .child(tool("write-history", "history", None).on_click(self.on(Cmd::WriteHistory, cx)))
                     .child(tool("write-export", "export", Some(t("导出").into())).on_click(self.on_menu(MenuKind::ManuscriptExport, cx))),
             )

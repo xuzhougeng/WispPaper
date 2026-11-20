@@ -19,6 +19,7 @@ mod extract;
 mod figures;
 mod floating;
 mod dialogs;
+mod draft;
 mod guide;
 mod home;
 mod input;

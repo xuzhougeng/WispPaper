@@ -104,7 +104,11 @@ impl Workspace {
         let key = |id: &str| if id.is_empty() { String::new() } else { shortcuts::pretty(&shortcuts::key_of(id, &self.settings.shortcuts)) };
         // (icon, label, the shortcut that does the same, command). A fixed label is a key of `locales/en.json`.
         let mut fixed: Vec<(&'static str, &'static str, &'static str, Cmd)> = vec![];
-        if let Some(lib) = self.lib.as_ref() {
+        if let Some(lib) = self.lib.as_ref().filter(|lib| lib.info.draft) {
+            // A conversation not yet made a library: its one step on, and the way back.
+            if lib.selected.is_some() { fixed.extend([("expand", "展开 / 收起文献详情", "detail", Cmd::ToggleWide), ("eye", "进入 / 退出阅读模式", "reading", Cmd::ToggleReading)]) }
+            fixed.push(("arrow-left", "回到首页", "home", Cmd::GoHome));
+        } else if let Some(lib) = self.lib.as_ref() {
             fixed.extend(crate::library::VIEWS.into_iter().map(|(_, icon, label, view)| (icon, label, "", Cmd::SetView(view))));
             fixed.extend([
                 ("sparkle", "助手", "ask", Cmd::SetPage(Page::Ask)),
@@ -129,6 +133,7 @@ impl Workspace {
             if lib.selected.is_some() && lib.tab == crate::app::Tab::Ask && lib.split && !self.settings.floating.on { fixed.push(("arrow-left-right", "交换 PDF 与提问的位置", "", Cmd::SwapPanes)) }
             fixed.push(("arrow-left", "回到所有文献库", "home", Cmd::GoHome));
         } else {
+            fixed.push(("sparkle", "助手：新对话", "ask", Cmd::Draft(crate::draft::Do::Begin)));
             fixed.push(("plus", "新建文献库", "new-library", Cmd::NewLibrary));
             fixed.push(("library", "导入文献库", "", Cmd::ImportLibrary));
         }
@@ -139,7 +144,8 @@ impl Workspace {
         let mut made = |icon: &'static str, label: String, also: &str, shortcut: &str, cmd: Cmd| {
             if holds(&format!("{label} {also}"), query) { rows.push(Row { icon, label: label.into(), note: key(shortcut).into(), cmd }) }
         };
-        if self.lib.is_some() {
+        if let Some(id) = self.lib.as_ref().filter(|lib| lib.info.draft).map(|lib| lib.info.id.clone()) { made("library", t("建成文献库…").to_string(), "建成文献库 make library promote", "", Cmd::Draft(crate::draft::Do::Promote(id))) }
+        if self.lib.as_ref().is_some_and(|lib| !lib.info.draft) {
             made("export", tf!("导出：{}", "Export: {}", "BibTeX（.bib）"), "导出 export", "", Cmd::Export(ExportKind::Bibtex));
             made("export", tf!("导出：{}", "Export: {}", t("表格（.csv）")), "导出 表格 export spreadsheet", "", Cmd::Export(ExportKind::Csv));
             if let Some(id) = self.lib.as_ref().map(|lib| lib.info.id.clone()) {
@@ -148,7 +154,9 @@ impl Workspace {
             }
         }
         let open = self.lib.as_ref().map(|lib| lib.info.id.as_str());
-        for info in self.libraries.iter().filter(|info| Some(info.id.as_str()) != open) { made("library", tf!("打开文献库：{}", "Open library: {}", info.name), "打开文献库 open library", "", Cmd::OpenLibrary(info.id.clone())) }
+        for info in self.libraries.iter().filter(|info| Some(info.id.as_str()) != open) {
+            if info.draft { made("message-square", tf!("打开对话：{}", "Open conversation: {}", info.name), "打开对话 open conversation", "", Cmd::Draft(crate::draft::Do::Open(info.id.clone()))) } else { made("library", tf!("打开文献库：{}", "Open library: {}", info.name), "打开文献库 open library", "", Cmd::OpenLibrary(info.id.clone())) }
+        }
         for (label, also, value) in [("跟随系统", "system", ""), ("浅色", "light", "light"), ("深色", "dark", "dark")] { made("palette", tf!("外观：{}", "Appearance: {}", t(label)), &format!("外观 主题 {label} appearance theme {also}"), "", Cmd::SetAppearance(value.into())) }
         for page in SettingsPage::ALL { made(page.icon(), tf!("设置 › {}", "Settings › {}", page.title()), "设置 settings", if page == SettingsPage::General { "settings" } else { "" }, Cmd::OpenSettings(page)) }
         let commands = rows.len();

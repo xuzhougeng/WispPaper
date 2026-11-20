@@ -40,13 +40,14 @@ pub struct ToolDef {
 }
 
 /// The tools that change the library.
-const WRITING: [&str; 23] = ["create_library", "import_library", "export_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "suggest_field", "sync_searches", "find_pdf", "import_url", "organise_papers", "edit_section", "set_outline", "export_note", "save_note_to_notion", "resolve_note_save", "save_cite_style", "restyle_docx"];
+const WRITING: [&str; 24] = ["create_library", "import_library", "export_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "suggest_field", "sync_searches", "find_pdf", "import_url", "organise_papers", "edit_section", "set_outline", "comment_manuscript", "export_note", "save_note_to_notion", "resolve_note_save", "save_cite_style", "restyle_docx"];
 /// Of those, the ones the window's assistant runs only with the person's
 /// consent. Saving a search, suggesting a screening decision or proposing
 /// a field's value changes nothing a person has not yet to act on, so they
 /// run as asked. The two that write a manuscript (`MANUSCRIPT`) are asked
 /// about everywhere but in the conversation that writes that manuscript,
-/// where the person has handed the pen over.
+/// where the person has handed the pen over. `comment_manuscript` is not among them: a comment changes no
+/// word of the manuscript, it waits for the person like a screening suggestion.
 const CONFIRMING: [&str; 17] = ["import_library", "export_library", "import_pdf", "import_references", "import_zotero", "run_search", "undo_import", "remove_search", "find_pdf", "import_url", "organise_papers", "edit_section", "set_outline", "export_note", "save_note_to_notion", "resolve_note_save", "restyle_docx"];
 /// The tools that write a manuscript (`compose`).
 pub const MANUSCRIPT: [&str; 2] = ["edit_section", "set_outline"];
@@ -72,7 +73,7 @@ pub fn catalog() -> Vec<ToolDef> {
         ToolDef {
             name: "list_libraries",
             title: "列出文献库",
-            description: "列出所有文献库：ID、名称、主题和文献数量。其他工具用 library 参数指定其中一个。",
+            description: "列出所有文献库：ID、名称、主题和文献数量。其他工具用 library 参数指定其中一个。首页上还没有建成文献库的对话不在其中。",
             input_schema: json!({"type": "object", "properties": {}, "additionalProperties": false}),
             writes: false,
             confirm: false,
@@ -427,6 +428,29 @@ pub fn catalog() -> Vec<ToolDef> {
             &[],
         ),
         scoped(
+            "comment_manuscript",
+            "写批注",
+            "在写作页稿件的一节上留批注，像 Word 审阅模式里那样，供用户逐条处理：每条针对这一节里的一处原文（quote，从 read_manuscript 读到的正文里逐字摘出，不跨段落，尽量短但能唯一定位，各条不重叠），comment 说明问题或理由，需要改文字时 replacement 给出整体替换 quote 的文字（只提醒时省略）。批注不改稿件正文：要不要采纳由用户决定，导出 Word 时写成 Word 的批注。在稿件里找不到原文的批注不会留下，列在 missed 里，可以改正 quote 后再试。每次最多 12 条，先说最要紧的。",
+            json!({
+                "manuscript": {"type": "string", "description": "稿件的 ID 或题目；只有一份稿件时可以省略。"},
+                "section": {"type": "string", "description": "批注所在的一节：节的 ID 或名称。"},
+                "remarks": {
+                    "type": "array",
+                    "description": "各条批注，按在这一节里的先后排列。",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "quote": {"type": "string", "description": "从这一节逐字摘出的原文。"},
+                            "comment": {"type": "string", "description": "批注：指出问题，或说明建议的修改和理由。用用户提问的语言写。"},
+                            "replacement": {"type": "string", "description": "建议用来整体替换 quote 的文字，用稿件的语言写；只提醒、不改文字时省略。"},
+                        },
+                        "required": ["quote", "comment"],
+                    },
+                },
+            }),
+            &["section", "remarks"],
+        ),
+        scoped(
             "edit_section",
             "写稿件",
             "写或修改写作页稿件的一节。只在用户要求你动笔（写、改、补、删稿件里的文字）时使用。两种用法取其一：edits 逐处修改，每项的 old 是从这一节现在的文字里逐字摘出的原文（先用 read_manuscript 读），new 是改成的文字，old 留空表示加在这一节末尾，new 留空表示删去；text 是这一节的全部新正文，用于空的一节或整节重写。正文是 Markdown，用稿件的语言写，节的名称不要写进正文。引用写作 [@Key]（Key 见 read_manuscript 里已有的引用），不知道 Key 时写 [@文献ID]，写入时会换成这篇文献的引用键；不要引用文献库里没有的文献。改动前这一节的文字会留作一个历史版本，用户可以随时换回去。返回改了几处；missed 是没有在这一节里找到原文、因而没有改的地方。",
@@ -526,6 +550,7 @@ pub fn describe_call(name: &str, args: &Value) -> String {
             (_, Value::Number(n)) => numbers.push((key, format!("{key} {n}"))),
             ("changes", Value::Array(items)) => numbers.push((key, format!("{} 篇", items.len()))),
             ("edits", Value::Array(items)) => numbers.push((key, format!("{} 处", items.len()))),
+            ("remarks", Value::Array(items)) => numbers.push((key, format!("{} 条", items.len()))),
             ("sections", Value::Array(items)) => numbers.push((key, format!("{} 节", items.len()))),
             _ => {}
         }
@@ -546,6 +571,10 @@ pub fn describe_result(result: &Result<Value, String>) -> String {
                 format!("{total} 条结果")
             } else if let (Some(changed), Some(unchanged)) = (value["changed"].as_u64(), value["unchanged"].as_u64()) {
                 if unchanged > 0 { format!("改了 {changed} 篇，{unchanged} 篇不用改") } else { format!("改了 {changed} 篇") }
+            } else if let Some(commented) = value["commented"].as_u64() {
+                let missed = value["missed"].as_array().map_or(0, Vec::len);
+                let name = value["section"]["name"].as_str().unwrap_or("");
+                if missed == 0 { format!("在「{name}」留了 {commented} 条批注") } else { format!("在「{name}」留了 {commented} 条批注，{missed} 条的原文没有找到") }
             } else if let Some(edited) = value["edited"].as_u64() {
                 let missed = value["missed"].as_array().map_or(0, Vec::len);
                 let name = value["section"]["name"].as_str().unwrap_or("");
@@ -584,7 +613,7 @@ pub fn call_with(root: &Path, name: &str, args: &Value, fetch: Fetch, download: 
     if name == "import_library" { return local::import_library(root, args).map_err(|e| format!("{e:#}")) }
     if name == "sync_searches" { return sync_searches(root, args, fetch, crate::time::now_millis()).map_err(|e| format!("{e:#}")) }
     if name == "list_libraries" {
-        let all: Vec<Value> = libraries::list(root).iter().map(|l| json!({"id": l.id, "name": l.name, "topic": l.topic, "papers": l.paper_count, "autoSyncHours": l.auto_sync_hours})).collect();
+        let all: Vec<Value> = libraries::shelved(root).iter().map(|l| json!({"id": l.id, "name": l.name, "topic": l.topic, "papers": l.paper_count, "autoSyncHours": l.auto_sync_hours})).collect();
         return Ok(json!({"libraries": all}));
     }
     let info = find_library(root, args["library"].as_str().unwrap_or(""))?;
@@ -667,6 +696,7 @@ fn dispatch(store: &mut Store, info: &LibraryInfo, name: &str, args: &Value, fet
         "restyle_docx" => local::restyle_docx(store, info, args, fetch),
         "list_manuscripts" => list_manuscripts(store),
         "read_manuscript" => read_manuscript(store, args),
+        "comment_manuscript" => comment_manuscript(store, args),
         "edit_section" => crate::compose::edit(store, args),
         "set_outline" => crate::compose::outline(store, args),
         "library_status" => library_status(store, info),
@@ -680,11 +710,14 @@ fn dispatch(store: &mut Store, info: &LibraryInfo, name: &str, args: &Value, fet
     }
 }
 
-/// The library `wanted` names by id or by name; the only one when it is empty.
+/// The library `wanted` names by id or by name; the only one when it is empty. A conversation of the home
+/// page not yet made a library (`LibraryInfo::draft`) is found only by its id: it is no library to count or
+/// to name, and an agent outside the window has no business there unless it was handed that id.
 pub fn find_library(root: &Path, wanted: &str) -> Result<LibraryInfo, String> {
-    let mut all = libraries::list(root);
-    let names = |all: &[LibraryInfo]| all.iter().map(|l| format!("「{}」", l.name)).collect::<Vec<_>>().join("、");
     let wanted = wanted.trim();
+    let (drafts, mut all): (Vec<LibraryInfo>, Vec<LibraryInfo>) = libraries::list(root).into_iter().partition(|l| l.draft);
+    if let Some(draft) = drafts.into_iter().find(|l| !wanted.is_empty() && l.id == wanted) { return Ok(draft) }
+    let names = |all: &[LibraryInfo]| all.iter().map(|l| format!("「{}」", l.name)).collect::<Vec<_>>().join("、");
     if wanted.is_empty() {
         return match all.len() {
             0 => Err(format!("{} 里还没有文献库。", root.display())),
@@ -1459,7 +1492,7 @@ pub fn due_searches(searches: &[SavedSearch], hours: u32, now_ms: i64) -> Vec<&S
 fn sync_searches(root: &Path, args: &Value, fetch: Fetch, now_ms: i64) -> Result<Value> {
     let force = truth(args, "force", false)?;
     let wanted = text(args, "library")?;
-    let all = if wanted.is_empty() { libraries::list(root) } else { vec![find_library(root, wanted).map_err(|e| anyhow!(e))?] };
+    let all = if wanted.is_empty() { libraries::shelved(root) } else { vec![find_library(root, wanted).map_err(|e| anyhow!(e))?] };
     let mut runs = vec![];
     let (mut added, mut failed) = (0, 0);
     for info in all.iter().filter(|info| force || info.auto_sync_hours > 0) {
@@ -1607,15 +1640,42 @@ fn list_manuscripts(store: &mut Store) -> Result<Value> {
     }))
 }
 
-fn read_manuscript(store: &mut Store, args: &Value) -> Result<Value> {
-    let manuscripts = store.manuscripts()?;
+/// The manuscript `args` names by id or title; the only one when it names none.
+fn named_manuscript<'a>(manuscripts: &'a [crate::manuscript::Manuscript], args: &Value) -> Result<&'a crate::manuscript::Manuscript> {
     let wanted = text(args, "manuscript")?;
-    let manuscript = match wanted {
+    Ok(match wanted {
         "" if manuscripts.len() == 1 => &manuscripts[0],
         "" if manuscripts.is_empty() => bail!("写作页还没有稿件。"),
         "" => bail!("有 {} 份稿件，用 manuscript 指定一份：{}", manuscripts.len(), manuscripts.iter().map(|m| format!("「{}」", m.shown_title())).collect::<Vec<_>>().join("、")),
         _ => manuscripts.iter().find(|m| m.id == wanted || m.shown_title() == wanted).ok_or_else(|| anyhow!("没有这份稿件：{wanted}。现有：{}", manuscripts.iter().map(|m| format!("「{}」", m.shown_title())).collect::<Vec<_>>().join("、")))?,
+    })
+}
+
+/// Comments of the assistant's on words of a section, as a review in Word leaves them: the text is not
+/// changed, each proposal waits for the person (`comment.rs`). A quotation the section does not hold
+/// leaves no comment and is said back, so the model can quote again.
+fn comment_manuscript(store: &mut Store, args: &Value) -> Result<Value> {
+    let manuscripts = store.manuscripts()?;
+    let manuscript = named_manuscript(&manuscripts, args)?;
+    let wanted = text(args, "section")?;
+    let Some(section) = manuscript.sections.iter().find(|s| s.id == wanted || s.name == wanted) else {
+        bail!("这份稿件没有名为「{wanted}」的节。现有：{}", manuscript.sections.iter().map(|s| format!("「{}」", s.name)).collect::<Vec<_>>().join("、"))
     };
+    let Some(items) = args["remarks"].as_array().filter(|items| !items.is_empty()) else { bail!("需要 remarks：至少一条批注。") };
+    let (remarks, missed) = crate::comment::remarks_in(items, &section.body);
+    let made = store.add_remarks(&manuscript.id, &section.id, &remarks)?;
+    Ok(json!({
+        "commented": made.len(),
+        "missed": missed,
+        "manuscript": manuscript.id,
+        "section": {"id": section.id, "name": section.name},
+        "next": "批注已留在稿件上，用户在窗口里逐条采纳或忽略；导出 Word 时写成 Word 的批注。不要把同样的意见再贴进对话。",
+    }))
+}
+
+fn read_manuscript(store: &mut Store, args: &Value) -> Result<Value> {
+    let manuscripts = store.manuscripts()?;
+    let manuscript = named_manuscript(&manuscripts, args)?;
     let section = text(args, "section")?;
     // The comments that still wait: those a Word file came with, the person's and the assistant's.
     let comments = store.comments(&manuscript.id)?;
@@ -1871,6 +1931,55 @@ pub(crate) mod tests {
         assert!(call(&root, "library_status", &json!({})).unwrap_err().contains("多个文献库"));
         assert_eq!(call(&root, "library_status", &json!({"library": "叶"})).unwrap()["papers"], 0);
         assert!(find_library(&root.join("nowhere"), "").unwrap_err().contains("还没有文献库"));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_conversation_not_yet_made_a_library_is_seen_only_by_its_id() {
+        let (root, _) = sample();
+        let draft = libraries::create_draft(&root, "根毛").unwrap();
+        // Not listed, not counted: the one library on the shelf still needs no name.
+        let listed = call(&root, "list_libraries", &json!({})).unwrap();
+        assert_eq!(listed["libraries"].as_array().unwrap().iter().map(|l| l["name"].as_str().unwrap()).collect::<Vec<_>>(), ["根"]);
+        assert_eq!(call(&root, "library_status", &json!({})).unwrap()["papers"], 2);
+        // Its name does not find it, and is not offered; its id does.
+        let refused = call(&root, "library_status", &json!({"library": "根毛"})).unwrap_err();
+        assert!(refused.ends_with("现有：「根」"), "{refused}");
+        assert_eq!(call(&root, "library_status", &json!({"library": draft.id})).unwrap()["papers"], 0);
+        // A data folder holding only conversations has no library.
+        let alone = std::env::temp_dir().join(format!("wisp-tools-{}", new_id("T")));
+        libraries::create_draft(&alone, "x").unwrap();
+        assert!(find_library(&alone, "").unwrap_err().contains("还没有文献库"));
+        assert!(call(&alone, "list_libraries", &json!({})).unwrap()["libraries"].as_array().unwrap().is_empty());
+        std::fs::remove_dir_all(root).ok();
+        std::fs::remove_dir_all(alone).ok();
+    }
+
+    #[test]
+    fn remarks_on_a_manuscript_are_kept_where_their_words_are_found() {
+        let (root, _) = sample();
+        let info = find_library(&root, "").unwrap();
+        let mut store = Store::open(&info.dir).unwrap();
+        let manuscript = store.create_manuscript("Root hairs", "en").unwrap();
+        let section = manuscript.sections[1].clone();
+        store.save_section_body(&section.id, "Root hairs take up water. They grow fast.\n\nEthylene makes them longer.").unwrap();
+        drop(store);
+        let args = json!({"section": section.name, "remarks": [
+            {"quote": "They grow fast.", "comment": "多快？给出数据和出处。", "replacement": "They grow about 1 µm per minute."},
+            {"quote": "Ethylene makes them longer", "comment": "需要引用。"},
+            {"quote": "Auxin is absent", "comment": "原文里没有这句。"},
+        ]});
+        let done = call(&root, "comment_manuscript", &args).unwrap();
+        assert_eq!((done["commented"].as_u64(), done["missed"].clone()), (Some(2), json!(["Auxin is absent"])));
+        assert_eq!(describe_result(&Ok(done)), format!("在「{}」留了 2 条批注，1 条的原文没有找到", section.name));
+        let store = Store::open(&info.dir).unwrap();
+        let comments = store.comments(&manuscript.id).unwrap();
+        assert_eq!(comments.iter().map(|c| (c.quote.as_str(), c.origin.as_str(), c.proposes())).collect::<Vec<_>>(), [("They grow fast.", crate::comment::ASSISTANT, true), ("Ethylene makes them longer", crate::comment::ASSISTANT, false)]);
+        // The text itself is the person's to change.
+        assert_eq!(store.manuscripts().unwrap()[0].section(&section.id).unwrap().body, "Root hairs take up water. They grow fast.\n\nEthylene makes them longer.");
+        assert!(call(&root, "comment_manuscript", &json!({"section": "Nowhere", "remarks": [{"quote": "x", "comment": "y"}]})).unwrap_err().contains("没有名为"));
+        assert!(call(&root, "comment_manuscript", &json!({"section": section.id, "remarks": []})).is_err());
+        assert!(catalog().iter().any(|tool| tool.name == "comment_manuscript" && tool.writes && !tool.confirm));
         std::fs::remove_dir_all(root).ok();
     }
 

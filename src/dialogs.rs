@@ -289,7 +289,14 @@ impl Workspace {
                     .child(footer(t("存入笔记"), false, self, cx))
             }
 
-            Modal::Library { editing, name, topic, color } => {
+            Modal::Rename { name, .. } => ui::dialog(420.)
+                .child(ui::dialog_title(t("重命名对话")))
+                .child(body().child(ui::field(name, window, cx)).child(error))
+                .child(footer(t("改名"), false, self, cx)),
+
+            Modal::Library { editing, name, topic, color, proposing } => {
+                // A conversation of the home page being made a library: it says so, and a model can name it from what was said.
+                let promoting = editing.as_ref().is_some_and(|id| self.lib.as_ref().is_some_and(|lib| lib.info.id == *id && lib.info.draft));
                 let swatches: Vec<Stateful<Div>> = theme::ACCENTS.iter().map(|accent| {
                     let chosen = accent.key == color;
                     div()
@@ -305,17 +312,32 @@ impl Workspace {
                         .on_click(self.on(Cmd::PickColor(accent.key.to_string()), cx))
                         .child(div().size(px(18.)).rounded_full().bg(accent.strong()))
                 }).collect();
+                // By the name, the sparkle that has the model propose the name and the topic; a spinner while it does. No words: the fields say what.
+                let sparkle = promoting.then(|| {
+                    div()
+                        .id("library-propose")
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .justify_center()
+                        .size(px(22.))
+                        .rounded(px(6.))
+                        .when(*proposing, |d| d.child(ui::spinner("library-proposing", 13., Theme::accent())))
+                        .when(!*proposing, |d| d.cursor_pointer().hover(|s| s.bg(Theme::accent_soft())).active(|s| s.bg(Theme::pressed())).child(ui::icon("sparkle", 14., Theme::accent())).on_click(self.on(Cmd::Draft(crate::draft::Do::Propose), cx)))
+                        .tooltip(ui::tip(t("让模型按这次对话拟名称和主题")))
+                });
+                let name_row = div().flex().flex_col().gap(px(5.)).child(div().flex().items_center().justify_between().h(text_px(22.)).mb(px(-5.)).child(div().text_size(text_px(12.)).text_color(Theme::text_secondary()).child(t("名称"))).children(sparkle)).child(ui::field(name, window, cx));
                 ui::dialog(480.)
-                    .child(ui::dialog_title(if editing.is_some() { t("编辑文献库") } else { t("新建文献库") }))
+                    .child(ui::dialog_title(if promoting { t("建成文献库") } else if editing.is_some() { t("编辑文献库") } else { t("新建文献库") }))
                     .child(
                         body()
-                            .child(ui::form_row(t("名称"), ui::field(name, window, cx)))
+                            .child(if promoting { name_row } else { ui::form_row(t("名称"), ui::field(name, window, cx)) })
                             .child(ui::form_row(t("主题"), ui::field(topic, window, cx)))
                             .child(ui::form_row(t("标识色"), div().flex().gap(px(6.)).children(swatches)))
-                            .child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(t("每个文献库是独立的文件夹：自己的数据库、PDF 和自定义词条，可以单独备份或拷走。")))
+                            .child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(if promoting { t("对话、收进的文献和交来的稿件都留在原处，成为这个文献库的内容。文献库是独立的文件夹：自己的数据库、PDF 和自定义词条，可以单独备份或拷走。") } else { t("每个文献库是独立的文件夹：自己的数据库、PDF 和自定义词条，可以单独备份或拷走。") }))
                             .child(error),
                     )
-                    .child(footer(if editing.is_some() { t("保存") } else { t("创建") }, false, self, cx))
+                    .child(footer(if promoting { t("建成文献库") } else if editing.is_some() { t("保存") } else { t("创建") }, false, self, cx))
             }
 
             Modal::AddById { input, run } => ui::dialog(480.)

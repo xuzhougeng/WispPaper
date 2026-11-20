@@ -162,7 +162,8 @@ impl Workspace {
     /// The sidebar's width for this window: none while it is put away, else
     /// the width the reader dragged it to, or the one it comes with.
     pub fn sidebar_width(&self, window: &Window) -> f32 {
-        if self.settings.sidebar_hidden { return 0. }
+        // A conversation not yet made a library has no navigation: the window is the conversation (`draft.rs`).
+        if self.settings.sidebar_hidden || self.in_draft() { return 0. }
         let own = if self.settings.sidebar_width > 0. { self.settings.sidebar_width } else { SIDEBAR_W };
         own.min(Self::sidebar_max(window)).max(SIDEBAR_MIN)
     }
@@ -194,7 +195,8 @@ impl Workspace {
     /// (`Cmd::LeaveAsk`) and closing the paper all end it.
     pub fn asking(&self, window: &Window) -> bool {
         let Some(lib) = &self.lib else { return false };
-        lib.selected.is_some() && lib.tab == Tab::Ask && lib.split && !lib.reading && !matches!(lib.page, Page::Trash | Page::Sources | Page::Guide) && f32::from(window.viewport_size().width) >= crate::detail::SPLIT_MIN
+        // A conversation not yet made a library keeps its conversation in view: a paper's own stays in its panel.
+        !lib.info.draft && lib.selected.is_some() && lib.tab == Tab::Ask && lib.split && !lib.reading && !matches!(lib.page, Page::Trash | Page::Sources | Page::Guide) && f32::from(window.viewport_size().width) >= crate::detail::SPLIT_MIN
     }
 
     /// The width of the list of papers beside a paper that is asked about: none on a page whose
@@ -314,8 +316,9 @@ impl Workspace {
         let main_width = f32::from(window.viewport_size().width) - sidebar_width - detail_width;
         let page = self.lib.as_ref().map_or(Page::Papers, |l| l.page);
         // What the manuscript cites is read by the outline and the page alike: worked out once, before either is drawn.
-        if page == Page::Write { self.cite_refresh(cx) }
+        if page == Page::Write || self.in_draft() { self.cite_refresh(cx) }
         let main = match page {
+            _ if self.in_draft() => self.render_draft(main_width, window, cx),
             Page::Papers => self.render_papers(main_width, window, cx),
             Page::Ask => self.render_chat(crate::app::Talk::Library, window, cx),
             Page::Trash => self.render_trash(cx),
@@ -379,11 +382,13 @@ impl Workspace {
     /// It is the only way back in the sidebar, so the topmost
     /// arrow is never the longer jump. A narrow sidebar keeps the arrow and drops its words.
     pub(crate) fn render_corner(&self, roomy: bool, asking: bool, cx: &mut Context<Self>) -> Div {
-        let (id, label, cmd) = if self.outline_shown() { ("back-library", t("文献库"), Cmd::LeaveWrite) } else if asking { ("back-library", t("文献库"), Cmd::LeaveAsk) } else { ("back-home", t("所有文献库"), Cmd::GoHome) };
+        // A conversation not yet made a library is one level under the home page: no sidebar to bring back, one way back.
+        let draft = self.in_draft();
+        let (id, label, cmd) = if draft { ("back-home", t("首页"), Cmd::GoHome) } else if self.outline_shown() { ("back-library", t("文献库"), Cmd::LeaveWrite) } else if asking { ("back-library", t("文献库"), Cmd::LeaveAsk) } else { ("back-home", t("所有文献库"), Cmd::GoHome) };
         ui::title_strip()
             .when(!ui::custom_titlebar(), |d| d.h(text_px(28.)))
             .pl(px(ui::traffic_lights_width()))
-            .child(ui::ghost_button("toggle-sidebar", Some("panel-left"), None).occlude().on_click(self.on(Cmd::ToggleSidebar, cx)))
+            .when(!draft, |d| d.child(ui::ghost_button("toggle-sidebar", Some("panel-left"), None).occlude().on_click(self.on(Cmd::ToggleSidebar, cx))))
             // The arrow one level up takes this one's place under the pointer: the second click of a double click is not a second step back.
             .child(ui::ghost_button(id, Some("arrow-left"), roomy.then(|| label.into())).occlude().on_click(cx.listener(move |this, event: &ClickEvent, window, cx| if event.click_count() <= 1 { this.run(cmd.clone(), window, cx) })))
     }
