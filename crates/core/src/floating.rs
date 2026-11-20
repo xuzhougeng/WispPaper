@@ -95,6 +95,20 @@ pub fn button_at(stored: Option<(f32, f32)>, area: (f32, f32)) -> (f32, f32) {
     (within(x, BUTTON, area.0.max(0.)), within(y, BUTTON, area.1.max(0.)))
 }
 
+/// The PDF's tools floating as a column over the page (`Settings::pdf_tools_at`): its size,
+/// how near the area's edges it may go, and where it stands until it is moved (under 标注).
+pub const TOOLS: (f32, f32) = (36., 176.);
+pub const TOOLS_MARGIN: f32 = 4.;
+pub const TOOLS_HOME: (f32, f32) = (8., 44.);
+
+/// The tool column's place in an area of this size, as its distance from the area's right
+/// edge and from its top: kept by the right edge, so a wider window does not leave it in the middle.
+pub fn tools_at(stored: Option<(f32, f32)>, area: (f32, f32)) -> (f32, f32) {
+    let (right, top) = stored.unwrap_or(TOOLS_HOME);
+    let clamp = |at: f32, size: f32, area: f32| finite(at, TOOLS_MARGIN).clamp(TOOLS_MARGIN, (area - size - TOOLS_MARGIN).max(TOOLS_MARGIN));
+    (clamp(right, TOOLS.0, area.0), clamp(top, TOOLS.1, area.1))
+}
+
 /// A press that went this far from where it began is a drag; a shorter one is a click.
 pub fn is_drag(delta: (f32, f32)) -> bool {
     delta.0.hypot(delta.1) > DRAG_SLOP
@@ -108,6 +122,19 @@ mod tests {
 
     fn inside(rect: Rect, area: (f32, f32)) -> bool {
         rect.x >= 0. && rect.y >= 0. && rect.x + rect.width <= area.0 && rect.y + rect.height <= area.1
+    }
+
+    #[test]
+    fn the_tools_stay_within_the_page_and_by_its_right_edge() {
+        assert_eq!(tools_at(None, AREA), TOOLS_HOME);
+        assert_eq!(tools_at(Some((120., 300.)), AREA), (120., 300.));
+        // Dragged past an edge: it stops at the margin.
+        assert_eq!(tools_at(Some((-50., -50.)), AREA), (TOOLS_MARGIN, TOOLS_MARGIN));
+        assert_eq!(tools_at(Some((5000., 5000.)), AREA), (AREA.0 - TOOLS.0 - TOOLS_MARGIN, AREA.1 - TOOLS.1 - TOOLS_MARGIN));
+        // A place left in a large window, read in a small one; an area smaller than the column.
+        assert_eq!(tools_at(Some((600., 600.)), (400., 300.)), (400. - TOOLS.0 - TOOLS_MARGIN, 300. - TOOLS.1 - TOOLS_MARGIN));
+        assert_eq!(tools_at(Some((20., 20.)), (10., 10.)), (TOOLS_MARGIN, TOOLS_MARGIN));
+        assert_eq!(tools_at(Some((f32::NAN, 60.)), AREA), (TOOLS_MARGIN, 60.));
     }
 
     #[test]

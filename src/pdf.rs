@@ -1476,6 +1476,21 @@ impl PdfView {
         cx.notify();
     }
 
+    /// The list of marks is open under its button at the top right, where the floating tools would stand.
+    pub fn annotations_open(&self) -> bool {
+        self.annotations_open
+    }
+
+    /// The viewer's width, as `set_width` was last told.
+    pub fn width(&self) -> f32 {
+        self.width
+    }
+
+    /// The viewer's height, as it was last laid out.
+    pub fn height(&self) -> f32 {
+        self.height
+    }
+
     pub fn cutting(&self) -> bool {
         self.cutting
     }
@@ -1862,7 +1877,7 @@ impl PdfView {
                         .child(button("annotation-cancel", t("取消")).on_click(cx.listener(|this, _, _, cx| { this.annotation_edit = None; cx.notify(); })))))
             });
             div().id("pdf-annotations-list").w_full().max_h(px((self.height - 70.).max(0.))).overflow_y_scroll().bg(Theme::bg_body()).border_1().border_color(Theme::line_strong()).rounded(px(8.))
-                .when(self.annotations.is_empty(), |d| d.child(div().p(px(12.)).text_color(Theme::text_secondary()).child(t("选中 PDF 文字后，可添加下划线或高亮；工具栏的「方框」「便签」可以框出区域、在任意位置记笔记。"))))
+                .when(self.annotations.is_empty(), |d| d.child(div().p(px(12.)).text_color(Theme::text_secondary()).child(t("选中 PDF 文字后，可添加下划线或高亮；「方框」「便签」两个工具可以框出区域、在任意位置记笔记。"))))
                 .children(rows)
         });
         div().absolute().top(px(8.)).right(px(8.)).max_w(px(width)).flex().flex_col().items_end().gap(px(6.)).text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text()).occlude()

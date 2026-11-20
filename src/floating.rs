@@ -26,6 +26,8 @@ pub enum Hold {
     Corner,
     /// The folded-up button: it moves once the pointer went far enough, else it is a click.
     Button,
+    /// The grip of the PDF's floating tools: the column moves over the page.
+    Tools,
 }
 
 /// A press on the window or the button, until the button is let go.
@@ -35,7 +37,16 @@ pub struct Drag {
     from: Point<Pixels>,
     rect: Rect,
     button: (f32, f32),
+    /// Where the tool column stood when the press began (`geo::tools_at`).
+    tools: (f32, f32),
     moved: bool,
+}
+
+impl Drag {
+    /// The PDF's floating tools are being moved.
+    pub fn held_tools(&self) -> bool {
+        self.hold == Hold::Tools && self.moved
+    }
 }
 
 impl Workspace {
@@ -205,8 +216,26 @@ impl Workspace {
         let floating = &self.settings.floating;
         let Some(lib) = self.lib.as_mut() else { return };
         let area = lib.float_area;
-        lib.float_drag = Some(Drag { hold, from: at, rect: geo::shown(floating.rect, area), button: geo::button_at(floating.button, area), moved: false });
+        lib.float_drag = Some(Drag { hold, from: at, rect: geo::shown(floating.rect, area), button: geo::button_at(floating.button, area), tools: (0., 0.), moved: false });
         cx.notify();
+    }
+
+    /// The area the PDF's floating tools stand in: the viewer as it was laid out.
+    fn tools_area(&self, cx: &App) -> (f32, f32) {
+        self.lib.as_ref().and_then(|lib| lib.pdf.as_ref()).map(|pdf| { let view = pdf.read(cx); (view.width(), view.height()) }).unwrap_or_default()
+    }
+
+    /// A press on the grip of the PDF's floating tools: the column follows the
+    /// pointer. Twice is home again, under 标注.
+    pub fn tools_press(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
+        if event.click_count >= 2 {
+            if let Some(lib) = self.lib.as_mut() { lib.float_drag = None }
+            self.settings.pdf_tools_at = None;
+            return self.save_settings(cx);
+        }
+        let tools = geo::tools_at(self.settings.pdf_tools_at, self.tools_area(cx));
+        self.float_press(Hold::Tools, event.position, cx);
+        if let Some(drag) = self.lib.as_mut().and_then(|lib| lib.float_drag.as_mut()) { drag.tools = tools }
     }
 
     fn float_move(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -214,7 +243,8 @@ impl Workspace {
         let Some(mut drag) = lib.float_drag else { return };
         // Let go outside the window: the button is up by the time the pointer is back.
         if event.pressed_button != Some(MouseButton::Left) { return self.float_release(window, cx) }
-        let area = lib.float_area;
+        let area = if drag.hold == Hold::Tools { self.tools_area(cx) } else { lib.float_area };
+        let Some(lib) = self.lib.as_mut() else { return };
         let delta = (f32::from(event.position.x - drag.from.x), f32::from(event.position.y - drag.from.y));
         if !drag.moved && !geo::is_drag(delta) { return }
         drag.moved = true;
@@ -224,6 +254,8 @@ impl Workspace {
             Hold::Title => floating.rect = Some(geo::moved(drag.rect, delta, area)),
             Hold::Corner => floating.rect = Some(geo::resized(drag.rect, delta, area)),
             Hold::Button => floating.button = Some(geo::button_at(Some((drag.button.0 + delta.0, drag.button.1 + delta.1)), area)),
+            // Its place is counted from the right edge: moving right brings it nearer.
+            Hold::Tools => self.settings.pdf_tools_at = Some(geo::tools_at(Some((drag.tools.0 - delta.0, drag.tools.1 + delta.1)), area)),
         }
         cx.notify();
     }
