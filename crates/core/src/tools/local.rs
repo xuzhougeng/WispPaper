@@ -344,6 +344,97 @@ pub(super) fn restyle_docx(store: &Store, info: &LibraryInfo, args: &Value, fetc
     }))
 }
 
+/// The deck the arguments of `make_slides` describe, and what could not be put on a slide as asked.
+fn deck_of(store: &Store, args: &Value) -> Result<(crate::pptx::Deck, Vec<String>)> {
+    use crate::pptx::{Deck, Picture, Point, Slide};
+    let paper = match text(args, "paperId")? {
+        "" => None,
+        id => Some(store.get_paper(id)?),
+    };
+    let mut deck = Deck { title: text(args, "title")?.to_string(), subtitle: text(args, "subtitle")?.to_string(), language: text(args, "language")?.to_string(), date: crate::time::now_iso(), slides: vec![] };
+    if let Some(paper) = &paper {
+        if deck.title.is_empty() { deck.title = paper.title.clone() }
+        if deck.subtitle.is_empty() { deck.subtitle = [paper.citation(), paper.journal.clone()].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" · ") }
+    }
+    if deck.title.is_empty() { bail!("需要 title（幻灯片的标题），或用 paperId 指明讲的是哪篇文献。") }
+    let Some(items) = args["slides"].as_array().filter(|items| !items.is_empty()) else { bail!("需要 slides：每页一个对象，写明 title 和 bullets，要放图时给 figure。") };
+    let mut notes = vec![];
+    for (n, item) in items.iter().enumerate() {
+        let number = n + 1;
+        let field = |key: &str| match &item[key] {
+            Value::Null => Ok(""),
+            Value::String(value) => Ok(value.trim()),
+            _ => bail!("第 {number} 页的 {key} 应为字符串。"),
+        };
+        let lines: Vec<&str> = match &item["bullets"] {
+            Value::Null => vec![],
+            // A model may write the points as one text, a line each.
+            Value::String(all) => all.lines().collect(),
+            Value::Array(all) => all.iter().map(|one| one.as_str().with_context(|| format!("第 {number} 页的 bullets 应为字符串的列表。"))).collect::<Result<_>>()?,
+            _ => bail!("第 {number} 页的 bullets 应为字符串的列表。"),
+        };
+        let mut slide = Slide { title: field("title")?.into(), points: lines.into_iter().map(Point::read).filter(|point| !point.text.is_empty()).collect(), caption: field("caption")?.into(), source: field("source")?.into(), notes: field("notes")?.into(), picture: None };
+        // The first point stands under none.
+        if let Some(first) = slide.points.first_mut() { first.level = 0 }
+        let picture = match (field("figure")?, field("image")?) {
+            ("", "") => None,
+            ("", image) => Some((image.to_string(), PathBuf::from(image))),
+            (id, "") => {
+                let figure = store.get_figure(id).map_err(|_| anyhow::anyhow!("第 {number} 页：图片库里没有 {id}。用 list_figures 查图片的 ID。"))?;
+                // What the figure library knows of it: its legend under it, and the paper and page it was cut from at the foot.
+                if slide.caption.is_empty() { slide.caption = [figure.label.as_str(), figure.legend.as_str()].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" | ") }
+                if slide.source.is_empty() && let Ok(from) = store.get_paper(&figure.paper_id) {
+                    let page = if figure.page > 0 { format!("p. {}", figure.page) } else { String::new() };
+                    slide.source = [from.citation(), figure.label.clone(), page].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" · ");
+                }
+                Some((id.to_string(), store.figure_path(&figure)))
+            }
+            _ => bail!("第 {number} 页：figure 和 image 只给一个。"),
+        };
+        if let Some((name, path)) = picture {
+            let bytes = std::fs::read(&path).with_context(|| format!("第 {number} 页：无法读取图片 {}", path.display()))?;
+            match Picture::read(bytes) {
+                Ok(picture) => slide.picture = Some(picture),
+                // The slide is made without it, and said.
+                Err(why) => notes.push(format!("第 {number} 页没有放图 {name}：{why}。")),
+            }
+        }
+        if slide.source.is_empty() && let Some(paper) = &paper { slide.source = paper.citation() }
+        if slide.title.is_empty() && slide.points.is_empty() && slide.picture.is_none() { bail!("第 {number} 页是空的：至少给 title、bullets 或一张图。") }
+        deck.slides.push(slide);
+    }
+    Ok((deck, notes))
+}
+
+/// Slides as a .pptx file where the caller says, or in the person's documents under the deck's title; no file is written over.
+pub(super) fn make_slides(store: &Store, args: &Value) -> Result<Value> {
+    let (deck, mut notes) = deck_of(store, args)?;
+    let output = match text(args, "output")? {
+        "" => {
+            let folder = dirs::document_dir().or_else(dirs::home_dir).unwrap_or_else(|| store.root().to_path_buf());
+            let stem: String = crate::archive::file_stem(&deck.title, "slides").chars().take(80).collect();
+            (1..).map(|n| folder.join(if n == 1 { format!("{stem}.pptx") } else { format!("{stem} ({n}).pptx") })).find(|path| !path.exists()).unwrap_or_default()
+        }
+        output => PathBuf::from(output),
+    };
+    if !output.extension().is_some_and(|e| e.eq_ignore_ascii_case("pptx")) { bail!("输出路径应是 .pptx 文件：{}", output.display()) }
+    if output.exists() { bail!("{} 已存在，不会覆盖。请换一个文件名。", output.display()) }
+    let written = crate::pptx::write(&deck);
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&output).with_context(|| format!("无法创建 {}（已有文件不会覆盖）", output.display()))?;
+    std::io::Write::write_all(&mut file, &written.bytes).with_context(|| format!("无法写入 {}", output.display()))?;
+    let pages = |numbers: &[usize]| numbers.iter().map(|n| n.to_string()).collect::<Vec<_>>().join("、");
+    if !written.continued.is_empty() { notes.push(format!("第 {} 页的要点一页放不下，接着排在了下一页（标题带「续」）。", pages(&written.continued))) }
+    if !written.clipped.is_empty() { notes.push(format!("第 {} 页的图注太长，幻灯片上只留了前三行，全文在这一页的备注里。", pages(&written.clipped))) }
+    Ok(json!({
+        "output": output,
+        "title": deck.title,
+        "slides": written.pages,
+        "pictures": deck.slides.iter().filter(|slide| slide.picture.is_some()).count(),
+        "notes": notes,
+        "next": "文件已写好。告诉用户文件在哪里（路径照原样写出，不要写成链接）、共几页、放了几张图，以及 notes 里说的情况；请用户在 PowerPoint、Keynote 或 WPS 里打开看版面，要改哪一页告诉你。",
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

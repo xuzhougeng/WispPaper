@@ -82,9 +82,14 @@ pub fn is_archive_name(path: &Path) -> bool {
 
 /// A file name for a library's archive: its name, without what a file system refuses.
 pub fn file_name(name: &str) -> String {
+    format!("{}.{EXTENSION}", file_stem(name, "library"))
+}
+
+/// A name as the stem of a file's: without what a file system refuses, and `fallback` when nothing is left.
+pub fn file_stem(name: &str, fallback: &str) -> String {
     let clean: String = name.trim().chars().map(|c| if c.is_control() || ['/', '\\', ':', '*', '?', '"', '<', '>', '|'].contains(&c) { '-' } else { c }).collect();
     let clean = clean.trim_matches(['.', ' ']);
-    format!("{}.{EXTENSION}", if clean.is_empty() { "library" } else { clean })
+    if clean.is_empty() { fallback.to_string() } else { clean.to_string() }
 }
 
 // ---- export

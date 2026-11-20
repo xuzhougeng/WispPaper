@@ -110,6 +110,7 @@ wisp search_fulltext --help             # 一个工具的参数
 | `restyle_docx` | 把 Word 文件的引用和参考文献表按一个 CSL 样式重排，写成新文件（`--path a.docx --style csl:nature`，或 `--csl` 一份 CSL 定义；`--output b.docx`，省略时写在原文件旁边、文件名加 `-restyled`；`--track` 把改动写成修订）。引用是能跳到条目的域；原文件不改，已有文件不覆盖 |
 | `save_cite_style` | 把一份 CSL 定义存为自己的引用样式（`--name my-journal.csl --csl …`），写在数据文件夹的 `styles/` 下，之后可在写作页「导出」菜单里选用 |
 | `import_manuscript` | 把一个在别处写好的稿件文件导入写作页，成为一份新稿件（`--path a.docx`，也可以是 `.md`、`.txt`），等同于写作页的「导入」：原文件不改，正文按标题分节（Word 文件没有用标题样式时按看起来像标题的段落分，结果的 `guessedHeadings` 列出它们），Word 里的批注一起带进来，表格和图片留在文件的副本里。正文里的引用保持文件里的写法。同一个文件已经是稿件时不再导入一份（`already`） |
+| `make_slides` | 把内容做成一份 PowerPoint 幻灯片，写成新文件（`wisp make_slides '<slides 的 JSON>' --paper-id P-… --output talk.pptx`）。`slides` 是一个 JSON 数组，每页给 `title`、`bullets`（字符串数组，以两个空格开头的是上一条下面的小点）、`figure`（图片库里一张图的 ID，图注和出处自动带上）或 `image`（本机 PNG / JPEG 的路径）、`caption`、`source`（页脚的出处）、`notes`（讲稿备注）；只有 `title` 的一页是分节页。`--title`、`--subtitle` 是标题页，省略时取 `--paper-id` 那篇文献的题目和作者、年份、期刊。版面由程序排：字号按内容选，要点放不下时接着排到下一页。已有文件不覆盖；`--output` 省略时写在「文档」文件夹，文件名是标题 |
 | `list_manuscripts` | 列出写作页的稿件：题目、语言、各节的名称和字数 |
 | `read_manuscript` | 读取一份稿件的正文，可以只读一节；只读 |
 | `edit_section` | 写或修改稿件的一节：`--edits` 是一个 JSON 数组，每项是 `old`（从这一节逐字摘出的原文，留空表示加在末尾）和 `new`（改成的文字，留空表示删去）；或用 `--text` 给出这一节的全部新正文。引用写作 `[@Key]` 或 `[@文献ID]`。改动前的文字留作这一节的一个历史版本（会改动稿件） |

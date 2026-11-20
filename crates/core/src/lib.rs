@@ -17,6 +17,7 @@
 //! - `structure` that text sorted into the parts of a paper and cut into sentences, for 写作
 //! - `cite`     citations in a manuscript: keys, finding them, the reference list and BibTeX
 //! - `headings` headings guessed by their look in a Word file without heading styles, for the person to confirm
+//! - `pptx`     slides written as a PowerPoint file: what is on a slide is said, where it stands is decided here
 //! - `docx`     Word files for 写作: read into paragraphs and comments, written again with the text as it stands and its comments
 //! - `comment`  批注: remarks on words of a manuscript, the person's, the assistant's and those a Word file came with
 //! - `revise`   改稿: the assistant's changes to a section as blocks of words to find and words to put there
@@ -65,6 +66,7 @@ pub mod oauth;
 pub mod openaccess;
 pub mod organise;
 pub mod passage;
+pub mod pptx;
 pub mod pdftext;
 pub mod provider;
 pub mod restyle;
