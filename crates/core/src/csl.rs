@@ -433,6 +433,71 @@ pub fn record_of(paper: &Paper) -> Record {
     record
 }
 
+/// A record as a paper of the library, the other way from `record_of`: what a Word file's reference becomes when
+/// its works are taken in. None without a title. What a record says that a paper may not hold (a DOI or PMID of
+/// another shape, a year out of range) is left out rather than costing the paper.
+pub fn paper_of(record: &Record) -> Option<Paper> {
+    use serde_json::Value;
+    let text = |name: &str| -> String {
+        match record.get(name) {
+            Some(Value::String(text)) => text.trim().to_string(),
+            Some(Value::Number(number)) => number.to_string(),
+            Some(Value::Array(items)) => items.iter().find_map(Value::as_str).unwrap_or("").trim().to_string(),
+            _ => String::new(),
+        }
+    };
+    let title = crate::model::strip_markup(&text("title"));
+    if title.trim().is_empty() { return None }
+    let authors: Vec<String> = record
+        .get("author")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|author| {
+            let part = |name: &str| author[name].as_str().unwrap_or("").trim();
+            match (part("family"), part("given"), part("literal")) {
+                ("", _, "") => None,
+                ("", _, literal) => Some(literal.to_string()),
+                (family, "", _) => Some(family.to_string()),
+                // 张 and 三 are one name written together; a Latin name is kept as `Zhang, Wei`, the family name first.
+                (family, given, _) if family.chars().chain(given.chars()).all(|c| !c.is_ascii_alphabetic()) => Some(format!("{family}{given}")),
+                (family, given, _) => Some(format!("{family}, {given}")),
+            }
+        })
+        .collect();
+    let year = match record.get("issued") {
+        Some(Value::Object(issued)) => issued.get("date-parts").and_then(|parts| parts.get(0)?.get(0).cloned()).or_else(|| issued.get("raw").or(issued.get("literal")).cloned()),
+        other => other.cloned(),
+    };
+    let year = match year {
+        Some(Value::Number(year)) => year.as_i64().map(|year| year as i32),
+        Some(Value::String(text)) => text.split(|c: char| !c.is_ascii_digit()).find(|digits| digits.len() == 4).and_then(|digits| digits.parse().ok()),
+        _ => None,
+    };
+    let doi = crate::model::normalize_doi(&text("DOI"));
+    let pmid = crate::model::normalize_pmid(&text("PMID"));
+    let publication_status = match text("type").as_str() {
+        "article" => "preprint",
+        "article-journal" | "paper-conference" | "book" | "chapter" | "thesis" | "report" if !text("container-title").is_empty() || !text("publisher").is_empty() || !doi.is_empty() => "published",
+        _ => "unknown",
+    };
+    Some(Paper {
+        title,
+        authors: authors.join("; "),
+        year: year.filter(|year| (1800..=2200).contains(year)),
+        journal: [text("container-title"), text("publisher")].into_iter().find(|name| !name.is_empty()).unwrap_or_default(),
+        volume: text("volume"),
+        issue: text("issue"),
+        pages: crate::model::clean_pages(&text("page")),
+        doi: if crate::model::valid_doi(&doi) { doi } else { String::new() },
+        pmid: if pmid.bytes().all(|b| b.is_ascii_digit()) { pmid } else { String::new() },
+        url: text("URL"),
+        abstract_text: text("abstract"),
+        publication_status: publication_status.into(),
+        ..Default::default()
+    })
+}
+
 /// A record as the processor takes one: every field it can read, the others left out. Zotero's records hold fields of
 /// its own (`accessed` without a date, lists of keywords) that are no CSL, and one such field is not to cost the record.
 fn item(record: &Record) -> csl_json::Item {
@@ -537,6 +602,25 @@ mod tests {
 
     fn paper(id: &str, authors: &str, year: i32, title: &str, journal: &str) -> Paper {
         Paper { id: id.into(), authors: authors.into(), year: Some(year), title: title.into(), journal: journal.into(), ..Default::default() }
+    }
+
+    #[test]
+    fn a_record_becomes_a_paper() {
+        // There and back: what `record_of` writes, `paper_of` reads.
+        let mut sent = paper("p1", "Zhang, Wei; Li, Na", 2021, "Root hairs take up water", "Plant Cell");
+        (sent.volume, sent.issue, sent.pages, sent.doi) = ("33".into(), "2".into(), "10-19".into(), "10.1093/plcell/koab001".into());
+        let back = paper_of(&record_of(&sent)).unwrap();
+        assert_eq!((back.title.as_str(), back.authors.as_str(), back.year, back.journal.as_str(), back.placed(), back.doi.as_str(), back.publication_status.as_str()), ("Root hairs take up water", "Zhang, Wei; Li, Na", Some(2021), "Plant Cell", sent.placed(), "10.1093/plcell/koab001", "published"));
+        // As Zotero writes one into a Word file: a year as text, a name in one piece, a Chinese name in two, and what no paper may hold left out.
+        let record: Record = serde_json::from_value(serde_json::json!({"id": "x", "type": "article-journal", "title": "<i>Arabidopsis</i> roots", "container-title": ["J. Roots"], "author": [{"family": "张", "given": "三"}, {"literal": "The Root Consortium"}, {"given": "Nobody"}], "issued": {"date-parts": [["2019", 5]]}, "DOI": "not a doi", "PMID": "PMC123", "page": "e12"})).unwrap();
+        let taken = paper_of(&record).unwrap();
+        assert_eq!((taken.title.as_str(), taken.authors.as_str(), taken.year, taken.journal.as_str(), taken.pages.as_str(), taken.doi.as_str(), taken.pmid.as_str()), ("Arabidopsis roots", "张三; The Root Consortium", Some(2019), "J. Roots", "e12", "", ""));
+        let mut normal = taken;
+        normal.normalize();
+        assert!(normal.validate().is_ok());
+        // A year out of range is no year, and a work without a title is no paper.
+        assert_eq!(paper_of(&serde_json::from_value(serde_json::json!({"title": "Old", "issued": {"raw": "1066"}})).unwrap()).unwrap().year, None);
+        assert_eq!(paper_of(&serde_json::from_value(serde_json::json!({"author": [{"family": "X"}]})).unwrap()), None);
     }
 
     fn temp(name: &str) -> PathBuf {

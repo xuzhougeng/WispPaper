@@ -1514,6 +1514,8 @@
   "帮我调研一下这个想法：": "Help me research this idea: ",
   "帮我审一下这份稿件：逻辑、论据和表述，意见作为批注留在稿件上。": "Review this manuscript for me: logic, evidence and wording; leave your remarks as comments on it.",
   "帮我找几篇文献：": "Find me a few papers on: ",
+  "从 Word 建文献库": "A library from a Word file",
+  "把这份 Word 文件参考文献表里的文献都收进来，建成一个文献库。": "Take every work in this Word file's reference list in, as a new library.",
   "对话的名称": "Name of the conversation",
   "首页的助手收 Word 文件（.docx）和 PDF。其他文件请拖进一个文献库。": "The assistant on the home page takes Word files (.docx) and PDFs. Drop other files into a library.",
   "这篇文献讲了什么？方法和主要结论是什么？": "What is this paper about? What are its methods and main conclusions?",

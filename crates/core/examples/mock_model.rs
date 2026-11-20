@@ -22,7 +22,9 @@
 //! one containing 「试试连接器」 makes it call the first tool of a connector
 //! (a name with `__`) that the request offers;
 //! one containing 「试试整理」 makes it call `organise_papers` for the first
-//! two papers, whose changes the window lists before it asks. In the
+//! two papers, whose changes the window lists before it asks; one containing
+//! 「建成一个文献库」 (the home page's start 从 Word 建文献库) calls `import_docx_references`
+//! on the Word file it came with, without the network. In the
 //! conversation that writes a manuscript (助手写) it calls `edit_section`
 //! and puts a paragraph citing the first paper at the end of the section on
 //! show; asked there to 「试试大纲」, it calls `set_outline` with three sections.
@@ -409,6 +411,16 @@ fn answer(mut stream: TcpStream, delay: u64) {
             events.push_str(&event(r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"我来动笔。"}}"#));
             events.push_str(&event(&format!(r#"{{"type":"content_block_start","index":1,"content_block":{{"type":"tool_use","id":"toolu_5","name":"{}","input":{{}}}}}}"#, if outline { "set_outline" } else { "edit_section" })));
             events.push_str(&event(&format!(r#"{{"type":"content_block_delta","index":1,"delta":{{"type":"input_json_delta","partial_json":{}}}}}"#, quoted(&args))));
+            events.push_str(&event(r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"}}"#));
+        } else if let Some(path) = request.rfind("建成一个文献库").filter(|at| request.rfind("\"role\":\"user\"").is_some_and(|user| user < *at)).and_then(|_| {
+            // 从 Word 建文献库 on the home page: the Word file the question came with, as its note names it.
+            let open = "（本机路径）：\\n- ";
+            request.rfind(open).and_then(|at| request[at + open.len()..].split("\\n").next()).map(str::to_string)
+        }) {
+            events.push_str(&event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#));
+            events.push_str(&event(r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"我把参考文献表里的文献收进来。"}}"#));
+            events.push_str(&event(r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_6","name":"import_docx_references","input":{}}}"#));
+            events.push_str(&event(&format!(r#"{{"type":"content_block_delta","index":1,"delta":{{"type":"input_json_delta","partial_json":{}}}}}"#, quoted(&format!(r#"{{"path": "{path}", "lookup": false}}"#)))));
             events.push_str(&event(r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"}}"#));
         } else if request.rfind("试试撤销").is_some_and(|at| request.rfind("\"role\":\"user\"").is_some_and(|user| user < at)) {
             // A tool that takes papers out of the library: the window asks the person before it runs.

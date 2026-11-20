@@ -28,19 +28,25 @@ const ROOM_FOR_COMMENTS: f32 = 1120.;
 /// A page narrower than this puts the manuscript over the conversation.
 const STACK_UNDER: f32 = 640.;
 
-/// The three quiet starts under the box: an icon, the words on the line, and what they put in the box. The
-/// second picks a file first: a manuscript is what it is about.
-const STARTS: [(&str, &str, &str, bool); 3] = [
+/// The quiet starts under the box: an icon, the words on the line, and what they put in the box. The second and
+/// the fourth pick a Word file first: a manuscript is what they are about.
+const STARTS: [(&str, &str, &str, bool); 4] = [
     ("search", "调研一个想法", "帮我调研一下这个想法：", false),
     ("file-text", "审一份稿件", "帮我审一下这份稿件：逻辑、论据和表述，意见作为批注留在稿件上。", true),
     ("library", "找几篇文献", "帮我找几篇文献：", false),
+    ("list", "从 Word 建文献库", "把这份 Word 文件参考文献表里的文献都收进来，建成一个文献库。", true),
 ];
+/// The start whose Word file is read for the works it cites (`import_docx_references`), not taken in as a manuscript to review.
+const COLLECT: usize = 3;
 
 /// The home page's box: what the first question will be, and the files that go with it.
 pub struct Home {
     pub input: Entity<TextInput>,
     /// A Word file to review, a PDF to talk about: taken into the conversation when the question is sent.
     pub files: Vec<PathBuf>,
+    /// The box's Word files are for the works they cite (the start 从 Word 建文献库): they go with the question as files
+    /// the assistant reads, not as a manuscript to review.
+    pub collect: bool,
     /// The conversation just made, and how many of its files are still being taken in: its first question waits for them.
     pub waiting: Option<(String, usize)>,
     /// The box is to have the keyboard when it is next drawn (a file was dropped, which brings no window along).
@@ -61,7 +67,7 @@ impl Home {
             input
         });
         let heard = cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| if *event == InputEvent::Submit { this.draft_send(window, cx) });
-        Home { input, files: vec![], waiting: None, focus: false, open: false, listing: false, _heard: heard }
+        Home { input, files: vec![], collect: false, waiting: None, focus: false, open: false, listing: false, _heard: heard }
     }
 }
 
@@ -112,6 +118,7 @@ impl Workspace {
             Do::Send => self.draft_send(window, cx),
             Do::Start(n) => {
                 let Some((_, _, words, pick)) = STARTS.get(n) else { return };
+                self.home.collect = n == COLLECT;
                 if *pick && !self.home.files.iter().any(|path| crate::comments::is_word(path)) { return self.draft_pick(Some(words), cx) }
                 self.home.input.update(cx, |input, cx| input.set_text(t(words), cx));
                 self.home.input.read(cx).focus(window);
@@ -198,7 +205,15 @@ impl Workspace {
         if let Some(missing) = self.settings.profile_for_or_default(Task::Chat).missing() {
             return self.fail(tf!("提问需要一个模型服务（{}）。在设置 › AI 里配置后再问。", "Asking needs a model service ({}). Set one up in Settings › AI first.", t(missing)), cx);
         }
-        let about = if text.is_empty() { files[0].file_stem().map(|stem| stem.to_string_lossy().to_string()).unwrap_or_default() } else { text.clone() };
+        let (words, papers): (Vec<PathBuf>, Vec<PathBuf>) = files.iter().cloned().partition(|path| crate::comments::is_word(path));
+        // Under 从 Word 建文献库 the Word files are read for what they cite: the conversation is named after the first of them.
+        let (cited, words) = if std::mem::take(&mut self.home.collect) { (words, vec![]) } else { (vec![], words) };
+        let stem = |path: &PathBuf| path.file_stem().map(|stem| stem.to_string_lossy().to_string()).unwrap_or_default();
+        let about = match cited.first() {
+            Some(path) => tf!("{} 的参考文献", "References of {}", stem(path)),
+            None if text.is_empty() => stem(&files[0]),
+            None => text.clone(),
+        };
         let info = match libraries::create_draft(&self.root, &about) {
             Ok(info) => info,
             Err(err) => return self.fail(format!("{err:#}"), cx),
@@ -208,11 +223,11 @@ impl Workspace {
         let Some(lib) = self.lib.as_mut().filter(|lib| lib.info.id == info.id) else { return };
         lib.library_chat.input.update(cx, |input, cx| input.set_text(&text, cx));
         lib.library_chat.input.read(cx).focus(window);
+        lib.library_chat.documents = cited;
         self.home.input.update(cx, |input, cx| input.set_text("", cx));
         self.home.files.clear();
-        if files.is_empty() { return self.ask_library(cx) }
-        self.home.waiting = Some((info.id.clone(), files.len()));
-        let (words, papers): (Vec<PathBuf>, Vec<PathBuf>) = files.into_iter().partition(|path| crate::comments::is_word(path));
+        if words.is_empty() && papers.is_empty() { return self.ask_library(cx) }
+        self.home.waiting = Some((info.id.clone(), words.len() + papers.len()));
         if !words.is_empty() { self.import_manuscript_files(words, cx) }
         for path in papers { self.draft_take_pdf(info.id.clone(), path, cx) }
         cx.notify();
@@ -330,7 +345,7 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// The box of a first question, and the three quiet starts under it.
+    /// The box of a first question, and the quiet starts under it.
     fn render_home_assistant(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         if std::mem::take(&mut self.home.focus) { self.home.input.read(cx).focus(window) }
         let input = &self.home.input;
