@@ -194,6 +194,36 @@ pub fn merge_lookup(mut paper: Paper, extra: Paper) -> Paper {
     paper
 }
 
+/// The paper behind a DOI or PMID: Crossref first for a DOI, completed by
+/// Europe PMC (abstract, PMID); Europe PMC alone for a PMID. An answer of
+/// 404 is "not known here"; any other failure is said when nothing was found.
+pub fn find(id: &Identifier, fetch: crate::sources::Fetch) -> Result<Paper, String> {
+    let mut notes = vec![];
+    let mut ask = |url: &str, name: &str| match fetch(url).map(|body| serde_json::from_str::<Value>(&body)) {
+        Ok(Ok(body)) => Some(body),
+        Ok(Err(err)) => {
+            notes.push(format!("{name}：无法解析返回内容：{err}"));
+            None
+        }
+        Err(err) if err.contains("404") => None,
+        Err(err) => {
+            notes.push(format!("{name}：{err}"));
+            None
+        }
+    };
+    let mut paper = match id {
+        Identifier::Doi(doi) => ask(&crossref_url(doi), "Crossref").and_then(|body| crossref_paper(&body)),
+        Identifier::Pmid(_) => None,
+    };
+    if let Some(extra) = ask(&europepmc_url(id), "Europe PMC").and_then(|body| europepmc_paper(&body)) {
+        paper = Some(match paper {
+            Some(found) => merge_lookup(found, extra),
+            None => extra,
+        });
+    }
+    paper.ok_or_else(|| if notes.is_empty() { "没有找到这个编号对应的文献，请检查后重试，或改用手动录入。".to_string() } else { crate::sources::reasons(&notes) })
+}
+
 /// The stretch of a text a DOI can run over: up to a space, a quote or a
 /// bracket. Round brackets belong to it while they close
 /// (`10.1016/S0092-8674(00)81683-9`); one that closes nothing, or is not

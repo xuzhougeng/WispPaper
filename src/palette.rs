@@ -114,7 +114,7 @@ impl Workspace {
                 ("pen-line", "写作", "", Cmd::SetPage(Page::Write)),
                 ("image", "图片库", "", Cmd::SetPage(Page::Figures)),
                 ("bin", "回收站", "", Cmd::SetPage(Page::Trash)),
-                ("plus", "通过 DOI / PMID 添加…", "add", Cmd::AddById),
+                ("plus", "通过 DOI / PMID / 网址添加…", "add", Cmd::AddById),
                 ("plus", "导入 PDF 文件…", "import-pdf", Cmd::ImportPdfs),
                 ("plus", "导入文件夹…", "", Cmd::ImportFolder),
                 ("plus", "导入 BibTeX / RIS…", "", Cmd::ImportReferences),

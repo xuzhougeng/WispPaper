@@ -1506,5 +1506,12 @@
   "展开候选句、批注和参考文献": "Open candidates, comments and references",
   "添加图片或 Word 文件": "Add images or a Word file",
   "看看这个 Word 文件的引用，我想重排它的引用格式。": "Look at the citations of this Word file; I want them in another citation style.",
-  "给一个写好的 Word 文件换引用格式：选文件，或把它拖进来。": "Restyle the citations of a finished Word file: pick it, or drop it here."
+  "给一个写好的 Word 文件换引用格式：选文件，或把它拖进来。": "Restyle the citations of a finished Word file: pick it, or drop it here.",
+  "通过 DOI / PMID / 网址添加": "Add by DOI / PMID / web address",
+  "通过 DOI / PMID / 网址添加…": "Add by DOI / PMID / web address…",
+  "DOI、PMID 或网址": "DOI, PMID or web address",
+  "也可以粘贴文献网页或 PDF 的网址：用本机的网络打开一次（校园网能下载的就能取到），添加文献并下载 PDF；需要登录或验证的网页不会去绕过。": "You can also paste the web address of an article page or a PDF. It is opened once over this computer's network (what your campus network can download is fetched), the paper is added and its PDF downloaded. Pages that need a login or a check are not worked around.",
+  "没有认出 DOI、PMID 或网址。DOI 形如 10.1038/s41586-020-2649-2，PMID 是一串数字，网址以 https:// 开头。": "No DOI, PMID or web address recognized. A DOI looks like 10.1038/s41586-020-2649-2, a PMID contains only digits, and a web address starts with https://.",
+  "按网址导入": "Import by web address",
+  "网址导入完成": "Web address import complete"
 }

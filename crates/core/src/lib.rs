@@ -80,4 +80,5 @@ pub mod time;
 pub mod tools;
 pub mod translation;
 pub mod update;
+pub mod webpage;
 pub mod zotero;

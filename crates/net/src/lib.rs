@@ -60,13 +60,24 @@ fn network_error(err: ureq::Error) -> String {
     format!("网络请求失败：{err}")
 }
 
-/// GET a JSON document; `None` for a 404.
-fn get_json(url: &str) -> Result<Option<Value>, String> {
-    let mut response = agent(Some(Duration::from_secs(40)), "")?.get(url).call().map_err(network_error)?;
-    let status = response.status().as_u16();
-    if status == 404 { return Ok(None) }
-    if !(200..300).contains(&status) { return Err(format!("服务返回 HTTP {status}：{url}")) }
-    response.body_mut().read_json::<Value>().map(Some).map_err(|e| format!("无法解析返回内容：{e}"))
+/// How long a host is waited for to begin answering by a caller that has a time to keep.
+const HURRIED_ANSWER: Duration = Duration::from_secs(30);
+
+/// The agent for a request that may take `own` at the most. A caller with a time to keep (`sources::within`: a
+/// pasted address) gets no more than what is left of it, and does not wait two minutes for a host that holds
+/// the connection without a word; once the time is up nothing is asked.
+fn timed_agent(own: Duration) -> Result<ureq::Agent, String> {
+    match wisp_core::sources::time_left() {
+        None => agent(Some(own), ""),
+        Some(left) if left.is_zero() => Err(format!("{}。", wisp_core::sources::TIME_UP)),
+        Some(left) => patient_agent(Some(own.min(left)), "", HURRIED_ANSWER.min(left)),
+    }
+}
+
+/// Why a request to `host` failed, as `said` puts it; one that ended with its caller's time says that instead
+/// of the timeout's own words.
+fn cut_short(host: &str, said: String) -> String {
+    if wisp_core::sources::time_up() { format!("{host} 迟迟没有答完，没有再等。") } else { said }
 }
 
 /// GET a document as text: what `wisp_core::sources` asks the literature
@@ -76,10 +87,10 @@ pub fn get_text(url: &str) -> Result<String, String> {
     // A service that says "too fast" is asked again, a little later each time.
     for wait in [Some(1500), Some(4000), None] {
         take_turn(host);
-        let mut response = agent(Some(Duration::from_secs(60)), "")?.get(url).call().map_err(network_error)?;
+        let mut response = timed_agent(Duration::from_secs(60))?.get(url).call().map_err(|err| cut_short(host, network_error(err)))?;
         let status = response.status().as_u16();
         match (status, wait) {
-            (200..300, _) => return response.body_mut().with_config().limit(64 << 20).read_to_string().map_err(|e| format!("无法读取 {host} 的返回内容：{e}")),
+            (200..300, _) => return response.body_mut().with_config().limit(64 << 20).read_to_string().map_err(|e| cut_short(host, format!("无法读取 {host} 的返回内容：{e}"))),
             (429, Some(millis)) => std::thread::sleep(Duration::from_millis(millis)),
             (429, None) => break,
             _ => return Err(format!("{host} 返回 HTTP {status}。")),
@@ -96,10 +107,10 @@ const MAX_DOWNLOAD: u64 = 120 << 20;
 /// that asks to log in comes back with 200 as well.
 pub fn download(url: &str) -> Result<Vec<u8>, String> {
     let host = url.split('/').nth(2).unwrap_or(url);
-    let mut response = agent(Some(Duration::from_secs(180)), "")?.get(url).header("Accept", "application/pdf,*/*;q=0.8").call().map_err(network_error)?;
+    let mut response = timed_agent(Duration::from_secs(180))?.get(url).header("Accept", "application/pdf,*/*;q=0.8").call().map_err(|err| cut_short(host, network_error(err)))?;
     let status = response.status().as_u16();
     if !(200..300).contains(&status) { return Err(format!("{host} 返回 HTTP {status}。")) }
-    response.body_mut().with_config().limit(MAX_DOWNLOAD).read_to_vec().map_err(|e| format!("无法读取 {host} 的返回内容：{e}"))
+    response.body_mut().with_config().limit(MAX_DOWNLOAD).read_to_vec().map_err(|e| cut_short(host, format!("无法读取 {host} 的返回内容：{e}")))
 }
 
 /// NCBI allows three requests a second without a key, counted across
@@ -119,31 +130,10 @@ fn take_turn(host: &str) {
     std::thread::sleep(at.saturating_duration_since(now));
 }
 
-/// The paper behind a DOI or PMID: Crossref first for a DOI, completed by
-/// Europe PMC (abstract, PMID); Europe PMC alone for a PMID.
+/// The paper behind a DOI or PMID (`lookup::find`): Crossref first for a
+/// DOI, completed by Europe PMC; Europe PMC alone for a PMID.
 pub fn lookup_paper(id: &Identifier) -> Result<Paper, String> {
-    let mut notes = vec![];
-    let mut paper: Option<Paper> = None;
-    if let Identifier::Doi(doi) = id {
-        match get_json(&lookup::crossref_url(doi)) {
-            Ok(Some(body)) => paper = lookup::crossref_paper(&body),
-            Ok(None) => {}
-            Err(err) => notes.push(format!("Crossref：{err}")),
-        }
-    }
-    match get_json(&lookup::europepmc_url(id)) {
-        Ok(Some(body)) => {
-            if let Some(extra) = lookup::europepmc_paper(&body) {
-                paper = Some(match paper {
-                    Some(found) => lookup::merge_lookup(found, extra),
-                    None => extra,
-                });
-            }
-        }
-        Ok(None) => {}
-        Err(err) => notes.push(format!("Europe PMC：{err}")),
-    }
-    paper.ok_or_else(|| if notes.is_empty() { "没有找到这个编号对应的文献，请检查后重试，或改用手动录入。".to_string() } else { wisp_core::sources::reasons(&notes) })
+    lookup::find(id, &get_text)
 }
 
 /// The newest published release, read off the redirect `url` answers with
@@ -395,6 +385,25 @@ mod tests {
             last
         });
         (base, handle)
+    }
+
+    /// A caller with a time to keep is not held by a host that takes the connection and says nothing, and asks
+    /// nothing more once the time is up.
+    #[test]
+    fn a_silent_host_is_left_when_the_time_is_up() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/paper.pdf", listener.local_addr().unwrap());
+        // Holds the connection longer than the test waits; not joined, it ends with the process.
+        std::thread::spawn(move || {
+            let held = listener.accept();
+            std::thread::sleep(Duration::from_secs(5));
+            drop(held);
+        });
+        let began = std::time::Instant::now();
+        let (cut, refused) = wisp_core::sources::within(Duration::from_millis(400), || (download(&url), get_text(&url)));
+        assert!(began.elapsed() < Duration::from_secs(3), "{:?}", began.elapsed());
+        assert!(cut.as_ref().is_err_and(|err| err.contains("迟迟没有答完")), "{cut:?}");
+        assert_eq!(refused, Err(format!("{}。", wisp_core::sources::TIME_UP)));
     }
 
     /// Send the conversation `wire` to the server at `base` and collect what comes back.

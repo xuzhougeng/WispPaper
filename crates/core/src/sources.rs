@@ -41,6 +41,46 @@ pub fn reasons(parts: &[String]) -> String {
     if parts.is_empty() { String::new() } else { format!("{}。", parts.join("；")) }
 }
 
+thread_local! {
+    /// When the work on this thread is to be over (`within`); none most of the time.
+    static UNTIL: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
+}
+
+/// Said of a request not made, or of work not gone on with, because the time `within` gave it was up.
+pub const TIME_UP: &str = "花的时间太长，没有再试下去";
+
+/// Run `work` with a time by which the requests it makes are to be over. The limit is this thread's (a tool runs
+/// on one, its requests blocking): `wisp_net` gives a request no longer than what is left of it, and whoever
+/// goes from one request to the next asks `time_up` first. Inside another `within` the earlier end holds.
+pub fn within<T>(limit: std::time::Duration, work: impl FnOnce() -> T) -> T {
+    struct Restore(Option<std::time::Instant>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            UNTIL.with(|until| until.set(self.0))
+        }
+    }
+    let end = std::time::Instant::now() + limit;
+    let _restore = Restore(UNTIL.with(|until| until.replace(Some(until.get().map_or(end, |outer| outer.min(end))))));
+    work()
+}
+
+/// What is left of the time `within` gave the work on this thread: `None` when it has no limit, zero when it is up.
+pub fn time_left() -> Option<std::time::Duration> {
+    UNTIL.with(|until| until.get()).map(|end| end.saturating_duration_since(std::time::Instant::now()))
+}
+
+/// Whether the time `within` gave is up. Never so for work without a limit.
+pub fn time_up() -> bool {
+    time_left().is_some_and(|left| left.is_zero())
+}
+
+/// `time_up`, for whoever is about to go on to the next request: said among the `reasons` once.
+pub fn out_of_time(reasons: &mut Vec<String>) -> bool {
+    let up = time_up();
+    if up && !reasons.iter().any(|reason| reason.contains(TIME_UP)) { reasons.push(TIME_UP.into()) }
+    up
+}
+
 /// What a search found: how many records the database holds for the query
 /// (when it says), and the newest of them.
 #[derive(Clone, Debug, Default, PartialEq)]

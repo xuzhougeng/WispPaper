@@ -1035,12 +1035,14 @@ pub struct ImportRow {
     pub unrecognised: bool,
     /// Why no text came of the file; empty when it did.
     pub textless: String,
+    /// An address pasted (`import_url`) whose paper came without its PDF: why, in a sentence.
+    pub no_pdf: String,
 }
 
 impl ImportRow {
     /// Whether the person still has something to do about this file.
     pub fn open(&self) -> bool {
-        self.unrecognised || !self.textless.is_empty() || matches!(self.outcome, Imported::Failed(_) | Imported::InTrash)
+        self.unrecognised || !self.textless.is_empty() || !self.no_pdf.is_empty() || matches!(self.outcome, Imported::Failed(_) | Imported::InTrash)
     }
 }
 
@@ -1056,6 +1058,8 @@ pub struct ImportRun {
     pub rows: Vec<ImportRow>,
     /// Words pasted with the identifiers that are neither a DOI nor a PMID: left out, said once in the report.
     pub unknown: Vec<String>,
+    /// How many of `ids` are web addresses (`import_url`) rather than identifiers.
+    pub urls: usize,
 }
 
 #[derive(Default)]
@@ -1092,8 +1096,10 @@ impl ImportRun {
         match (self.ids, self.running()) {
             (0, true) => t("导入 PDF"),
             (0, false) => t("PDF 导入完成"),
-            (ids, true) if ids == self.total => t("按 DOI / PMID 导入"),
-            (ids, false) if ids == self.total => t("DOI / PMID 导入完成"),
+            (ids, true) if ids == self.total && self.urls == 0 => t("按 DOI / PMID 导入"),
+            (ids, false) if ids == self.total && self.urls == 0 => t("DOI / PMID 导入完成"),
+            (_, true) if self.urls == self.total => t("按网址导入"),
+            (_, false) if self.urls == self.total => t("网址导入完成"),
             (_, true) => t("正在导入"),
             (_, false) => t("导入完成"),
         }
@@ -1119,6 +1125,34 @@ impl ImportRun {
         }
         facts.join(" · ")
     }
+}
+
+/// What `import_url` said of one address, as a row of the import's report.
+fn url_row(url: &str, result: Result<Value, String>) -> ImportRow {
+    let mut row = ImportRow { name: url.to_string(), outcome: Imported::Added, paper_id: None, unrecognised: false, textless: String::new(), no_pdf: String::new() };
+    let found = match result {
+        Ok(found) => found,
+        Err(err) => {
+            row.outcome = Imported::Failed(err);
+            return row;
+        }
+    };
+    let said = |key: &str| found[key].as_str().unwrap_or("").to_string();
+    let pdf = said("pdf");
+    row.outcome = match said("outcome").as_str() {
+        "added" => Imported::Added,
+        "attached" => Imported::Attached,
+        // The library held the paper and the address brought its PDF.
+        "held" if pdf == "saved" => Imported::Attached,
+        "held" => Imported::Held,
+        "in_trash" => Imported::InTrash,
+        _ => Imported::Failed(said("reason")),
+    };
+    row.paper_id = found["paperId"].as_str().map(str::to_string);
+    row.unrecognised = found["unrecognised"].as_bool().unwrap_or(false);
+    row.textless = said("textReason");
+    if pdf == "none" { row.no_pdf = said("pdfReason") }
+    row
 }
 
 /// What looking for the open full text of one paper came to.
@@ -2123,7 +2157,7 @@ impl Workspace {
             MenuKind::Paper(_) | MenuKind::Papers(_) | MenuKind::Trashed(_) | MenuKind::File(_) | MenuKind::Tag(_) | MenuKind::Conversation(..) | MenuKind::Text(_) | MenuKind::Answer(..) => (items, breaks) = self.context_menu(&kind),
             MenuKind::Figure(id) => (items, breaks) = self.figure_menu(&id),
             MenuKind::Add => {
-                items.push(item(t("通过 DOI / PMID 添加…"), Cmd::AddById));
+                items.push(item(t("通过 DOI / PMID / 网址添加…"), Cmd::AddById));
                 items.push(item(t("导入 PDF 文件…"), Cmd::ImportPdfs));
                 items.push(item(t("导入文件夹…"), Cmd::ImportFolder));
                 items.push(item(t("导入 BibTeX / RIS…"), Cmd::ImportReferences));
@@ -4134,7 +4168,7 @@ impl Workspace {
         let mut paper = found.unwrap_or_else(|| Paper { title: stem.clone(), ..Default::default() });
         paper.source = t("PDF 导入").into();
         paper.tags = clean_strings(paper.tags.iter().chain(tags));
-        let mut row = ImportRow { name: path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| stem.clone()), outcome: Imported::Added, paper_id: None, unrecognised: false, textless: String::new() };
+        let mut row = ImportRow { name: path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| stem.clone()), outcome: Imported::Added, paper_id: None, unrecognised: false, textless: String::new(), no_pdf: String::new() };
         let stored = (|| -> anyhow::Result<()> {
             let known = lib.store.existing_paper(&{
                 let mut probe = paper.clone();
@@ -4239,7 +4273,7 @@ impl Workspace {
                     let done = this.update(cx, |this, cx| {
                         let Some(lib) = this.lib.as_mut().filter(|l| l.info.id == library) else { return false };
                         let stored = found.and_then(|paper| lib.store.import_papers(vec![paper]).and_then(|result| lib.reload().map(|()| result)).map_err(|e| format!("{e:#}")));
-                        let mut row = ImportRow { name: name.clone(), outcome: Imported::Added, paper_id: None, unrecognised: false, textless: String::new() };
+                        let mut row = ImportRow { name: name.clone(), outcome: Imported::Added, paper_id: None, unrecognised: false, textless: String::new(), no_pdf: String::new() };
                         match stored.map(|result| (result.added.into_iter().next(), result.skipped.into_iter().next())) {
                             Ok((Some(paper), _)) => row.paper_id = Some(paper.id),
                             Ok((None, Some(held))) => {
@@ -4261,6 +4295,46 @@ impl Workspace {
             })
             .detach();
         }
+    }
+
+    /// Web addresses pasted into 通过 DOI / PMID / 网址添加, taken in one after another in the background as part
+    /// of the import's run (`import_url`, on a connection of its own): each page fetched once, its paper added
+    /// and its PDF kept when it can be had. A row for each joins the import's report.
+    fn import_urls(&mut self, urls: Vec<String>, cx: &mut Context<Self>) {
+        if urls.is_empty() { return }
+        let Some(lib) = self.lib.as_mut() else { return };
+        let run = match lib.import.as_mut().filter(|run| run.running()) {
+            Some(run) => run,
+            None => lib.import.insert(ImportRun::default()),
+        };
+        run.total += urls.len();
+        run.ids += urls.len();
+        run.urls += urls.len();
+        cx.notify();
+        self.import_next_url(std::rc::Rc::new(std::cell::RefCell::new(urls.into_iter().rev().collect())), cx);
+    }
+
+    /// The next address of `import_urls`; the run stops when the library is closed or its report put away.
+    fn import_next_url(&mut self, queue: std::rc::Rc<std::cell::RefCell<Vec<String>>>, cx: &mut Context<Self>) {
+        let Some(run) = self.lib.as_mut().and_then(|lib| lib.import.as_mut()) else { return };
+        let Some(url) = queue.borrow_mut().pop() else { return };
+        run.working.push(url.clone());
+        self.library_tool("import_url", serde_json::json!({"url": url}), cx, move |this, result, cx| {
+            let Some(lib) = this.lib.as_mut() else { return };
+            let row = url_row(&url, result);
+            if row.paper_id.is_some() {
+                // A paper or a PDF came in: the list, the detail panel and the next question see it.
+                let _ = lib.reload();
+                lib.texts_changed();
+                if row.paper_id == lib.selected { lib.pdf = None }
+            }
+            let Some(run) = lib.import.as_mut() else { return };
+            if let Some(at) = run.working.iter().position(|working| working == &url) { run.working.remove(at); }
+            run.rows.push(row);
+            if !run.running() { run.working.clear() }
+            this.ensure_pdf(cx);
+            this.import_next_url(queue, cx);
+        });
     }
 
     /// Try once more to get the text of a stored file: after the reader has
@@ -5968,14 +6042,18 @@ impl Workspace {
             }
             Modal::AddById { input, run } => {
                 if run.is_some() { return }
-                let (ids, unknown) = lookup::parse_identifiers(&text(input, cx));
-                if ids.is_empty() {
-                    self.modal_error = t("没有认出 DOI 或 PMID。DOI 形如 10.1038/s41586-020-2649-2，PMID 是一串数字。").into();
+                let (ids, words) = lookup::parse_identifiers(&text(input, cx));
+                // The web addresses among the other words: an article's page at its publisher, or its PDF.
+                let (urls, unknown): (Vec<String>, Vec<String>) = words.into_iter().partition(|word| wisp_core::webpage::is_address(word));
+                if ids.is_empty() && urls.is_empty() {
+                    self.modal_error = t("没有认出 DOI、PMID 或网址。DOI 形如 10.1038/s41586-020-2649-2，PMID 是一串数字，网址以 https:// 开头。").into();
                     return;
                 }
-                // Several are an import of their own, in the background; what is not an identifier is left out.
-                if ids.len() > 1 || !unknown.is_empty() {
+                // Several, or any address, are an import of their own, in the background; what is neither is left out.
+                if ids.len() > 1 || !unknown.is_empty() || !urls.is_empty() {
                     self.run(Cmd::CloseModal, window, cx);
+                    // The addresses first: the identifiers then join their run, and the words left out are said in it.
+                    self.import_urls(urls, cx);
                     self.import_ids(ids, unknown, cx);
                     return;
                 }
@@ -6363,7 +6441,7 @@ impl Workspace {
                             let failed = i % 5 == 4;
                             let skipped = i % 5 == 3;
                             let incomplete = i % 5 == 2;
-                            pdfs.rows.push(ImportRow { name: file, outcome: if failed { Imported::Failed("无法读取这个文件".into()) } else if skipped { Imported::InTrash } else if i % 5 == 1 { Imported::Attached } else { Imported::Added }, paper_id: (!failed).then(|| paper.id.clone()), unrecognised: incomplete, textless: String::new() });
+                            pdfs.rows.push(ImportRow { name: file, outcome: if failed { Imported::Failed("无法读取这个文件".into()) } else if skipped { Imported::InTrash } else if i % 5 == 1 { Imported::Attached } else { Imported::Added }, paper_id: (!failed).then(|| paper.id.clone()), unrecognised: incomplete, textless: String::new(), no_pdf: String::new() });
                             zotero.rows.push(zotero::Row { title: paper.title.clone(), paper_id: (!failed && !skipped).then(|| paper.id.clone()), added: i % 5 == 0, in_trash: skipped, files_added: usize::from(!failed && !skipped), problems: if failed { vec!["无法读取文献记录".into()] } else if incomplete { vec!["附件尚未下载到本机".into()] } else { vec![] }, ..Default::default() });
                         } else if pdfs.working.len() < IMPORT_WORKERS {
                             pdfs.working.push(file);

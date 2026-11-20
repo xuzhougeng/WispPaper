@@ -927,6 +927,17 @@ impl Store {
         Ok(self.db.query_row("SELECT paper_id FROM resources WHERE sha256 = ?1 ORDER BY added_at, id LIMIT 1", [sha], |r| r.get(0)).optional()?)
     }
 
+    /// `paper_holding` for a file still in memory: a PDF fetched from an address.
+    pub fn paper_holding_bytes(&self, bytes: &[u8]) -> Result<Option<String>> {
+        let sha: String = Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect();
+        Ok(self.db.query_row("SELECT paper_id FROM resources WHERE sha256 = ?1 ORDER BY added_at, id LIMIT 1", [sha], |r| r.get(0)).optional()?)
+    }
+
+    /// Whether a paper is in the trash.
+    pub fn in_trash(&self, id: &str) -> Result<bool> {
+        Ok(self.db.query_row("SELECT 1 FROM trashed_papers WHERE paper_id = ?1", [id], |_| Ok(())).optional()?.is_some())
+    }
+
     /// Keep a fetched file with a paper: `bytes` as `name`, and where it came from.
     pub fn import_fetched(&mut self, paper_id: &str, name: &str, bytes: &[u8], kind: &str, url: &str, source: &str, version: &str) -> Result<PaperFile> {
         // Through a file of that name, so that it is stored the way a dropped one is.
