@@ -280,12 +280,20 @@ impl Workspace {
         };
         let rule = || div().flex_none().w(px(1.)).h(px(14.)).mx(px(4.)).bg(Theme::line()).into_any_element();
         let key = self.find_key();
+        let mut items = vec![];
+        // Under the manuscript only: whether a citation the pointer is on shows its card. Following it with a click works either way.
+        if !floating {
+            let shown = !self.settings.citation_cards_hidden;
+            let tip = if shown { tf!("引用卡片：开。指针停在引用上时显示文献和它依据的原句；点击关掉。{}+点击引用仍会打开文献。", "Citation cards: on. Pointing at a citation shows the paper and the sentence it rests on; click to turn off. {}+click on a citation still opens the paper.", crate::write_source::follow_key()) } else { tf!("引用卡片：关。点击后指针停在引用上时显示文献和它依据的原句。{}+点击引用仍会打开文献。", "Citation cards: off. Click to show the paper and the sentence it rests on when pointing at a citation. {}+click on a citation still opens the paper.", crate::write_source::follow_key()) };
+            items.push(button("write-citation-cards".into(), Some(if shown { "eye" } else { "eye-off" }), t("引用卡片").into(), tip, true, Cmd::CitationCards(!shown), cx));
+            items.push(rule());
+        }
         // Looking in the library: nothing of the text changes.
-        let mut items = vec![
+        items.extend([
             button("write-bar-find".into(), Some("scan-text"), t("找句子").into(), tf!("在文献库里找与这段相近的句子，列在右边供参考和引用（{key}）。不改你的文字。", "Find sentences in the library similar to this text, listed at the right for reference and citing ({key}). Your text is not changed."), true, Cmd::WriteFind, cx),
             button("write-bar-cite".into(), Some("library"), crate::i18n::assist_title(&Assist::Cite, &language), t("在文献库里逐句找可以引用的文献，列出每篇和它自己的原句。勾选后只把引用加到句末，不改你的文字。").into(), !busy, Cmd::WriteAssist(Assist::Cite), cx),
             rule(),
-        ];
+        ]);
         // A new version of the words, for the person to take or leave.
         if configured {
             let mut actions = vec![Assist::Polish, Assist::Translate, Assist::Rewrite];

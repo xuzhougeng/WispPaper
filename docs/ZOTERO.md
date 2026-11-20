@@ -61,7 +61,7 @@ wisp import_zotero -l "植物单细胞" --path /path/to/Zotero/zotero.sqlite
 
 | Zotero 内容 | 在 Wisp Paper 中的位置或处理方式 |
 |---|---|
-| 题目、作者、年份、期刊或出版物、DOI、URL、摘要 | 文献的对应字段；作者按 Zotero 原顺序保留，机构作者也支持 |
+| 题目、作者、年份、期刊或出版物、卷、期、页码、DOI、URL、摘要 | 文献的对应字段；作者按 Zotero 原顺序保留，机构作者也支持 |
 | Extra 中的 PMID；没有 DOI 字段时 Extra 中的 DOI | 用于对应标识符字段及去重；Extra 原文也保留在笔记中 |
 | 标签 | 文献标签 |
 | 分类及子分类 | 转为 `Zotero/父分类/子分类` 标签，例如 `Zotero/植物/根`，可在左侧点击筛选 |
@@ -72,7 +72,7 @@ wisp import_zotero -l "植物单细胞" --path /path/to/Zotero/zotero.sqlite
 | 订阅源、独立笔记、独立附件、PDF 批注 | 不迁移 |
 | 网页快照、图片及其他非 PDF 附件 | 不迁移，结果显示非 PDF 附件的数量 |
 
-Zotero 中的编辑者等非作者角色、卷期页码、条目关联、保存的搜索、彩色标签设置和其他 Wisp Paper 没有对应字段的内容不会迁移。原库仍保留完整信息。
+Zotero 中的编辑者等非作者角色、条目关联、保存的搜索、彩色标签设置和其他 Wisp Paper 没有对应字段的内容不会迁移。原库仍保留完整信息。
 
 ## 常见问题
 

@@ -1307,7 +1307,7 @@ fn find_metadata(store: &mut Store, args: &Value, fetch: Fetch) -> Result<Value>
         let record = &candidate.paper;
         let held = store.existing_paper(record)?.filter(|id| *id != paper.id);
         candidates.push(json!({
-            "title": record.title, "authors": record.authors, "year": record.year, "journal": record.journal, "status": record.publication_status, "doi": record.doi, "pmid": record.pmid,
+            "title": record.title, "authors": record.authors, "year": record.year, "journal": record.journal, "volume": record.volume, "issue": record.issue, "pages": record.pages, "status": record.publication_status, "doi": record.doi, "pmid": record.pmid,
             "sources": candidate.sources, "similarity": (candidate.similarity * 100.).round() / 100., "matches": candidate.same, "differences": candidate.differs, "partialAuthors": candidate.partial_authors,
             "link": record.link(), "inLibrary": held, "wouldFill": if candidate.similarity >= complete::ALIKE_ENOUGH { complete::suggested(&paper, record, placeholder) } else { vec![] },
         }));

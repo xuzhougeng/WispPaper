@@ -292,13 +292,22 @@ pub fn pubmed_papers(xml: &str) -> Vec<Paper> {
             .map(|(_, value)| normalize_doi(&strip_markup(value)))
             .unwrap_or_default();
         let year = element(article, "PubDate").and_then(year_in).or_else(|| element(article, "ArticleDate").and_then(year_in));
+        let journal = element(article, "Journal");
+        // `357-62` as PubMed writes it, or the first and last page apart.
+        let pages = element(article, "Pagination").map(|pagination| match text_of(pagination, "MedlinePgn") {
+            written if !written.is_empty() => written,
+            _ => [text_of(pagination, "StartPage"), text_of(pagination, "EndPage")].into_iter().filter(|page| !page.is_empty()).collect::<Vec<_>>().join("-"),
+        }).unwrap_or_default();
         let preprint = elements(article, "PublicationType").iter().any(|(_, kind)| kind.trim() == "Preprint");
         papers.push(Paper {
             title,
             pmid,
             doi,
             authors: authors.join("; "),
-            journal: element(article, "Journal").map(|journal| text_of(journal, "Title")).unwrap_or_default(),
+            journal: journal.map(|journal| text_of(journal, "Title")).unwrap_or_default(),
+            volume: journal.map(|journal| text_of(journal, "Volume")).unwrap_or_default(),
+            issue: journal.map(|journal| text_of(journal, "Issue")).unwrap_or_default(),
+            pages: crate::model::clean_pages(&pages),
             year,
             abstract_text: parts.join("\n"),
             publication_status: if preprint { "preprint" } else { "published" }.into(),
@@ -342,9 +351,9 @@ mod tests {
 
     const PUBMED: &str = r#"<?xml version="1.0" ?><PubmedArticleSet>
 <PubmedArticle><MedlineCitation Status="MEDLINE"><PMID Version="1">31178400</PMID>
-<Article PubModel="Print-Electronic"><Journal><ISSN>1534-5807</ISSN><JournalIssue><PubDate><Year>2019</Year><Month>Mar</Month></PubDate></JournalIssue><Title>Developmental cell</Title></Journal>
+<Article PubModel="Print-Electronic"><Journal><ISSN>1534-5807</ISSN><JournalIssue CitedMedium="Internet"><Volume>48</Volume><Issue>6</Issue><PubDate><Year>2019</Year><Month>Mar</Month></PubDate></JournalIssue><Title>Developmental cell</Title></Journal>
 <ArticleTitle>A Single-Cell RNA Sequencing Profiles the Developmental Landscape of <i>Arabidopsis</i> Root.</ArticleTitle>
-<ELocationID EIdType="pii" ValidYN="Y">S1534-5807(19)30145-4</ELocationID><ELocationID EIdType="doi" ValidYN="Y">10.1016/j.devcel.2019.02.022</ELocationID>
+<Pagination><StartPage>840</StartPage><EndPage>852.e5</EndPage><MedlinePgn>840-852.e5</MedlinePgn></Pagination><ELocationID EIdType="pii" ValidYN="Y">S1534-5807(19)30145-4</ELocationID><ELocationID EIdType="doi" ValidYN="Y">10.1016/j.devcel.2019.02.022</ELocationID>
 <Abstract><AbstractText Label="BACKGROUND">Roots &amp; cells.</AbstractText><AbstractText Label="RESULTS">We profiled <sup>7,000</sup> cells.</AbstractText></Abstract>
 <AuthorList CompleteYN="Y"><Author ValidYN="Y"><LastName>Zhang</LastName><ForeName>Tian-Qi</ForeName><Initials>TQ</Initials></Author><Author><CollectiveName>Root Consortium</CollectiveName></Author></AuthorList>
 <PublicationTypeList><PublicationType UI="D016428">Journal Article</PublicationType></PublicationTypeList></Article></MedlineCitation>
@@ -364,6 +373,8 @@ mod tests {
         assert_eq!(p.title, "A Single-Cell RNA Sequencing Profiles the Developmental Landscape of Arabidopsis Root");
         assert_eq!((p.pmid.as_str(), p.doi.as_str(), p.year), ("31178400", "10.1016/j.devcel.2019.02.022", Some(2019)));
         assert_eq!((p.authors.as_str(), p.journal.as_str()), ("Zhang, Tian-Qi; Root Consortium", "Developmental cell"));
+        assert_eq!((p.volume.as_str(), p.issue.as_str(), p.pages.as_str()), ("48", "6", "840-852.e5"));
+        assert_eq!((papers[1].volume.as_str(), papers[1].pages.as_str()), ("", ""));
         assert_eq!(p.abstract_text, "BACKGROUND: Roots & cells.\nRESULTS: We profiled 7,000 cells.");
         assert_eq!(p.publication_status, "published");
         // The DOI of the record, never one from its reference list.

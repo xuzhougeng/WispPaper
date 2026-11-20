@@ -653,6 +653,8 @@ pub enum Cmd {
     WriteStop,
     /// Look for candidates: the selected text, or the paragraph at the caret.
     WriteFind,
+    /// Show (true) or hide the card under the citation the pointer is on (`Settings::citation_cards_hidden`).
+    CitationCards(bool),
     /// Only the papers with this tag (empty: any), and only the starred ones.
     WriteOnly(String, bool),
     /// Show or hide the sentences around a candidate, by its card's id.
@@ -1306,6 +1308,9 @@ pub struct PaperForm {
     pub authors: Entity<TextInput>,
     pub year: Entity<TextInput>,
     pub journal: Entity<TextInput>,
+    pub volume: Entity<TextInput>,
+    pub issue: Entity<TextInput>,
+    pub pages: Entity<TextInput>,
     pub doi: Entity<TextInput>,
     pub pmid: Entity<TextInput>,
     pub url: Entity<TextInput>,
@@ -2629,6 +2634,10 @@ impl Workspace {
             Cmd::WriteExportCited => self.export_cited(cx),
             Cmd::WriteRun(reading) => self.write_run_start(reading, None, cx),
             Cmd::WriteFind => self.write_find(false, cx),
+            Cmd::CitationCards(on) => {
+                self.settings.citation_cards_hidden = !on;
+                self.save_settings(cx);
+            }
             Cmd::WriteOnly(tag, starred) => self.write_narrow(tag, starred, cx),
             Cmd::WriteUnfold(card) => {
                 if let Some(unfolded) = self.lib.as_mut().map(|lib| &mut lib.writing.search.unfolded) && !unfolded.remove(&card) { unfolded.insert(card); }
@@ -5333,6 +5342,9 @@ impl Workspace {
             authors: self.modal_input("作者，用分号分隔：Zhang, Wei; Li, Na", &paper.authors, false, window, cx),
             year: self.modal_input("例如 2024", &paper.year.map(|y| y.to_string()).unwrap_or_default(), false, window, cx),
             journal: self.modal_input("期刊或会议", &paper.journal, false, window, cx),
+            volume: self.modal_input("", &paper.volume, false, window, cx),
+            issue: self.modal_input("", &paper.issue, false, window, cx),
+            pages: self.modal_input("例如 357-362", &paper.pages, false, window, cx),
             doi: self.modal_input("10.xxxx/…", &paper.doi, false, window, cx),
             pmid: self.modal_input("PubMed 编号", &paper.pmid, false, window, cx),
             url: self.modal_input("https://…", &paper.url, false, window, cx),
@@ -6003,6 +6015,9 @@ impl Workspace {
                 paper.title = text(&form.title, cx);
                 paper.authors = text(&form.authors, cx);
                 paper.journal = text(&form.journal, cx);
+                paper.volume = text(&form.volume, cx);
+                paper.issue = text(&form.issue, cx);
+                paper.pages = text(&form.pages, cx);
                 paper.doi = text(&form.doi, cx);
                 paper.pmid = text(&form.pmid, cx);
                 paper.url = text(&form.url, cx);
