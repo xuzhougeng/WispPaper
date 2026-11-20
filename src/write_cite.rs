@@ -337,6 +337,7 @@ impl Workspace {
         if !refused.is_empty() {
             (card.busy, card.error) = (false, refused.to_string());
             writing.assist.card = Some(card);
+            writing.side_open = true;
             return cx.notify();
         }
         let index = wisp_core::cite::Index::new(&lib.papers, lib.trash.iter().map(|entry| &entry.paper), &lib.citing.kept);
@@ -344,6 +345,7 @@ impl Workspace {
         let papers_in = citefind::library_language(&lib.papers);
         let (section, library, info, text) = (card.section.clone(), lib.info.id.clone(), lib.info.clone(), card.original.clone());
         writing.assist.card = Some(card);
+        writing.side_open = true;
         cx.notify();
 
         let (sender, events) = async_channel::unbounded();

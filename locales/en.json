@@ -1481,5 +1481,7 @@
   "导出 Word 时按这种格式写引用，文末列出参考文献；稿件里仍是引用键": "Word exports will cite in this style, with a reference list at the end; the manuscript keeps its citation keys",
   "收起参考文献": "Close references",
   "预览中：再点一下回到编辑": "Previewing: click again to go back to editing",
-  "预览：看排好版的全文，Markdown 照它写的样子画出来": "Preview: the whole manuscript laid out, with its Markdown drawn"
+  "预览：看排好版的全文，Markdown 照它写的样子画出来": "Preview: the whole manuscript laid out, with its Markdown drawn",
+  "收起，把地方让给稿件": "Fold, leaving the room to the manuscript",
+  "展开候选句、批注和参考文献": "Open candidates, comments and references"
 }

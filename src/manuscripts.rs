@@ -883,10 +883,9 @@ impl Workspace {
             .min_h_0()
             .overflow_y_scroll()
             .track_scroll(&lib.citing.read_scroll)
-            .rounded(px(10.))
-            .border_1()
+            // No frame, like the section being written: one line under it, where the text scrolls away.
+            .border_b_1()
             .border_color(Theme::line())
-            .bg(Theme::bg_body())
             .child(div().flex().justify_center().px(px(28.)).py(px(24.)).child(div().flex().flex_col().gap(px(26.)).w_full().max_w(theme::manuscript_width()).child(div().text_size(text_px(22.)).font_weight(FontWeight::SEMIBOLD).line_height(text_px(30.)).child(crate::i18n::manuscript_title(manuscript).to_string())).children(sections).children(self.render_references_read(cx))))
             .into_any_element()
     }

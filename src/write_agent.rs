@@ -25,6 +25,10 @@ use wisp_core::settings::Task;
 const MANUSCRIPT_MIN: f32 = 340.;
 const CHAT_MIN: f32 = 440.;
 const MANUSCRIPT_SHARE: f32 = 0.52;
+/// A page narrower than this has no room for the two side by side: the manuscript stands over the conversation.
+const STACK_UNDER: f32 = 640.;
+/// How much of such a page's height the manuscript takes.
+const STACKED_SHARE: f32 = 0.46;
 
 /// What the mode keeps beside the manuscript.
 #[derive(Default)]
@@ -262,12 +266,22 @@ impl Workspace {
 
     /// 写作 with the assistant leading: the conversation, and the manuscript to its right.
     pub(crate) fn render_write_agent(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        // The reference list, when it is asked for (the outline's 参考文献), stands at the right of the manuscript.
+        // The reference list, when it is asked for (the outline's 参考文献), stands at the right of the manuscript;
+        // in a page without room for a third column it stands in the manuscript's place until it is closed.
         let references_width = self.agent_references_width(width);
+        let instead = references_width == 0. && self.agent_references_open();
+        let stacked = width < STACK_UNDER;
         let width = width - references_width;
-        let manuscript_width = self.agent_manuscript_width(width);
+        let manuscript_width = if stacked { width } else { self.agent_manuscript_width(width) };
         let chat = self.render_chat(Talk::Write, window, cx);
-        let manuscript = self.render_manuscript_column(manuscript_width, true, false, window, cx);
+        let manuscript = if instead { self.render_agent_references(manuscript_width, window, cx) } else { self.render_manuscript_column(manuscript_width, true, false, window, cx) };
+        // Too narrow for the two side by side: the manuscript over the conversation, each scrolling by itself.
+        if stacked {
+            return div().id("write-page").flex().flex_col().size_full()
+                .child(div().flex().flex_none().w(px(width)).h(relative(STACKED_SHARE)).overflow_hidden().border_b_1().border_color(Theme::line()).child(manuscript))
+                .child(div().flex_1().min_h_0().w(px(width)).overflow_hidden().child(chat))
+                .into_any_element();
+        }
         // The edge between the two: drag it to give either more room, click it twice for the widths they came with.
         let held = self.resizing == Some(Edge::Manuscript);
         let between = div()
@@ -308,10 +322,16 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// How wide the reference list beside the manuscript is in this mode; nothing while it is closed or the manuscript is read through.
+    /// How wide the reference list beside the manuscript is in this mode; nothing while it is closed, the manuscript is read through, or the page has no room for a third column (it then stands in the manuscript's place).
     pub(crate) fn agent_references_width(&self, page: f32) -> f32 {
-        let open = self.lib.as_ref().is_some_and(|lib| lib.writing.side == Side::References && !lib.writing.reading);
-        if !open { 0. } else if page > 1280. { 360. } else { 300. }
+        let width = if page > 1280. { 360. } else { 300. };
+        // A column of its own only where the conversation and the manuscript keep their widths beside it.
+        if self.agent_references_open() && page - width >= CHAT_MIN + MANUSCRIPT_MIN { width } else { 0. }
+    }
+
+    /// Whether the reference list is asked for in this mode: not while the manuscript is read through, which ends in it.
+    fn agent_references_open(&self) -> bool {
+        self.lib.as_ref().is_some_and(|lib| lib.writing.side == Side::References && !lib.writing.reading)
     }
 
     /// The manuscript's reference list at the right of the page, with a way to close it: the same page the other mode has beside its manuscript.
