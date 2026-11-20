@@ -149,6 +149,68 @@ fn import_one_pdf(store: &mut Store, path: &Path, tags: &[String], target: Optio
     Ok(())
 }
 
+/// A Word file written elsewhere, read for what it cites (`restyle::inspect`): `lookup` asks Crossref about the
+/// entries neither the library nor their own text settles, `entries` are records the caller read better than the rules.
+fn docx_cited(store: &Store, args: &Value, fetch: crate::sources::Fetch) -> Result<(PathBuf, Vec<u8>, crate::restyle::Inspected)> {
+    let path = input_path(args)?;
+    if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("docx")) { bail!("这里只读 Word 的 .docx 文件：{}", path.display()) }
+    let bytes = std::fs::read(&path).with_context(|| format!("无法读取 {}", path.display()))?;
+    let mut given: Vec<(usize, crate::csl::Record)> = vec![];
+    for entry in args["entries"].as_array().into_iter().flatten() {
+        let (Some(n), Some(record)) = (entry["n"].as_u64(), entry["csl"].as_object()) else { bail!("entries 的每一项应有 n（参考文献表里的第几条）和 csl（这一条的 CSL-JSON 对象）。") };
+        given.push((n as usize, record.clone()));
+    }
+    let papers = store.list_papers()?;
+    let inspected = crate::restyle::inspect(&bytes, &papers, &given, args["lookup"].as_bool().unwrap_or(false).then_some(fetch))?;
+    Ok((path, bytes, inspected))
+}
+
+pub(super) fn read_docx_citations(store: &Store, args: &Value, fetch: crate::sources::Fetch) -> Result<Value> {
+    let (path, _, inspected) = docx_cited(store, args, fetch)?;
+    let mut report = inspected.report();
+    report["path"] = json!(path);
+    let unresolved = report["unresolved"].as_array().map_or(0, Vec::len);
+    report["next"] = json!(if unresolved > 0 {
+        "unresolved 里的条目没能识别：它们会原样留在参考文献表末尾，引用它们的地方也保持原样。可以带 lookup: true 再读一次（联网查 Crossref），或者你自己读懂这一条的文字后用 entries 给出它的 CSL-JSON（只转写条目里写着的信息，不要补写没有的）。把识别结果和保持原样的引用如实告诉用户，再用 restyle_docx 输出。"
+    } else {
+        "把识别结果（来源、条目数、保持原样的引用）告诉用户，问清要用的引用样式，再用 restyle_docx 输出新文件。"
+    });
+    Ok(report)
+}
+
+pub(super) fn restyle_docx(store: &Store, info: &LibraryInfo, args: &Value, fetch: crate::sources::Fetch) -> Result<Value> {
+    let root = info.dir.parent().map(Path::to_path_buf).unwrap_or_else(|| info.dir.clone());
+    let style = match (text(args, "csl")?, text(args, "style")?) {
+        ("", "") => bail!("需要 style（引用样式的 key，见 list_cite_styles）或 csl（一份 CSL 定义）。"),
+        ("", key) if !key.contains(':') => bail!("style 应为 CSL 样式的 key，例如 csl:nature、csl:apa、file:my-journal.csl；见 list_cite_styles。"),
+        ("", key) => crate::csl::load(key, &root)?,
+        (xml, _) => crate::csl::parse(xml, &root)?,
+    };
+    let (path, bytes, inspected) = docx_cited(store, args, fetch)?;
+    let output = match text(args, "output")? {
+        "" => path.with_file_name(format!("{}-restyled.docx", path.file_stem().unwrap_or_default().to_string_lossy())),
+        output => PathBuf::from(output),
+    };
+    if !output.extension().is_some_and(|e| e.eq_ignore_ascii_case("docx")) { bail!("输出路径应是 .docx 文件：{}", output.display()) }
+    // The file the person gave is never written over, nor any other.
+    if output.exists() { bail!("{} 已存在，不会覆盖。请换一个文件名。", output.display()) }
+    let options = crate::restyle::Options { track: args["track"].as_bool().unwrap_or(false), author: match text(args, "author")? { "" => "Wisp Paper".into(), author => author.to_string() }, date: crate::time::now_iso(), language: text(args, "language")?.to_string() };
+    let done = crate::restyle::restyle(&bytes, &inspected, &style, &options)?;
+    std::fs::write(&output, &done.bytes).with_context(|| format!("无法写入 {}", output.display()))?;
+    let report = inspected.report();
+    Ok(json!({
+        "output": output,
+        "source": path,
+        "style": if style.name.is_empty() { style.key.clone() } else { style.name.clone() },
+        "tracked": options.track,
+        "citations": {"rewritten": done.rewritten, "keptAsWritten": report["citations"]["keptAsWritten"], "sample": done.sample.iter().map(|(before, after)| json!({"before": before, "after": after})).collect::<Vec<_>>()},
+        "references": {"entries": done.entries, "leftAsWritten": done.unresolved, "sample": done.list_sample},
+        "unresolved": report["unresolved"],
+        "notes": report["notes"],
+        "next": "新文件已写好，原文件没有改动。告诉用户文件在哪里、改写了多少处引用、哪些保持原样及原因；请用户在 Word 里打开核对。",
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -65,6 +65,7 @@ pub mod organise;
 pub mod passage;
 pub mod pdftext;
 pub mod provider;
+pub mod restyle;
 pub mod retrieval;
 pub mod review;
 pub mod revise;

@@ -21,9 +21,10 @@ use crate::docx::Look;
 use crate::model::Paper;
 use anyhow::{Context as _, Result, anyhow, bail};
 use hayagriva::archive::ArchivedStyle;
+use hayagriva::citationberg::json as csl_json;
 use hayagriva::citationberg::{self, FontStyle, FontVariant, FontWeight, IndependentStyle, Locale, LocaleCode, StyleClass, TextDecoration, VerticalAlign};
 use hayagriva::types::{Date, EntryType, FormatString, Person};
-use hayagriva::{BibliographyDriver, BibliographyRequest, CitationItem, CitationRequest, ElemChild, ElemChildren, ElemMeta, Entry, Formatting};
+use hayagriva::{BibliographyDriver, BibliographyRequest, CitationItem, CitationRequest, ElemChild, ElemChildren, ElemMeta, Entry, Formatting, LocatorPayload, SpecificLocator};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -341,14 +342,19 @@ pub fn render(style: &Loaded, groups: &[Vec<&Paper>], language: &str) -> (Vec<Ri
         driver.citation(CitationRequest::new(items, &style.style, locale.clone(), locales(), None));
     }
     let rendered = driver.finish(BibliographyRequest::new(&style.style, locale, locales()));
+    let ids: Vec<Vec<&str>> = groups.iter().map(|group| group.iter().map(|paper| paper.id.as_str()).collect()).collect();
+    written(rendered, &ids)
+}
+
+/// What the processor made, as texts: each citation with its items linked to `ids`, and the list.
+fn written(rendered: hayagriva::Rendered, ids: &[Vec<&str>]) -> (Vec<Rich>, Vec<(String, Rich)>) {
     let cited = rendered
         .citations
         .iter()
-        .zip(groups)
-        .map(|(citation, group)| {
-            let ids: Vec<&str> = group.iter().map(|paper| paper.id.as_str()).collect();
+        .zip(ids)
+        .map(|(citation, ids)| {
             let mut rich = Rich::default();
-            flatten(&citation.citation, &ids, &mut rich);
+            flatten(&citation.citation, ids, &mut rich);
             trimmed(rich)
         })
         .collect();
@@ -372,6 +378,142 @@ pub fn render(style: &Loaded, groups: &[Vec<&Paper>], language: &str) -> (Vec<Ri
         })
         .unwrap_or_default();
     (cited, list)
+}
+
+// ---- works that are no papers of the library
+
+/// A work as CSL-JSON says one (`type`, `title`, `author` with `family` and
+/// `given`, `issued` with `date-parts`, `container-title`, `volume`, `page`,
+/// `DOI`…): what Zotero writes into a Word file for each citation, and what
+/// a reference read from a file's own list is made into. Its `id` is what a
+/// citation names it by.
+pub type Record = serde_json::Map<String, serde_json::Value>;
+
+/// One work of a citation.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Cite {
+    /// The record's `id`.
+    pub id: String,
+    /// The page a citation names: `p. 12` in most styles.
+    pub locator: String,
+    /// The authors are said in the sentence: `Zhang et al. (2024)`.
+    pub narrative: bool,
+}
+
+/// A paper of the library as a record.
+pub fn record_of(paper: &Paper) -> Record {
+    let mut record = Record::new();
+    let mut set = |name: &str, value: &str| {
+        if !value.trim().is_empty() { record.insert(name.into(), value.trim().into()); }
+    };
+    set("id", &paper.id);
+    set("type", "article-journal");
+    set("title", &paper.title);
+    set("container-title", &paper.journal);
+    set("DOI", &paper.doi);
+    set("PMID", &paper.pmid);
+    let authors: Vec<serde_json::Value> = crate::model::author_names(&paper.authors).into_iter().map(|(family, given)| if given.is_empty() { serde_json::json!({"family": family}) } else { serde_json::json!({"family": family, "given": given}) }).collect();
+    if !authors.is_empty() { record.insert("author".into(), authors.into()); }
+    if let Some(year) = paper.year { record.insert("issued".into(), serde_json::json!({"date-parts": [[year]]})); }
+    record
+}
+
+/// A record as the processor takes one: every field it can read, the others left out. Zotero's records hold fields of
+/// its own (`accessed` without a date, lists of keywords) that are no CSL, and one such field is not to cost the record.
+fn item(record: &Record) -> csl_json::Item {
+    let mut fields = std::collections::BTreeMap::new();
+    for (name, value) in record {
+        // A year alone, as a number or as text: `{"date-parts": [["2024"]]}` is what Zotero writes, `2024` what a person would.
+        let value = match (name.as_str(), value) {
+            ("issued", serde_json::Value::Number(year)) => serde_json::json!({"date-parts": [[year]]}),
+            ("issued", serde_json::Value::String(year)) if year.trim().parse::<i32>().is_ok() => serde_json::json!({"date-parts": [[year.trim().parse::<i32>().unwrap_or(0)]]}),
+            _ => value.clone(),
+        };
+        if let Ok(value) = serde_json::from_value::<csl_json::Value>(value) { fields.insert(name.clone(), value); }
+    }
+    csl_json::Item(fields)
+}
+
+fn id_of(record: &Record) -> String {
+    match record.get("id") {
+        Some(serde_json::Value::String(id)) => id.clone(),
+        Some(serde_json::Value::Number(id)) => id.to_string(),
+        _ => String::new(),
+    }
+}
+
+/// Whether a style's citation says the year: an author-date style, in which `Zhang et al. (2024)` keeps its authors
+/// in the sentence. A numbered style or one with labels puts its whole citation there.
+fn says_year(style: &Loaded) -> bool {
+    let mut probe = Record::new();
+    probe.insert("id".into(), "probe".into());
+    probe.insert("type".into(), "article-journal".into());
+    probe.insert("title".into(), "Probe".into());
+    probe.insert("author".into(), serde_json::json!([{"family": "Zzyzx", "given": "Q"}]));
+    probe.insert("issued".into(), serde_json::json!({"date-parts": [[1987]]}));
+    let item = item(&probe);
+    let mut driver = BibliographyDriver::new();
+    driver.citation(CitationRequest::new(vec![CitationItem::with_entry(&item)], &style.style, None, locales(), None));
+    let rendered = driver.finish(BibliographyRequest::new(&style.style, None, locales()));
+    let mut rich = Rich::default();
+    if let Some(citation) = rendered.citations.first() { flatten(&citation.citation, &[], &mut rich) }
+    rich.text.contains("1987")
+}
+
+/// The citations of a text whose works are records: each group as it is
+/// written, in the order given, and the list with each entry's record id.
+/// `uncited` are works the list is to hold though no group names them, after
+/// the others. A work a group names that `records` does not hold is left out
+/// of its citation.
+pub fn render_records(style: &Loaded, groups: &[Vec<Cite>], uncited: &[String], records: &[Record], language: &str) -> (Vec<Rich>, Vec<(String, Rich)>) {
+    let items: HashMap<String, csl_json::Item> = records.iter().map(|record| (id_of(record), item(record))).filter(|(id, _)| !id.is_empty()).collect();
+    let locale = locale(language);
+    let year_alone = groups.iter().flatten().any(|cite| cite.narrative) && says_year(style);
+    let mut driver = BibliographyDriver::new();
+    for group in groups {
+        let cited = group
+            .iter()
+            .filter_map(|cite| {
+                let mut item = CitationItem::with_entry(items.get(&cite.id)?);
+                if !cite.locator.trim().is_empty() { item.locator = Some(SpecificLocator(citationberg::taxonomy::Locator::Page, LocatorPayload::Str(cite.locator.trim()))) }
+                Some(item)
+            })
+            .collect();
+        driver.citation(CitationRequest::new(cited, &style.style, locale.clone(), locales(), None));
+    }
+    for id in uncited {
+        let Some(found) = items.get(id) else { continue };
+        let mut item = CitationItem::with_entry(found);
+        item.hidden = true;
+        driver.citation(CitationRequest::new(vec![item], &style.style, locale.clone(), locales(), None));
+    }
+    let rendered = driver.finish(BibliographyRequest::new(&style.style, locale, locales()));
+    let ids: Vec<Vec<&str>> = groups.iter().map(|group| group.iter().filter(|cite| items.contains_key(&cite.id)).map(|cite| cite.id.as_str()).collect()).collect();
+    let (mut cited, list) = written(rendered, &ids);
+    // The authors a sentence already names are not said again: the citation from its first year on, in the style's
+    // own brackets. The processor's own year-only form drops the letter that tells two works of a year apart.
+    for (rich, group) in cited.iter_mut().zip(groups).filter(|(_, group)| year_alone && !group.is_empty() && group.iter().all(|cite| cite.narrative)) {
+        let years: Vec<String> = group.iter().filter_map(|cite| records.iter().find(|record| id_of(record) == cite.id)).filter_map(year_said).collect();
+        let Some(at) = years.iter().filter_map(|year| rich.text.find(year.as_str())).min() else { continue };
+        let open = rich.text.chars().next().filter(|c| !c.is_alphanumeric()).map_or(0, char::len_utf8);
+        if at > open { *rich = cut(std::mem::take(rich), open..at) }
+    }
+    (cited, list)
+}
+
+/// The year a record is of, as its digits: `{"date-parts": [["2024", 3]]}`, or the year alone.
+fn year_said(record: &Record) -> Option<String> {
+    let issued = record.get("issued")?;
+    let year = issued.get("date-parts").and_then(|parts| parts.get(0)?.get(0)).unwrap_or(issued);
+    Some(year.to_string().trim_matches('"').trim().to_string()).filter(|year| year.len() == 4 && year.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// A text without a stretch of it, its ranges kept on what stays.
+fn cut(rich: Rich, gone: std::ops::Range<usize>) -> Rich {
+    let fit = |n: usize| if n >= gone.end { n - gone.len() } else { n.min(gone.start) };
+    let mut text = rich.text;
+    text.replace_range(gone.clone(), "");
+    Rich { text, looks: rich.looks.into_iter().map(|(range, look)| (fit(range.start)..fit(range.end), look)).filter(|(range, _)| !range.is_empty()).collect(), links: rich.links.into_iter().map(|(range, to)| (fit(range.start)..fit(range.end), to)).filter(|(range, _)| !range.is_empty()).collect() }
 }
 
 #[cfg(test)]
@@ -477,5 +619,28 @@ mod tests {
         assert!(add(&root, &elsewhere.join("missing.csl")).is_err());
         std::fs::write(elsewhere.join("not.csl"), "<html/>").unwrap();
         assert!(add(&root, &elsewhere.join("not.csl")).is_err());
+    }
+
+    #[test]
+    fn works_that_are_no_papers_are_cited_from_their_records() {
+        let root = temp("records");
+        let zotero: Record = serde_json::from_str(r#"{"id": "z1", "type": "article-journal", "title": "Single-cell atlas of roots", "container-title": "Nature Plants", "volume": "10", "issue": "3", "page": "45-67", "DOI": "10.1/x", "author": [{"family": "Zhang", "given": "Wei"}, {"family": "Li", "given": "Qiang"}, {"family": "Wang", "given": "Fang"}], "issued": {"date-parts": [["2024", 3, 1]]}, "accessed": {"season": []}, "keywords": ["a", "b"]}"#).unwrap();
+        let mut held = record_of(&paper("p1", "Smith, John", 2019, "Second", "Cell"));
+        held.insert("issued".into(), serde_json::json!(2019));
+        let cite = |id: &str| Cite { id: id.into(), ..Default::default() };
+        let apa = load_from("csl:apa", &root, None).unwrap();
+        let (cited, list) = render_records(&apa, &[vec![cite("z1"), cite("p1")], vec![Cite { locator: "12".into(), ..cite("z1") }], vec![Cite { narrative: true, ..cite("p1") }], vec![cite("gone")]], &[], &[zotero.clone(), held.clone()], "en");
+        assert_eq!(cited.iter().map(|rich| rich.text.as_str()).collect::<Vec<_>>(), ["(Smith, 2019; Zhang et al., 2024)", "(Zhang et al., 2024, p. 12)", "(2019)", ""]);
+        assert_eq!(cited[2].links, [(1..5, "p1".to_string())]);
+        assert_eq!(cited[0].links.iter().map(|(_, to)| to.as_str()).collect::<Vec<_>>(), ["p1", "z1"]);
+        // What the record holds beyond a paper's is in the entry: volume, issue, pages.
+        let entry = &list.iter().find(|(id, _)| id == "z1").unwrap().1.text;
+        assert!(entry.contains("10(3), 45–67"), "{entry}");
+        // A numbered style has no year to say alone, and a work nothing cites is listed after the others.
+        let nature = load_from("csl:nature", &root, None).unwrap();
+        let (cited, list) = render_records(&nature, &[vec![Cite { narrative: true, ..cite("p1") }]], &["z1".to_string()], &[zotero, held], "en");
+        assert_eq!(cited[0].text, "1");
+        assert_eq!(list.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), ["p1", "z1"]);
+        assert!(list[1].1.text.starts_with("2. Zhang, W., Li, Q. & Wang, F."), "{}", list[1].1.text);
     }
 }

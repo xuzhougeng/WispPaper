@@ -201,7 +201,7 @@ fn is_body(text: &str, than: usize) -> bool {
 }
 
 /// References follow this heading: what comes after it is a list, not text with headings.
-fn opens_references(text: &str) -> bool {
+pub(crate) fn opens_references(text: &str) -> bool {
     let lower = words_of(text).to_lowercase();
     ["参考文献", "參考文獻", "引用文献", "references", "reference", "literature cited", "bibliography", "literatur", "références", "referencias", "referências", "참고문헌"].iter().any(|name| lower == *name)
 }
