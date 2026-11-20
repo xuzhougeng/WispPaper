@@ -424,6 +424,8 @@ impl Workspace {
                     .child(ui::secondary_button("detail-edit", t("编辑信息与词条")).on_click(self.on(Cmd::EditPaper(id.clone()), cx)))
                     // A record without a number of its own can be looked for by its title.
                     .when(p.doi.is_empty() && p.pmid.is_empty(), |d| d.child(ui::secondary_button("detail-complete", t("按题目补全")).on_click(self.on(Cmd::CompletePaper(id.clone()), cx))))
+                    // One with its number and a gap in what it says can be completed from the record the number names.
+                    .when((!p.doi.is_empty() || !p.pmid.is_empty()) && (p.journal.is_empty() || p.authors.is_empty() || p.year.is_none()), |d| d.child(ui::secondary_button("detail-complete-id", if p.doi.is_empty() { t("按 PMID 补全") } else { t("按 DOI 补全") }).on_click(self.on(Cmd::CompleteById(id.clone()), cx))))
                     .when(!link.is_empty(), |d| d.child(ui::secondary_button("detail-link", t("打开网页")).on_click(self.on(Cmd::OpenLink(id.clone()), cx))))
                     .child(ui::ghost_button("detail-trash", Some("bin"), Some(t("移到回收站").into())).h(text_px(32.)).on_click(self.on(Cmd::TrashPaper(id.clone()), cx))),
             )

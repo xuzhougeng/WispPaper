@@ -710,6 +710,8 @@ pub enum Cmd {
     SubmitModal,
     /// 按题目补全: look for the records a paper without its metadata may be.
     CompletePaper(String),
+    /// 按 DOI / PMID 补全: the record the paper's own number names, to take its missing fields from.
+    CompleteById(String),
     /// Look at one of the records found, or (`None`) go back to all of them.
     CompleteChoose(Option<usize>),
     /// Take or leave one field of the record looked at.
@@ -1325,9 +1327,12 @@ impl Retracted {
 
 /// 按题目补全: what is asked, the records found, and the one being
 /// looked at with the fields to take from it. Nothing is written before
-/// the person has picked a record and said which fields.
+/// the person has picked a record and said which fields. 按 DOI / PMID
+/// 补全 (`by_id`) is the same with the one record its number names.
 pub struct CompleteForm {
     pub paper_id: String,
+    /// Looked up by the paper's DOI or PMID: no title to type, one record, no list to go back to.
+    pub by_id: bool,
     /// When the paper was last changed as the dialog opened: a change made meanwhile stops the writing.
     seen: String,
     pub title: Entity<TextInput>,
@@ -3471,9 +3476,10 @@ impl Workspace {
             }
             Cmd::SubmitModal => self.submit_modal(window, cx),
             Cmd::CompletePaper(id) => self.complete_dialog(id, window, cx),
+            Cmd::CompleteById(id) => self.complete_by_id_dialog(id, window, cx),
             Cmd::CompleteChoose(at) => {
                 self.modal_error.clear();
-                let Some(Modal::Complete(form)) = self.modal.as_mut() else { return };
+                let Some(Modal::Complete(form)) = self.modal.as_mut().filter(|modal| !matches!(modal, Modal::Complete(form) if form.by_id && at.is_none())) else { return };
                 form.chosen = at.filter(|at| form.found.as_ref().is_some_and(|found| *at < found.candidates.len()));
                 form.fields = match (form.chosen, self.lib.as_ref().and_then(|lib| lib.paper(&form.paper_id))) {
                     (Some(at), Some(paper)) => match &form.found.as_ref().unwrap().candidates[at] {
@@ -5386,7 +5392,7 @@ impl Workspace {
         let author = self.modal_input("一位作者的姓名，可不填", &first_author, false, window, cx);
         let year = self.modal_input("例如 2019，可不填", &paper.year.map(|y| y.to_string()).unwrap_or_default(), false, window, cx);
         title.read(cx).focus(window);
-        self.modal = Some(Modal::Complete(Box::new(CompleteForm { paper_id: id.clone(), seen: paper.updated_at.clone(), title, author, year, placeholder, guessed: false, busy: false, found: None, held: vec![], chosen: None, fields: vec![] })));
+        self.modal = Some(Modal::Complete(Box::new(CompleteForm { paper_id: id.clone(), seen: paper.updated_at.clone(), title, author, year, placeholder, by_id: false, guessed: false, busy: false, found: None, held: vec![], chosen: None, fields: vec![] })));
         cx.notify();
         if !placeholder || pdfs.is_empty() { return }
         cx.spawn(async move |this, cx| {
@@ -5398,6 +5404,58 @@ impl Workspace {
                 if form.paper_id != id || !form.title.read(cx).text().trim().is_empty() { return }
                 form.title.update(cx, |input, cx| input.set_text(&shown, cx));
                 form.guessed = true;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Open 按 DOI / PMID 补全 for a paper and ask at once: there is nothing to type.
+    fn complete_by_id_dialog(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.modal_subscriptions.clear();
+        self.modal_error.clear();
+        let Some(lib) = &self.lib else { return };
+        let Some(paper) = lib.paper(&id).cloned() else { return };
+        if complete::identifier(&paper).is_none() { return }
+        let files: Vec<PaperFile> = lib.paper_files(&id).into_iter().cloned().collect();
+        let placeholder = complete::placeholder_title(&paper, &files);
+        // The title search's boxes stay unused; the form is shared with it.
+        let (title, author, year) = (self.modal_input("", "", false, window, cx), self.modal_input("", "", false, window, cx), self.modal_input("", "", false, window, cx));
+        self.modal = Some(Modal::Complete(Box::new(CompleteForm { paper_id: id, by_id: true, seen: paper.updated_at.clone(), title, author, year, placeholder, guessed: false, busy: false, found: None, held: vec![], chosen: None, fields: vec![] })));
+        window.focus(&self.focus);
+        self.complete_lookup(cx);
+    }
+
+    /// 按 DOI / PMID 补全: ask for the record the paper's number names, and open it field by field.
+    fn complete_lookup(&mut self, cx: &mut Context<Self>) {
+        let Some(Modal::Complete(form)) = self.modal.as_mut() else { return };
+        if form.busy { return }
+        let Some(paper) = self.lib.as_ref().and_then(|lib| lib.paper(&form.paper_id)).cloned() else { return };
+        self.modal_error.clear();
+        form.busy = true;
+        let (paper_id, placeholder) = (form.paper_id.clone(), form.placeholder);
+        let library = self.lib.as_ref().map(|l| l.info.id.clone()).unwrap_or_default();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let found = cx.background_executor().spawn(async move { complete::by_identifier(&paper, placeholder, &wisp_net::get_text) }).await;
+            this.update(cx, |this, cx| {
+                let Some(lib) = this.lib.as_ref().filter(|l| l.info.id == library) else { return };
+                let Some(Modal::Complete(form)) = this.modal.as_mut().filter(|modal| matches!(modal, Modal::Complete(form) if form.paper_id == paper_id && form.by_id)) else { return };
+                form.busy = false;
+                match found {
+                    Ok(candidate) => {
+                        let held = lib.store.existing_paper(&candidate.paper).ok().flatten().filter(|id| *id != paper_id).map(|id| (id.clone(), lib.paper(&id).or_else(|| lib.trash.iter().map(|entry| &entry.paper).find(|paper| paper.id == id)).map(|paper| paper.title.clone()).unwrap_or_default()));
+                        form.fields = match lib.paper(&paper_id) {
+                            Some(paper) if candidate.similarity >= complete::ALIKE_ENOUGH => complete::suggested(paper, &candidate.paper, placeholder),
+                            _ => vec![],
+                        };
+                        form.held = vec![held];
+                        form.found = Some(complete::Found { candidates: vec![candidate], asked: vec![] });
+                        form.chosen = Some(0);
+                    }
+                    Err(error) => this.modal_error = error,
+                }
                 cx.notify();
             })
             .ok();
@@ -6041,7 +6099,7 @@ impl Workspace {
             Modal::ReviewText { .. } => self.submit_review_text(window, cx),
             Modal::Figure(_) => self.submit_figure(window, cx),
             Modal::Complete(form) => {
-                if form.chosen.is_some() { self.complete_apply(window, cx) } else { self.complete_find(cx) }
+                if form.chosen.is_some() { self.complete_apply(window, cx) } else if form.by_id { self.complete_lookup(cx) } else { self.complete_find(cx) }
             }
             Modal::Zotero { .. } => self.run(Cmd::PickZotero, window, cx),
             Modal::ZoteroReport => self.run(Cmd::CloseModal, window, cx),
@@ -7030,6 +7088,8 @@ impl Workspace {
                     "paper" => self.lib.as_ref().and_then(|l| l.selected.clone()).map(Cmd::EditPaper),
                     // 按题目补全 for the selected paper; `submit` then looks, `candidate:0` opens the first record found.
                     "complete" => self.lib.as_ref().and_then(|l| l.selected.clone()).map(Cmd::CompletePaper),
+                    // 按 DOI / PMID 补全 for the selected paper: asks at once and opens the record.
+                    "complete-id" => self.lib.as_ref().and_then(|l| l.selected.clone()).map(Cmd::CompleteById),
                     _ => None,
                 },
                 _ => None,

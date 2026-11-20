@@ -4,9 +4,10 @@
 //! and write the fields the person takes into the paper. No HTTP here (the
 //! caller hands in `Fetch`), no browser, and nothing is written without a
 //! person choosing the record and the fields: the first hit of a title
-//! search is not the paper.
+//! search is not the paper. A paper that has its DOI or PMID is completed
+//! the same way from the one record that number names (`by_identifier`).
 
-use crate::lookup::{crossref_work, encode, europepmc_hit, merge_lookup};
+use crate::lookup::{Identifier, crossref_work, encode, europepmc_hit, merge_lookup};
 use crate::model::{PUBLICATION_STATUSES, Paper, PaperFile, label, title_key};
 use crate::sources::{Fetch, arxiv_found};
 use serde_json::Value;
@@ -39,6 +40,8 @@ pub struct Candidate {
     pub differs: Vec<String>,
     /// The source gave only some of the authors.
     pub partial_authors: bool,
+    /// What it was found by: 题目, DOI or PMID; said in the paper's 来源 once written.
+    pub by: &'static str,
 }
 
 /// What came of asking one source.
@@ -130,7 +133,7 @@ fn candidate(mut paper: Paper, source: &'static str, query: &Query) -> Candidate
     }
     let lower = paper.authors.to_lowercase();
     let partial_authors = lower.contains("et al") || lower.trim_end().ends_with("...") || lower.trim_end().ends_with('…');
-    Candidate { paper, sources: vec![source], similarity, same, differs, partial_authors }
+    Candidate { paper, sources: vec![source], similarity, same, differs, partial_authors, by: "题目" }
 }
 
 /// Ask the sources about a title. One that fails or finds nothing takes
@@ -171,6 +174,37 @@ pub fn find(query: &Query, fetch: Fetch) -> Found {
     found.candidates.retain(|candidate| candidate.similarity >= LEAST_ALIKE);
     found.candidates.sort_by(|a, b| b.similarity.total_cmp(&a.similarity));
     found
+}
+
+/// The number a paper is looked up by: its DOI, else its PMID.
+pub fn identifier(paper: &Paper) -> Option<Identifier> {
+    if !paper.doi.is_empty() { return Some(Identifier::Doi(paper.doi.clone())) }
+    (!paper.pmid.is_empty()).then(|| Identifier::Pmid(paper.pmid.clone()))
+}
+
+/// 按 DOI / PMID 补全: the record the paper's own number names, compared
+/// with the paper as a title search's record is. A DOI read off a PDF's
+/// first page may be that of a paper it cites: a record whose title is not
+/// the paper's is no more taken without the person than a title search's.
+/// `placeholder`: the paper's title is only the name of its file, so not compared.
+pub fn by_identifier(paper: &Paper, placeholder: bool, fetch: Fetch) -> Result<Candidate, String> {
+    let Some(id) = identifier(paper) else { return Err("这篇文献没有 DOI 或 PMID，无从按编号查起。".into()) };
+    let record = crate::lookup::find(&id, fetch)?;
+    let (by, sources): (&'static str, Vec<&'static str>) = match id {
+        Identifier::Doi(_) => ("DOI", vec!["Crossref", "Europe PMC"]),
+        Identifier::Pmid(_) => ("PMID", vec!["Europe PMC"]),
+    };
+    let query = Query { title: paper.title.clone(), author: crate::model::author_names(&paper.authors).into_iter().next().map(|(family, _)| family).unwrap_or_default(), year: paper.year };
+    let mut found = candidate(record, sources[0], &query);
+    (found.sources, found.by) = (sources, by);
+    // The first note is the title's.
+    if placeholder || paper.title.trim().is_empty() {
+        found.similarity = 1.;
+        found.same.retain(|note| !note.starts_with("题目"));
+        found.differs.retain(|note| !note.starts_with("题目"));
+    }
+    found.same.insert(0, format!("{by} 一致"));
+    Ok(found)
 }
 
 // ---- the fields of a record
@@ -247,7 +281,9 @@ pub fn apply(paper: &mut Paper, candidate: &Candidate, keys: &[&str]) {
         }
     }
     if keys.is_empty() { return }
-    let note = format!("按题目从 {} 补全", candidate.sources.join("、"));
+    // "按题目从", "按 DOI 从": a Latin word stands apart from the Chinese ones.
+    let by = if candidate.by.is_ascii() { format!(" {} ", candidate.by) } else { candidate.by.to_string() };
+    let note = format!("按{by}从 {} 补全", candidate.sources.join("、"));
     let before = paper.source.split('；').next().unwrap_or("").trim().to_string();
     paper.source = if before.is_empty() { note } else { format!("{before}；{note}") };
 }
@@ -347,5 +383,30 @@ mod tests {
         apply(&mut paper, &found.candidates[1], &["year"]);
         assert_eq!((paper.year, paper.source.as_str()), (Some(2018), "PDF 导入；按题目从 Crossref 补全"));
         assert_eq!((shown(&paper, "status"), shown(&candidate.paper, "status")), (String::new(), "正式发表".to_string()));
+    }
+
+    #[test]
+    fn by_its_number() {
+        let work = r#"{"message":{"DOI":"10.1104/pp.18.01482","title":["A Single-Cell RNA Sequencing Profiles the Developmental Landscape of Arabidopsis Root"],"author":[{"family":"Zhang","given":"Tian-Qi"}],"published-print":{"date-parts":[[2019,5]]},"container-title":["Plant Physiology"],"type":"journal-article"}}"#;
+        let fetch = |url: &str| -> Result<String, String> { Ok(if url.contains("crossref") { work } else { EUROPEPMC }.into()) };
+        // A paper with its DOI and title but no journal: the journal, PMID and abstract are offered, ticked as blanks.
+        let paper = Paper { id: "P-1".into(), title: "A single-cell RNA sequencing profiles the developmental landscape of Arabidopsis root".into(), authors: "Zhang TQ".into(), year: Some(2019), doi: "10.1104/pp.18.01482".into(), source: "PubMed 导入".into(), publication_status: "unknown".into(), ..Default::default() };
+        let found = by_identifier(&paper, false, &fetch).unwrap();
+        assert_eq!((found.similarity, found.by, found.sources.as_slice()), (1., "DOI", ["Crossref", "Europe PMC"].as_slice()));
+        assert_eq!(found.same, ["DOI 一致", "题目一致", "年份 2019", "作者里有 Zhang"]);
+        assert_eq!(suggested(&paper, &found.paper, false), ["journal", "status", "pmid", "abstract"]);
+        let mut written = paper.clone();
+        apply(&mut written, &found, &["journal", "pmid"]);
+        assert_eq!((written.journal.as_str(), written.pmid.as_str(), written.source.as_str()), ("Plant Physiology", "31004836", "PubMed 导入；按 DOI 从 Crossref、Europe PMC 补全"));
+        // A PMID alone asks Europe PMC.
+        let by_pmid = by_identifier(&Paper { doi: String::new(), pmid: "31004836".into(), ..paper.clone() }, false, &fetch).unwrap();
+        assert_eq!((by_pmid.by, by_pmid.sources.as_slice(), by_pmid.paper.journal.as_str()), ("PMID", ["Europe PMC"].as_slice(), "Mol Plant"));
+        // The DOI names another paper: said, and nothing is ticked unasked.
+        let other = by_identifier(&Paper { title: "Leaf development in maize".into(), ..paper.clone() }, false, &fetch).unwrap();
+        assert!(other.similarity < ALIKE_ENOUGH && other.differs[0].starts_with("题目有"));
+        // A title that is the file's name is not compared.
+        let named = by_identifier(&Paper { title: "zhang2019".into(), ..paper.clone() }, true, &fetch).unwrap();
+        assert_eq!((named.similarity, named.differs.is_empty()), (1., true));
+        assert!(by_identifier(&Paper { doi: String::new(), ..paper }, false, &fetch).is_err());
     }
 }
