@@ -6443,6 +6443,8 @@ impl Workspace {
                     self.home_attach(vec![arg.into()], cx);
                     None
                 }
+                // `homestart:<n>` is the n-th start under the box; one that picks a Word file takes the one in the box when there is one.
+                "homestart" => Some(Cmd::Draft(crate::draft::Do::Start(arg.parse().unwrap_or(0)))),
                 "homeask" => {
                     if !arg.is_empty() { self.home.input.update(cx, |input, cx| input.set_text(arg, cx)) }
                     Some(Cmd::Draft(crate::draft::Do::Send))

@@ -40,7 +40,7 @@ pub struct ToolDef {
 }
 
 /// The tools that change the library.
-const WRITING: [&str; 24] = ["create_library", "import_library", "export_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "suggest_field", "sync_searches", "find_pdf", "import_url", "organise_papers", "edit_section", "set_outline", "comment_manuscript", "export_note", "save_note_to_notion", "resolve_note_save", "save_cite_style", "restyle_docx"];
+const WRITING: [&str; 25] = ["create_library", "import_library", "export_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "suggest_field", "sync_searches", "find_pdf", "import_url", "organise_papers", "edit_section", "set_outline", "comment_manuscript", "export_note", "save_note_to_notion", "resolve_note_save", "save_cite_style", "restyle_docx", "import_docx_references"];
 /// Of those, the ones the window's assistant runs only with the person's
 /// consent. Saving a search, suggesting a screening decision or proposing
 /// a field's value changes nothing a person has not yet to act on, so they
@@ -48,7 +48,7 @@ const WRITING: [&str; 24] = ["create_library", "import_library", "export_library
 /// about everywhere but in the conversation that writes that manuscript,
 /// where the person has handed the pen over. `comment_manuscript` is not among them: a comment changes no
 /// word of the manuscript, it waits for the person like a screening suggestion.
-const CONFIRMING: [&str; 17] = ["import_library", "export_library", "import_pdf", "import_references", "import_zotero", "run_search", "undo_import", "remove_search", "find_pdf", "import_url", "organise_papers", "edit_section", "set_outline", "export_note", "save_note_to_notion", "resolve_note_save", "restyle_docx"];
+const CONFIRMING: [&str; 18] = ["import_library", "export_library", "import_pdf", "import_references", "import_zotero", "run_search", "undo_import", "remove_search", "find_pdf", "import_url", "organise_papers", "edit_section", "set_outline", "export_note", "save_note_to_notion", "resolve_note_save", "restyle_docx", "import_docx_references"];
 /// The tools that write a manuscript (`compose`).
 pub const MANUSCRIPT: [&str; 2] = ["edit_section", "set_outline"];
 
@@ -416,6 +416,17 @@ pub fn catalog() -> Vec<ToolDef> {
             }),
             &["path"],
         ),
+        scoped(
+            "import_docx_references",
+            "从 Word 文件收进参考文献",
+            "把一个 Word 文件（.docx）参考文献表里的文献收进文献库，不改文件：识别方式同 read_docx_citations（Zotero / Mendeley 的引用域直接取文献信息，否则按「参考文献」「References」标题后的条目逐条读）。lookup 默认开：有 DOI 的按 DOI 查 Crossref，按文字读出但没有 DOI 的按文字查 Crossref 补上 DOI 和期刊信息（只采用题目和年份相符的记录）。按 DOI、PMID、题目去重，文献库里已有的、回收站里的都跳过，所以可以放心重复调用。没能识别的条目不会收进来，结果的 unresolved 里逐条列出原文；你读懂其中一条后，用 entries 给出它的 CSL-JSON 再调用一次（给了 entries 时只收这几条，不再联网）。checkAgainst 里是按规则读出、没有核对过的条目，请提醒用户核对。",
+            json!({
+                "path": {"type": "string", "description": "本机 .docx 文件的路径。"},
+                "lookup": {"type": "boolean", "description": "联网查 Crossref 补全和核对条目。默认 true；为 false 时只用文件里的信息。"},
+                "entries": {"type": "array", "description": "你替规则读懂的条目：n 是参考文献表里的第几条（从 1 起），csl 是这一条的 CSL-JSON（type、title、author 的 family / given、issued 的 date-parts、container-title、volume、issue、page、DOI…）。只转写条目文字里写着的信息，不要补写没有的。给出时只收这几条。", "items": {"type": "object", "properties": {"n": {"type": "integer"}, "csl": {"type": "object"}}, "required": ["n", "csl"]}}
+            }),
+            &["path"],
+        ),
         scoped("list_manuscripts", "稿件列表", "列出用户在写作页的稿件：题目、语言、各节的名称、属于论文的哪一部分和字数。只读。", json!({}), &[]),
         scoped(
             "read_manuscript",
@@ -694,6 +705,7 @@ fn dispatch(store: &mut Store, info: &LibraryInfo, name: &str, args: &Value, fet
         }
         "read_docx_citations" => local::read_docx_citations(store, args, fetch),
         "restyle_docx" => local::restyle_docx(store, info, args, fetch),
+        "import_docx_references" => local::import_docx_references(store, args, fetch),
         "list_manuscripts" => list_manuscripts(store),
         "read_manuscript" => read_manuscript(store, args),
         "comment_manuscript" => comment_manuscript(store, args),
@@ -2637,7 +2649,7 @@ pub(crate) mod tests {
             // Only a tool that changes the library has anything to ask the person about.
             assert!(tool.writes || !tool.confirm, "{}", tool.name);
         }
-        assert_eq!(library_catalog().iter().filter(|tool| tool.confirm).map(|tool| tool.name).collect::<Vec<_>>().len(), 16);
+        assert_eq!(library_catalog().iter().filter(|tool| tool.confirm).map(|tool| tool.name).collect::<Vec<_>>().len(), 17);
         // The tools that write a manuscript are asked about outside the conversation that writes it.
         assert!(MANUSCRIPT.iter().all(|name| catalog().iter().any(|tool| tool.name == *name && tool.writes && tool.confirm)));
         std::fs::remove_dir_all(root).ok();
@@ -2672,6 +2684,31 @@ pub(crate) mod tests {
         assert!(call(&root, "restyle_docx", &json!({"path": path, "style": "numeric"})).unwrap_err().contains("csl:nature"));
         assert!(call(&root, "read_docx_citations", &json!({"path": root.join("x.pdf")})).is_err());
         assert!(catalog().iter().any(|tool| tool.name == "restyle_docx" && tool.writes && tool.confirm) && catalog().iter().any(|tool| tool.name == "read_docx_citations" && !tool.writes));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn the_references_of_a_word_file_become_the_librarys_papers() {
+        let (root, _) = sample();
+        let dir = crate::libraries::list(&root)[0].dir.clone();
+        Store::open(&dir).unwrap().add_paper(Paper { title: "Root hairs take up water".into(), doi: "10.1000/hairs".into(), year: Some(2021), ..Default::default() }).unwrap();
+        let p = |text: &str| format!("<w:p><w:r><w:t xml:space=\"preserve\">{text}</w:t></w:r></w:p>");
+        let source = crate::docx::tests::file(&format!("{}{}{}{}{}", p("Roots [1], branches [2] and more [3]."), p("References"), p("[1] Zhang W. Root hairs take up water. Plant Cell. 2021;33(2):10-19. doi:10.1000/hairs"), p("[2] Wang F. Lateral roots branch out. Nature, 2019, 570: 1-5."), p("[3] A note nobody can read.")), "");
+        let path = root.join("thesis.docx");
+        std::fs::write(&path, &source).unwrap();
+        // Without the network: the one the library has is skipped, the one read by rule comes in to be checked, the one unread is said.
+        let done = call(&root, "import_docx_references", &json!({"path": path, "lookup": false})).unwrap();
+        assert_eq!((done["entries"].as_u64(), done["added"].as_u64(), done["skipped"].as_u64()), (Some(3), Some(1), Some(1)));
+        assert_eq!((done["checkAgainst"][0]["n"].as_u64(), done["unresolved"][0]["n"].as_u64(), done["unresolved"][0]["text"].as_str()), (Some(2), Some(3), Some("[3] A note nobody can read.")));
+        let papers = Store::open(&dir).unwrap().list_papers().unwrap();
+        let taken = papers.iter().find(|paper| paper.title == "Lateral roots branch out").unwrap();
+        assert_eq!((taken.authors.as_str(), taken.year, taken.journal.as_str(), taken.source.as_str()), ("Wang, F", Some(2019), "Nature", "导入 · thesis.docx"));
+        // An entry read by the caller is taken alone; again, nothing comes in twice.
+        let given = call(&root, "import_docx_references", &json!({"path": path, "entries": [{"n": 3, "csl": {"type": "article-journal", "title": "Notes on roots", "author": [{"family": "Nobody"}], "issued": {"date-parts": [[2020]]}}}]})).unwrap();
+        assert_eq!((given["added"].as_u64(), given["unresolved"].as_array().map(Vec::len)), (Some(1), Some(0)));
+        assert_eq!(call(&root, "import_docx_references", &json!({"path": path, "lookup": false})).unwrap()["added"].as_u64(), Some(0));
+        assert_eq!(Store::open(&dir).unwrap().list_papers().unwrap().len(), papers.len() + 1);
+        assert!(call(&root, "import_docx_references", &json!({"path": root.join("x.pdf")})).is_err());
         std::fs::remove_dir_all(root).ok();
     }
 

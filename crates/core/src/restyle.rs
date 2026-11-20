@@ -104,7 +104,7 @@ pub struct Inspected {
 /// What the assistant is told with a question that came with Word files: where they are and what it can do with them.
 pub fn note(paths: &[String]) -> String {
     let files: Vec<String> = paths.iter().map(|path| format!("- {path}")).collect();
-    format!("用户随这个问题附上了 Word 文件（本机路径）：\n{}\n这是在别处写好的稿件，不是写作页的稿件，不要用稿件工具去读写它。用户多半想重排它的引用格式：先用 read_docx_citations 读出它引用了什么，把识别结果如实告诉用户（引用来自 Zotero 域还是按文字识别、参考文献多少条、哪些没能识别、哪些引用会保持原样）；用户没说用哪个样式时问清楚（list_cite_styles 有可用的样式）；要在某个样式上改动时用 read_cite_style 读出它、改好、用 try_cite_style 试排给用户看，再把改好的 CSL 交给 restyle_docx。restyle_docx 写出一个新文件，保存位置由用户在保存对话框里选，原文件不会改动；不要自己填 output。", files.join("\n"))
+    format!("用户随这个问题附上了 Word 文件（本机路径）：\n{}\n这是在别处写好的稿件，不是写作页的稿件，不要用稿件工具去读写它。按用户的话决定做什么。用户要把它参考文献表里的文献收进来（建一个文献库）时，用 import_docx_references（导入前用户会在窗口里确认），再如实告诉用户收进了多少篇、跳过了多少篇、哪些条目没能识别；没能识别的条目你读得懂时，用 entries 给出它们再调用一次。用户只交来文件、没说做什么时，多半想重排它的引用格式：先用 read_docx_citations 读出它引用了什么，把识别结果如实告诉用户（引用来自 Zotero 域还是按文字识别、参考文献多少条、哪些没能识别、哪些引用会保持原样）；用户没说用哪个样式时问清楚（list_cite_styles 有可用的样式）；要在某个样式上改动时用 read_cite_style 读出它、改好、用 try_cite_style 试排给用户看，再把改好的 CSL 交给 restyle_docx。restyle_docx 写出一个新文件，保存位置由用户在保存对话框里选，原文件不会改动；不要自己填 output。", files.join("\n"))
 }
 
 // ---- small readers of text
@@ -538,6 +538,19 @@ fn with_id(mut record: Record, id: &str) -> Record {
     record
 }
 
+/// Crossref searched by an entry's words: only a record whose title the entry itself says, since the first hit of
+/// a search is not the work meant.
+fn searched(text: &str, fetch: Fetch) -> Result<Option<Record>, String> {
+    let words: String = label(text).map_or(text, |(_, at)| &text[at..]).chars().take(300).collect();
+    let url = format!("https://api.crossref.org/works?rows=3&query.bibliographic={}", crate::lookup::encode(&words));
+    let body = serde_json::from_str::<Value>(&fetch(&url)?).unwrap_or_default();
+    let key = title_key(text);
+    Ok(body["message"]["items"].as_array().into_iter().flatten().filter_map(crossref_record).find(|record| {
+        let title = title_key(record["title"].as_str().unwrap_or(""));
+        title.chars().count() >= 12 && key.contains(&title)
+    }))
+}
+
 /// One entry of the file's list as a record, by the best way there is.
 fn resolve(entry: &mut Entry, papers: &[Paper], given: Option<&Record>, fetch: Option<Fetch>) {
     let parsed = parse_entry(&entry.text);
@@ -567,24 +580,12 @@ fn resolve(entry: &mut Entry, papers: &[Paper], given: Option<&Record>, fetch: O
         return;
     }
     if let Some(fetch) = fetch {
-        let words: String = label(&entry.text).map_or(entry.text.as_str(), |(_, at)| &entry.text[at..]).chars().take(300).collect();
-        let url = format!("https://api.crossref.org/works?rows=3&query.bibliographic={}", crate::lookup::encode(&words));
-        match fetch(&url).map(|body| serde_json::from_str::<Value>(&body).unwrap_or_default()) {
-            Ok(body) => {
-                let key = title_key(&entry.text);
-                // Only a record whose title the entry itself says: the first hit of a search is not the work meant.
-                let found = body["message"]["items"].as_array().into_iter().flatten().filter_map(crossref_record).find(|record| {
-                    let title = title_key(record["title"].as_str().unwrap_or(""));
-                    title.chars().count() >= 12 && key.contains(&title)
-                });
-                match found {
-                    Some(record) => {
-                        (entry.origin, entry.sure, entry.record) = (LOOKUP, LIKELY, Some(with_id(record, &entry.id)));
-                        return;
-                    }
-                    None => notes.push("按文字在 Crossref 没有查到题目相符的记录".into()),
-                }
+        match searched(&entry.text, fetch) {
+            Ok(Some(record)) => {
+                (entry.origin, entry.sure, entry.record) = (LOOKUP, LIKELY, Some(with_id(record, &entry.id)));
+                return;
             }
+            Ok(None) => notes.push("按文字在 Crossref 没有查到题目相符的记录".into()),
             Err(error) => notes.push(format!("查询 Crossref 失败：{error}")),
         }
     }
@@ -1037,6 +1038,58 @@ impl Inspected {
     }
 }
 
+// ---- the works it cites, as papers
+
+/// An entry of the file's list as a paper to take into a library, and how it came to be one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Work {
+    /// Its place in the list, from one.
+    pub n: usize,
+    /// As the file's list says it; empty for a work known from a field alone.
+    pub text: String,
+    /// None for an entry that could not be read.
+    pub paper: Option<Paper>,
+    pub origin: &'static str,
+    pub sure: &'static str,
+    pub note: String,
+    /// How often the file's text cites it.
+    pub cited: usize,
+}
+
+/// The works a file cites, as papers (`csl::paper_of`), in the order of its list. With `fetch`, an entry read from
+/// its own text that names no DOI is searched on Crossref by its words, and the record found (one whose title the
+/// entry says, of the same year) gives it its DOI and what else the text left out; a library is to find the work
+/// again, which a DOI does best. `only` keeps the entries of those places, for records given anew.
+pub fn works(inspected: &Inspected, fetch: Option<Fetch>, only: &[usize]) -> Vec<Work> {
+    let mut out = vec![];
+    for (place, entry) in inspected.entries.iter().enumerate() {
+        let n = place + 1;
+        if !only.is_empty() && !only.contains(&n) { continue }
+        let mut work = Work { n, text: entry.text.clone(), paper: entry.record.as_ref().and_then(csl::paper_of), origin: entry.origin, sure: entry.sure, note: entry.note.clone(), cited: inspected.cited(&entry.id) };
+        let unnamed = entry.origin == TEXT && !entry.text.is_empty() && work.paper.as_ref().is_some_and(|paper| paper.doi.is_empty());
+        if let (Some(fetch), Some(paper), true) = (fetch, work.paper.as_mut(), unnamed) {
+            match searched(&entry.text, fetch) {
+                Ok(Some(record)) => match csl::paper_of(&record).filter(|found| found.year.is_none() || paper.year.is_none() || found.year == paper.year) {
+                    Some(found) => {
+                        // Crossref's record is the work's own; what it lacks the entry's text still says.
+                        let text = std::mem::replace(paper, found);
+                        for (field, said) in [(&mut paper.authors, text.authors), (&mut paper.journal, text.journal), (&mut paper.volume, text.volume), (&mut paper.issue, text.issue), (&mut paper.pages, text.pages)] {
+                            if field.is_empty() { *field = said }
+                        }
+                        if paper.year.is_none() { paper.year = text.year }
+                        (work.origin, work.sure) = (LOOKUP, LIKELY);
+                    }
+                    None => work.note = "Crossref 上题目相符的记录年份不同，未采用".into(),
+                },
+                Ok(None) => {}
+                Err(error) => work.note = format!("查询 Crossref 失败：{error}"),
+            }
+        }
+        out.push(work);
+    }
+    out
+}
+
 // ---- writing it again
 
 #[derive(Clone, Debug, Default)]
@@ -1400,5 +1453,37 @@ mod tests {
         // Without being asked nothing is looked up, and a file without a list is said to have none.
         assert_eq!(inspect(&source, &[], &[], None).unwrap().entries.iter().filter(|entry| entry.record.is_some()).count(), 0);
         assert!(inspect(&file(&p("No list here [1]."), ""), &[], &[], None).unwrap_err().to_string().contains("参考文献表"));
+    }
+
+    #[test]
+    fn the_works_a_file_cites_become_papers() {
+        let body = format!(
+            "{}{}{}{}{}{}",
+            p("Roots grow down [1, 2], as [2] and [4] said."),
+            p("References"),
+            p("[1] Zhang W, Li N. Root hairs take up water. Plant Cell, 2021, 33(2): 10-19."),
+            p("[2] Wang F. Lateral roots branch out. Nature, 2019, 570: 1-5."),
+            p("[3] Nothing to read here at all"),
+            p("[4] Chen J. Root caps sense gravity. Science, 2020, 368: 7-9."),
+        );
+        let source = file(&body, "");
+        let found = inspect(&source, &[], &[], None).unwrap();
+        // Read by rule, with no network: three papers, and the entry nobody could read said, not made up.
+        let read = works(&found, None, &[]);
+        assert_eq!(read.iter().map(|work| (work.n, work.paper.as_ref().map(|paper| paper.title.as_str()), work.cited)).collect::<Vec<_>>(), [(1, Some("Root hairs take up water"), 1), (2, Some("Lateral roots branch out"), 2), (3, None, 0), (4, Some("Root caps sense gravity"), 1)]);
+        let first = read[0].paper.as_ref().unwrap();
+        assert_eq!((first.year, first.journal.as_str(), first.placed().as_str(), first.doi.is_empty()), (Some(2021), "Plant Cell", "33(2), 10–19", true));
+        // Searched by its words, an entry gets the DOI of the record whose title it says, of its year; another year is not taken.
+        let fetch = |url: &str| -> Result<String, String> {
+            if url.contains("Lateral") { return Ok(r#"{"message": {"items": [{"title": ["Lateral roots branch out"], "DOI": "10.1038/s41586-019-0001-1", "author": [{"family": "Wang", "given": "Fang"}], "issued": {"date-parts": [[2019]]}, "container-title": ["Nature"]}]}}"#.into()) }
+            if url.contains("caps") { return Ok(r#"{"message": {"items": [{"title": ["Root caps sense gravity"], "DOI": "10.1126/science.0002", "issued": {"date-parts": [[2011]]}}]}}"#.into()) }
+            Ok(r#"{"message": {"items": []}}"#.into())
+        };
+        let looked = works(&found, Some(&fetch), &[2, 4]);
+        assert_eq!(looked.iter().map(|work| work.n).collect::<Vec<_>>(), [2, 4]);
+        let second = looked[0].paper.as_ref().unwrap();
+        assert_eq!((second.doi.as_str(), second.authors.as_str(), second.volume.as_str(), looked[0].origin), ("10.1038/s41586-019-0001-1", "Wang, Fang", "570", LOOKUP));
+        assert_eq!((looked[1].paper.as_ref().unwrap().doi.as_str(), looked[1].origin), ("", TEXT));
+        assert!(looked[1].note.contains("年份不同"), "{}", looked[1].note);
     }
 }

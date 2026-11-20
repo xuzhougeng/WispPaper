@@ -257,7 +257,7 @@ pub fn manuscript_review_note(manuscripts: &[(&crate::manuscript::Manuscript, Op
         if let Some(path) = path { out.push_str(&format!("；原 Word 文件的副本：{path}")) }
         out.push('\n');
     }
-    out.push_str("做法：先用 read_manuscript 通读（长的稿件按节读），再用 comment_manuscript 把意见逐条留在稿件上：每条针对一处逐字摘出的原文，说明问题和理由，能直接改好的给出 replacement。批注只是建议，正文由用户自己决定改不改：审稿时不要用 edit_section 改稿件。对话里用几句话总结主要问题和留了几条批注，不要把批注再抄一遍。用户要带批注的 Word 文件时，告诉他点稿件上方的「导出」。用户要重排这份 Word 文件的引用格式时，对上面副本的路径用 read_docx_citations 和 restyle_docx。");
+    out.push_str("做法：先用 read_manuscript 通读（长的稿件按节读），再用 comment_manuscript 把意见逐条留在稿件上：每条针对一处逐字摘出的原文，说明问题和理由，能直接改好的给出 replacement。批注只是建议，正文由用户自己决定改不改：审稿时不要用 edit_section 改稿件。对话里用几句话总结主要问题和留了几条批注，不要把批注再抄一遍。用户要带批注的 Word 文件时，告诉他点稿件上方的「导出」。用户要重排这份 Word 文件的引用格式时，对上面副本的路径用 read_docx_citations 和 restyle_docx；要把它参考文献表里的文献收进这次对话时，对副本的路径用 import_docx_references。");
     Some(out)
 }
 
