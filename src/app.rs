@@ -1339,7 +1339,8 @@ pub enum Modal {
     EmptyTrash { phrase: Entity<TextInput> },
     /// What came of each PDF of the last import (`Library::import`).
     ImportReport,
-    Zotero,
+    /// `open`: Zotero holds its database right now, as far as the usual place of it tells.
+    Zotero { open: bool },
     ZoteroReport,
     /// What came of looking for each paper's open full text (`Library::fetching`).
     FetchReport,
@@ -2497,7 +2498,7 @@ impl Workspace {
             Cmd::ImportZotero => {
                 if self.lib.is_none() { return self.fail(t("请先打开一个文献库。"), cx) }
                 self.modal_error.clear();
-                self.modal = Some(if self.lib.as_ref().and_then(|l| l.zotero.as_ref()).is_some_and(|r| r.running) { Modal::ZoteroReport } else { Modal::Zotero });
+                self.modal = Some(if self.lib.as_ref().and_then(|l| l.zotero.as_ref()).is_some_and(|r| r.running) { Modal::ZoteroReport } else { Modal::Zotero { open: zotero::default_database().is_some_and(|path| zotero::in_use(&path)) } });
             }
             Cmd::PickZotero => self.pick_zotero(cx),
             Cmd::ShowZotero => {
@@ -3847,7 +3848,10 @@ impl Workspace {
             this.update(cx, |this, cx| {
                 if this.lib.as_ref().is_none_or(|l| l.info.id != library) { return }
                 match result {
-                    Ok(Ok(Some(paths))) => { if let Some(path) = paths.into_iter().next() { this.import_zotero(path, cx) } }
+                    Ok(Ok(Some(paths))) => match paths.into_iter().next() {
+                        Some(path) => this.import_zotero(path, cx),
+                        None => this.modal_error = t("没有得到所选文件的路径，请重新选择 zotero.sqlite。").into(),
+                    },
                     Ok(Ok(None)) => {}
                     Ok(Err(err)) => { this.modal_error = tf!("无法打开文件选择器：{err:#}", "Cannot open file picker: {err:#}"); }
                     Err(err) => { this.modal_error = tf!("文件选择器未能返回结果：{err}", "File picker returned no result: {err}"); }
@@ -3920,10 +3924,19 @@ impl Workspace {
     fn pick_files(&mut self, prompt: &'static str, pdfs: bool, cx: &mut Context<Self>) {
         let extensions: Vec<SharedString> = if pdfs { vec!["pdf".into()] } else { vec!["bib".into(), "ris".into(), "txt".into(), "enw".into()] };
         let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some(prompt.into()), extensions: Some(extensions) });
+        self.import_picked(picked, cx);
+    }
+
+    /// What a file picker gave goes to the import; a picker that failed says so instead of doing nothing.
+    fn import_picked<E: std::fmt::Display + 'static>(&mut self, picked: impl Future<Output = Result<anyhow::Result<Option<Vec<PathBuf>>>, E>> + 'static, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
-            if let Ok(Ok(Some(paths))) = picked.await {
-                this.update(cx, |this, cx| this.import_paths(paths, cx)).ok();
-            }
+            let result = picked.await;
+            this.update(cx, |this, cx| match result {
+                Ok(Ok(Some(paths))) => this.import_paths(paths, cx),
+                Ok(Ok(None)) => {}
+                Ok(Err(err)) => this.fail(tf!("无法打开文件选择器：{err:#}", "Cannot open file picker: {err:#}"), cx),
+                Err(err) => this.fail(tf!("文件选择器未能返回结果：{err}", "File picker returned no result: {err}"), cx),
+            }).ok();
         })
         .detach();
     }
@@ -3931,12 +3944,7 @@ impl Workspace {
     /// Folders picked: every PDF under them, tagged with the folders it lies in.
     fn pick_folders(&mut self, cx: &mut Context<Self>) {
         let picked = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: true, prompt: Some(t("导入").into()), extensions: None });
-        cx.spawn(async move |this, cx| {
-            if let Ok(Ok(Some(paths))) = picked.await {
-                this.update(cx, |this, cx| this.import_paths(paths, cx)).ok();
-            }
-        })
-        .detach();
+        self.import_picked(picked, cx);
     }
 
     /// Files picked for a paper: as `kind` (`fulltext` or `supplement`), or, without one, the first PDF its main text
@@ -5766,7 +5774,7 @@ impl Workspace {
             Modal::Complete(form) => {
                 if form.chosen.is_some() { self.complete_apply(window, cx) } else { self.complete_find(cx) }
             }
-            Modal::Zotero => self.run(Cmd::PickZotero, window, cx),
+            Modal::Zotero { .. } => self.run(Cmd::PickZotero, window, cx),
             Modal::ZoteroReport => self.run(Cmd::CloseModal, window, cx),
             Modal::FetchReport => self.run(Cmd::CloseModal, window, cx),
             Modal::Library { editing, name, topic, color } => {
