@@ -191,15 +191,7 @@ fn raised_numbers(glyphs: &[String], boxes: &[[f32; 4]]) -> Vec<bool> {
 /// first 80, 40 or 20 characters are looked for, so a quotation that drifts
 /// from the page after a while is still found, and said to be found in part.
 pub fn find_quote(glyphs: &[String], boxes: &[[f32; 4]], quote: &str) -> Option<(std::ops::Range<usize>, bool)> {
-    let raised = raised_numbers(glyphs, boxes);
-    // Every compared character, with the glyph it came from: without the raised numbers, then with them.
-    let streams = [true, false].map(|skip| {
-        let mut stream: Vec<(char, usize)> = vec![];
-        for (index, glyph) in glyphs.iter().enumerate() {
-            if !(skip && raised[index]) { stream.extend(bare(glyph).chars().map(|c| (c, index))) }
-        }
-        stream
-    });
+    let streams = streams(glyphs, boxes);
     let wanted: Vec<char> = bare(quote).chars().collect();
     for length in [wanted.len(), 80, 40, 20] {
         if length > wanted.len() || length < 8 { continue }
@@ -211,6 +203,42 @@ pub fn find_quote(glyphs: &[String], boxes: &[[f32; 4]], quote: &str) -> Option<
         }
     }
     None
+}
+
+/// Every compared character of a page, with the glyph it came from: without the raised numbers, then with them.
+fn streams(glyphs: &[String], boxes: &[[f32; 4]]) -> [Vec<(char, usize)>; 2] {
+    let raised = raised_numbers(glyphs, boxes);
+    [true, false].map(|skip| {
+        let mut stream: Vec<(char, usize)> = vec![];
+        for (index, glyph) in glyphs.iter().enumerate() {
+            if !(skip && raised[index]) { stream.extend(bare(glyph).chars().map(|c| (c, index))) }
+        }
+        stream
+    })
+}
+
+/// Every place words typed to look for stand among the glyphs of a page, in
+/// order and apart: the ranges of glyphs they cover. Compared as `bare`
+/// text, so case, spaces, hyphens and line breaks do not matter, and raised
+/// citation numbers between the words do not break them; the words are
+/// looked for with those numbers too when they are not found without.
+pub fn find_all(glyphs: &[String], boxes: &[[f32; 4]], query: &str) -> Vec<std::ops::Range<usize>> {
+    let wanted: Vec<char> = bare(query).chars().collect();
+    if wanted.is_empty() { return vec![] }
+    for stream in streams(glyphs, boxes) {
+        let mut found: Vec<std::ops::Range<usize>> = vec![];
+        let mut at = 0;
+        while at + wanted.len() <= stream.len() {
+            if stream[at..at + wanted.len()].iter().map(|(c, _)| c).eq(wanted.iter()) {
+                found.push(stream[at].1..stream[at + wanted.len() - 1].1 + 1);
+                at += wanted.len();
+            } else {
+                at += 1;
+            }
+        }
+        if !found.is_empty() { return found }
+    }
+    vec![]
 }
 
 /// Glyph boxes (`[left, top, right, bottom]`, in drawing order) merged into
@@ -347,6 +375,16 @@ mod tests {
         // What earlier builds kept.
         assert_eq!((failure_kind("文件里没有可提取的文字（可能是扫描件）。"), failure_kind("PDF 结构异常，无法提取文字。")), ("no_text", "parser"));
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn words_looked_for_on_a_page() {
+        let glyphs: Vec<String> = "Gene expression in ro-\not cells; gene\nexpression again.".chars().map(String::from).collect();
+        let found: Vec<String> = find_all(&glyphs, &[], "Gene Expression").into_iter().map(|range| glyphs[range].concat()).collect();
+        assert_eq!(found, ["Gene expression", "gene\nexpression"]);
+        // A word broken over a line by its hyphen is one word; nothing typed finds nothing.
+        assert_eq!(find_all(&glyphs, &[], "root").len(), 1);
+        assert!(find_all(&glyphs, &[], " - ").is_empty() && find_all(&glyphs, &[], "absent").is_empty());
     }
 
     #[test]

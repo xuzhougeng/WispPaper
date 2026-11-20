@@ -197,6 +197,32 @@ pub fn is_language(code: &str) -> bool {
     LANGUAGES.iter().any(|(key, _)| *key == code)
 }
 
+/// Every place `query` stands in `text`, as byte ranges in order and apart, letters compared without their case.
+/// What the search over a manuscript lights and goes to, section by section.
+pub fn occurrences(text: &str, query: &str) -> Vec<std::ops::Range<usize>> {
+    let wanted: Vec<char> = query.chars().flat_map(char::to_lowercase).collect();
+    if query.trim().is_empty() { return vec![] }
+    let letters: Vec<(usize, char)> = text.char_indices().collect();
+    let mut found = vec![];
+    let mut at = 0;
+    'start: while at < letters.len() {
+        // Compared letter by letter: a letter whose lower case is longer (İ) is matched as that whole.
+        let (mut i, mut w) = (at, 0);
+        while w < wanted.len() {
+            let Some((_, c)) = letters.get(i) else { break 'start };
+            for lower in c.to_lowercase() {
+                if wanted.get(w) != Some(&lower) { at += 1; continue 'start }
+                w += 1;
+            }
+            i += 1;
+        }
+        let end = letters.get(i).map_or(text.len(), |(byte, _)| *byte);
+        found.push(letters[at].0..end);
+        at = i;
+    }
+    found
+}
+
 /// Whether a section's text is worth a snapshot, given the newest one kept:
 /// only when it changed, and an empty section with no history has nothing to keep.
 pub fn worth_keeping(latest: Option<&str>, body: &str) -> bool {
@@ -1216,6 +1242,17 @@ mod tests {
 
     fn store() -> Store {
         Store::in_memory(Path::new("/tmp/wisp-manuscript-test")).unwrap()
+    }
+
+    #[test]
+    fn words_looked_for_in_a_section() {
+        let text = "Cells grow. 细胞生长很快，cells 也会分裂；CELLS.";
+        let found: Vec<&str> = occurrences(text, "cells").into_iter().map(|range| &text[range]).collect();
+        assert_eq!(found, ["Cells", "cells", "CELLS"]);
+        assert_eq!(occurrences(text, "生长").into_iter().map(|range| &text[range]).collect::<Vec<_>>(), ["生长"]);
+        // Apart, not overlapping; nothing typed finds nothing.
+        assert_eq!(occurrences("aaaa", "aa"), [0..2, 2..4]);
+        assert!(occurrences(text, "  ").is_empty() && occurrences(text, "absent").is_empty() && occurrences("", "a").is_empty());
     }
 
     #[test]

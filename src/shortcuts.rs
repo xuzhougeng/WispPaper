@@ -29,13 +29,13 @@ pub const SHORTCUTS: [Shortcut; 15] = [
     Shortcut { id: "settings", label: "打开设置", group: 0, default: "secondary-," },
     Shortcut { id: "home", label: "回到所有文献库", group: 0, default: "secondary-shift-h" },
     Shortcut { id: "new-library", label: "新建文献库", group: 0, default: "secondary-shift-n" },
-    Shortcut { id: "search", label: "搜索文献", group: 1, default: "secondary-f" },
+    Shortcut { id: "search", label: "搜索：文献库里搜文献，写作里搜稿件，PDF 里搜原文", group: 1, default: "secondary-f" },
     Shortcut { id: "add", label: "通过 DOI / PMID 添加文献", group: 1, default: "secondary-n" },
     Shortcut { id: "import-pdf", label: "导入 PDF 文件", group: 1, default: "secondary-o" },
     Shortcut { id: "ask", label: "打开助手", group: 1, default: "secondary-l" },
     Shortcut { id: "detail", label: "展开 / 收起文献详情", group: 1, default: "secondary-e" },
     Shortcut { id: "sidebar", label: "显示 / 收起侧边栏", group: 1, default: "secondary-b" },
-    Shortcut { id: "reading", label: "进入 / 退出阅读模式", group: 1, default: "secondary-shift-f" },
+    Shortcut { id: "reading", label: "进入 / 退出阅读模式（写作里是稿件预览）", group: 1, default: "secondary-shift-f" },
     Shortcut { id: "zoom-in", label: "放大 PDF", group: 1, default: "secondary-=" },
     Shortcut { id: "zoom-out", label: "缩小 PDF", group: 1, default: "secondary--" },
     Shortcut { id: "zoom-fit", label: "PDF 适应宽度", group: 1, default: "secondary-0" },
@@ -137,6 +137,9 @@ pub fn rebuild(custom: &BTreeMap<String, String>, cx: &mut App) {
             _ => KeyBinding::new(&key, ToggleDetail, context),
         });
     }
+    // The same key in a PDF with the keyboard looks in the file: the deeper context is heard first.
+    let search = key_of("search", custom);
+    if !search.is_empty() && Keystroke::parse(&search).is_ok() { bindings.push(KeyBinding::new(&search, crate::pdf::FindInPdf, Some("PdfView"))) }
     bindings.extend(crate::background::bindings());
     cx.bind_keys(bindings);
 }

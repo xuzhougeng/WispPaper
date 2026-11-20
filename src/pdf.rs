@@ -2,18 +2,20 @@
 //! with hayro (pure Rust, no system PDF library); the view is a virtualised
 //! list that asks for the pages on screen and keeps the latest few. The same
 //! thread finds a quoted sentence among the glyphs of a page, so a citation
-//! can be shown where it stands.
+//! can be shown where it stands, and the words typed into the find bar
+//! (the shortcut `search` while the viewer has the keyboard, or 自己搜索
+//! when a citation's sentence was not found there).
 
 use crate::i18n::t;
 use crate::app::Translated;
 use crate::theme::{Theme, text_px};
 use crate::ui;
-use crate::input::TextInput;
+use crate::input::{InputEvent, TextInput};
 use gpui::{prelude::FluentBuilder, *};
 use wisp_core::annotation::{Annotation, COLORS, Kind};
 use wisp_core::pdftext::{self, Mark};
 
-actions!(pdf, [CopySelection]);
+actions!(pdf, [CopySelection, FindInPdf]);
 
 /// What the viewer tells whoever shows it.
 pub enum PdfEvent {
@@ -309,6 +311,14 @@ fn zoom_step(percent: f32, up: bool) -> f32 {
 
 /// The pages a quotation is looked for on before giving up.
 const FIND_PAGES: usize = 300;
+/// Pages whose glyphs the worker keeps once read, for the next search.
+const KEEP_GLYPHS: usize = 120;
+/// Room the find bar and the citation's notice leave at the right of the viewer, for 标注's button.
+const FIND_CLEAR: f32 = 120.;
+/// Words of a sentence not found tried at most, one after another, until one is on some page.
+const SEARCH_TRIES: usize = 6;
+/// Places the find bar shows at most.
+const SEARCH_HITS: usize = 999;
 /// Page renders kept from a burst of requests; older ones are handed back.
 const KEEP_REQUESTS: usize = 3;
 
@@ -331,6 +341,8 @@ struct CitationFocus {
     page: Option<usize>,
     boxes: Vec<[f32; 4]>,
     status: CitationStatus,
+    /// The sentence looked for: what 自己搜索 starts from when it was not found.
+    quote: String,
 }
 
 impl CitationFocus {
@@ -341,6 +353,7 @@ impl CitationFocus {
     fn begin(&mut self, page: usize, quote: &str) -> u64 {
         self.clear();
         self.page = Some(page.saturating_sub(1));
+        self.quote = quote.to_string();
         self.status = if quote.trim().is_empty() { CitationStatus::PageOnly } else { CitationStatus::Searching };
         self.request
     }
@@ -364,11 +377,45 @@ impl CitationFocus {
     }
 }
 
+/// The find bar: words typed to look for in the whole file, the places found, and the one gone to.
+struct Finder {
+    input: Entity<TextInput>,
+    _heard: Subscription,
+    request: u64,
+    hits: Vec<(usize, Vec<[f32; 4]>)>,
+    at: Option<usize>,
+    searching: bool,
+    /// Opened because a citation's sentence was not found in the file: said under the bar.
+    missed: bool,
+    /// More words of that sentence to try while the one in the bar is on no page.
+    tries: Vec<String>,
+}
+
+/// Words of a sentence the PDF did not have word for word, to look for instead, the likeliest first: its
+/// longer words of letters (terms, names) by length, then pieces of four of its Chinese characters.
+pub(crate) fn search_words(quote: &str) -> Vec<String> {
+    let is_cjk = wisp_core::structure::is_cjk;
+    let mut words: Vec<String> = vec![];
+    for word in quote.split(|c: char| !c.is_alphanumeric() && c != '-').map(|w| w.trim_matches('-')).filter(|w| w.chars().count() >= 4 && !w.chars().any(is_cjk)) {
+        if !words.iter().any(|known| known.eq_ignore_ascii_case(word)) { words.push(word.to_string()) }
+    }
+    // Longest first; of the same length, in the sentence's order.
+    words.sort_by_key(|w| std::cmp::Reverse(w.chars().count()));
+    let letters: Vec<char> = quote.chars().collect();
+    for run in letters.split(|c| !is_cjk(*c)).filter(|run| run.len() >= 2) {
+        words.extend(run.chunks(4).filter(|piece| piece.len() >= 2).map(|piece| piece.iter().collect::<String>()));
+    }
+    words.truncate(SEARCH_TRIES);
+    words
+}
+
 enum Request {
     /// Render a page at so many device pixels per point.
     Page(usize, f32),
     /// Look for a quoted sentence, starting at this 0-based page.
     Find(u64, Option<usize>, String),
+    /// Look for words typed into the find bar, on every page.
+    Search(u64, String),
     /// The glyphs of a page, for selecting text on it.
     Marks(usize),
 }
@@ -384,6 +431,8 @@ enum Reply {
     /// Where the quotation is: the page, one box per line in page points, and whether that is all of it.
     Found(u64, usize, Vec<[f32; 4]>, bool),
     NotFound(u64),
+    /// Where the words of the find bar stand: each place's page and one box per line, in reading order.
+    Hits(u64, Vec<(usize, Vec<[f32; 4]>)>),
     Marks(usize, Vec<Mark>),
 }
 
@@ -481,13 +530,34 @@ fn worker(path: PathBuf, requests: mpsc::Receiver<Request>, replies: async_chann
     let cache = RenderCache::new();
     let text_cache = InterpreterCache::new();
     let (interpreter, settings) = (InterpreterSettings::default(), RenderSettings::default());
+    // The glyphs of pages read for a quotation or a search, kept for the next one (of a long file, the first pages read).
+    let mut read: HashMap<usize, Arc<Glyphs>> = HashMap::new();
+    let glyphs_of = |index: usize, read: &mut HashMap<usize, Arc<Glyphs>>| -> Option<Arc<Glyphs>> {
+        if let Some(known) = read.get(&index) { return Some(known.clone()) }
+        let page = pages.get(index)?;
+        let (w, h) = page.render_dimensions();
+        let glyphs = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut glyphs = Glyphs::default();
+            let mut context = Context::new(page.initial_transform(true).to_kurbo(), Rect::new(0., 0., w as f64, h as f64), &text_cache, page.xref(), interpreter.clone());
+            interpret_page(page, &mut context, &mut glyphs);
+            glyphs
+        }))
+        .ok()
+        .map(Arc::new)?;
+        if read.len() < KEEP_GLYPHS { read.insert(index, glyphs.clone()); }
+        Some(glyphs)
+    };
     while let Ok(first) = requests.recv() {
         let mut waiting = vec![first];
         waiting.extend(requests.try_iter());
         // Of several quotations asked for in a row, only the last still matters.
         let find = waiting.iter().rev().find_map(|request| match request {
             Request::Find(request, page, quote) => Some((*request, *page, quote.clone())),
-            Request::Page(..) | Request::Marks(_) => None,
+            Request::Page(..) | Request::Marks(_) | Request::Search(..) => None,
+        });
+        let search = waiting.iter().rev().find_map(|request| match request {
+            Request::Search(request, words) => Some((*request, words.clone())),
+            _ => None,
         });
         // Scrolling queues pages faster than they render: the latest few are drawn,
         // newest first, and the view is told about the rest so it can ask again.
@@ -506,15 +576,7 @@ fn worker(path: PathBuf, requests: mpsc::Receiver<Request>, replies: async_chann
             order.extend(rest);
             let mut reply = Reply::NotFound(request);
             for index in order {
-                let page = &pages[index];
-                let (w, h) = page.render_dimensions();
-                let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let mut glyphs = Glyphs::default();
-                    let mut context = Context::new(page.initial_transform(true).to_kurbo(), Rect::new(0., 0., w as f64, h as f64), &text_cache, page.xref(), interpreter.clone());
-                    interpret_page(page, &mut context, &mut glyphs);
-                    glyphs
-                }));
-                let Ok(glyphs) = read else { continue };
+                let Some(glyphs) = glyphs_of(index, &mut read) else { continue };
                 // The whole quotation on a later page is better than its beginning on this one.
                 if let Some((range, whole)) = wisp_core::fulltext::find_quote(&glyphs.texts, &glyphs.boxes, &quote) {
                     if whole || matches!(reply, Reply::NotFound(_)) { reply = Reply::Found(request, index, wisp_core::fulltext::line_boxes(&glyphs.boxes[range]), whole) }
@@ -522,6 +584,17 @@ fn worker(path: PathBuf, requests: mpsc::Receiver<Request>, replies: async_chann
                 }
             }
             if replies.send_blocking(reply).is_err() { return }
+        }
+
+        if let Some((request, words)) = search {
+            let mut hits = vec![];
+            for index in 0..pages.len().min(FIND_PAGES) {
+                if hits.len() >= SEARCH_HITS { break }
+                let Some(glyphs) = glyphs_of(index, &mut read) else { continue };
+                hits.extend(wisp_core::fulltext::find_all(&glyphs.texts, &glyphs.boxes, &words).into_iter().map(|range| (index, wisp_core::fulltext::line_boxes(&glyphs.boxes[range]))));
+            }
+            hits.truncate(SEARCH_HITS);
+            if replies.send_blocking(Reply::Hits(request, hits)).is_err() { return }
         }
 
         for (index, scale) in wanted {
@@ -627,6 +700,9 @@ pub struct PdfView {
     note_editing: bool,
     note_input: Entity<TextInput>,
     focus: FocusHandle,
+    finder: Option<Finder>,
+    /// Counts the searches asked for, so a late answer to an older one is dropped.
+    searches: u64,
 }
 
 impl EventEmitter<PdfEvent> for PdfView {}
@@ -695,6 +771,8 @@ impl PdfView {
             note_editing: false,
             note_input: cx.new(|cx| TextInput::new("写下想法…", cx).multiline(4)),
             focus: cx.focus_handle(),
+            finder: None,
+            searches: 0,
         }
     }
 
@@ -884,6 +962,134 @@ impl PdfView {
     }
 
     /// The pages as the half last worked in shows them.
+    /// The find bar, with its words selected: those given, else what is selected on a page, else what was looked for last.
+    /// For a citation not found, `words` is the first of `search_words` and the rest are tried after it when it finds nothing.
+    pub fn open_finder(&mut self, words: Option<String>, missed: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let words = words.or_else(|| self.selected().map(|(_, text)| text).filter(|text| text.chars().count() <= 80 && !text.contains('\n')));
+        if self.finder.is_none() {
+            let input = cx.new(|cx| TextInput::new("在 PDF 里查找", cx));
+            let heard = cx.subscribe(&input, |this, _, event: &InputEvent, cx| match event {
+                // The person's own words: no more of the sentence's are tried.
+                InputEvent::Changed => {
+                    if let Some(finder) = this.finder.as_mut() { finder.tries.clear() }
+                    this.finder_search(cx)
+                }
+                InputEvent::Submit => this.finder_step(true, cx),
+                _ => {}
+            });
+            self.finder = Some(Finder { input, _heard: heard, request: 0, hits: vec![], at: None, searching: false, missed, tries: vec![] });
+        }
+        let Some(finder) = self.finder.as_mut() else { return };
+        finder.missed = missed;
+        finder.tries = if missed { search_words(&self.citation.quote).into_iter().skip(1).collect() } else { vec![] };
+        let input = finder.input.clone();
+        let given = words.is_some();
+        input.update(cx, |input, cx| {
+            if let Some(words) = &words { input.set_text(words, cx) }
+            let end = input.text().len();
+            input.select_range(0..end, cx);
+        });
+        input.read(cx).focus(window);
+        if given || finder.hits.is_empty() { self.finder_search(cx) }
+        cx.notify();
+    }
+
+    fn close_finder(&mut self, window: &mut Window) {
+        self.finder = None;
+        window.focus(&self.focus);
+    }
+
+    /// Ask the worker for the words now in the bar.
+    fn finder_search(&mut self, cx: &mut Context<Self>) {
+        self.searches += 1;
+        let request = self.searches;
+        let Some(finder) = self.finder.as_mut() else { return };
+        let words = finder.input.read(cx).text().to_string();
+        (finder.request, finder.hits, finder.at) = (request, vec![], None);
+        finder.searching = !wisp_core::fulltext::bare(&words).is_empty();
+        if finder.searching { let _ = self.requests.send(Request::Search(request, words)); }
+        cx.notify();
+    }
+
+    /// The next place found (true) or the one before; past the end, around to the beginning.
+    fn finder_step(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let Some(finder) = self.finder.as_ref() else { return };
+        let count = finder.hits.len();
+        if count == 0 { return }
+        let next = match finder.at {
+            Some(n) if forward => (n + 1) % count,
+            Some(n) => (n + count - 1) % count,
+            None => 0,
+        };
+        self.finder_go(next, cx);
+    }
+
+    /// Bring a place found below the find bar, and into the view sideways.
+    fn finder_go(&mut self, n: usize, cx: &mut Context<Self>) {
+        let Some(finder) = self.finder.as_mut() else { return };
+        let Some((index, boxes)) = finder.hits.get(n).cloned() else { return };
+        finder.at = Some(n);
+        let below = if finder.missed { 160. } else { 110. };
+        if let Some(first) = boxes.first() {
+            let scale = self.scale_of(index);
+            // Near the top of its page the place is brought down by showing the foot of the page before.
+            let down = first[1] * scale - below;
+            let top = match index.checked_sub(1).filter(|_| down < 0.) {
+                Some(before) => ListOffset { item_ix: before, offset_in_item: px((self.sizes.get(before).map_or(842., |size| size.1) * self.scale_of(before) + PAGE_GAP + down).max(0.)) },
+                None => ListOffset { item_ix: index, offset_in_item: px(down.max(0.)) },
+            };
+            self.list().scroll_to(top);
+            if self.max_x > 0. { self.panes[self.active].scroll_x = (first[0] * scale - 40.).clamp(0., self.max_x) }
+        }
+        cx.notify();
+    }
+
+    /// The find bar at the top of the viewer: the words, how many places and which is gone to, the arrows and ×;
+    /// opened for a citation not found, what to do about it.
+    fn finder_bar(&self, window: &Window, cx: &mut Context<Self>) -> Option<Div> {
+        let finder = self.finder.as_ref()?;
+        let typed = !wisp_core::fulltext::bare(finder.input.read(cx).text()).is_empty();
+        let (count, color) = match (typed, finder.searching, finder.hits.len(), finder.at) {
+            (false, ..) => (String::new(), Theme::text_tertiary()),
+            (true, true, ..) => (t("查找中…").to_string(), Theme::text_tertiary()),
+            (true, false, 0, _) => (t("没有找到").to_string(), Theme::danger()),
+            (true, false, n, Some(at)) => (format!("{}/{n}", at + 1), Theme::text_secondary()),
+            (true, false, n, None) => (tf!("{n} 处", "{n} found"), Theme::text_secondary()),
+        };
+        let able = !finder.hits.is_empty();
+        let arrow = |id: &'static str, icon: &str, tip: &'static str, forward: bool, cx: &mut Context<Self>| ui::icon_action(id, icon, Theme::text_secondary(), t(tip)).when(!able, |d| d.opacity(0.4).cursor_default()).when(able, |d| d.on_click(cx.listener(move |this, _, window, cx| { this.finder_step(forward, cx); if let Some(finder) = this.finder.as_ref() { finder.input.read(cx).focus(window) } })));
+        // At the top left: the right corner has 标注's button and its panel.
+        Some(
+            div()
+                .absolute()
+                .top(px(8.))
+                .left(px(12.))
+                .w(px(340f32.min(self.width - FIND_CLEAR).max(200.)))
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .p(px(6.))
+                .rounded(px(8.))
+                .bg(Theme::bg_body())
+                .border_1()
+                .border_color(Theme::line())
+                .shadow(crate::theme::shadow_card())
+                .occlude()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.))
+                        .child(div().flex_1().min_w_0().child(ui::field(&finder.input, window, cx).py(px(4.))))
+                        .child(div().flex_none().min_w(px(32.)).px(px(2.)).text_size(text_px(12.)).text_color(color).child(count))
+                        .child(arrow("pdf-find-previous", "chevron-up", "上一处", false, cx))
+                        .child(arrow("pdf-find-next", "chevron-down", "下一处（Enter）", true, cx))
+                        .child(ui::icon_action("pdf-find-close", "x", Theme::text_tertiary(), t("关闭（Esc）")).on_click(cx.listener(|this, _, window, cx| { this.close_finder(window); cx.notify() }))),
+                )
+                .when(finder.missed, |d| d.child(div().px(px(4.)).text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text_secondary()).child(t("引用的这句话没能在 PDF 里逐字对上：可能是改写、翻译，或排版把句子拆开了。已用句中的词查找；也可以换成别的词、数字或术语。")))),
+        )
+    }
+
     fn list(&self) -> &ListState {
         &self.panes[self.active].list
     }
@@ -1141,6 +1347,24 @@ impl PdfView {
                 }
             }
             Reply::NotFound(request) => { self.citation.finish(request, None); }
+            Reply::Hits(request, hits) => {
+                let Some(finder) = self.finder.as_mut().filter(|finder| finder.request == request) else { return };
+                // A word of a sentence not found that is on no page either: the next one.
+                if hits.is_empty() && !finder.tries.is_empty() {
+                    let next = finder.tries.remove(0);
+                    let input = finder.input.clone();
+                    input.update(cx, |input, cx| {
+                        input.set_text(&next, cx);
+                        input.select_range(0..next.len(), cx);
+                    });
+                    return self.finder_search(cx);
+                }
+                (finder.hits, finder.searching, finder.at) = (hits, false, None);
+                // The first place from the page in view on.
+                let top = self.list().logical_scroll_top().item_ix;
+                let first = self.finder.as_ref().and_then(|finder| finder.hits.iter().position(|(page, _)| *page >= top).or((!finder.hits.is_empty()).then_some(0)));
+                if let Some(n) = first { self.finder_go(n, cx) }
+            }
             Reply::Marks(index, marks) => {
                 self.marks_pending.remove(&index);
                 // Of a long paper, the glyphs of the pages read last are enough.
@@ -1250,9 +1474,16 @@ impl PdfView {
             .filter(|_| cited)
             .map(|line| div().absolute().left(px(line[0] * scale - 1.)).top(px(line[1] * scale)).w(px((line[2] - line[0]) * scale + 2.)).h(px((line[3] - line[1]) * scale)).rounded(px(2.)).bg(hsla(50. / 360., 1., 0.5, 0.35)))
             .collect();
+        // What the find bar found on this page: the place gone to stronger.
+        let found: Vec<Div> = self
+            .finder
+            .iter()
+            .flat_map(|finder| finder.hits.iter().enumerate().filter(|(_, (page, _))| *page == index).flat_map(move |(n, (_, lines))| lines.iter().map(move |line| (finder.at == Some(n), *line))))
+            .map(|(current, line)| div().absolute().left(px(line[0] * scale - 1.)).top(px(line[1] * scale)).w(px((line[2] - line[0]) * scale + 2.)).h(px((line[3] - line[1]) * scale)).rounded(px(2.)).bg(if current { Theme::found_current() } else { Theme::found() }))
+            .collect();
         let sheet = div().relative().flex_none().ml(px(self.sheet_left(pane, width))).w(px(width)).h(px(height)).bg(gpui::white()).border_1().border_color(Theme::line()).overflow_hidden();
         let sheet = match image {
-            Some((image, _)) => sheet.when(cutting || !free, |d| d.cursor_crosshair()).when(free, |d| d.cursor_text()).child(img(image).w(px(width)).h(px(height))).children(annotations).children(selected).children(marks).children(cut).children(shapes).children(drawing).children(notes),
+            Some((image, _)) => sheet.when(cutting || !free, |d| d.cursor_crosshair()).when(free, |d| d.cursor_text()).child(img(image).w(px(width)).h(px(height))).children(annotations).children(selected).children(marks).children(found).children(cut).children(shapes).children(drawing).children(notes),
             None => sheet.flex().items_center().justify_center().text_size(text_px(12.)).text_color(Theme::text_placeholder()).child(if self.broken.contains(&index) { tf!("第 {} 页无法渲染", "Cannot render page {}", index + 1) } else { tf!("第 {} 页", "Page {}", index + 1) }),
         };
         // Draw over the image without changing its size or covering the text.
@@ -1962,6 +2193,11 @@ impl Render for PdfView {
             CitationStatus::Partial => Some(t("只在 PDF 里找到这句引文的开头，已标出；其余部分与原文对不上，请自行核对。")),
             CitationStatus::None | CitationStatus::Found => None,
         };
+        // Where the sentence was not found word for word, the person looks for it: 自己搜索 opens the find bar with a word of it.
+        let missed = matches!(self.citation.status, CitationStatus::Missing | CitationStatus::Partial);
+        // The find bar, once open, is what is said about it.
+        let notice = notice.filter(|_| self.finder.is_none());
+        let finder = self.finder_bar(window, cx);
         div()
             .id("pdf-viewer")
             .key_context("PdfView")
@@ -1970,15 +2206,18 @@ impl Render for PdfView {
             .bg(Theme::bg_sunken())
             .relative()
             .on_action(cx.listener(|this, _: &CopySelection, _, cx| this.copy(cx)))
+            .on_action(cx.listener(|this, _: &FindInPdf, window, cx| this.open_finder(None, false, window, cx)))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::press))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| this.drag(event, cx)))
             .on_mouse_up(MouseButton::Left, cx.listener(|this, event: &MouseUpEvent, _, cx| this.release(Some(event.position), cx)))
             // Esc puts a highlight's menu away before it does anything else.
             // Then a note's card, then a tool in use.
-            .on_action(cx.listener(|this, _: &crate::shortcuts::Dismiss, _, cx| {
+            .on_action(cx.listener(|this, _: &crate::shortcuts::Dismiss, window, cx| {
                 if this.mark_menu.take().is_some() {
                 } else if this.note_open.is_some() || this.note_draft.is_some() {
                     this.close_note();
+                } else if this.finder.is_some() {
+                    this.close_finder(window);
                 } else if this.tool != Tool::Select {
                     (this.tool, this.drawing) = (Tool::Select, None);
                 } else {
@@ -2015,7 +2254,14 @@ impl Render for PdfView {
             .children(card)
             .children(mark_menu)
             .children(note_card)
-            .children(notice.map(|notice| div().absolute().top(px(8.)).left_0().w_full().px(px(8.)).flex().justify_center().child(div().px(px(10.)).py(px(5.)).rounded(px(6.)).bg(Theme::bg_body()).border_1().border_color(Theme::line()).text_size(text_px(12.)).text_color(Theme::text_secondary()).child(notice))))
+            .children(notice.map(|notice| {
+                let search = ui::ghost_button("pdf-cite-search", Some("search"), Some(t("自己搜索").into())).h(text_px(22.)).px(px(6.)).text_size(text_px(12.)).text_color(Theme::accent()).on_click(cx.listener(|this, _, window, cx| {
+                    let word = search_words(&this.citation.quote).into_iter().next().unwrap_or_default();
+                    this.open_finder(Some(word), true, window, cx);
+                }));
+                div().absolute().top(px(8.)).left(px(8.)).right(px(FIND_CLEAR - 12.)).flex().justify_center().child(div().flex().items_center().gap(px(6.)).max_w(px((self.width - FIND_CLEAR - 4.).max(160.))).pl(px(10.)).pr(px(if missed { 4. } else { 10. })).py(px(if missed { 2. } else { 5. })).rounded(px(6.)).bg(Theme::bg_body()).border_1().border_color(Theme::line()).text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text_secondary()).child(div().flex_shrink().min_w_0().child(notice)).when(missed, |d| d.child(search)))
+            }))
+            .children(finder)
             .child(self.annotation_panel(window, cx))
             .into_any_element()
     }
@@ -2024,7 +2270,17 @@ impl Render for PdfView {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that would bring in gpui's own `test` attribute.
-    use super::{BAR_INSET, BAR_THUMB_MIN, CARD_EDGE, CardPlace, CitationFocus, CitationStatus, DIVIDER, MARGIN, PAGE_GAP, POINT_PX, Split, Zoom, bar_thumb, card_place, page_scale, pane_at, pane_size, picture_serves, render_scale, zoom_step};
+    use super::{BAR_INSET, BAR_THUMB_MIN, CARD_EDGE, CardPlace, CitationFocus, CitationStatus, DIVIDER, MARGIN, PAGE_GAP, POINT_PX, Split, Zoom, bar_thumb, card_place, page_scale, pane_at, pane_size, picture_serves, render_scale, search_words, zoom_step};
+
+    #[test]
+    fn a_sentence_not_found_is_looked_for_by_its_words() {
+        // The longer words first, each once, short ones left out.
+        assert_eq!(search_words("Libraries were prepared with single-cell Chromium kits; libraries again."), ["single-cell", "Libraries", "prepared", "Chromium", "again", "were"]);
+        assert_eq!(search_words("根系发育受到生长素的调控。"), ["根系发育", "受到生长", "素的调控"]);
+        // A term in a Chinese sentence before the characters around it.
+        assert_eq!(search_words("我们用 Arabidopsis 做了实验"), ["Arabidopsis", "我们用", "做了实验"]);
+        assert!(search_words("").is_empty());
+    }
 
     #[test]
     fn a_split_viewer_has_two_equal_halves() {

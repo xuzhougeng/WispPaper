@@ -1482,6 +1482,17 @@
   "收起参考文献": "Close references",
   "预览中：再点一下回到编辑": "Previewing: click again to go back to editing",
   "预览：看排好版的全文，Markdown 照它写的样子画出来": "Preview: the whole manuscript laid out, with its Markdown drawn",
+  "搜索：文献库里搜文献，写作里搜稿件，PDF 里搜原文": "Search: papers in the library, the manuscript in Writing, the text in a PDF",
+  "进入 / 退出阅读模式（写作里是稿件预览）": "Enter / leave reading mode (manuscript preview in Writing)",
+  "在稿件里查找": "Find in manuscript",
+  "没有找到": "Not found",
+  "上一处": "Previous",
+  "下一处（Enter）": "Next (Enter)",
+  "关闭（Esc）": "Close (Esc)",
+  "在 PDF 里查找": "Find in PDF",
+  "查找中…": "Searching…",
+  "自己搜索": "Search yourself",
+  "引用的这句话没能在 PDF 里逐字对上：可能是改写、翻译，或排版把句子拆开了。已用句中的词查找；也可以换成别的词、数字或术语。": "The cited sentence does not match the PDF word for word: it may be paraphrased, translated, or split by the layout. Its words are searched for instead; you can also try another word, number or term.",
   "收起，把地方让给稿件": "Fold, leaving the room to the manuscript",
   "展开候选句、批注和参考文献": "Open candidates, comments and references"
 }
