@@ -24,6 +24,10 @@ const NARROWING_TAGS: usize = 24;
 const MARGIN: f32 = 36.;
 /// Room between the frame of the sheet being written and its text, at each side.
 const SHEET_MARGIN: f32 = 40.;
+/// A page narrower than this has no room for the manuscript and the panel side by side.
+const STACK_UNDER: f32 = 680.;
+/// How much of such a page's height the panel takes while it is open under the manuscript.
+const DRAWER_SHARE: f32 = 0.46;
 
 /// What the empty manuscript says: to the person who writes it, and beside the conversation in which the assistant does.
 pub(crate) const PLACEHOLDER: &str = "在这里写。写好一段，按「查找候选句」的快捷键，右边就列出文献库里的文献在同一部分相近的写法；中文或别的语言也可以，先写下想表达的意思。";
@@ -50,12 +54,15 @@ impl Workspace {
     pub fn render_write(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         // The other mode: the assistant writes, the person talks with it beside the manuscript.
         if self.settings.agent_writing { return self.render_write_agent(width, window, cx) }
-        let stacked = width < 680.;
-        let panel = if stacked { width } else if width > 980. { 420. } else { 340. };
+        // Too narrow for both side by side (a small window, or a paper open at the right): the manuscript has the page,
+        // and the panel is a drawer under it, folded to its tabs until one is asked for. Each scrolls by itself: a page
+        // that scrolled both would take the wheel from the manuscript at its end.
+        let stacked = width < STACK_UNDER;
+        let panel = if stacked { width } else if width > 1500. { 480. } else if width > 980. { 420. } else { 340. };
         let editor = self.render_manuscript_column(if stacked { width } else { width - panel }, false, stacked, window, cx);
         let reading = self.lib.as_ref().is_some_and(|lib| lib.writing.reading);
-        div().id("write-page").flex().size_full().when(stacked, |d| d.flex_col().overflow_y_scroll()).child(editor)
-            .when(!reading, |d| d.child(self.render_candidates(panel, window, cx).when(stacked, |d| d.flex_none().h(px(560.)))))
+        div().id("write-page").flex().size_full().when(stacked, |d| d.flex_col()).child(editor)
+            .when(!reading, |d| d.child(self.render_candidates(panel, stacked, window, cx)))
             .into_any_element()
     }
 
@@ -91,7 +98,6 @@ impl Workspace {
         let writing = &lib.writing;
         let text = writing.editor.read(cx).text();
         let (length, characters) = (length_label(text), text.chars().filter(|c| !c.is_whitespace()).count());
-        let focused = writing.editor.focus_handle(cx).is_focused(window);
         // An earlier version of the section, looked at in its place.
         let version = writing.agent.versions.shown().filter(|version| agent && version.section_id == writing.section_id);
         let editing = !writing.reading && version.is_none();
@@ -117,7 +123,7 @@ impl Workspace {
             .mx_auto()
             .children(seek)
             .child(
-                div().flex().flex_col().flex_1().min_h_0().px(px(16.)).pt(px(12.)).pb(px(8.)).child(if writing.reading { self.render_manuscript_reading(cx) } else if let Some(version) = version { self.render_version(version, cx) } else {
+                div().flex().flex_col().flex_1().min_h_0().px(px(16.)).pb(px(8.)).when(version.is_some(), |d| d.pt(px(12.))).child(if writing.reading { self.render_manuscript_reading(cx) } else if let Some(version) = version { self.render_version(version, cx) } else {
                     let page = div().relative().w_full().max_w(theme::manuscript_width()).mx_auto().pl(px(18.)).pr(px(if markers.is_empty() { 18. } else { MARGIN })).py(px(14.)).text_size(text_px(15.)).line_height(theme::body_line(26.)).text_color(Theme::text());
                     div()
                         .id("write-editor")
@@ -125,10 +131,9 @@ impl Workspace {
                         .min_h_0()
                         .overflow_y_scroll()
                         .track_scroll(&writing.editor_scroll)
-                        .rounded(px(10.))
-                        .border_1()
-                        .border_color(if focused { Theme::accent().opacity(0.55) } else { Theme::line() })
-                        .bg(Theme::bg_body())
+                        // No frame of its own: the column's lines already say where the manuscript is. One line under it, where the text scrolls away.
+                        .border_b_1()
+                        .border_color(Theme::line())
                         .child(if agent { page.child(writing.editor.clone()) } else { page.child(crate::input::with_selection_toolbar(&writing.editor, self.render_assist_bar(true, cx))) }.children(markers).children(bars))
                         .into_any_element()
                 }),
@@ -161,7 +166,8 @@ impl Workspace {
             .flex_1()
             .min_w_0()
             .h_full()
-            .when(stacked, |d| d.flex_none().h(px(800.)))
+            // Over the panel in a narrow page: what the panel leaves of the height.
+            .when(stacked, |d| d.min_h_0())
             .child(self.render_manuscript_bar(width, window, cx))
             .child(body)
     }
@@ -173,7 +179,8 @@ impl Workspace {
     }
 
     /// The panel beside the manuscript: what there is to draw on, and the candidates.
-    fn render_candidates(&self, width: f32, window: &Window, cx: &mut Context<Self>) -> Div {
+    /// `stacked`: under the manuscript instead, as a drawer that is its row of tabs while folded.
+    fn render_candidates(&self, width: f32, stacked: bool, window: &Window, cx: &mut Context<Self>) -> Div {
         let lib = self.lib.as_ref().unwrap();
         let writing = &lib.writing;
         let search = &writing.search;
@@ -225,7 +232,14 @@ impl Workspace {
         let count = found.map(|value| value["sentencesInSection"].as_u64().unwrap_or(0));
         let drawn_on = count.zip(drawn_on).map(|(count, text)| div().id("write-drawn-on").flex_none().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(tf!("{count} 句", "{count} sentences")).tooltip(move |_, cx| cx.new(|_| crate::write_assist::Tip(text.clone())).into()));
 
-        let side = div().relative().flex().flex_col().flex_none().w(px(width)).h_full().border_l_1().border_color(Theme::line()).bg(Theme::bg_sunken()).child(ui::strip_cap(Theme::bg_sunken())).child(self.render_side_switch(cx));
+        let side = div().relative().flex().flex_col().flex_none().w(px(width)).border_color(Theme::line()).bg(Theme::bg_sunken());
+        let side = if stacked {
+            let side = side.border_t_1().child(self.render_side_switch(Some(writing.side_open), cx));
+            if !writing.side_open { return side }
+            side.h(relative(DRAWER_SHARE))
+        } else {
+            side.h_full().border_l_1().child(ui::strip_cap(Theme::bg_sunken())).child(self.render_side_switch(None, cx))
+        };
         // What an action on the text came to stands over any page of the panel.
         if writing.side != Side::Candidates {
             let card = self.render_assist_card(width, cx);

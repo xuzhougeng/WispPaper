@@ -1492,5 +1492,7 @@
   "在 PDF 里查找": "Find in PDF",
   "查找中…": "Searching…",
   "自己搜索": "Search yourself",
-  "引用的这句话没能在 PDF 里逐字对上：可能是改写、翻译，或排版把句子拆开了。已用句中的词查找；也可以换成别的词、数字或术语。": "The cited sentence does not match the PDF word for word: it may be paraphrased, translated, or split by the layout. Its words are searched for instead; you can also try another word, number or term."
+  "引用的这句话没能在 PDF 里逐字对上：可能是改写、翻译，或排版把句子拆开了。已用句中的词查找；也可以换成别的词、数字或术语。": "The cited sentence does not match the PDF word for word: it may be paraphrased, translated, or split by the layout. Its words are searched for instead; you can also try another word, number or term.",
+  "收起，把地方让给稿件": "Fold, leaving the room to the manuscript",
+  "展开候选句、批注和参考文献": "Open candidates, comments and references"
 }

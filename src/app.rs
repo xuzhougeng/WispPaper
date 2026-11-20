@@ -898,6 +898,8 @@ pub struct Writing {
     pub editor_scroll: ScrollHandle,
     /// Which page the panel beside the manuscript shows.
     pub side: Side,
+    /// Whether that panel is open where it stands under the manuscript, in a page too narrow for both side by side: folded to its tabs until asked for.
+    pub side_open: bool,
     /// The other mode, where the assistant writes: which manuscript its conversation is about, what it changed, the versions to step through (`write_agent.rs`).
     pub agent: crate::write_agent::Agent,
     /// Looking for words in the manuscript (`write_seek.rs`).
@@ -2594,7 +2596,11 @@ impl Workspace {
             }
             Cmd::WriteCopyReferences => self.copy_references(cx),
             Cmd::WriteSide(side) => {
-                if let Some(lib) = self.lib.as_mut() { lib.writing.side = side }
+                // The page on show asked for again folds the panel under a narrow manuscript, or opens it; another page opens it.
+                if let Some(lib) = self.lib.as_mut() {
+                    lib.writing.side_open = lib.writing.side != side || !lib.writing.side_open;
+                    lib.writing.side = side;
+                }
             }
             Cmd::WriteReferences => {
                 // Beside the conversation the list is a column of its own: the row opens and closes it.
@@ -2602,7 +2608,7 @@ impl Workspace {
                 if let Some(lib) = self.lib.as_mut() && agent && !lib.writing.reading && lib.writing.side == Side::References && lib.citing.whole {
                     lib.writing.side = Side::Candidates;
                 } else if let Some(lib) = self.lib.as_mut() {
-                    (lib.writing.side, lib.citing.whole) = (Side::References, true);
+                    (lib.writing.side, lib.writing.side_open, lib.citing.whole) = (Side::References, true, true);
                     // Read through, the manuscript ends in its references: there is no panel beside it.
                     if lib.writing.reading { lib.citing.read_scroll.scroll_to_bottom() }
                 }
@@ -3560,7 +3566,7 @@ impl Workspace {
         subscriptions.extend(heard);
         let revise = crate::revise::Revising::new(&mut subscriptions, cx);
         let seek = crate::write_seek::Seek::new(&mut subscriptions, cx);
-        let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new(), assist: Default::default(), revise, comments, editor_scroll: ScrollHandle::new(), side: Side::default(), agent: Default::default(), seek };
+        let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new(), assist: Default::default(), revise, comments, editor_scroll: ScrollHandle::new(), side: Side::default(), side_open: false, agent: Default::default(), seek };
         let citing = crate::cite::Citing::new(&store, &writing.manuscript, &mut subscriptions, cx);
         let gallery = crate::figures::Gallery::new(&mut subscriptions, cx);
         let filters = Filters { sort: info.sort.clone(), ..Default::default() };
