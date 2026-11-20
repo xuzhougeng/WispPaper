@@ -39,14 +39,14 @@ pub struct ToolDef {
 }
 
 /// The tools that change the library.
-const WRITING: [&str; 21] = ["create_library", "import_library", "export_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "suggest_field", "sync_searches", "find_pdf", "organise_papers", "edit_section", "set_outline", "export_note", "save_note_to_notion", "resolve_note_save", "save_cite_style"];
+const WRITING: [&str; 22] = ["create_library", "import_library", "export_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "suggest_field", "sync_searches", "find_pdf", "organise_papers", "edit_section", "set_outline", "export_note", "save_note_to_notion", "resolve_note_save", "save_cite_style", "restyle_docx"];
 /// Of those, the ones the window's assistant runs only with the person's
 /// consent. Saving a search, suggesting a screening decision or proposing
 /// a field's value changes nothing a person has not yet to act on, so they
 /// run as asked. The two that write a manuscript (`MANUSCRIPT`) are asked
 /// about everywhere but in the conversation that writes that manuscript,
 /// where the person has handed the pen over.
-const CONFIRMING: [&str; 15] = ["import_library", "export_library", "import_pdf", "import_references", "import_zotero", "run_search", "undo_import", "remove_search", "find_pdf", "organise_papers", "edit_section", "set_outline", "export_note", "save_note_to_notion", "resolve_note_save"];
+const CONFIRMING: [&str; 16] = ["import_library", "export_library", "import_pdf", "import_references", "import_zotero", "run_search", "undo_import", "remove_search", "find_pdf", "organise_papers", "edit_section", "set_outline", "export_note", "save_note_to_notion", "resolve_note_save", "restyle_docx"];
 /// The tools that write a manuscript (`compose`).
 pub const MANUSCRIPT: [&str; 2] = ["edit_section", "set_outline"];
 
@@ -379,6 +379,34 @@ pub fn catalog() -> Vec<ToolDef> {
             }),
             &["name", "csl"],
         ),
+        scoped(
+            "read_docx_citations",
+            "读 Word 文件的引用",
+            "读一个在别处写好的 Word 文件（.docx）引用了什么，不改文件：正文里的每处引用、参考文献表的每一条，以及每一条是怎样识别出来的。文件带 Zotero / Mendeley 的引用域时，文献信息直接取自域（resolved 为 field，不需要猜）；否则按文字读：「参考文献」「References」标题后的段落是条目，正文里的 [1]、[2, 4–6]、上标编号或（Zhang et al., 2024a; Li & Wang, 2019）、张三等（2020）与条目对上。每条的 resolved：library（是文献库里的文献）、lookup（联网查到）、text（按规则从这条文字里读出，sure 为 guess 时请核对 read 的内容）、given（你给的）、unresolved（没能识别）。citations.keptAsWritten 是重排时会保持原样的引用和原因。只读。",
+            json!({
+                "path": {"type": "string", "description": "本机 .docx 文件的路径。"},
+                "lookup": {"type": "boolean", "description": "为 true 时，对文献库里没有的条目联网查 Crossref：有 DOI 的按 DOI 查，文字读不全的按文字查（只采用题目与条目相符的记录）。默认 false。"},
+                "entries": {"type": "array", "description": "你替规则读懂的条目：n 是参考文献表里的第几条（从 1 起），csl 是这一条的 CSL-JSON（type、title、author 的 family / given、issued 的 date-parts、container-title、volume、issue、page、DOI…）。只转写条目文字里写着的信息。", "items": {"type": "object", "properties": {"n": {"type": "integer"}, "csl": {"type": "object"}}, "required": ["n", "csl"]}}
+            }),
+            &["path"],
+        ),
+        scoped(
+            "restyle_docx",
+            "重排 Word 文件的引用",
+            "把一个 Word 文件（.docx）的引用和参考文献表按一个 CSL 引用样式重排，写成一个新文件：正文里的每处引用就地换成新样式的写法，并且是点了能跳到对应条目的域；原来的参考文献表换成新样式的表；其余内容、格式、图表、批注都不动。原文件不改，输出路径上已有文件时不覆盖。先用 read_docx_citations 看清识别结果并告诉用户，再调用这个工具。样式可以是 list_cite_styles 里的 key，也可以直接给一份 CSL 定义（用 read_cite_style 读出最接近的样式改好、try_cite_style 试排后再用，例如「Nature 但用方括号」）。没能识别的条目原样留在表末，引用它们的地方、带前后缀的引用保持原样，结果里逐条说明。Zotero / EndNote 的引用域被重排后是普通的跳转域，不再由它们管理。",
+            json!({
+                "path": {"type": "string", "description": "本机 .docx 文件的路径。"},
+                "output": {"type": "string", "description": "新文件的路径（.docx）；已有文件不会覆盖。省略时写在原文件旁边，文件名加 -restyled。"},
+                "style": {"type": "string", "description": "引用样式的 key，例如 csl:nature、csl:apa、csl:gb-7714-2015-numeric、file:my-journal.csl。与 csl 二选一。"},
+                "csl": {"type": "string", "description": "一份完整的 CSL 定义（XML），不保存。与 style 二选一。"},
+                "track": {"type": "boolean", "description": "为 true 时把改动写成 Word 的修订，用户可以在 Word 里逐处接受或拒绝。默认 false。"},
+                "author": {"type": "string", "description": "修订的作者名；省略为 Wisp Paper。"},
+                "language": {"type": "string", "description": "样式用语的语言（en、zh…：et al. 与「等」）；省略时按文件正文的语言。"},
+                "lookup": {"type": "boolean", "description": "同 read_docx_citations。"},
+                "entries": {"type": "array", "description": "同 read_docx_citations。", "items": {"type": "object", "properties": {"n": {"type": "integer"}, "csl": {"type": "object"}}, "required": ["n", "csl"]}}
+            }),
+            &["path"],
+        ),
         scoped("list_manuscripts", "稿件列表", "列出用户在写作页的稿件：题目、语言、各节的名称、属于论文的哪一部分和字数。只读。", json!({}), &[]),
         scoped(
             "read_manuscript",
@@ -626,6 +654,8 @@ fn dispatch(store: &mut Store, info: &LibraryInfo, name: &str, args: &Value, fet
             out["next"] = json!("已保存。请告诉用户：在写作页「导出」菜单的引用样式里选它，导出 Word 时就按它写引用。");
             Ok(out)
         }
+        "read_docx_citations" => local::read_docx_citations(store, args, fetch),
+        "restyle_docx" => local::restyle_docx(store, info, args, fetch),
         "list_manuscripts" => list_manuscripts(store),
         "read_manuscript" => read_manuscript(store, args),
         "edit_section" => crate::compose::edit(store, args),
@@ -1485,7 +1515,6 @@ pub fn preview_call(store: &Store, name: &str, args: &Value) -> Result<Vec<Strin
             Ok(vec![destination, format!("标题：{}", doc.title), format!("正文 {} 字，{} 张图片；原始笔记不变。", doc.markdown.chars().count(), doc.used_attachments().count()), doc.markdown.chars().take(2000).collect()])
         }
         "resolve_note_save" => Ok(vec![format!("仅在已手动核对 Notion 后确认：{}。", if args["saved"] == true { "笔记已成功写入" } else { "完全没有写入（不是部分写入）" }), format!("记录：{}；页面：{}", args["id"].as_str().unwrap_or(""), args["page"].as_str().unwrap_or(""))]),
-        "organise_papers" => organise::preview(store, args),
         "edit_section" | "set_outline" => crate::compose::preview(store, name, args).map_err(|e| format!("{e:#}")),
         _ => Ok(vec![]),
     }
@@ -2465,9 +2494,41 @@ pub(crate) mod tests {
             // Only a tool that changes the library has anything to ask the person about.
             assert!(tool.writes || !tool.confirm, "{}", tool.name);
         }
-        assert_eq!(library_catalog().iter().filter(|tool| tool.confirm).map(|tool| tool.name).collect::<Vec<_>>().len(), 14);
+        assert_eq!(library_catalog().iter().filter(|tool| tool.confirm).map(|tool| tool.name).collect::<Vec<_>>().len(), 15);
         // The tools that write a manuscript are asked about outside the conversation that writes it.
         assert!(MANUSCRIPT.iter().all(|name| catalog().iter().any(|tool| tool.name == *name && tool.writes && tool.confirm)));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_word_file_written_elsewhere_is_read_and_cited_anew_in_a_new_file() {
+        let (root, _) = sample();
+        Store::open(&crate::libraries::list(&root)[0].dir).unwrap().add_paper(Paper { title: "Root hairs take up water".into(), doi: "10.1000/hairs".into(), authors: "Zhang, Wei; Li, Na; Wang, Fang".into(), year: Some(2021), journal: "Plant Cell".into(), ..Default::default() }).unwrap();
+        let p = |text: &str| format!("<w:p><w:r><w:t xml:space=\"preserve\">{text}</w:t></w:r></w:p>");
+        let source = crate::docx::tests::file(&format!("{}{}{}{}", p("Stem cells stay put [1], whatever else is said [2]."), p("References"), p("[1] Zhang W, Li N, Wang F. Root hairs take up water. Plant Cell. 2021;33(2):10-19. doi:10.1000/hairs"), p("[2] A note nobody can read.")), "");
+        let path = root.join("draft.docx");
+        std::fs::write(&path, &source).unwrap();
+        let read = call(&root, "read_docx_citations", &json!({"path": path})).unwrap();
+        assert_eq!((read["source"].as_str(), read["entries"][0]["resolved"].as_str(), read["entries"][0]["sure"].as_str(), read["unresolved"].clone()), (Some("text"), Some("library"), Some("sure"), json!([2])));
+        assert_eq!(read["citations"]["keptAsWritten"][0]["why"], "第 2 条参考文献没能识别");
+        // A new file beside the old one; neither it nor the file given is ever written over.
+        let done = call(&root, "restyle_docx", &json!({"path": path, "style": "csl:apa"})).unwrap();
+        let output = PathBuf::from(done["output"].as_str().unwrap());
+        assert_eq!((output.file_name().and_then(|name| name.to_str()), done["citations"]["rewritten"].as_u64(), done["references"]["leftAsWritten"].as_u64()), (Some("draft-restyled.docx"), Some(1), Some(1)));
+        let said: Vec<String> = crate::docx::read(&std::fs::read(&output).unwrap()).unwrap().paragraphs.into_iter().map(|para| para.text).collect();
+        assert_eq!(said[0], "Stem cells stay put (Zhang et al., 2021), whatever else is said [2].");
+        assert!(said[2].starts_with("Zhang, W., Li, N., & Wang, F. (2021). Root hairs take up water. Plant Cell, 33(2), 10–19."), "{}", said[2]);
+        assert_eq!(std::fs::read(&path).unwrap(), source);
+        assert!(call(&root, "restyle_docx", &json!({"path": path, "style": "csl:apa"})).unwrap_err().contains("不会覆盖"));
+        assert!(call(&root, "restyle_docx", &json!({"path": path, "style": "csl:apa", "output": path})).unwrap_err().contains("不会覆盖"));
+        // A style changed for this file alone, the entry the rules could not read given by whoever asks, the changes tracked.
+        let mine = call(&root, "read_cite_style", &json!({"style": "csl:nature"})).unwrap()["csl"].as_str().unwrap().replace("vertical-align=\"sup\"", "prefix=\"[\" suffix=\"]\"");
+        let done = call(&root, "restyle_docx", &json!({"path": path, "csl": mine, "output": root.join("out.docx"), "track": true, "entries": [{"n": 2, "csl": {"type": "article-journal", "title": "A note", "author": [{"family": "Nobody"}], "issued": {"date-parts": [[1999]]}}}]})).unwrap();
+        assert_eq!((done["citations"]["rewritten"].as_u64(), done["unresolved"].clone(), done["tracked"].as_bool()), (Some(2), json!([]), Some(true)));
+        assert_eq!(done["citations"]["sample"][1], json!({"before": "[2]", "after": "[2]"}));
+        assert!(call(&root, "restyle_docx", &json!({"path": path, "style": "numeric"})).unwrap_err().contains("csl:nature"));
+        assert!(call(&root, "read_docx_citations", &json!({"path": root.join("x.pdf")})).is_err());
+        assert!(catalog().iter().any(|tool| tool.name == "restyle_docx" && tool.writes && tool.confirm) && catalog().iter().any(|tool| tool.name == "read_docx_citations" && !tool.writes));
         std::fs::remove_dir_all(root).ok();
     }
 

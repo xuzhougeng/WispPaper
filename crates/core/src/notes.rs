@@ -263,9 +263,9 @@ mod tests {
             let mut paper = Paper { id: crate::model::new_id("P"), title: "A paper".into(), year: Some(2020), notes: "原始笔记".into(), ..Default::default() };
             store.save_paper(&mut paper).unwrap();
             let mut conversation = Conversation { paper_id: paper.id.clone(), transcript: Transcript { items: vec![
-                Said::User { text: "第一问\n\n> 引文".into(), images: vec!["I1".into()], prompt: String::new() },
+                Said::User { text: "第一问\n\n> 引文".into(), images: vec!["I1".into()], files: vec![], prompt: String::new() },
                 Said::Answer { text: "# Answer\n\n[reference](https://example.org)\n\n~~~\n# code\n~~~".into() },
-                Said::User { text: "第二问".into(), images: vec!["missing".into()], prompt: String::new() },
+                Said::User { text: "第二问".into(), images: vec!["missing".into()], files: vec![], prompt: String::new() },
                 Said::Answer { text: "不应出现在只选第一问的笔记".into() },
             ], ..Default::default() }, ..Default::default() };
             store.save_conversation(&mut conversation).unwrap();

@@ -19,7 +19,7 @@ hayro-interpret = "0.9"
 flate2 = "1"
 icu_segmenter = "2"
 # CSL citation styles, the files Zotero uses (`csl.rs`); `archive` carries the common styles and every locale.
-hayagriva = { version = "0.10", default-features = false, features = ["archive"] }
+hayagriva = { version = "0.10", default-features = false, features = ["archive", "csl-json"] }
 
 [lints]
 workspace = true

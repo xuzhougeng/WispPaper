@@ -236,6 +236,12 @@ fn source_chip(id: SharedString, max_width: f32) -> Stateful<Div> {
     div().id(id).flex().items_center().gap(px(4.)).min_w_0().max_w(px(max_width)).h(text_px(24.)).px(px(8.)).rounded(px(6.)).border_1().border_color(Theme::line()).text_size(text_px(12.)).cursor_pointer().hover(|s| s.bg(Theme::hover()).border_color(Theme::accent()))
 }
 
+/// A Word file that goes, or went, with a question: its name, quiet.
+fn document_chip(path: &str) -> Div {
+    let name = std::path::Path::new(path).file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
+    div().flex().flex_none().items_center().gap(px(6.)).max_w(px(280.)).h(text_px(26.)).pl(px(8.)).pr(px(8.)).rounded(px(8.)).border_1().border_color(Theme::line()).bg(Theme::bg_body()).text_size(text_px(12.)).text_color(Theme::text_secondary()).child(ui::icon("file-text", 13., Theme::text_tertiary())).child(div().min_w_0().truncate().child(ui::one_line(&name)))
+}
+
 /// A picture of a conversation, cropped to a square.
 fn thumbnail(picture: &ChatImage, size: f32) -> Div {
     div().size(px(size)).flex_none().rounded(px(10.)).border_1().border_color(Theme::line()).overflow_hidden().child(img(picture.image.clone()).size_full().object_fit(ObjectFit::Cover))
@@ -798,13 +804,15 @@ impl Workspace {
         enum Start {
             Say(&'static str),
             Command(&'static str),
+            /// A Word file is picked to go with the next question.
+            Pick(&'static str),
         }
         use Start::*;
         let groups: [(&str, &str, &[Start]); 4] = [
             ("search", "找文献", &[Say("按这个文献库的主题在 PubMed 和 Europe PMC 试检索，看看还有哪些文献没有收进来。"), Say("给还没有 PDF 的文献查找开放全文。"), Command("search")]),
             ("file-text", "读文献", &[Say("这些文献主要在研究哪些问题？按主题归类。"), Say("哪些文献的结论相互支持或矛盾？"), Say("我还没读的文献里，哪几篇最值得先读？为什么？"), Command("compare")]),
             ("list-todo", "整理", &[Say("给这些文献按主题打上标签，优先用已有的标签。"), Say("把我还没读的文献里最值得先读的几篇加上星标。"), Say("读一遍这些文献，为自定义词条提出取值。")]),
-            ("pen-line", "写", &[Command("review"), Command("write"), Command("cite")]),
+            ("pen-line", "写", &[Command("review"), Command("write"), Command("cite"), Pick("给一个写好的 Word 文件换引用格式：选文件，或把它拖进来。")]),
         ];
         // A width of its own: a card that shares the row's width is measured before its lines wrap, and is then too short for them.
         // So the page's width is worked out here (less its padding, edge lines and a scroll bar): two cards to a row while each keeps a readable width, else one, as wide as reads well.
@@ -819,6 +827,7 @@ impl Workspace {
                         let about = ai::SLASH.iter().find(|slash| slash.name == *name).map_or("", |slash| slash.about);
                         line.child(div().flex_none().font_weight(FontWeight::MEDIUM).text_color(Theme::accent()).child(format!("/{name}"))).child(div().flex_1().min_w_0().text_color(Theme::text_secondary()).child(t(about))).on_click(self.on(Cmd::StartCommand(name), cx))
                     }
+                    Pick(text) => line.child(div().flex_1().min_w_0().child(t(text))).on_click(self.on(Cmd::AttachImages(Talk::Library), cx)),
                 }
             });
             div()
@@ -1030,7 +1039,7 @@ impl Workspace {
         let mut i = 0;
         while i < chat.messages.len() {
             let content = match &chat.messages[i] {
-                ChatItem::User { text, images, .. } => {
+                ChatItem::User { text, images, files, .. } => {
                     // What can be done with a question shows under it while the pointer is over it: quiet otherwise, and nothing while an answer is on its way.
                     let group = SharedString::from(format!("asked-row-{side}-{i}"));
                     items.push(
@@ -1041,6 +1050,7 @@ impl Workspace {
                             .items_end()
                             .gap(px(6.))
                             .when(!images.is_empty(), |d| d.child(div().flex().flex_wrap().justify_end().gap(px(6.)).max_w(relative(0.85)).children(images.iter().map(|picture| thumbnail(picture, 96.)))))
+                            .when(!files.is_empty(), |d| d.child(div().flex().flex_wrap().justify_end().gap(px(6.)).max_w(relative(0.85)).children(files.iter().map(|file| document_chip(file)))))
                             .when(!text.is_empty(), |d| d.child(self.selectable(format!("asked-{side}-{i}"), text.clone(), cx).max_w(relative(0.85)).px(px(14.)).py(px(9.)).rounded(px(16.)).bg(Theme::groove()).line_height(theme::body_line(21.))))
                             .when(!chat.busy, |d| {
                                 d.child(
@@ -1509,7 +1519,7 @@ impl Workspace {
         let side = talk.side();
         let focused = chat.input.focus_handle(cx).is_focused(window);
         let commands = if focused { chat.slash_list(&self.settings.commands, cx) } else { vec![] };
-        let ready = !chat.input.read(cx).text().trim().is_empty() || !chat.attachments.is_empty() || !chat.quotes.is_empty();
+        let ready = !chat.input.read(cx).text().trim().is_empty() || !chat.attachments.is_empty() || !chat.quotes.is_empty() || !chat.documents.is_empty();
         let lib = self.lib.as_ref().unwrap();
         // The papers the first question is kept to, while it is still to come; and a paper on its way in.
         let open = talk == Talk::Library && chat.ctx.is_none() && chat.messages.is_empty() && chat.history.is_none();
@@ -1638,6 +1648,11 @@ impl Workspace {
                                 .child(ui::ghost_button(SharedString::from(format!("quote-remove-{side}-{n}")), Some("x"), None).h(text_px(20.)).min_w(px(20.)).on_click(self.on(Cmd::RemoveQuote(talk, n), cx)))
                         })))
                     })
+                    .when(!chat.documents.is_empty(), |d| {
+                        d.child(div().flex().flex_wrap().gap(px(6.)).px(px(2.)).pt(px(2.)).children(chat.documents.iter().enumerate().map(|(n, path)| {
+                            document_chip(&path.display().to_string()).pr(px(2.)).child(ui::ghost_button(SharedString::from(format!("document-remove-{side}-{n}")), Some("x"), None).h(text_px(20.)).min_w(px(20.)).on_click(self.on(Cmd::RemoveDocument(talk, n), cx)))
+                        })))
+                    })
                     .when(!chat.attachments.is_empty() || chat.attaching > 0, |d| {
                         d.child(
                             div()
@@ -1749,7 +1764,7 @@ mod tests {
     fn the_last_answer_is_offered_to_the_step_once() {
         use crate::app::ChatItem;
         use wisp_core::review::{Review, ReviewSection};
-        let asked = |text: &str| ChatItem::User { text: text.into(), images: vec![], prompt: String::new() };
+        let asked = |text: &str| ChatItem::User { text: text.into(), images: vec![], prompt: String::new(), files: vec![] };
         let said = |text: &str| ChatItem::Answer(text.into());
         let mut review = Review::default();
         // The whole answer, the piece before its tool call included; nothing while the question is the last thing said.

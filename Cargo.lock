@@ -953,6 +953,7 @@ dependencies = [
  "quick-xml 0.38.4",
  "serde",
  "serde_path_to_error",
+ "unscanny",
 ]
 
 [[package]]

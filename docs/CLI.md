@@ -105,6 +105,8 @@ wisp search_fulltext --help             # 一个工具的参数
 | `list_cite_styles` | 列出导出 Word 时可用的引用样式（CSL）：常用的内置样式、自己添加的和 Zotero 里装的、全部内置样式 |
 | `read_cite_style` | 读取一个引用样式的 CSL 定义（`--style csl:nature`）；只读 |
 | `try_cite_style` | 用文献库里的文献试排一个样式（`--style` 已有样式，或 `--csl` 一份 CSL 定义），不保存：正文引用和参考文献条目各是什么样子 |
+| `read_docx_citations` | 读一个在别处写好的 Word 文件引用了什么（`--path a.docx`），不改文件：正文里的引用、参考文献表的每一条和它是怎样识别的（Zotero 域、文献库里的文献、条目自己的文字…），以及重排时会保持原样的引用和原因；`--lookup` 联网查 Crossref |
+| `restyle_docx` | 把 Word 文件的引用和参考文献表按一个 CSL 样式重排，写成新文件（`--path a.docx --style csl:nature`，或 `--csl` 一份 CSL 定义；`--output b.docx`，省略时写在原文件旁边、文件名加 `-restyled`；`--track` 把改动写成修订）。引用是能跳到条目的域；原文件不改，已有文件不覆盖 |
 | `save_cite_style` | 把一份 CSL 定义存为自己的引用样式（`--name my-journal.csl --csl …`），写在数据文件夹的 `styles/` 下，之后可在写作页「导出」菜单里选用 |
 | `list_manuscripts` | 列出写作页的稿件：题目、语言、各节的名称和字数 |
 | `read_manuscript` | 读取一份稿件的正文，可以只读一节；只读 |

@@ -141,7 +141,7 @@ fn sign_label(sign: Sign) -> &'static str {
     }
 }
 
-fn is_word(path: &Path) -> bool {
+pub(crate) fn is_word(path: &Path) -> bool {
     path.extension().is_some_and(|e| e.eq_ignore_ascii_case("docx"))
 }
 

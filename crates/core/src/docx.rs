@@ -703,6 +703,26 @@ impl Para {
         self.changed(&ops, track)
     }
 
+    /// `edited`, by the changes the caller names when they do make `new` of this paragraph's text.
+    fn edited_by(&self, new: &str, edits: &[(Range<usize>, String)], track: Option<&mut Track>) -> String {
+        let old = self.text();
+        let lead = old.len() - old.trim_start().len();
+        let said = old.trim();
+        let (mut made, mut at, mut fits) = (String::new(), 0, !edits.is_empty());
+        for (range, ins) in edits {
+            if range.start < at || range.end < range.start || !said.is_char_boundary(range.start) || !said.is_char_boundary(range.end) || range.end > said.len() {
+                fits = false;
+                break;
+            }
+            made.push_str(&said[at..range.start]);
+            made.push_str(ins);
+            at = range.end;
+        }
+        if !fits || format!("{made}{}", &said[at..]) != new.trim() { return self.edited(new, track) }
+        let ops: Vec<Op> = edits.iter().filter(|(range, ins)| !range.is_empty() || !ins.is_empty()).map(|(range, ins)| Op { at: lead + range.start, del: range.len(), ins: ins.clone() }).collect();
+        self.changed(&ops, track)
+    }
+
     fn changed(&self, ops: &[Op], track: Option<&mut Track>) -> String {
         let mut editor = Editor { ops, used: vec![false; ops.len()], pos: 0, track };
         let mut body = String::new();
@@ -1265,6 +1285,204 @@ pub fn read(bytes: &[u8]) -> Result<Read> {
     Ok(Read { paragraphs, comments, tables: doc.blocks.iter().filter(|block| matches!(block, Block::Other(xml) if xml.starts_with("<w:tbl"))).count(), pictures: body.matches("<w:drawing").count() + body.matches("<w:pict>").count() + body.matches("<w:pict ").count(), tracked: body.contains("<w:ins ") || body.contains("<w:del ") })
 }
 
+// ---- fields
+
+/// A field of the body: a code Word (or Zotero, EndNote) works out, and the words it shows for it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Field {
+    /// As the file says it: ` ADDIN ZOTERO_ITEM CSL_CITATION {…}`, ` HYPERLINK \l "x"`.
+    pub code: String,
+    /// The paragraphs, by their place in `Read::paragraphs`, its shown words begin and end in.
+    pub from: usize,
+    pub to: usize,
+    /// Where they begin in `from` and end in `to`, in bytes of the paragraph's text.
+    pub start: usize,
+    pub end: usize,
+    /// It begins and ends in paragraphs of the body, so `unfielded` can take its marks out.
+    pub whole: bool,
+}
+
+/// What a file's paragraphs hold beside their words, as far as citations go.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Marks {
+    /// The fields that begin in a paragraph of the body, in the file's order; one inside another comes after it.
+    pub fields: Vec<Field>,
+    /// The raised words of each of `Read::paragraphs`, in bytes of its text.
+    pub raised: Vec<Vec<Range<usize>>>,
+}
+
+fn field_mark(xml: &str) -> Option<String> {
+    if !xml.starts_with("<w:fldChar") { return None }
+    attr(open_tag(xml), "w:fldCharType")
+}
+
+/// The fields and raised words of a file's body.
+pub fn marks(bytes: &[u8]) -> Result<Marks> {
+    let zip = Zip::read(bytes)?;
+    let main = zip.main()?;
+    let xml = zip.text(&main)?;
+    let styles = styles_of(&zip, &main)?;
+    let doc = Document::parse(&xml)?;
+    let readable = doc.readable(&styles);
+    // A place in the file, block and byte of its text, as a place in the paragraphs read: the paragraph's text is trimmed.
+    let leads: Vec<(usize, usize)> = readable.iter().map(|&block| {
+        let text = doc.para(block).text();
+        (text.len() - text.trim_start().len(), text.trim().len())
+    }).collect();
+    let begins = |block: usize, at: usize| match readable.iter().position(|known| *known >= block) {
+        Some(n) if readable[n] == block => (n, at.saturating_sub(leads[n].0).min(leads[n].1)),
+        Some(n) => (n, 0),
+        None => (readable.len(), 0),
+    };
+    let ends = |block: usize, at: usize| match readable.iter().rposition(|known| *known <= block) {
+        Some(n) if readable[n] == block => (n, at.saturating_sub(leads[n].0).min(leads[n].1)),
+        Some(n) => (n, leads[n].1),
+        None => (0, 0),
+    };
+    struct Open {
+        code: String,
+        shown: Option<(usize, usize)>,
+    }
+    fn walk<'a>(items: &'a [Item], f: &mut dyn FnMut(&'a str, bool, bool)) {
+        for item in items {
+            match item {
+                Item::Raw(xml) => f(xml, false, false),
+                Item::Wrap { items, .. } => walk(items, f),
+                Item::Run(run) => {
+                    // Raised by its setting, or (as LibreOffice writes it) lifted off the line.
+                    let raised = val_of(&run.rpr, "w:vertAlign").as_deref() == Some("superscript") || val_of(&run.rpr, "w:position").and_then(|lift| lift.parse::<i32>().ok()).is_some_and(|lift| lift > 0);
+                    for part in &run.parts {
+                        match part {
+                            Part::Text(text) => f(text, true, raised),
+                            Part::Shown(_, shown) => f(shown, true, raised),
+                            Part::Raw(xml) => f(xml, false, false),
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut marks = Marks { fields: vec![], raised: vec![vec![]; readable.len()] };
+    // The fields not ended yet: each with its place in `fields`.
+    let mut open: Vec<(usize, Open)> = vec![];
+    for (n, block) in doc.blocks.iter().enumerate() {
+        let Block::Para(_, para) = block else { continue };
+        let place = readable.iter().position(|known| *known == n);
+        let mut at = 0;
+        walk(&para.items, &mut |piece, text, raised| {
+            if text {
+                if let (true, Some(place)) = (raised, place) {
+                    let (start, end) = (begins(n, at).1, begins(n, at + piece.len()).1);
+                    match marks.raised[place].last_mut() {
+                        Some(last) if last.end == start => last.end = end,
+                        _ if end > start => marks.raised[place].push(start..end),
+                        _ => {}
+                    }
+                }
+                at += piece.len();
+                return;
+            }
+            if piece.starts_with("<w:instrText") {
+                if let Some((_, field)) = open.last_mut().filter(|(_, field)| field.shown.is_none()) { field.code.push_str(&unescape(inside(piece))) }
+                return;
+            }
+            match field_mark(piece).as_deref() {
+                Some("begin") => {
+                    open.push((marks.fields.len(), Open { code: String::new(), shown: None }));
+                    marks.fields.push(Field::default());
+                }
+                Some("separate") => {
+                    if let Some((_, field)) = open.last_mut() { field.shown = Some((n, at)) }
+                }
+                Some("end") => {
+                    let Some((index, field)) = open.pop() else { return };
+                    let (from, start) = field.shown.map_or_else(|| begins(n, at), |(block, at)| begins(block, at));
+                    let (to, end) = ends(n, at);
+                    marks.fields[index] = Field { code: field.code, from, to: to.max(from.min(readable.len().saturating_sub(1))), start, end: if to < from { start } else { end }, whole: true };
+                }
+                _ => {}
+            }
+        });
+    }
+    // One that never ends in a paragraph of the body (its end is in a table) is known by its code alone.
+    for (index, field) in open {
+        let (from, start) = field.shown.map_or((readable.len(), 0), |(block, at)| begins(block, at));
+        marks.fields[index] = Field { code: field.code, from, to: readable.len().saturating_sub(1), start, end: leads.last().map_or(0, |last| last.1), whole: false };
+    }
+    Ok(marks)
+}
+
+/// The file with these fields (by their place in `Marks::fields`) no fields any more: the words they show stay as
+/// ordinary text, their codes and marks go, and with them those of the fields inside them. A citation of Zotero's or
+/// EndNote's that is written anew must not stay a field of theirs, which would write the old words back.
+pub fn unfielded(bytes: &[u8], fields: &[usize]) -> Result<Vec<u8>> {
+    let whole: Vec<bool> = marks(bytes)?.fields.iter().map(|field| field.whole).collect();
+    if !fields.iter().any(|field| whole.get(*field) == Some(&true)) { return Ok(bytes.to_vec()) }
+    let mut zip = Zip::read(bytes)?;
+    let main = zip.main()?;
+    let xml = zip.text(&main)?;
+    let doc = Document::parse(&xml)?;
+    struct Strip<'a> {
+        wanted: &'a [usize],
+        whole: &'a [bool],
+        next: usize,
+        /// Whether each field not ended yet goes.
+        open: Vec<bool>,
+        gone: usize,
+    }
+    impl Strip<'_> {
+        fn keeps(&mut self, xml: &str) -> bool {
+            let inside_one = self.open.last().copied().unwrap_or(false);
+            let keep = if xml.starts_with("<w:instrText") {
+                !inside_one
+            } else {
+                match field_mark(xml).as_deref() {
+                    Some("begin") => {
+                        let goes = inside_one || (self.wanted.contains(&self.next) && self.whole.get(self.next) == Some(&true));
+                        self.next += 1;
+                        self.open.push(goes);
+                        !goes
+                    }
+                    Some("separate") => !inside_one,
+                    Some("end") => !self.open.pop().unwrap_or(false),
+                    _ => true,
+                }
+            };
+            if !keep { self.gone += 1 }
+            keep
+        }
+    }
+    fn strip(items: &mut Vec<Item>, state: &mut Strip) {
+        for item in items.iter_mut() {
+            match item {
+                Item::Raw(xml) => {
+                    // A mark outside any run is not what Word writes; it is counted so the fields keep their places.
+                    if field_mark(xml).as_deref() == Some("begin") { state.next += 1; state.open.push(false) } else if field_mark(xml).as_deref() == Some("end") { state.open.pop(); }
+                }
+                Item::Wrap { items, .. } => strip(items, state),
+                Item::Run(run) => run.parts.retain(|part| !matches!(part, Part::Raw(xml) if !state.keeps(xml))),
+            }
+        }
+        // A run that held nothing but a mark goes with it.
+        items.retain(|item| !matches!(item, Item::Run(run) if run.parts.is_empty()));
+    }
+    let mut state = Strip { wanted: fields, whole: &whole, next: 0, open: vec![], gone: 0 };
+    let mut body = String::with_capacity(xml.len());
+    for block in &doc.blocks {
+        match block {
+            Block::Other(xml) => body.push_str(xml),
+            Block::Para(xml, para) => {
+                let before = state.gone;
+                let mut para = para.clone();
+                strip(&mut para.items, &mut state);
+                if state.gone == before { body.push_str(xml) } else { body.push_str(&para.xml()) }
+            }
+        }
+    }
+    zip.set(&main, format!("{}{body}{}", doc.head, doc.tail).as_bytes());
+    Ok(zip.write())
+}
+
 // ---- writing again
 
 /// What a paragraph of the manuscript is in the document.
@@ -1318,6 +1536,16 @@ pub struct Wanted {
     /// Written as Word's fields (`HYPERLINK \l`), which jump to the bookmark; one whose anchor no paragraph has is left out.
     pub links: Vec<Link>,
     pub looks: Vec<(Range<usize>, Look)>,
+    /// Words that are set on the line whatever the file's own words there were: a citation that was a raised number and is one no more.
+    pub level: Vec<Range<usize>>,
+    /// The changes that make this text of the file's paragraph, when whoever asks knows them: what stands now in
+    /// place of each stretch of the paragraph's text as the file has it (in bytes, in order). They are made as given
+    /// when the paragraph this one is taken for reads so; otherwise, and without any, the two texts are compared word
+    /// by word, which takes `grow1.` for one word and would set `grow` like the raised number.
+    pub edits: Vec<(Range<usize>, String)>,
+    /// Never one of the file's paragraphs changed: written anew, set like the nearest of its kind. An entry of a
+    /// reference list in another style, which would else keep the italics of the words it shares with the old one.
+    pub fresh: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1413,7 +1641,7 @@ fn with_look(rpr: &str, look: Look) -> String {
 }
 
 /// Give the text of `range` a look, cutting the runs it starts and ends in.
-fn restyle(items: &mut Vec<Item>, pos: &mut usize, range: &Range<usize>, look: Look) {
+fn restyle(items: &mut Vec<Item>, pos: &mut usize, range: &Range<usize>, look: &dyn Fn(&str) -> String) {
     let mut n = 0;
     while n < items.len() {
         let mut cut = None;
@@ -1429,7 +1657,7 @@ fn restyle(items: &mut Vec<Item>, pos: &mut usize, range: &Range<usize>, look: L
                         *pos = range.start;
                     } else {
                         if range.end < to { cut = Some(run.split(range.end - from)) }
-                        run.rpr = with_look(&run.rpr, look);
+                        run.rpr = look(&run.rpr);
                         *pos += run.len();
                     }
                 } else {
@@ -1443,6 +1671,14 @@ fn restyle(items: &mut Vec<Item>, pos: &mut usize, range: &Range<usize>, look: L
     }
 }
 
+/// A run's properties without what raised it: the setting, or the lift off the line and the smaller size that goes with it.
+fn lowered(rpr: &str) -> String {
+    if rpr.is_empty() { return String::new() }
+    let level = without(rpr, "w:vertAlign");
+    if val_of(rpr, "w:position").is_none() { return level }
+    ["w:position", "w:sz", "w:szCs"].iter().fold(level, |rpr, name| without(&rpr, name))
+}
+
 /// The bookmarks links lead to, by the anchor of the paragraph each is on: its number among the document's marks, and its name.
 type Anchors = BTreeMap<String, (u32, String)>;
 
@@ -1452,15 +1688,19 @@ const BOOKMARK: &str = "_WPREF_";
 /// A paragraph with its looks, its links as fields and its bookmark. `xml` says the paragraph's text with the file's own spaces around it.
 fn dressed(xml: String, wanted: &Wanted, anchors: &Anchors) -> String {
     let anchor = wanted.anchor.as_ref().and_then(|anchor| anchors.get(anchor));
-    if wanted.looks.is_empty() && anchor.is_none() && !wanted.links.iter().any(|link| anchors.contains_key(&link.to)) { return xml }
+    if wanted.looks.is_empty() && wanted.level.is_empty() && anchor.is_none() && !wanted.links.iter().any(|link| anchors.contains_key(&link.to)) { return xml }
     let mut para = Para::parse(&xml);
     let text = para.text();
     let lead = text.len() - text.trim_start().len();
     let length = text.trim().len();
     let within = |range: &Range<usize>| (text.floor_char_boundary(lead + range.start.min(length)), text.floor_char_boundary(lead + range.end.min(length)));
+    for range in &wanted.level {
+        let (start, end) = within(range);
+        if end > start { restyle(&mut para.items, &mut 0, &(start..end), &lowered) }
+    }
     for (range, look) in &wanted.looks {
         let (start, end) = within(range);
-        if end > start { restyle(&mut para.items, &mut 0, &(start..end), *look) }
+        if end > start { restyle(&mut para.items, &mut 0, &(start..end), &|rpr| with_look(rpr, *look)) }
     }
     for link in &wanted.links {
         let (Some((_, name)), (start, end)) = (anchors.get(&link.to), within(&link.range)) else { continue };
@@ -1488,7 +1728,11 @@ pub fn rewrite(source: &[u8], wanted: &[Wanted], options: &Options) -> Result<Re
     let readable = doc.readable(&styles);
     let old: Vec<String> = readable.iter().map(|&block| doc.para(block).text().trim().to_string()).collect();
     let new: Vec<&str> = wanted.iter().map(|wanted| wanted.text.trim()).collect();
-    let steps = align(&old.iter().map(String::as_str).collect::<Vec<_>>(), &new);
+    // A paragraph to be written anew is no paragraph of the file changed, however alike the two read.
+    let steps: Vec<Step> = align(&old.iter().map(String::as_str).collect::<Vec<_>>(), &new).into_iter().flat_map(|step| match step {
+        Step::Changed(o, w) if wanted[w].fresh => vec![Step::Removed(o), Step::Added(w)],
+        step => vec![step],
+    }).collect();
 
     let comments_part = comments_part(&zip, &main)?;
     let comments_xml = match &comments_part {
@@ -1537,7 +1781,7 @@ pub fn rewrite(source: &[u8], wanted: &[Wanted], options: &Options) -> Result<Re
             }
             Step::Changed(o, w) => {
                 let block = readable[o];
-                out[block] = vec![dressed(noted(doc.para(block).edited(&wanted[w].text, track.as_mut()), &wanted[w].notes, &mut comments), &wanted[w], &anchors)];
+                out[block] = vec![dressed(noted(doc.para(block).edited_by(&wanted[w].text, &wanted[w].edits, track.as_mut()), &wanted[w].notes, &mut comments), &wanted[w], &anchors)];
                 (last, last_old, done.changed) = (Some(block), Some(o), done.changed + 1);
             }
             Step::Removed(o) => {
@@ -1616,13 +1860,13 @@ pub fn rewrite(source: &[u8], wanted: &[Wanted], options: &Options) -> Result<Re
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     const W: &str = "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"";
 
     /// A Word file with this body, and these comments when there are any.
-    fn file(body: &str, comments: &str) -> Vec<u8> {
+    pub(crate) fn file(body: &str, comments: &str) -> Vec<u8> {
         let mut zip = Zip { entries: vec![] };
         let comment_type = if comments.is_empty() { "" } else { "<Override PartName=\"/word/comments.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml\"/>" };
         zip.set("[Content_Types].xml", format!("<?xml version=\"1.0\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>{comment_type}</Types>").as_bytes());
@@ -1635,7 +1879,7 @@ mod tests {
         zip.write()
     }
 
-    fn body_of(bytes: &[u8]) -> String {
+    pub(crate) fn body_of(bytes: &[u8]) -> String {
         let xml = Zip::read(bytes).unwrap().text("word/document.xml").unwrap();
         let start = xml.find("<w:body>").unwrap() + 8;
         xml[start..xml.rfind("<w:sectPr>").unwrap()].to_string()
@@ -1896,5 +2140,52 @@ mod tests {
         // An empty file takes the text before its page properties.
         let done = rewrite(&file("", ""), &[super::tests::body("First words.")], &Options::default()).unwrap();
         assert_eq!(body_of(&done.bytes), "<w:p><w:r><w:t xml:space=\"preserve\">First words.</w:t></w:r></w:p>");
+    }
+
+    /// A field as Word writes one: its code over two runs, then what it shows.
+    pub(crate) fn field(code: &str, shown: &str) -> String {
+        let (a, b) = code.split_at(code.floor_char_boundary(code.len() / 2));
+        format!("<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\">{}</w:instrText></w:r><w:r><w:instrText xml:space=\"preserve\">{}</w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>{shown}<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>", escape(a), escape(b))
+    }
+
+    #[test]
+    fn fields_are_read_with_what_they_show_and_taken_out_whole() {
+        let cited = field(" ADDIN ZOTERO_ITEM CSL_CITATION {\"a\": \"<1 & 2>\"} ", "<w:r><w:rPr><w:vertAlign w:val=\"superscript\"/></w:rPr><w:t>1,2</w:t></w:r>");
+        // EndNote keeps its data in a field of its own inside the code.
+        let nested = "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText> ADDIN EN.CITE </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"begin\"><w:fldData>AAAA</w:fldData></w:fldChar></w:r><w:r><w:instrText> ADDIN EN.CITE.DATA </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t>(Li, 2020)</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r>";
+        let list = "<w:p><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText> ADDIN ZOTERO_BIBL </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t>1. First.</w:t></w:r></w:p><w:p><w:r><w:t>2. Second.</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>";
+        let source = file(&format!("<w:p><w:r><w:t xml:space=\"preserve\"> Roots grow</w:t></w:r>{cited}<w:r><w:t xml:space=\"preserve\"> down </w:t></w:r>{nested}<w:r><w:t>.</w:t></w:r></w:p><w:p><w:r><w:t>Untouched.</w:t></w:r></w:p>{list}"), "");
+        let found = marks(&source).unwrap();
+        assert_eq!(texts(&source)[0], "Roots grow1,2 down (Li, 2020).");
+        assert_eq!(found.fields.iter().map(|field| field.code.trim()).collect::<Vec<_>>(), ["ADDIN ZOTERO_ITEM CSL_CITATION {\"a\": \"<1 & 2>\"}", "ADDIN EN.CITE", "ADDIN EN.CITE.DATA", "ADDIN ZOTERO_BIBL"]);
+        assert_eq!(found.fields.iter().map(|field| (field.from, field.start, field.to, field.end)).collect::<Vec<_>>(), [(0, 10, 0, 13), (0, 19, 0, 29), (0, 19, 0, 19), (2, 0, 3, 10)]);
+        assert_eq!(found.raised.iter().map(|ranges| ranges.iter().map(|range| (range.start, range.end)).collect::<Vec<_>>()).collect::<Vec<_>>(), [vec![(10, 13)], vec![], vec![], vec![]]);
+        // Taken out: the words stay, the data inside goes with its field, the others are as they were.
+        let plain = unfielded(&source, &[1]).unwrap();
+        assert_eq!(texts(&plain), texts(&source));
+        assert_eq!(marks(&plain).unwrap().fields.iter().map(|field| field.code.trim().to_string()).collect::<Vec<_>>(), ["ADDIN ZOTERO_ITEM CSL_CITATION {\"a\": \"<1 & 2>\"}", "ADDIN ZOTERO_BIBL"]);
+        assert!(body_of(&plain).contains("<w:p><w:r><w:t>Untouched.</w:t></w:r></w:p>") && !body_of(&plain).contains("EN.CITE"));
+        let bare = unfielded(&source, &[0, 3]).unwrap();
+        assert_eq!(body_of(&bare).matches("<w:fldChar ").count(), 5);
+        assert!(!body_of(&bare).contains("ZOTERO") && body_of(&bare).contains("<w:p><w:r><w:t xml:space=\"preserve\">2. Second.</w:t></w:r></w:p>"));
+        assert_eq!(unfielded(&source, &[]).unwrap(), source);
+    }
+
+    #[test]
+    fn a_paragraph_is_written_anew_and_raised_words_are_set_on_the_line() {
+        let source = file("<w:p><w:r><w:t>Roots grow</w:t></w:r><w:r><w:rPr><w:b/><w:vertAlign w:val=\"superscript\"/></w:rPr><w:t>1</w:t></w:r><w:r><w:t>.</w:t></w:r></w:p><w:p><w:pPr><w:ind w:left=\"420\"/></w:pPr><w:r><w:rPr><w:i/></w:rPr><w:t>Zhang W. Roots. Nature 2024.</w:t></w:r></w:p>", "");
+        let wanted = [Wanted { text: "Roots grow [1].".into(), level: std::iter::once(10..14).collect(), edits: vec![(10..11, " [1]".into())], ..Default::default() }, Wanted { text: "[1] Zhang W. Roots. Nature 2024.".into(), fresh: true, ..Default::default() }];
+        let done = rewrite(&source, &wanted, &Options::default()).unwrap();
+        assert_eq!((done.changed, done.removed, done.added), (1, 1, 1));
+        let body = body_of(&done.bytes);
+        assert!(body.starts_with("<w:p><w:r><w:t xml:space=\"preserve\">Roots grow</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\"> [1]</w:t></w:r>"), "{body}");
+        // The new entry is set like the old one's paragraph, with none of the looks its words had.
+        assert!(body.contains("<w:ind w:left=\"420\"/>") && body.ends_with("<w:t xml:space=\"preserve\">[1] Zhang W. Roots. Nature 2024.</w:t></w:r></w:p>"), "{body}");
+        assert_eq!(texts(&done.bytes), ["Roots grow [1].", "[1] Zhang W. Roots. Nature 2024."]);
+        // LibreOffice raises by lifting the words and setting them smaller: read as raised, and both go.
+        let lifted = file("<w:p><w:r><w:t>Roots grow</w:t></w:r><w:r><w:rPr><w:position w:val=\"8\"/><w:sz w:val=\"19\"/></w:rPr><w:t>1</w:t></w:r></w:p>", "");
+        assert_eq!(marks(&lifted).unwrap().raised[0].len(), 1);
+        let done = rewrite(&lifted, &[Wanted { text: "Roots grow [1]".into(), level: std::iter::once(10..14).collect(), edits: vec![(10..11, " [1]".into())], ..Default::default() }], &Options::default()).unwrap();
+        assert!(body_of(&done.bytes).ends_with("<w:r><w:rPr></w:rPr><w:t xml:space=\"preserve\"> [1]</w:t></w:r></w:p>"), "{}", body_of(&done.bytes));
     }
 }
