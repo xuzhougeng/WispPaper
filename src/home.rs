@@ -9,7 +9,7 @@ use crate::shortcuts::{AskAssistant, DecideIncluded, DecideIrrelevant, DecidePen
 use crate::theme::{self, Theme, text_px};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
-use wisp_core::time;
+use wisp_core::{libraries, time};
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -131,6 +131,42 @@ impl Render for Workspace {
     }
 }
 
+/// A library's card on its way to another place on the home page: what is held, and the card drawn under the pointer meanwhile.
+#[derive(Clone)]
+pub struct LibraryDrag {
+    id: String,
+    name: String,
+    color: String,
+    /// Where in its card the pointer took hold of it.
+    held: Point<Pixels>,
+}
+
+impl Render for LibraryDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let accent = theme::accent_of(&self.color);
+        // What is dragged is drawn from the card's corner: the smaller card is moved to the pointer.
+        div().pl((self.held.x - px(16.)).max(px(0.))).pt((self.held.y - px(16.)).max(px(0.))).child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .w(px(220.))
+                .h(text_px(40.))
+                .px(px(10.))
+                .rounded(px(10.))
+                .border_1()
+                .border_color(accent.strong())
+                .bg(Theme::bg_body())
+                .shadow(theme::shadow_panel())
+                .font(theme::ui_font())
+                .text_size(text_px(13.))
+                .text_color(Theme::text())
+                .child(div().flex().flex_none().items_center().justify_center().size(px(24.)).rounded(px(6.)).bg(accent.soft()).child(ui::icon("library", 14., accent.strong())))
+                .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::SEMIBOLD).child(self.name.clone())),
+        )
+    }
+}
+
 /// How far the assistant's button stands from the window's bottom right corner.
 const CORNER_GAP: f32 = 24.;
 
@@ -196,10 +232,9 @@ impl Workspace {
 
     fn render_home(&mut self, cx: &mut Context<Self>) -> AnyElement {
         // The conversations not yet made libraries are the assistant's, behind the button in the corner, not among the libraries.
-        let cards: Vec<AnyElement> = self
-            .libraries
-            .iter()
-            .filter(|info| !info.draft)
+        // In the order the person dragged them to, the rest as they were made (`libraries::shelf`); opening one does not move it.
+        let cards: Vec<AnyElement> = libraries::shelf(&self.libraries, &self.settings.library_order)
+            .into_iter()
             .map(|info| {
                 let accent = theme::accent_of(&info.color);
                 // Three lines of the card hold about this much; a longer topic ends in 「…」 on a whole character instead of being clipped mid-glyph.
@@ -220,6 +255,13 @@ impl Workspace {
                     .hover(|s| s.border_color(accent.strong()))
                     .on_click(self.on(Cmd::OpenLibrary(info.id.clone()), cx))
                     .on_mouse_down(MouseButton::Right, self.on_context(MenuKind::LibraryCard(info.id.clone()), cx))
+                    // Dragged onto another card, it takes that card's place; a press that does not move is still a click.
+                    .on_drag(LibraryDrag { id: info.id.clone(), name: info.name.clone(), color: info.color.clone(), held: Point::default() }, |drag, held, _, cx| cx.new(|_| LibraryDrag { held, ..drag.clone() }))
+                    .drag_over::<LibraryDrag>(move |style, _, _, _| style.border_color(accent.strong()).bg(accent.soft()))
+                    .on_drop(cx.listener({
+                        let onto = info.id.clone();
+                        move |this, drag: &LibraryDrag, window, cx| this.run(Cmd::MoveLibrary(drag.id.clone(), onto.clone()), window, cx)
+                    }))
                     // A 6px quad clamps its radius to 3px and the card clips only to a rectangle, so the strip crops a taller quad that keeps the card's inner curve.
                     .child(div().flex_none().h(px(6.)).w_full().overflow_hidden().child(div().h(px(22.)).w_full().rounded_t(px(11.)).bg(accent.strong())))
                     .child(

@@ -31,7 +31,7 @@ pub struct LibraryInfo {
     /// The paper list's last order (`Filters::sort`), so the library opens as it was left.
     pub sort: String,
     pub created_at: String,
-    /// Last time the library was opened: the home page lists the latest first.
+    /// Last time the library was opened: shown on its card, and the conversations not yet made libraries are listed by it.
     pub opened_at: String,
     /// A conversation started from the home page that has not been made a library yet: the home page lists it
     /// under 最近对话, not among the libraries, and the tools of `wisp` and MCP see it only when it is named by
@@ -92,6 +92,26 @@ fn make(root: &Path, name: &str, topic: &str, color: &str, draft: bool) -> Resul
 /// The libraries on the shelf: every one under `root` but the conversations not yet made libraries.
 pub fn shelved(root: &Path) -> Vec<LibraryInfo> {
     list(root).into_iter().filter(|info| !info.draft).collect()
+}
+
+/// The libraries of `all` that stand on the home page, in the order they keep there: the ones in `order` (ids, as
+/// the person dragged them) first, then the rest in the order they were made. Opening one does not move it.
+pub fn shelf<'a>(all: &'a [LibraryInfo], order: &[String]) -> Vec<&'a LibraryInfo> {
+    let mut shelf: Vec<&LibraryInfo> = all.iter().filter(|info| !info.draft).collect();
+    let place = |info: &LibraryInfo| order.iter().position(|id| *id == info.id).unwrap_or(usize::MAX);
+    shelf.sort_by(|a, b| place(a).cmp(&place(b)).then_with(|| a.created_at.cmp(&b.created_at)).then_with(|| a.id.cmp(&b.id)));
+    shelf
+}
+
+/// The order to keep after the library `moved` was dragged onto `onto`: it takes that one's place, the others
+/// between them step aside. Every library on the shelf is named, so the order holds as libraries come and go.
+pub fn reorder(all: &[LibraryInfo], order: &[String], moved: &str, onto: &str) -> Vec<String> {
+    let mut ids: Vec<String> = shelf(all, order).into_iter().map(|info| info.id.clone()).collect();
+    if let (Some(from), Some(to)) = (ids.iter().position(|id| id == moved), ids.iter().position(|id| id == onto)) {
+        let id = ids.remove(from);
+        ids.insert(to, id);
+    }
+    ids
 }
 
 /// How long the name a conversation gets from its first question is, in characters.
@@ -229,6 +249,25 @@ mod tests {
         // The same folder, its papers with it.
         assert_eq!((made.dir.clone(), made.paper_count, made.topic.as_str()), (draft.dir.clone(), 1, "乙烯与生长素在根毛发育中的相互作用"));
         std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn the_shelf_keeps_its_order() {
+        let made = |id: &str, created: &str, opened: &str, draft: bool| LibraryInfo { id: id.into(), name: id.into(), created_at: created.into(), opened_at: opened.into(), draft, ..Default::default() };
+        // As `list` gives them: the latest opened first.
+        let all = [made("c", "3", "9", false), made("d", "4", "8", true), made("a", "1", "7", false), made("b", "2", "1", false)];
+        let ids = |shelf: Vec<&LibraryInfo>| shelf.into_iter().map(|l| l.id.clone()).collect::<Vec<_>>();
+        // Never dragged: the order they were made, the conversation left out.
+        assert_eq!(ids(shelf(&all, &[])), ["a", "b", "c"]);
+        // Dragged: that order, and one made since (or not named) after it.
+        assert_eq!(ids(shelf(&all, &["c".into(), "gone".into(), "a".into()])), ["c", "a", "b"]);
+        // Dragging takes the place of the one let go on, either way.
+        assert_eq!(reorder(&all, &[], "c", "a"), ["c", "a", "b"]);
+        assert_eq!(reorder(&all, &[], "a", "c"), ["b", "c", "a"]);
+        assert_eq!(reorder(&all, &[], "a", "b"), ["b", "a", "c"]);
+        // Let go on itself or on something not there: the order as it stands.
+        assert_eq!(reorder(&all, &["b".into()], "b", "b"), ["b", "a", "c"]);
+        assert_eq!(reorder(&all, &[], "d", "a"), ["a", "b", "c"]);
     }
 
     #[test]

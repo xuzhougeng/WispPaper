@@ -265,6 +265,8 @@ pub enum ScopeDo {
 pub enum Cmd {
     // Home
     OpenLibrary(String),
+    /// A library's card was dragged onto another's (moved, onto): it takes that place on the home page.
+    MoveLibrary(String, String),
     NewLibrary,
     EditLibrary(String),
     AskRemoveLibrary(String),
@@ -2354,6 +2356,12 @@ impl Workspace {
         cx.notify();
         match cmd {
             Cmd::OpenLibrary(id) => self.open_library(&id, window, cx),
+            Cmd::MoveLibrary(moved, onto) => {
+                if moved == onto { return }
+                self.settings.library_order = libraries::reorder(&self.libraries, &self.settings.library_order, &moved, &onto);
+                self.save_settings(cx);
+                cx.notify();
+            }
             Cmd::GoHome => {
                 self.write_snapshot("leave");
                 self.lib = None;
@@ -6355,7 +6363,7 @@ impl Workspace {
                     _ => None,
                 },
                 // The n-th library card of the home page; the conversations of 最近对话 are `conv:<n>`.
-                "open" => self.libraries.iter().filter(|l| !l.draft).nth(arg.parse::<usize>().unwrap_or(0)).map(|l| Cmd::OpenLibrary(l.id.clone())),
+                "open" => libraries::shelf(&self.libraries, &self.settings.library_order).into_iter().nth(arg.parse::<usize>().unwrap_or(0)).map(|l| Cmd::OpenLibrary(l.id.clone())),
                 // `conv:<n>` by place (latest opened first), or `conv:<words>` the first whose name starts so.
                 "conv" => match arg.parse::<usize>() {
                     Ok(n) => self.conversations().nth(n),
