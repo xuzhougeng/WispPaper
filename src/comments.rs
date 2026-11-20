@@ -193,6 +193,7 @@ impl Workspace {
     pub(crate) fn comment_point(&mut self, id: &str, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
         lib.writing.side = Side::Comments;
+        lib.writing.side_open = true;
         let comments = &mut lib.writing.comments;
         (comments.focused, comments.reveal) = (Some(id.to_string()), Some(id.to_string()));
         cx.notify();
@@ -249,6 +250,7 @@ impl Workspace {
                 let picked = text[selection].lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or("").to_string();
                 writing.comments.drafting = Some(picked);
                 writing.side = Side::Comments;
+                writing.side_open = true;
                 writing.comments.draft.update(cx, |input, cx| input.set_text("", cx));
                 writing.comments.draft.read(cx).focus(window);
             }
@@ -412,6 +414,7 @@ impl Workspace {
         // What others said about this text, for the assistant to answer first.
         let theirs: Vec<(String, String, String)> = writing.comments.list.iter().filter(|comment| comment.origin != comment::ASSISTANT && comment.state == comment::OPEN && comment.section_id == section_id && (comment.quote.is_empty() || comment::locate(&scope, &comment.quote, None).is_some())).map(|comment| (comment.quote.clone(), comment.author.clone(), comment.body.clone())).collect();
         writing.side = Side::Comments;
+        writing.side_open = true;
         let comments = &mut writing.comments;
         (comments.error, comments.note) = (String::new(), String::new());
         let request = comment::review_prompt(&language, &name, &scope, &wish, &theirs, reply_in).and_then(|(system, message)| ai::plain_request(&profile, &system, &message));
@@ -649,14 +652,16 @@ impl Workspace {
     }
 
     /// Over the panel beside the manuscript: the candidates, the comments, or the reference list.
-    pub(crate) fn render_side_switch(&self, cx: &mut Context<Self>) -> Div {
+    /// `drawer`: under a narrow manuscript, whether the panel is open; folded, no tab is lit and each opens its page.
+    pub(crate) fn render_side_switch(&self, drawer: Option<bool>, cx: &mut Context<Self>) -> Div {
         let lib = self.lib.as_ref().unwrap();
         let shown = lib.writing.side;
+        let folded = drawer == Some(false);
         let waiting = lib.writing.comments.open_in(&lib.writing.section_id);
         // What the list on that page cites, and whether a citation of it names no paper.
         let (cited, unresolved) = (lib.citing.listed.shown(lib.citing.whole).len(), lib.citing.listed.issues(lib.citing.whole, &lib.writing.section_id).next().is_some());
         let tab = |id: &'static str, name: String, side: Side, dot: bool, this: &Self, cx: &mut Context<Self>| {
-            let on = shown == side;
+            let on = shown == side && !folded;
             div().id(id).flex().flex_1().items_center().justify_center().gap(px(5.)).h(text_px(26.)).rounded(px(6.)).text_size(text_px(12.)).cursor_pointer().when(on, |d| d.bg(Theme::segment()).text_color(Theme::text()).font_weight(FontWeight::MEDIUM)).when(!on, |d| d.text_color(Theme::text_secondary()).hover(|s| s.text_color(Theme::text()))).on_click(this.on(Cmd::WriteSide(side), cx)).child(name).when(dot, |d| d.child(div().flex_none().size(px(6.)).rounded(px(3.)).bg(Theme::danger())))
         };
         // In the header band the manuscript's bar stands in, so the line under both runs on.
@@ -672,6 +677,8 @@ impl Workspace {
                 .child(tab("write-side-comments", if waiting > 0 { tf!("批注 {waiting}", "Comments {waiting}") } else { t("批注").into() }, Side::Comments, false, self, cx))
                 .child(tab("write-side-references", if cited > 0 { tf!("参考文献 {cited}", "References {cited}") } else { t("参考文献").into() }, Side::References, unresolved, self, cx)),
         )
+        // Asking for the page on show again folds the drawer, or opens it.
+        .when_some(drawer, |d, open| d.when(!open, |d| d.border_b_0()).child(ui::icon_action("write-side-fold", if open { "chevron-down" } else { "chevron-up" }, Theme::text_tertiary(), if open { t("收起，把地方让给稿件") } else { t("展开候选句、批注和参考文献") }).on_click(self.on(Cmd::WriteSide(shown), cx))))
     }
 
     /// The comments on the section being written, beside the manuscript.

@@ -73,6 +73,7 @@ impl Workspace {
         let Some(lib) = self.lib.as_mut().filter(|l| l.page == Page::Write) else { return };
         // What is found is listed on the candidates' page, whichever was on show.
         lib.writing.side = Side::Candidates;
+        lib.writing.side_open = true;
         let writing = &lib.writing;
         let text = if from_box {
             writing.find.read(cx).text().trim().to_string()

@@ -120,6 +120,7 @@ impl Workspace {
             if !for_this {
                 card.note = t("正在文献库里找与这段相近的句子…").into();
                 writing.assist.card = Some(card);
+                writing.side_open = true;
                 writing.assist.awaiting = Some(generation);
                 return self.write_find(false, cx);
             }
@@ -140,11 +141,13 @@ impl Workspace {
             Err(error) => {
                 (card.busy, card.error) = (false, error);
                 writing.assist.card = Some(card);
+                writing.side_open = true;
                 return cx.notify();
             }
         };
         let (section, library, protocol) = (card.section.clone(), lib.info.id.clone(), profile.protocol);
         writing.assist.card = Some(card);
+        writing.side_open = true;
         cx.notify();
 
         let (sender, events) = async_channel::unbounded();
