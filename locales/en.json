@@ -1498,5 +1498,8 @@
   "自己搜索": "Search yourself",
   "引用的这句话没能在 PDF 里逐字对上：可能是改写、翻译，或排版把句子拆开了。已用句中的词查找；也可以换成别的词、数字或术语。": "The cited sentence does not match the PDF word for word: it may be paraphrased, translated, or split by the layout. Its words are searched for instead; you can also try another word, number or term.",
   "收起，把地方让给稿件": "Fold, leaving the room to the manuscript",
-  "展开候选句、批注和参考文献": "Open candidates, comments and references"
+  "展开候选句、批注和参考文献": "Open candidates, comments and references",
+  "添加图片或 Word 文件": "Add images or a Word file",
+  "看看这个 Word 文件的引用，我想重排它的引用格式。": "Look at the citations of this Word file; I want them in another citation style.",
+  "给一个写好的 Word 文件换引用格式：选文件，或把它拖进来。": "Restyle the citations of a finished Word file: pick it, or drop it here."
 }

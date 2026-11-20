@@ -16,7 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(existing) = store.list_papers()?.into_iter().find(|p| p.title == paper.title && !p.id.is_empty()) { paper = existing }
     else { store.save_paper(&mut paper)?; }
     let mut conversation = Conversation { paper_id: paper.id.clone(), transcript: Transcript { items: vec![
-        Said::User { text: "测试图片和原文摘录\n\n> 这是虚构的原文摘录。".into(), images: vec!["I-test".into()], prompt: String::new() },
+        Said::User { text: "测试图片和原文摘录\n\n> 这是虚构的原文摘录。".into(), images: vec!["I-test".into()], files: vec![], prompt: String::new() },
         Said::Answer { text: "# 测试回答\n\n此内容只用于验证排版，不是研究结论。".into() },
     ], ..Default::default() }, ..Default::default() };
     if let Some(existing) = store.list_conversations(&paper.id)?.first() { conversation = store.conversation(&existing.id)?.ok_or("Conversation missing")? }

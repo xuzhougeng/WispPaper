@@ -475,6 +475,8 @@ pub enum Cmd {
     /// Choose pictures to go with the next question.
     AttachImages(Talk),
     RemoveAttachment(Talk, usize),
+    /// Let go of a Word file that was to go with the next question.
+    RemoveDocument(Talk, usize),
     /// Take a passage quoted for the next question away again.
     RemoveQuote(Talk, usize),
     /// The person's answer to the assistant wanting to change the library.
@@ -963,12 +965,15 @@ pub enum ChatItem {
     /// A question, as typed, with the pictures that went with it, and
     /// what went to the model where that is not the text (a slash command
     /// written out, passages from a PDF put before it).
-    User { text: String, images: Vec<ChatImage>, prompt: String },
+    User { text: String, images: Vec<ChatImage>, prompt: String, files: Vec<String> },
     /// Text of the model; one answer may come in several pieces with tool calls between them.
     Answer(String),
     /// A tool the model called, and what came back (summary, failed) once it has run.
     Tool { call: String, result: Option<(String, bool)> },
 }
+
+/// The tool that writes a Word file's citations anew: where its file goes is asked in a save dialog (`place_outputs`).
+const RESTYLE: &str = "restyle_docx";
 
 /// What the person says to the assistant wanting to change the library.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1218,6 +1223,8 @@ pub struct Chat {
     /// Pictures that go with the next question, and how many more are still being read.
     pub attachments: Vec<ChatImage>,
     pub attaching: usize,
+    /// Word files that go with the next question, for the assistant to restyle their citations (`wisp_core::restyle`).
+    pub documents: Vec<PathBuf>,
     /// Which of the slash commands on offer is picked.
     pub slash: usize,
     /// The list of commands was closed with Escape; typing opens it again.
@@ -1533,6 +1540,7 @@ impl Chat {
             quotes: vec![],
             attachments: vec![],
             attaching: 0,
+            documents: vec![],
             slash: 0,
             slash_closed: false,
             history: None,
@@ -1628,7 +1636,7 @@ impl Chat {
             .messages
             .iter()
             .filter_map(|item| match item {
-                ChatItem::User { text, images, prompt } => Some(ai::Said::User { text: text.clone(), images: images.iter().map(|picture| picture.id.clone()).collect(), prompt: prompt.clone() }),
+                ChatItem::User { text, images, prompt, files } => Some(ai::Said::User { text: text.clone(), images: images.iter().map(|picture| picture.id.clone()).collect(), files: files.clone(), prompt: prompt.clone() }),
                 ChatItem::Answer(text) if !text.is_empty() => {
                     cited.extend(ai::citations(text).into_iter().map(|citation| citation.label));
                     Some(ai::Said::Answer { text: text.clone() })
@@ -1662,6 +1670,7 @@ impl Chat {
         self.quotes.clear();
         self.attachments.clear();
         self.attaching = 0;
+        self.documents.clear();
         self.slash = 0;
         self.slash_closed = false;
         self.history = None;
@@ -2982,14 +2991,27 @@ impl Workspace {
                 if let Some(lib) = self.lib.as_ref() { lib.chat(paper).input.read(cx).focus(window) }
             }
             Cmd::AttachImages(paper) => {
-                let extensions: Vec<SharedString> = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff"].into_iter().map(SharedString::from).collect();
-                let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some(t("添加图片").into()), extensions: Some(extensions) });
+                // The assistant of the library also takes a Word file, to restyle its citations.
+                let documents = paper == Talk::Library;
+                let extensions: Vec<SharedString> = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff"].into_iter().chain(documents.then_some("docx")).map(SharedString::from).collect();
+                let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some(if documents { t("添加图片或 Word 文件") } else { t("添加图片") }.into()), extensions: Some(extensions) });
                 cx.spawn(async move |this, cx| {
                     if let Ok(Ok(Some(paths))) = picked.await {
-                        this.update(cx, |this, cx| this.attach_images(paper, paths.into_iter().map(Picture::File).collect(), cx)).ok();
+                        this.update(cx, |this, cx| {
+                            let (files, pictures): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|path| documents && crate::comments::is_word(path));
+                            if !files.is_empty() { this.attach_documents(paper, files, cx) }
+                            if !pictures.is_empty() { this.attach_images(paper, pictures.into_iter().map(Picture::File).collect(), cx) }
+                        })
+                        .ok();
                     }
                 })
                 .detach();
+            }
+            Cmd::RemoveDocument(paper, at) => {
+                if let Some(lib) = self.lib.as_mut() {
+                    let chat = lib.chat_mut(paper);
+                    if at < chat.documents.len() { chat.documents.remove(at); }
+                }
             }
             Cmd::RemoveAttachment(paper, at) => {
                 if let Some(lib) = self.lib.as_mut() {
@@ -3011,7 +3033,7 @@ impl Workspace {
                 }) else {
                     return;
                 };
-                self.execute_tools(paper, pending.calls, pending.first, consent != Consent::Deny, cx);
+                if consent == Consent::Deny { self.execute_tools(paper, pending.calls, pending.first, false, cx) } else { self.place_outputs(paper, pending.calls, pending.first, 0, cx) }
             }
             Cmd::ToggleTools(paper, at) => {
                 if let Some(lib) = self.lib.as_mut() {
@@ -3992,7 +4014,11 @@ impl Workspace {
         for path in archives { self.import_library(path, cx) }
         if paths.is_empty() { return }
         if self.lib.is_none() { return self.fail(t("请先打开一个文献库，再拖入文件。"), cx) }
-        // A Word file is a manuscript to go on with, wherever it is dropped; Markdown and plain text are, on the writing page.
+        // On the assistant's page a Word file goes with the next question: it was written elsewhere and stays so, its citations are what is asked about.
+        let (documents, paths): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|path| self.lib.as_ref().is_some_and(|lib| lib.page == Page::Ask) && path.is_file() && crate::comments::is_word(path));
+        if !documents.is_empty() { self.attach_documents(Talk::Library, documents, cx) }
+        if paths.is_empty() { return }
+        // Elsewhere a Word file is a manuscript to go on with; Markdown and plain text are, on the writing page.
         let writing = self.lib.as_ref().is_some_and(|lib| lib.page == Page::Write);
         let (drafts, paths): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|path| path.is_file() && (path.extension().is_some_and(|e| e.eq_ignore_ascii_case("docx")) || (writing && (crate::comments::is_manuscript_file(path) || path.extension().is_some_and(|e| e.eq_ignore_ascii_case("txt"))))));
         if !drafts.is_empty() { self.import_manuscript_files(drafts, cx) }
@@ -4434,6 +4460,16 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Word files to go with the next question of a conversation: kept by their paths, read only when the assistant's tools are.
+    pub(crate) fn attach_documents(&mut self, talk: Talk, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        let Some(lib) = self.lib.as_mut() else { return };
+        let chat = lib.chat_mut(talk);
+        for path in paths {
+            if !chat.documents.contains(&path) { chat.documents.push(path) }
+        }
+        cx.notify();
+    }
+
     /// Read pictures in and put them with the next question. Each is made
     /// one a model takes (`picture::prepare`) off the main thread.
     pub(crate) fn attach_images(&mut self, talk: Talk, mut pictures: Vec<Picture>, cx: &mut Context<Self>) {
@@ -4480,8 +4516,8 @@ impl Workspace {
     }
 
     /// Ask what is in the box; or, with `again`, a question asked before
-    /// (its words and pictures), leaving the box alone. True when it was sent.
-    fn send_question(&mut self, talk: Talk, again: Option<(String, Vec<ChatImage>)>, cx: &mut Context<Self>) -> bool {
+    /// (its words, pictures and files), leaving the box alone. True when it was sent.
+    fn send_question(&mut self, talk: Talk, again: Option<(String, Vec<ChatImage>, Vec<String>)>, cx: &mut Context<Self>) -> bool {
         let profile = self.settings.profile_for_or_default(Task::Chat);
         // The conversation that writes says of its manuscript what it is and where it stands.
         let composing = if talk == Talk::Write {
@@ -4496,10 +4532,12 @@ impl Workspace {
         let Some(lib) = self.lib.as_mut() else { return false };
         let paper_id = lib.selected.clone();
         let chat = chat_of!(lib, talk);
-        let (question, again) = match again {
-            Some((text, images)) => (text, Some(images)),
-            None => (chat.input.read(cx).text().trim().to_string(), None),
+        let (question, again, files) = match again {
+            Some((text, images, files)) => (text, Some(images), files),
+            None => (chat.input.read(cx).text().trim().to_string(), None, chat.documents.iter().map(|path| path.display().to_string()).collect::<Vec<_>>()),
         };
+        // A Word file sent without a word is to have its citations looked at.
+        let question = if question.is_empty() && !files.is_empty() { t("看看这个 Word 文件的引用，我想重排它的引用格式。").to_string() } else { question };
         let asked_again = again.is_some();
         // A review is begun once, by the question that first asked for it.
         let begin_review = !asked_again && talk == Talk::Library && question.strip_prefix("/review").is_some_and(|rest| rest.starts_with(char::is_whitespace));
@@ -4557,7 +4595,8 @@ impl Workspace {
                 Scope::Library if !lib.asked.is_empty() => lib.papers.iter().filter(|p| lib.asked.contains(&p.id)).collect(),
                 Scope::Library => lib.shown.iter().map(|&i| &lib.papers[i]).filter(|p| lib.scope_hits.as_ref().is_none_or(|hits| hits.contains(&p.id))).collect(),
             };
-            if papers.is_empty() && talk != Talk::Write {
+            // A Word file to restyle needs no paper of the library.
+            if papers.is_empty() && talk != Talk::Write && files.is_empty() {
                 chat.error = t("当前列表里没有文献。先添加文献，或清空筛选条件。").into();
                 cx.notify();
                 return false;
@@ -4584,7 +4623,7 @@ impl Workspace {
             let mut answer = String::new();
             for item in &chat.messages {
                 match item {
-                    ChatItem::User { text, images, prompt } => {
+                    ChatItem::User { text, images, prompt, .. } => {
                         if !answer.is_empty() { wire.push(ai::assistant_message(&std::mem::take(&mut answer))) }
                         // A question from before the request was kept is read again as it would be now.
                         let sent = if prompt.is_empty() { ai::expand_slash(text) } else { prompt.clone() };
@@ -4626,14 +4665,17 @@ impl Workspace {
             Some(note) => format!("{prompt}\n\n{note}"),
             None => prompt,
         };
+        // The Word files that came with the question: the assistant is told where they are and what it can do with them.
+        let prompt = if files.is_empty() { prompt } else { format!("{prompt}\n\n{}", wisp_core::restyle::note(&files)) };
         let images = match again {
             Some(images) => images,
             None => std::mem::take(&mut chat.attachments),
         };
+        let documents = if asked_again { vec![] } else { std::mem::take(&mut chat.documents) };
         chat.wire.push(ai::user_message_with(profile.protocol, &prompt, &wire_images(&images)));
         // Kept with the question, so the conversation taken up later asks what was asked now, whatever the command says by then.
         let sent = if prompt == question { String::new() } else { prompt };
-        chat.messages.push(ChatItem::User { text: question, images, prompt: sent });
+        chat.messages.push(ChatItem::User { text: question, images, prompt: sent, files });
         chat.steps = 0;
         chat.started = Some(Instant::now());
         // What the last question changed in the manuscript has been seen: the next changes are this one's.
@@ -4655,6 +4697,7 @@ impl Workspace {
                 if !asked_again {
                     if let Some(ChatItem::User { images, .. }) = popped { chat.attachments = images }
                     chat.quotes = quotes;
+                    chat.documents = documents;
                 }
                 if chat.messages.is_empty() { chat.ctx = None }
             }
@@ -4681,8 +4724,11 @@ impl Workspace {
         let mut tail = chat.cut(at);
         // Nothing left: the material is chosen again with the next first question.
         if chat.messages.is_empty() { chat.forget_context() }
-        let Some(ChatItem::User { text, images, .. }) = tail.first() else { return };
+        let Some(ChatItem::User { text, images, files, .. }) = tail.first() else { return };
         let (text, images) = (text.clone(), images.clone());
+        for file in files.iter().map(PathBuf::from) {
+            if !chat.documents.contains(&file) { chat.documents.push(file) }
+        }
         // A second 撤回 further up takes the first's along: both are put back together, with the box as it was before the first.
         let (draft, attachments) = match chat.retracted.take() {
             Some(earlier) => {
@@ -4730,8 +4776,8 @@ impl Workspace {
         let Some(asked) = chat.messages[..at].iter().rposition(|item| matches!(item, ChatItem::User { .. })) else { return };
         let mut tail = chat.cut(asked);
         let question = tail.remove(0);
-        let ChatItem::User { text, images, .. } = &question else { return };
-        let again = (text.clone(), images.clone());
+        let ChatItem::User { text, images, files, .. } = &question else { return };
+        let again = (text.clone(), images.clone(), files.clone());
         chat.retracted = None;
         if !self.send_question(talk, Some(again), cx) && let Some(lib) = self.lib.as_mut() {
             // Not sent (no model, no key): the conversation is as it was, and says why.
@@ -4890,8 +4936,9 @@ impl Workspace {
             });
             // In the conversation that writes a manuscript the pen was handed over: writing that manuscript is not asked about again.
             let handed = about.as_ref().is_some_and(|about| tools::MANUSCRIPT.contains(&call.name.as_str()) && args.as_ref().is_ok_and(|args| args["manuscript"].as_str() == Some(about)));
-            // A call that cannot run as written has nothing to ask about: it fails by itself.
-            let asks = args.is_ok() && tool.is_some_and(|t| t.confirm) && !handed;
+            // A call that cannot run as written has nothing to ask about: it fails by itself. Nor has one that writes a
+            // Word file anew: the person says where it goes in the save dialog, which is their yes (`place_outputs`).
+            let asks = args.is_ok() && tool.is_some_and(|t| t.confirm) && !handed && call.name != RESTYLE;
             // What it would change, for the card that asks; one that would be refused anyway is not asked about.
             let details = match &args {
                 Ok(args) if asks => tools::preview_call(store, &call.name, args).ok(),
@@ -4905,7 +4952,52 @@ impl Workspace {
             chat.pending = Some(PendingTools { calls: prepared, first });
             return cx.notify();
         }
-        self.execute_tools(talk, prepared, first, true, cx);
+        self.place_outputs(talk, prepared, first, 0, cx);
+    }
+
+    /// Before a call that writes a Word file anew runs (`restyle_docx`), the person says where the new file goes: the
+    /// save dialog 导出 uses, opened beside the file given. Closing it is a no to that call. The file given is never
+    /// the one written, and a file already there is not written over: the new one gets a free name beside it. Then the
+    /// calls run (`execute_tools`).
+    fn place_outputs(&mut self, talk: Talk, mut calls: Vec<PreparedCall>, first: usize, from: usize, cx: &mut Context<Self>) {
+        let next = calls.iter().enumerate().skip(from).find(|(_, call)| call.name == RESTYLE && call.outside.is_none() && call.args.is_ok()).map(|(n, _)| n);
+        let (Some(at), Some(lib)) = (next, self.lib.as_mut()) else { return self.execute_tools(talk, calls, first, true, cx) };
+        let (library, generation) = (lib.info.id.clone(), lib.chat_mut(talk).generation);
+        let args = calls[at].args.clone().unwrap_or_default();
+        let source = PathBuf::from(args["path"].as_str().unwrap_or(""));
+        // `draft-nature.docx`: the file's name and the style's.
+        let style = args["style"].as_str().and_then(|key| key.split(':').nth(1)).map(|name| name.trim_end_matches(".csl").to_string()).filter(|name| !name.is_empty()).unwrap_or_else(|| "restyled".into());
+        let name = format!("{}-{style}.docx", source.file_stem().map(|stem| stem.to_string_lossy().to_string()).unwrap_or_else(|| "document".into()));
+        let directory = source.parent().filter(|folder| folder.is_dir()).map(std::path::Path::to_path_buf).or_else(dirs::document_dir).or_else(dirs::home_dir).unwrap_or_else(|| self.root.clone());
+        // A scripted run has nobody at a dialog: the file goes beside the one given.
+        let scripted = std::env::var("WISP_PAPER_DEV").is_ok();
+        let picked = (!scripted).then(|| cx.prompt_for_new_path(&directory, Some(&name)));
+        cx.spawn(async move |this, cx| {
+            let chosen = match picked {
+                Some(picked) => picked.await.ok().and_then(Result::ok).flatten(),
+                None => Some(directory.join(&name)),
+            };
+            this.update(cx, |this, cx| {
+                // Another library or another conversation by now: its calls are not run for this one.
+                if !this.lib.as_mut().is_some_and(|lib| lib.info.id == library && lib.chat_mut(talk).generation == generation) { return }
+                match chosen {
+                    Some(mut path) => {
+                        if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("docx")) { path.set_extension("docx"); }
+                        let (folder, stem) = (path.parent().map(std::path::Path::to_path_buf).unwrap_or_default(), path.file_stem().map(|stem| stem.to_string_lossy().to_string()).unwrap_or_default());
+                        let mut n = 2;
+                        while path.exists() {
+                            path = folder.join(format!("{stem} ({n}).docx"));
+                            n += 1;
+                        }
+                        if let Ok(args) = calls[at].args.as_mut() { args["output"] = Value::String(path.display().to_string()) }
+                    }
+                    None => calls[at].args = Err("用户关掉了保存对话框，没有选保存位置，新文件没有写。不要重试；问用户是否还要输出。".into()),
+                }
+                this.place_outputs(talk, calls, first, at + 1, cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Run a turn's tools off the main thread, then hand the results to
@@ -5072,7 +5164,7 @@ impl Workspace {
         chat.reset(cx);
         for item in conversation.transcript.items {
             chat.messages.push(match item {
-                ai::Said::User { text, images, prompt } => {
+                ai::Said::User { text, images, prompt, files } => {
                     let mut pictures = vec![];
                     for image_id in images {
                         // A picture that cannot be read back is left out; the question stays.
@@ -5081,7 +5173,7 @@ impl Workspace {
                         chat.stored_images.insert(image_id.clone());
                         pictures.push(ChatImage { id: image_id, image: Arc::new(Image::from_bytes(format, data)) });
                     }
-                    ChatItem::User { text, images: pictures, prompt }
+                    ChatItem::User { text, images: pictures, prompt, files }
                 }
                 ai::Said::Answer { text } => ChatItem::Answer(text),
                 ai::Said::Tool { call, result, failed } => ChatItem::Tool { call, result: Some((result, failed)) },
@@ -6629,6 +6721,11 @@ impl Workspace {
                 // `image:/path/to.png` puts a picture with the next question to the library.
                 "image" => {
                     self.attach_images(Talk::Library, vec![Picture::File(arg.into())], cx);
+                    None
+                }
+                // `document:<path>` puts a Word file with the library's next question, as dropping it on 助手 does.
+                "document" => {
+                    self.attach_documents(Talk::Library, vec![arg.into()], cx);
                     None
                 }
                 "history" => Some(Cmd::ToggleHistory(Talk::Library)),

@@ -101,6 +101,12 @@ pub struct Inspected {
     list_fields: Vec<usize>,
 }
 
+/// What the assistant is told with a question that came with Word files: where they are and what it can do with them.
+pub fn note(paths: &[String]) -> String {
+    let files: Vec<String> = paths.iter().map(|path| format!("- {path}")).collect();
+    format!("用户随这个问题附上了 Word 文件（本机路径）：\n{}\n这是在别处写好的稿件，不是写作页的稿件，不要用稿件工具去读写它。用户多半想重排它的引用格式：先用 read_docx_citations 读出它引用了什么，把识别结果如实告诉用户（引用来自 Zotero 域还是按文字识别、参考文献多少条、哪些没能识别、哪些引用会保持原样）；用户没说用哪个样式时问清楚（list_cite_styles 有可用的样式）；要在某个样式上改动时用 read_cite_style 读出它、改好、用 try_cite_style 试排给用户看，再把改好的 CSL 交给 restyle_docx。restyle_docx 写出一个新文件，保存位置由用户在保存对话框里选，原文件不会改动；不要自己填 output。", files.join("\n"))
+}
+
 // ---- small readers of text
 
 fn is_cjk(c: char) -> bool {
@@ -182,6 +188,12 @@ fn initials(word: &str) -> bool {
     !letters.is_empty() && letters.len() <= 3 && letters.iter().all(|c| c.is_uppercase()) && word.chars().all(|c| c.is_alphabetic() || matches!(c, '.' | '-' | ' '))
 }
 
+/// Initials written together, each said by itself: `MCP` is `M. C. P.`, which a style then sets as it sets initials. Anything else as it is.
+fn spelled(given: &str) -> String {
+    if given.chars().count() < 2 || !given.chars().all(|c| c.is_uppercase()) || !initials(given) { return given.to_string() }
+    given.chars().map(|c| format!("{c}.")).collect::<Vec<_>>().join(" ")
+}
+
 const COMPOUND: [&str; 12] = ["欧阳", "司马", "诸葛", "上官", "司徒", "夏侯", "皇甫", "尉迟", "公孙", "慕容", "令狐", "东方"];
 
 /// One author as written, family name and given name.
@@ -204,7 +216,7 @@ fn person(name: &str) -> Option<(String, String)> {
         // A name of one word may be a body's: WHO.
         [one] => Some((one.to_string(), String::new())),
         // `Zhang W`, `van der Berg AB`: the family name first, initials after it. `ZHANG Wei` likewise.
-        [family @ .., last] if initials(last) || family.iter().all(|word| !word.chars().any(|c| c.is_lowercase())) => Some((cased(&family.join(" ")), last.to_string())),
+        [family @ .., last] if initials(last) || family.iter().all(|word| !word.chars().any(|c| c.is_lowercase())) => Some((cased(&family.join(" ")), spelled(last))),
         // `Wei Zhang`: the family name last.
         [given @ .., last] => Some((cased(last), given.join(" "))),
     }
@@ -763,8 +775,18 @@ fn names_of(names: &str) -> Option<(String, String)> {
     Some((family.to_string(), if lower[cut..].contains("et al") { String::new() } else { second }))
 }
 
+/// What stands before the names of a citation that is worded: longer ones first.
+const PREFIXES: [&str; 14] = ["see also", "see e.g.", "see", "e.g.,", "e.g.", "cf.", "reviewed in", "reviewed by", "参见", "详见", "例如", "见", "如", "综述见"];
+
 /// One part of a citation in brackets, between its semicolons: the works it names, or why it is none.
 fn named_part(part: &str) -> Option<Result<Vec<NamedWork>, String>> {
+    // Words before the names (`see`, `参见`): a citation still, which stays as its writer worded it.
+    let said = part.trim_start();
+    let lower = said.to_lowercase();
+    if let Some(lead) = PREFIXES.iter().find(|lead| lower.starts_with(**lead) && !said[lead.len()..].starts_with(|c: char| c.is_ascii_alphabetic())) {
+        let rest = said[lead.len()..].trim_start_matches([',', '，', ':', '：', ' ']);
+        return named_part(rest).map(|_| Err(format!("带有前缀「{}」", said[..lead.len()].trim())));
+    }
     let found = years(part);
     let (first, ..) = found.first()?;
     let (family, second) = names_of(&part[..*first])?;
@@ -864,7 +886,7 @@ fn author_year(text: &str, paragraph: usize, entries: &[Entry]) -> Vec<Found> {
         } else {
             let parts: Vec<Option<Result<Vec<NamedWork>, String>>> = inner.split([';', '；']).filter(|part| !part.trim().is_empty()).map(named_part).collect();
             // Words in brackets that name no work at all: not a citation.
-            if !parts.iter().any(|part| matches!(part, Some(Ok(_)))) { continue }
+            if !parts.iter().any(Option::is_some) { continue }
             for part in parts {
                 match part {
                     Some(Ok(works)) => {
@@ -1155,7 +1177,7 @@ mod tests {
         assert_eq!(said(&apa), (vec!["Zhang|W.".to_string(), "Li|Q.".into(), "Wang|F.".into()], Some(2024), "Single-cell atlas of roots", "Nature Plants", "10", "3", "45–67"));
         assert_eq!((apa.letter.as_str(), apa.doi.as_str()), ("a", "10.1038/s41477-024-0001-2"));
         let vancouver = parse_entry("[2] Smith JA, van der Berg AB, Li Q. Roots and shoots: a review. Plant Cell. 2019;31(2):123-134. PMID: 30123456");
-        assert_eq!(said(&vancouver), (vec!["Smith|JA".to_string(), "van der Berg|AB".into(), "Li|Q".into()], Some(2019), "Roots and shoots: a review", "Plant Cell", "31", "2", "123–134"));
+        assert_eq!(said(&vancouver), (vec!["Smith|J. A.".to_string(), "van der Berg|A. B.".into(), "Li|Q".into()], Some(2019), "Roots and shoots: a review", "Plant Cell", "31", "2", "123–134"));
         assert_eq!(vancouver.pmid, "30123456");
         let nature = parse_entry("3. Zhang, W., Li, Q. & Wang, F. Single-cell atlas of roots. Nat. Plants 10, 45–67 (2024).");
         assert_eq!(said(&nature), (vec!["Zhang|W.".to_string(), "Li|Q.".into(), "Wang|F".into()], Some(2024), "Single-cell atlas of roots", "Nat. Plants", "10", "", "45–67"));
@@ -1316,7 +1338,7 @@ mod tests {
             "(Zhang et al., 2024a; Smith & Li, 2019) = r2,r1",
             "(2024b) = r3",
             "(2019) = r1",
-            "(Jones, 1999; see also Smith & Li, 2019, p. 5) =  参考文献表里没有「Jones, 1999」；括号里除了引用还有别的话",
+            "(Jones, 1999; see also Smith & Li, 2019, p. 5) =  参考文献表里没有「Jones, 1999」；带有前缀「see also」",
             "(Smith & Li, 2019, pp. 5–7) = r1",
         ]);
         assert_eq!(found.report()["uncited"], json!([4]));
@@ -1333,7 +1355,7 @@ mod tests {
 
         let body = format!(
             "{}{}{}{}{}",
-            p("根系向下生长（张三等，2020；李四和王五，2019a），张三等（2020）也这样认为（见图 2）。"),
+            p("根系向下生长（张三等，2020；李四和王五，2019a），张三等（2020）也这样认为（见图 2），也有不同意见（参见李四和王五，2019b）。"),
             p("参考文献"),
             p("李四, 王五. 根毛的发育[J]. 植物学报, 2019a, 54(1): 1-9."),
             p("李四, 王五. 根毛的吸水[J]. 植物学报, 2019b, 54(2): 10-19."),
@@ -1342,10 +1364,10 @@ mod tests {
         let source = file(&body, "");
         let found = inspect(&source, &[], &[], None).unwrap();
         assert_eq!(found.language, "zh");
-        assert_eq!(named(&found), ["（张三等，2020；李四和王五，2019a） = r3,r1", "（2020） = r3"]);
+        assert_eq!(named(&found), ["（张三等，2020；李四和王五，2019a） = r3,r1", "（2020） = r3", "（参见李四和王五，2019b） =  带有前缀「参见」"]);
         let done = restyle(&source, &found, &style("gb-7714-2015-numeric"), &Options::default()).unwrap();
         let said = texts(&done.bytes);
-        assert_eq!(said[0], "根系向下生长[1,2]，张三等[1]也这样认为（见图 2）。");
+        assert_eq!(said[0], "根系向下生长[1,2]，张三等[1]也这样认为（见图 2），也有不同意见（参见李四和王五，2019b）。");
         assert_eq!(said[2], "[1] 张三, 李四, 赵六. 水稻根系发育的单细胞图谱[J]. 植物学报, 2020, 55(3): 12-20.");
         assert!(said[3].starts_with("[2] 李四, 王五. 根毛的发育[J]") && said[4].starts_with("[3] 李四, 王五. 根毛的吸水[J]"), "{said:?}");
         assert_eq!(said.len(), 5);

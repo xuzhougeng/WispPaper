@@ -1349,7 +1349,8 @@ pub fn marks(bytes: &[u8]) -> Result<Marks> {
                 Item::Raw(xml) => f(xml, false, false),
                 Item::Wrap { items, .. } => walk(items, f),
                 Item::Run(run) => {
-                    let raised = val_of(&run.rpr, "w:vertAlign").as_deref() == Some("superscript");
+                    // Raised by its setting, or (as LibreOffice writes it) lifted off the line.
+                    let raised = val_of(&run.rpr, "w:vertAlign").as_deref() == Some("superscript") || val_of(&run.rpr, "w:position").and_then(|lift| lift.parse::<i32>().ok()).is_some_and(|lift| lift > 0);
                     for part in &run.parts {
                         match part {
                             Part::Text(text) => f(text, true, raised),
@@ -1670,6 +1671,14 @@ fn restyle(items: &mut Vec<Item>, pos: &mut usize, range: &Range<usize>, look: &
     }
 }
 
+/// A run's properties without what raised it: the setting, or the lift off the line and the smaller size that goes with it.
+fn lowered(rpr: &str) -> String {
+    if rpr.is_empty() { return String::new() }
+    let level = without(rpr, "w:vertAlign");
+    if val_of(rpr, "w:position").is_none() { return level }
+    ["w:position", "w:sz", "w:szCs"].iter().fold(level, |rpr, name| without(&rpr, name))
+}
+
 /// The bookmarks links lead to, by the anchor of the paragraph each is on: its number among the document's marks, and its name.
 type Anchors = BTreeMap<String, (u32, String)>;
 
@@ -1687,7 +1696,7 @@ fn dressed(xml: String, wanted: &Wanted, anchors: &Anchors) -> String {
     let within = |range: &Range<usize>| (text.floor_char_boundary(lead + range.start.min(length)), text.floor_char_boundary(lead + range.end.min(length)));
     for range in &wanted.level {
         let (start, end) = within(range);
-        if end > start { restyle(&mut para.items, &mut 0, &(start..end), &|rpr| if rpr.is_empty() { String::new() } else { without(rpr, "w:vertAlign") }) }
+        if end > start { restyle(&mut para.items, &mut 0, &(start..end), &lowered) }
     }
     for (range, look) in &wanted.looks {
         let (start, end) = within(range);
@@ -2173,5 +2182,10 @@ pub(crate) mod tests {
         // The new entry is set like the old one's paragraph, with none of the looks its words had.
         assert!(body.contains("<w:ind w:left=\"420\"/>") && body.ends_with("<w:t xml:space=\"preserve\">[1] Zhang W. Roots. Nature 2024.</w:t></w:r></w:p>"), "{body}");
         assert_eq!(texts(&done.bytes), ["Roots grow [1].", "[1] Zhang W. Roots. Nature 2024."]);
+        // LibreOffice raises by lifting the words and setting them smaller: read as raised, and both go.
+        let lifted = file("<w:p><w:r><w:t>Roots grow</w:t></w:r><w:r><w:rPr><w:position w:val=\"8\"/><w:sz w:val=\"19\"/></w:rPr><w:t>1</w:t></w:r></w:p>", "");
+        assert_eq!(marks(&lifted).unwrap().raised[0].len(), 1);
+        let done = rewrite(&lifted, &[Wanted { text: "Roots grow [1]".into(), level: std::iter::once(10..14).collect(), edits: vec![(10..11, " [1]".into())], ..Default::default() }], &Options::default()).unwrap();
+        assert!(body_of(&done.bytes).ends_with("<w:r><w:rPr></w:rPr><w:t xml:space=\"preserve\"> [1]</w:t></w:r></w:p>"), "{}", body_of(&done.bytes));
     }
 }

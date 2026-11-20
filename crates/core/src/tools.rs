@@ -1515,12 +1515,6 @@ pub fn preview_call(store: &Store, name: &str, args: &Value) -> Result<Vec<Strin
             Ok(vec![destination, format!("标题：{}", doc.title), format!("正文 {} 字，{} 张图片；原始笔记不变。", doc.markdown.chars().count(), doc.used_attachments().count()), doc.markdown.chars().take(2000).collect()])
         }
         "resolve_note_save" => Ok(vec![format!("仅在已手动核对 Notion 后确认：{}。", if args["saved"] == true { "笔记已成功写入" } else { "完全没有写入（不是部分写入）" }), format!("记录：{}；页面：{}", args["id"].as_str().unwrap_or(""), args["page"].as_str().unwrap_or(""))]),
-        "restyle_docx" => {
-            let said = |key: &str| args[key].as_str().unwrap_or("").trim().to_string();
-            let style = if said("csl").is_empty() { crate::csl::name_of(&said("style"), &store.root().parent().map(Path::to_path_buf).unwrap_or_default()).unwrap_or_else(|| said("style")) } else { "改过的 CSL 样式（不保存）".to_string() };
-            Ok(vec![format!("原文件：{}（不会改动）", said("path")), format!("新文件：{}", if said("output").is_empty() { "原文件旁边，文件名加 -restyled".to_string() } else { said("output") }), format!("引用样式：{style}{}", if args["track"] == true { "；改动写成修订" } else { "" })])
-        }
-        "organise_papers" => organise::preview(store, args),
         "edit_section" | "set_outline" => crate::compose::preview(store, name, args).map_err(|e| format!("{e:#}")),
         _ => Ok(vec![]),
     }
@@ -2535,7 +2529,6 @@ pub(crate) mod tests {
         assert!(call(&root, "restyle_docx", &json!({"path": path, "style": "numeric"})).unwrap_err().contains("csl:nature"));
         assert!(call(&root, "read_docx_citations", &json!({"path": root.join("x.pdf")})).is_err());
         assert!(catalog().iter().any(|tool| tool.name == "restyle_docx" && tool.writes && tool.confirm) && catalog().iter().any(|tool| tool.name == "read_docx_citations" && !tool.writes));
-        assert_eq!(preview_call(&Store::open(&crate::libraries::list(&root)[0].dir).unwrap(), "restyle_docx", &json!({"path": "a.docx", "style": "csl:apa", "track": true})).unwrap()[2], "引用样式：APA Style 7th edition；改动写成修订");
         std::fs::remove_dir_all(root).ok();
     }
 
