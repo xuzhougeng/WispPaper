@@ -1045,6 +1045,7 @@
   "配引用": "Find citations",
   "仿写": "Rewrite by example",
   "找句子": "Find sentences",
+  "引用卡片": "Citation cards",
   "正在文献库里找与这段相近的句子…": "Finding sentences in the library similar to this text…",
   "在文献库里逐句找可以引用的文献，列出每篇和它自己的原句。勾选后只把引用加到句末，不改你的文字。": "Find, sentence by sentence, the papers in the library this text can cite, each with a sentence of its own. Ticked papers are added as citations at the end of the sentence; your text is not changed.",
   "只改语法、用词和不通顺的地方。给出改后的文字并标出改了哪里，由你决定是否替换。": "Fix grammar, wording and rough spots only. The new version is shown with its changes marked; you decide whether to replace.",
