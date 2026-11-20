@@ -43,6 +43,7 @@ diff -ru $R/xattr-0.2.3/src vendor/xattr/src
 | 22 | `platform/mac/platform.rs` | 读取剪贴板时同时保留文字和一种图片格式（优先 PNG），跳过空图片数据 | 截图工具同时提供文字和图片时，正文可选择图片，文本输入框仍可读取文字 |
 | 23 | `elements/text.rs` | 量文字的缓存多记一项「截到多宽」，宽度变了就重新量；每次量都从完整的 runs 开始（截断会把 runs 改短）。原来不换行的文字第一次按不限宽量过后尺寸一直沿用 | `truncate()` 的文字原来从不出省略号，由外层裁掉半个字；现在截在整字上并带「…」，列宽拖动时跟着重截 |
 | 24 | `platform/mac/events.rs`、`platform/mac/window.rs` | 视图接收 `magnifyWithEvent:`，触控板双指捏合（`NSEventTypeMagnify`）转成按住 Ctrl 的滚轮事件：每放大 e 倍滚 240 px，即 `dy = 240 · ln(1 + magnification)` | PDF 里双指捏合缩放。浏览器和 Windows（精确式触摸板）也是这样把捏合交给应用的，所以应用里只有「Ctrl + 滚轮」一条缩放路径 |
+| 25 | `platform/mac/platform.rs` | 打开面板 `setCanResolveUbiquitousConflicts: NO`：不让面板处理所选文件的 iCloud 冲突版本 | 选中有未解决 iCloud 冲突的文件（如 iCloud 目录里的 `zotero.sqlite`）并确认时，面板进程 `openAndSavePanelService` 在 `_resolveUbiquitousConflictsForURLs:` 里无限递归、栈溢出崩溃，选择结果回不来（#177）。应用只读取文件的当前版本，不需要面板代为解决冲突 |
 
 
 ## taffy 0.9.0

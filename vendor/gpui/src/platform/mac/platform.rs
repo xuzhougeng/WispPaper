@@ -722,6 +722,10 @@ impl Platform for MacPlatform {
 
                     panel.setCanCreateDirectories(true.to_objc());
                     panel.setResolvesAliases_(false.to_objc());
+                    // quiet.md: the panel is not to settle iCloud conflicts of the
+                    // chosen files. Its helper process recurses in that step until
+                    // its stack is used up, and the choice never comes back.
+                    let _: () = msg_send![panel, setCanResolveUbiquitousConflicts: NO];
                     let done_tx = Cell::new(Some(done_tx));
                     let block = ConcreteBlock::new(move |response: NSModalResponse| {
                         let result = if response == NSModalResponse::NSModalResponseOk {
