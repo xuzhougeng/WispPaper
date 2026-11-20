@@ -73,6 +73,9 @@ fn bib_entry(kind: &str, body: &str) -> Option<Paper> {
         title,
         authors: get("author").split(" and ").map(str::trim).filter(|a| !a.is_empty() && *a != "others").collect::<Vec<_>>().join("; "),
         journal: [get("journal"), get("journaltitle"), get("booktitle"), get("publisher")].into_iter().find(|v| !v.is_empty()).unwrap_or_default(),
+        volume: get("volume"),
+        issue: [get("number"), get("issue")].into_iter().find(|v| !v.is_empty()).unwrap_or_default(),
+        pages: crate::model::clean_pages(&[get("pages"), get("eid"), get("article-number")].into_iter().find(|v| !v.is_empty()).unwrap_or_default()),
         year: [get("year"), get("date")].iter().find_map(|v| first_year(v)),
         doi: normalize_doi(&get("doi")),
         pmid: get("pmid"),
@@ -237,6 +240,8 @@ pub fn parse_ris(text: &str) -> Vec<Paper> {
     let mut current: Option<Paper> = None;
     let mut authors: Vec<String> = vec![];
     let mut last_tag = String::new();
+    // `SP` and `EP`; some files write the whole range in `SP`.
+    let (mut first_page, mut last_page) = (String::new(), String::new());
     for line in text.lines() {
         let line = line.trim_end();
         let tagged = line.len() >= 5 && line.is_char_boundary(2) && line.is_char_boundary(5) && &line[2..5] == "  -" && line[..2].chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
@@ -253,6 +258,7 @@ pub fn parse_ris(text: &str) -> Vec<Paper> {
             let status = if value == "UNPB" { "preprint" } else if ["JOUR", "CONF", "CPAPER", "BOOK", "CHAP"].contains(&value.as_str()) { "published" } else { "" };
             current = Some(Paper { publication_status: status.to_string(), ..Default::default() });
             authors.clear();
+            (first_page, last_page) = (String::new(), String::new());
             continue;
         }
         let Some(paper) = current.as_mut() else { continue };
@@ -266,6 +272,10 @@ pub fn parse_ris(text: &str) -> Vec<Paper> {
             "JO" | "JF" | "T2" | "J2" if paper.journal.is_empty() || !tagged => {
                 if tagged { paper.journal = value } else { append(&mut paper.journal, &value) }
             }
+            "VL" if tagged => paper.volume = value,
+            "IS" if tagged => paper.issue = value,
+            "SP" if tagged => first_page = value,
+            "EP" if tagged => last_page = value,
             "PY" | "Y1" | "DA" if paper.year.is_none() => paper.year = first_year(&value),
             "DO" => paper.doi = normalize_doi(&value),
             "AB" | "N2" => append(&mut paper.abstract_text, &value),
@@ -277,6 +287,7 @@ pub fn parse_ris(text: &str) -> Vec<Paper> {
                 let mut done = current.take().unwrap();
                 done.authors = authors.join("; ");
                 done.tags = clean_strings(&done.tags);
+                done.pages = crate::model::clean_pages(&if last_page.is_empty() || first_page.contains('-') { first_page.clone() } else { format!("{first_page}-{last_page}") });
                 // "doi:10.…" sometimes hides in the URL or notes.
                 if done.doi.is_empty() && let Some(at) = done.url.find("doi.org/") {
                     done.doi = normalize_doi(&done.url[at..]);
@@ -372,6 +383,7 @@ mod tests {
 @article{zhang2024, title = {{Single-cell} atlas of {A}rabidopsis \& rice},
   author = "Zhang, Wei and M{\"u}ller, J\'an and others",
   journal = {Nature Plants}, year = 2024, doi = {https://doi.org/10.1000/ABC_1},
+  volume = 10, number = {3}, pages = {357--362},
   keywords = {root, atlas; root},
   abstract = {Line one
      line two.}
@@ -385,6 +397,7 @@ mod tests {
         assert_eq!(p.title, "Single-cell atlas of Arabidopsis & rice");
         assert_eq!(p.authors, "Zhang, Wei; Müller, Ján");
         assert_eq!((p.journal.as_str(), p.year, p.doi.as_str()), ("Nature Plants", Some(2024), "10.1000/abc_1"));
+        assert_eq!((p.volume.as_str(), p.issue.as_str(), p.pages.as_str()), ("10", "3", "357-362"));
         assert_eq!(p.tags, ["root", "atlas"]);
         assert_eq!(p.abstract_text, "Line one line two.");
         assert_eq!(p.publication_status, "published");
@@ -393,21 +406,24 @@ mod tests {
 
     #[test]
     fn export_then_import() {
-        let mut original = Paper { title: "Cost of 100% {braces} & more_stuff".into(), authors: "Smith, Alice; Jones, Bob".into(), journal: "J. Tests".into(), year: Some(2020), doi: "10.1000/x_y".into(), ..Default::default() };
+        let mut original = Paper { title: "Cost of 100% {braces} & more_stuff".into(), authors: "Smith, Alice; Jones, Bob".into(), journal: "J. Tests".into(), volume: "7".into(), issue: "S1".into(), pages: "12-19".into(), year: Some(2020), doi: "10.1000/x_y".into(), ..Default::default() };
         original.normalize();
         let read = parse_bibtex(&crate::export::bibtex(&[&original]));
         assert_eq!(read.len(), 1);
         assert_eq!((read[0].title.as_str(), read[0].authors.as_str(), read[0].doi.as_str()), ("Cost of 100% {braces} & more_stuff", "Smith, Alice; Jones, Bob", "10.1000/x_y"));
+        assert_eq!((read[0].volume.as_str(), read[0].issue.as_str(), read[0].pages.as_str()), ("7", "S1", "12-19"));
     }
 
     #[test]
     fn ris_records() {
-        let text = "TY  - JOUR\nTI  - Root cell atlas\nAU  - Zhang, Wei\nAU  - Li, Na\nJO  - Plant Cell\nPY  - 2022/03/01\nDO  - 10.1000/ris\nAB  - First line\nsecond line\nKW  - root\nKW  - atlas\nER  - \n\nTY  - UNPB\nT1  - Draft\nER  - \n";
+        let text = "TY  - JOUR\nTI  - Root cell atlas\nAU  - Zhang, Wei\nAU  - Li, Na\nJO  - Plant Cell\nVL  - 34\nIS  - 2\nSP  - 101\nEP  - 15\nPY  - 2022/03/01\nDO  - 10.1000/ris\nAB  - First line\nsecond line\nKW  - root\nKW  - atlas\nER  - \n\nTY  - UNPB\nT1  - Draft\nER  - \n";
         let papers = parse_references(text, "RIS 导入").unwrap();
         assert_eq!(papers.len(), 2);
         assert_eq!(papers[0].authors, "Zhang, Wei; Li, Na");
         assert_eq!((papers[0].year, papers[0].doi.as_str(), papers[0].abstract_text.as_str()), (Some(2022), "10.1000/ris", "First line second line"));
         assert_eq!(papers[0].tags, ["root", "atlas"]);
+        // The last page written short is read in full.
+        assert_eq!((papers[0].volume.as_str(), papers[0].issue.as_str(), papers[0].pages.as_str()), ("34", "2", "101-115"));
         assert_eq!(papers[1].publication_status, "preprint");
         assert_eq!(papers[1].source, "RIS 导入");
         assert!(parse_references("just words", "x").is_err());

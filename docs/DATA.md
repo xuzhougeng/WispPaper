@@ -5,6 +5,7 @@
 | 内容 | 位置 |
 |---|---|
 | 文献库 | `文档/WispPaper/<文献库 ID>/`，内含 `library.json`、`wisp-paper.sqlite`、`papers/`，用到时还有 `figures/`（图片库）和 `manuscripts/`（导入的 Word 稿件） |
+| 文献的书目信息（题目、作者、期刊、卷、期、页码、年份、DOI、PMID、摘要）、标签、笔记和各项状态 | 文献库的 `wisp-paper.sqlite` 中 `papers` 表；卷、期、页码是后来加的列，旧版本打开这个库时不读也不改它们 |
 | 历史对话（问题、回答、随问题发出的图片） | 各文献库的 `wisp-paper.sqlite` 里，随文献库文件夹一起走；在「历史」里删除一条对话是真的删除 |
 | Notion 笔记保存记录 | 各文献库的 `wisp-paper.sqlite` 中 `note_saves` 表，保存父页面、笔记页面 ID、草稿指纹及写入状态；不保存另一份笔记正文或令牌 |
 | PDF 标注（下划线、高亮、原文、页码、坐标、笔记） | 文献库的 `wisp-paper.sqlite` 中 `pdf_annotations` 表；原 PDF 不改写，备份时需连同数据库一起保存；删除标注或移除其附件会删除对应标注记录 |

@@ -495,6 +495,8 @@ impl Workspace {
                             .child(ui::form_row(t("题目"), ui::field(&form.title, window, cx)))
                             .child(ui::form_row(t("作者"), ui::field(&form.authors, window, cx)))
                             .child(pair(ui::form_row(t("期刊 / 会议"), ui::field(&form.journal, window, cx)).into_any_element(), ui::form_row(t("年份"), ui::field(&form.year, window, cx)).into_any_element()))
+                            // Where in the journal: two short numbers and a range, on one line.
+                            .child(div().flex().gap(px(12.)).child(div().flex_1().min_w_0().child(ui::form_row(t("卷"), ui::field(&form.volume, window, cx)))).child(div().flex_1().min_w_0().child(ui::form_row(t("期"), ui::field(&form.issue, window, cx)))).child(div().flex_1().min_w_0().child(ui::form_row(t("起止页码"), ui::field(&form.pages, window, cx)))))
                             .child(pair(ui::form_row("DOI", ui::field(&form.doi, window, cx)).into_any_element(), ui::form_row("PMID", ui::field(&form.pmid, window, cx)).into_any_element()))
                             .child(ui::form_row(t("网址"), ui::field(&form.url, window, cx)))
                             .child(ui::form_row(t("标签"), ui::field(&form.tags, window, cx)))

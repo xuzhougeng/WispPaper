@@ -1301,6 +1301,9 @@ pub struct PaperForm {
     pub authors: Entity<TextInput>,
     pub year: Entity<TextInput>,
     pub journal: Entity<TextInput>,
+    pub volume: Entity<TextInput>,
+    pub issue: Entity<TextInput>,
+    pub pages: Entity<TextInput>,
     pub doi: Entity<TextInput>,
     pub pmid: Entity<TextInput>,
     pub url: Entity<TextInput>,
@@ -5247,6 +5250,9 @@ impl Workspace {
             authors: self.modal_input("作者，用分号分隔：Zhang, Wei; Li, Na", &paper.authors, false, window, cx),
             year: self.modal_input("例如 2024", &paper.year.map(|y| y.to_string()).unwrap_or_default(), false, window, cx),
             journal: self.modal_input("期刊或会议", &paper.journal, false, window, cx),
+            volume: self.modal_input("", &paper.volume, false, window, cx),
+            issue: self.modal_input("", &paper.issue, false, window, cx),
+            pages: self.modal_input("例如 357-362", &paper.pages, false, window, cx),
             doi: self.modal_input("10.xxxx/…", &paper.doi, false, window, cx),
             pmid: self.modal_input("PubMed 编号", &paper.pmid, false, window, cx),
             url: self.modal_input("https://…", &paper.url, false, window, cx),
@@ -5917,6 +5923,9 @@ impl Workspace {
                 paper.title = text(&form.title, cx);
                 paper.authors = text(&form.authors, cx);
                 paper.journal = text(&form.journal, cx);
+                paper.volume = text(&form.volume, cx);
+                paper.issue = text(&form.issue, cx);
+                paper.pages = text(&form.pages, cx);
                 paper.doi = text(&form.doi, cx);
                 paper.pmid = text(&form.pmid, cx);
                 paper.url = text(&form.url, cx);

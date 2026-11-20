@@ -471,8 +471,8 @@ pub fn bibtex(references: &[Reference], index: &Index) -> String {
     crate::export::bibtex_keyed(&entries)
 }
 
-/// One entry, from what the record has: `Zhang, W., & Li, Q. (2024). Title. Journal. https://doi.org/…`.
-/// The records keep no volume, issue or pages, so an entry has none.
+/// One entry, from what the record has: `Zhang, W., & Li, Q. (2024). Title. Journal, 10(3), 357–362. https://doi.org/…`.
+/// Volume, issue and pages are written when the record has them.
 pub fn reference(paper: &Paper) -> String {
     reference_dated(paper, &paper.year.map_or("n.d.".to_string(), |year| year.to_string()))
 }
@@ -491,7 +491,13 @@ fn reference_dated(paper: &Paper, year: &str) -> String {
     let mut out = if authors.is_empty() { format!("{title} ({year}).") } else { format!("{authors} ({year}). {title}") };
     let journal = paper.journal.trim();
     if !journal.is_empty() {
-        out.push_str(&format!(" {}{}", journal, if journal.ends_with('.') { "" } else { "." }));
+        // `Journal, 10(3), 357–362.`: each part only when the record has it.
+        let placed = paper.placed();
+        if placed.is_empty() {
+            out.push_str(&format!(" {}{}", journal, if journal.ends_with('.') { "" } else { "." }));
+        } else {
+            out.push_str(&format!(" {journal}, {placed}."));
+        }
     } else if paper.publication_status == "preprint" {
         out.push_str(" Preprint.");
     }
@@ -1054,6 +1060,14 @@ mod tests {
         assert_eq!(refs[1].text, "Müller, J. (n.d.). Auxin.");
         assert_eq!(refs[2].text, "Smith, A., & Jones, B. (2019). Two authors. PMID: 123");
         assert_eq!(refs[3].text, "Zhang, W., Li, Q., & Wang, F. (2024). Single-cell atlas of roots. Nature Plants. https://doi.org/10.1000/x");
+        // Volume, issue and pages follow the journal, each when the record has it.
+        let mut placed = papers[0].clone();
+        (placed.volume, placed.issue, placed.pages) = ("10".into(), "3".into(), "357-362".into());
+        assert_eq!(reference(&placed), "Zhang, W., Li, Q., & Wang, F. (2024). Single-cell atlas of roots. Nature Plants, 10(3), 357–362. https://doi.org/10.1000/x");
+        placed.issue.clear();
+        assert!(reference(&placed).contains(" Nature Plants, 10, 357–362. "));
+        (placed.volume, placed.pages) = (String::new(), "e1234".into());
+        assert!(reference(&placed).contains(" Nature Plants, e1234. "));
         let bib = bibtex(&refs, &index);
         assert!(bib.starts_with("@article{DeNovo2020,\n") && bib.contains("@article{Zhang2024,\n") && bib.matches("@article").count() == 4, "{bib}");
         assert_eq!(authors_shown("Tian-Qi Zhang; 张伟"), ["Zhang, T.-Q.", "张伟"]);

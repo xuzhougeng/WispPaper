@@ -22,10 +22,11 @@ use crate::model::Paper;
 use anyhow::{Context as _, Result, anyhow, bail};
 use hayagriva::archive::ArchivedStyle;
 use hayagriva::citationberg::{self, FontStyle, FontVariant, FontWeight, IndependentStyle, Locale, LocaleCode, StyleClass, TextDecoration, VerticalAlign};
-use hayagriva::types::{Date, EntryType, FormatString, Person};
+use hayagriva::types::{Date, EntryType, FormatString, MaybeTyped, Numeric, PageRanges, Person};
 use hayagriva::{BibliographyDriver, BibliographyRequest, CitationItem, CitationRequest, ElemChild, ElemChildren, ElemMeta, Entry, Formatting};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::str::FromStr as _;
 use std::sync::OnceLock;
 
 /// The folder of the data root that holds the styles the person added.
@@ -248,6 +249,7 @@ fn locale(language: &str) -> Option<LocaleCode> {
 }
 
 /// A paper as a CSL processor reads one: an article, in its journal when it has one.
+/// The volume and issue are the journal's, the pages the article's.
 fn entry(paper: &Paper) -> Entry {
     let mut entry = Entry::new(&paper.id, EntryType::Article);
     entry.set_title(FormatString::with_value(paper.title.trim()));
@@ -259,9 +261,19 @@ fn entry(paper: &Paper) -> Entry {
     if !paper.journal.trim().is_empty() {
         let mut journal = Entry::new("journal", EntryType::Periodical);
         journal.set_title(FormatString::with_value(paper.journal.trim()));
+        if let Some(volume) = numbered(&paper.volume) { journal.set_volume(volume) }
+        if let Some(issue) = numbered(&paper.issue) { journal.set_issue(issue) }
         entry.set_parents(vec![journal]);
     }
+    // A range a style can shorten or give an en dash; an article number as it is written.
+    if !paper.pages.trim().is_empty() { entry.set_page_range(MaybeTyped::<PageRanges>::from_str(paper.pages.trim()).unwrap_or_else(|never| match never {})) }
     entry
+}
+
+/// A volume or issue: a number where it is one (`585`, `12-13`), else the words as written (`S1`).
+fn numbered(value: &str) -> Option<MaybeTyped<Numeric>> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| MaybeTyped::from_str(value).unwrap_or_else(|never| match never {}))
 }
 
 fn look(formatting: &Formatting) -> Look {
@@ -418,6 +430,29 @@ mod tests {
         // The journal is in italics.
         let (range, look) = list[0].1.looks.iter().find(|(_, look)| look.italic).unwrap();
         assert_eq!((&list[0].1.text[range.clone()], look.bold), ("Nature Plants", false));
+    }
+
+    #[test]
+    fn an_entry_says_where_in_the_journal_the_paper_is() {
+        let root = temp("placed");
+        let mut numpy = paper("a", "Harris, Charles R.; Millman, K. Jarrod", 2020, "Array programming with NumPy", "Nature");
+        (numpy.volume, numpy.issue, numpy.pages) = ("585".into(), "7825".into(), "357-362".into());
+        let entry = |style: &str, paper: &Paper| render(&load_from(style, &root, None).unwrap(), &[vec![paper]], "en").1[0].1.clone();
+        let apa = entry("csl:apa", &numpy);
+        assert_eq!(apa.text, "Harris, C. R., & Millman, K. J. (2020). Array programming with NumPy. Nature, 585(7825), 357–362.");
+        // APA: the journal and the volume in italics, the issue not.
+        let italic: Vec<&str> = apa.looks.iter().filter(|(_, look)| look.italic).map(|(range, _)| &apa.text[range.clone()]).collect();
+        assert_eq!(italic, ["Nature", "585"]);
+        // Nature: the volume in bold (with its comma, as the style has it), no issue.
+        let nature = entry("csl:nature", &numpy);
+        assert_eq!(nature.text, "1. Harris, C. R. & Millman, K. J. Array programming with NumPy. Nature 585, 357–362 (2020).");
+        let bold: Vec<&str> = nature.looks.iter().filter(|(_, look)| look.bold).map(|(range, _)| &nature.text[range.clone()]).collect();
+        assert_eq!(bold, ["585,"]);
+        // An article number and a supplement's issue are written as they are; what a record lacks is left out.
+        (numpy.volume, numpy.issue, numpy.pages) = ("12".into(), "S1".into(), "e1234".into());
+        assert_eq!(entry("csl:apa", &numpy).text, "Harris, C. R., & Millman, K. J. (2020). Array programming with NumPy. Nature, 12(S1), e1234.");
+        (numpy.issue, numpy.pages) = (String::new(), String::new());
+        assert_eq!(entry("csl:apa", &numpy).text, "Harris, C. R., & Millman, K. J. (2020). Array programming with NumPy. Nature, 12.");
     }
 
     #[test]
