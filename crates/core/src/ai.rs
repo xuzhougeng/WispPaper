@@ -1118,7 +1118,7 @@ pub struct Slash {
     pub alone: &'static str,
 }
 
-pub const SLASH: [Slash; 7] = [
+pub const SLASH: [Slash; 8] = [
     Slash {
         name: "search",
         about: "在全文和记录里检索",
@@ -1153,6 +1153,13 @@ pub const SLASH: [Slash; 7] = [
         hint: "哪一部分和要写的内容，如：导言 根系如何感知土壤紧实",
         template: "参照文献库里的文献，帮我起草论文的一段：{}\n\n先判断这段属于论文的哪个部分（摘要、导言、方法、结果、讨论），用 find_sentences 取这一部分的候选句：先不带 query 看各篇文献怎么开头，再用英文关键词查与要写的内容相近的句子。然后用英文写出这一段：借鉴候选句的结构和措辞，但句子要自己写，不要照抄；引述他人结论的地方给出引用标签和页码。写完后列出你参考的 3 到 5 个候选句（原句、标签、页码），说明各借鉴了什么。文献库里没有这一部分的句子可参考时直接说明。",
         alone: "",
+    },
+    Slash {
+        name: "slides",
+        about: "把一篇文献做成汇报用的幻灯片",
+        hint: "文献标签或题目，如 P3；不写就是正在读的这篇",
+        template: "把这篇文献做成一份汇报用的幻灯片（.pptx）：{}\n\n做法：\n1. 用 get_paper 和 read_fulltext 把它读一遍。没有保存全文、只有摘要可依据时，先告诉用户，再只按摘要做。\n2. 用 list_figures（paper 填这篇文献）看图片库里收藏了它的哪些图。\n3. 按「背景与问题 → 方法 → 主要结果 → 结论与局限」排 8 到 12 页：一个结果一页，有对应的图就放上；每页 3 到 5 条要点，每条一句话，数字和结论以原文为准，不补原文没有的内容；notes 写讲这一页时要说的话，source 写出处的页码。\n4. 调用 make_slides，paperId 填这篇文献。\n\n完成后告诉用户文件在哪里、共几页、哪几页放了图。图片库里没有这篇文献的图时，说明幻灯片里没有图：在 PDF 页上框选收藏图片后再做一次就有了。",
+        alone: "这次对话正在读的这篇文献（对话不是针对某一篇文献时，先问用户要讲哪一篇）",
     },
     Slash {
         name: "verify",
@@ -2393,8 +2400,8 @@ mod tests {
         assert_eq!(expand_slash("/style-check 一段话"), "/style-check 一段话");
 
         let names = |input: &str| slash_matches(input, &own).into_iter().map(|offer| offer.name).collect::<Vec<_>>();
-        assert_eq!(names("/"), ["search", "cite", "review", "compare", "write", "verify", "new", "style-check", "润色", "empty"]);
-        assert_eq!(names("/s"), ["search", "style-check"]);
+        assert_eq!(names("/"), ["search", "cite", "review", "compare", "write", "slides", "verify", "new", "style-check", "润色", "empty"]);
+        assert_eq!(names("/s"), ["search", "slides", "style-check"]);
         assert_eq!(names("/润"), ["润色"]);
         assert_eq!(names("/空泛"), ["style-check"]);
         let offers = slash_matches("/", &own);
@@ -2408,7 +2415,7 @@ mod tests {
     #[test]
     fn slash_popup() {
         let names = |input: &str| slash_matches(input, &[]).into_iter().map(|command| command.name).collect::<Vec<_>>();
-        assert_eq!(names("/"), ["search", "cite", "review", "compare", "write", "verify", "new"]);
+        assert_eq!(names("/"), ["search", "cite", "review", "compare", "write", "slides", "verify", "new"]);
         // A command that can stand alone works on what it says it does.
         assert!(matches!(read_input("/verify", &[]), Ok(Input::Ask(prompt)) if prompt.contains("逐条核对下面这段内容的依据：上一个回答")));
         assert!(read_input("/cite", &[]).is_err());

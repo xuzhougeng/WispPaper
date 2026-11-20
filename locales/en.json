@@ -1099,6 +1099,8 @@
   "要配引用的文字": "Text to cite",
   "比较几篇文献的方法和结论": "Compare methods and conclusions",
   "参照文献库里同一部分的写法起草一段": "Draft using the same section of library papers",
+  "把一篇文献做成汇报用的幻灯片": "Turn a paper into presentation slides",
+  "文献标签或题目，如 P3；不写就是正在读的这篇": "Paper label or title, e.g. P3; blank uses the paper being read",
   "逐条核对上一个回答的依据": "Verify claims in the previous answer",
   "要核对的论断；不写就核对上一个回答": "Claims to verify; blank uses the previous answer",
   "开始一次新对话": "Start a new conversation",

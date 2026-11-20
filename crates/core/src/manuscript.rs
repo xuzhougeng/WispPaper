@@ -448,7 +448,7 @@ pub(crate) fn crc32(data: &[u8]) -> u32 {
 }
 
 /// A zip archive of these files, stored without compression.
-fn stored_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
+pub(crate) fn stored_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
     let (mut out, mut central) = (Vec::new(), Vec::new());
     let u16le = |v: &mut Vec<u8>, n: u16| v.extend_from_slice(&n.to_le_bytes());
     let u32le = |v: &mut Vec<u8>, n: u32| v.extend_from_slice(&n.to_le_bytes());

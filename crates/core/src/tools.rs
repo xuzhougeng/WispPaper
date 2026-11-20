@@ -40,7 +40,7 @@ pub struct ToolDef {
 }
 
 /// The tools that change the library.
-const WRITING: [&str; 26] = ["create_library", "import_library", "export_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "suggest_field", "sync_searches", "find_pdf", "import_url", "organise_papers", "edit_section", "set_outline", "comment_manuscript", "export_note", "save_note_to_notion", "resolve_note_save", "save_cite_style", "restyle_docx", "import_docx_references", "import_manuscript"];
+const WRITING: [&str; 27] = ["create_library", "import_library", "export_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "suggest_field", "sync_searches", "find_pdf", "import_url", "organise_papers", "edit_section", "set_outline", "comment_manuscript", "export_note", "save_note_to_notion", "resolve_note_save", "save_cite_style", "restyle_docx", "import_docx_references", "import_manuscript", "make_slides"];
 /// Of those, the ones the window's assistant runs only with the person's
 /// consent. Saving a search, suggesting a screening decision or proposing
 /// a field's value changes nothing a person has not yet to act on, so they
@@ -48,7 +48,7 @@ const WRITING: [&str; 26] = ["create_library", "import_library", "export_library
 /// about everywhere but in the conversation that writes that manuscript,
 /// where the person has handed the pen over. `comment_manuscript` is not among them: a comment changes no
 /// word of the manuscript, it waits for the person like a screening suggestion.
-const CONFIRMING: [&str; 19] = ["import_library", "export_library", "import_pdf", "import_references", "import_zotero", "run_search", "undo_import", "remove_search", "find_pdf", "import_url", "organise_papers", "edit_section", "set_outline", "export_note", "save_note_to_notion", "resolve_note_save", "restyle_docx", "import_docx_references", "import_manuscript"];
+const CONFIRMING: [&str; 20] = ["import_library", "export_library", "import_pdf", "import_references", "import_zotero", "run_search", "undo_import", "remove_search", "find_pdf", "import_url", "organise_papers", "edit_section", "set_outline", "export_note", "save_note_to_notion", "resolve_note_save", "restyle_docx", "import_docx_references", "import_manuscript", "make_slides"];
 /// The tools that write a manuscript (`compose`).
 pub const MANUSCRIPT: [&str; 2] = ["edit_section", "set_outline"];
 
@@ -436,6 +436,35 @@ pub fn catalog() -> Vec<ToolDef> {
             }),
             &["path"],
         ),
+        scoped(
+            "make_slides",
+            "做幻灯片",
+            "把内容做成一份 PowerPoint 幻灯片（.pptx），写成一个新文件：读一篇文献做汇报、组会讲文献、把几篇文献的比较讲成几页，都用它。你只说每页有什么（标题、要点、图、图注、出处、讲稿），版面由程序排：字号按内容选，要点一页放不下时接着排到下一页，图和要点并排或上下放；第一页是标题页，不用写在 slides 里。先用 read_fulltext 读过文献再写，内容以文献为准；每页 3 到 5 条要点，每条一句话，展开讲的话放 notes。图来自图片库（先用 list_figures 按 paper 查这篇文献已收藏的图，figure 给图片的 ID，图注和出处会自动带上）或本机的 PNG / JPEG 文件（image）；文献的图还没有收藏时，先出没有图的版本，并告诉用户在 PDF 页上框选收藏图片后可以重做。只有 title 的一页是分节页。输出路径上已有文件时不覆盖。",
+            json!({
+                "title": {"type": "string", "description": "标题页的标题；省略时用 paperId 那篇文献的题目。"},
+                "subtitle": {"type": "string", "description": "标题页标题下的一行（报告人、场合、日期…）；省略且给了 paperId 时写文献的作者、年份和期刊。"},
+                "paperId": {"type": "string", "description": "讲的是哪篇文献（文献 ID）。给了以后，没有写 source 的页在页脚写它的出处。"},
+                "language": {"type": "string", "enum": ["zh", "en"], "description": "幻灯片的语言；省略时按标题判断。"},
+                "slides": {
+                    "type": "array",
+                    "description": "标题页之后的各页，按顺序。",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string", "description": "这一页的标题，一行以内。"},
+                            "bullets": {"type": "array", "items": {"type": "string"}, "description": "要点，每条一句话；以两个空格开头的是上一条下面的小点。可以用 **粗体** 标出关键词。"},
+                            "figure": {"type": "string", "description": "图片库里一张图的 ID（见 list_figures）。"},
+                            "image": {"type": "string", "description": "本机 PNG 或 JPEG 文件的路径；与 figure 只给一个。"},
+                            "caption": {"type": "string", "description": "图下面的图注；用 figure 时省略就是图片库里的图号和图注。"},
+                            "source": {"type": "string", "description": "页脚的出处，例如「Zhang et al., 2024 · p. 5」；省略时按 figure 或 paperId 写。不要写 P1 这样只在这次对话里有意义的编号。"},
+                            "notes": {"type": "string", "description": "讲稿备注：讲这一页时要说的话，不显示在幻灯片上。"}
+                        }
+                    }
+                },
+                "output": {"type": "string", "description": "新文件的路径（.pptx）；已有文件不会覆盖。省略时写在用户的「文档」文件夹，文件名是标题。"}
+            }),
+            &["slides"],
+        ),
         scoped("list_manuscripts", "稿件列表", "列出用户在写作页的稿件：题目、语言、各节的名称、属于论文的哪一部分和字数。只读。", json!({}), &[]),
         scoped(
             "read_manuscript",
@@ -726,6 +755,7 @@ fn dispatch(store: &mut Store, info: &LibraryInfo, name: &str, args: &Value, fet
         "restyle_docx" => local::restyle_docx(store, info, args, fetch),
         "import_docx_references" => local::import_docx_references(store, args, fetch),
         "import_manuscript" => local::import_manuscript(store, args),
+        "make_slides" => local::make_slides(store, args),
         "list_manuscripts" => list_manuscripts(store),
         "read_manuscript" => read_manuscript(store, args),
         "comment_manuscript" => comment_manuscript(store, args),
@@ -2669,6 +2699,55 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn slides_are_written_to_a_new_file_with_the_figures_of_the_library() {
+        let (root, atlas) = sample();
+        let info = find_library(&root, "").unwrap();
+        let mut store = Store::open(&info.dir).unwrap();
+        let png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x02\x80\x00\x00\x01\xe0\x08\x02\x00\x00\x00";
+        let mut niche = crate::figure::Figure { paper_id: atlas.clone(), page: 2, label: "Fig. 1".into(), legend: "The quiescent centre under the confocal microscope.".into(), ..Default::default() };
+        store.add_figure(&mut niche, png).unwrap();
+        let mut drawn = crate::figure::Figure { legend: "A drawing".into(), ..Default::default() };
+        store.add_figure(&mut drawn, b"RIFF\x00\x00\x00\x00WEBPVP8 ").unwrap();
+        let cited = store.get_paper(&atlas).unwrap().citation();
+        drop(store);
+        let output = root.join("talk.pptx");
+        let slides = json!([
+            {"title": "背景"},
+            {"title": "静止中心", "bullets": ["- WOX5 只在静止中心表达", "  - 敲除后干细胞分化"], "figure": niche.id, "notes": "先讲这张图。"},
+            {"title": "模型画的图", "bullets": "一条\n两条", "figure": drawn.id, "source": "自绘"},
+        ]);
+        let done = call(&root, "make_slides", &json!({"paperId": atlas, "slides": slides, "output": output})).unwrap();
+        // The title page and three slides; the WebP is left out and said, the slide is still made.
+        assert_eq!((done["slides"].as_u64(), done["pictures"].as_u64(), done["title"].as_str(), done["output"].as_str()), (Some(4), Some(1), Some("Root stem cell niche"), output.to_str()));
+        assert!(done["notes"][0].as_str().unwrap().contains("第 3 页没有放图") && done["notes"][0].as_str().unwrap().contains("WebP"));
+        let zip = crate::docx::Zip::read(&std::fs::read(&output).unwrap()).unwrap();
+        // What the paper and the figure library know is on the slides without being asked for.
+        assert!(cited.ends_with("et al., 2021") && zip.text("ppt/slides/slide1.xml").unwrap().contains(&format!("<a:t>{cited}</a:t>")));
+        let (opening, shown) = (zip.text("ppt/slides/slide2.xml").unwrap(), zip.text("ppt/slides/slide3.xml").unwrap());
+        assert!(opening.contains(&format!("<a:t>{cited}</a:t>")) && shown.contains(&format!("<a:t>{cited} · Fig. 1 · p. 2</a:t>")) && shown.contains("<a:t>Fig. 1 | The quiescent centre under the confocal microscope.</a:t>"));
+        assert!(shown.contains("lvl=\"1\"") && shown.contains("<a:t>敲除后干细胞分化</a:t>") && zip.has("ppt/media/image1.png") && zip.text("ppt/notesSlides/notesSlide3.xml").unwrap().contains("先讲这张图。"));
+        let last = zip.text("ppt/slides/slide4.xml").unwrap();
+        assert!(last.contains("<a:t>一条</a:t>") && last.contains("<a:t>两条</a:t>") && last.contains("<a:t>自绘</a:t>") && !last.contains("<p:pic>"));
+        // No file is written over, and a call that cannot be carried out says which slide is at fault.
+        assert!(call(&root, "make_slides", &json!({"title": "T", "slides": slides, "output": output})).unwrap_err().contains("不会覆盖"));
+        assert!(call(&root, "make_slides", &json!({"title": "T", "slides": slides, "output": root.join("talk.ppt")})).unwrap_err().contains(".pptx"));
+        let wrong = |slides: Value| call(&root, "make_slides", &json!({"title": "T", "slides": slides, "output": root.join("other.pptx")})).unwrap_err();
+        assert!(wrong(json!([{"title": "a"}, {"figure": "G-none"}])).contains("第 2 页：图片库里没有 G-none"));
+        assert!(wrong(json!([{"notes": "只有备注"}])).contains("第 1 页是空的") && wrong(json!([])).contains("需要 slides") && wrong(json!([{"title": "a", "bullets": [1]}])).contains("bullets"));
+        assert!(wrong(json!([{"figure": niche.id, "image": "/tmp/a.png"}])).contains("只给一个") && !root.join("other.pptx").exists());
+        assert!(call(&root, "make_slides", &json!({"slides": [{"title": "a"}], "output": root.join("other.pptx")})).unwrap_err().contains("需要 title"));
+        // A picture file of the machine goes on a slide too; the command line reads the slides as JSON.
+        let picture = root.join("plot.png");
+        std::fs::write(&picture, png).unwrap();
+        let tool = catalog().into_iter().find(|tool| tool.name == "make_slides").unwrap();
+        let words = [format!("[{{\"title\": \"Plot\", \"image\": {:?}}}]", picture.to_str().unwrap()), "--title".into(), "Lab meeting".into(), "--output".into(), root.join("plot.pptx").display().to_string()];
+        let made = call(&root, "make_slides", &cli_args(&tool.input_schema, &words).unwrap()).unwrap();
+        assert_eq!((made["slides"].as_u64(), made["pictures"].as_u64(), made["notes"].as_array().map(Vec::len)), (Some(2), Some(1), Some(0)));
+        assert!(tool.writes && tool.confirm);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
     fn every_tool_is_callable() {
         let (root, _) = sample();
         for tool in catalog() {
@@ -2678,7 +2757,7 @@ pub(crate) mod tests {
             // Only a tool that changes the library has anything to ask the person about.
             assert!(tool.writes || !tool.confirm, "{}", tool.name);
         }
-        assert_eq!(library_catalog().iter().filter(|tool| tool.confirm).map(|tool| tool.name).collect::<Vec<_>>().len(), 18);
+        assert_eq!(library_catalog().iter().filter(|tool| tool.confirm).map(|tool| tool.name).collect::<Vec<_>>().len(), 19);
         // The tools that write a manuscript are asked about outside the conversation that writes it.
         assert!(MANUSCRIPT.iter().all(|name| catalog().iter().any(|tool| tool.name == *name && tool.writes && tool.confirm)));
         std::fs::remove_dir_all(root).ok();

@@ -158,7 +158,7 @@ pub fn picture_kind(bytes: &[u8]) -> Option<&'static str> {
 }
 
 /// The width and height a PNG says it has.
-fn png_size(bytes: &[u8]) -> Option<(u32, u32)> {
+pub(crate) fn png_size(bytes: &[u8]) -> Option<(u32, u32)> {
     if picture_kind(bytes) != Some("png") || bytes.len() < 24 || &bytes[12..16] != b"IHDR" { return None }
     let number = |at: usize| u32::from_be_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
     Some((number(16), number(20)))

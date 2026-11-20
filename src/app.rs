@@ -987,8 +987,9 @@ pub enum ChatItem {
     Tool { call: String, result: Option<(String, bool)> },
 }
 
-/// The tool that writes a Word file's citations anew: where its file goes is asked in a save dialog (`place_outputs`).
-const RESTYLE: &str = "restyle_docx";
+/// The tools that write a new file outside the library, a Word file cited anew and slides: where the file goes is asked in a save dialog (`place_outputs`).
+const PLACED: [&str; 2] = ["restyle_docx", SLIDES];
+const SLIDES: &str = "make_slides";
 /// The tool that leaves the assistant's remarks on a manuscript as comments: they are read again after it ran (`comments_arrived`).
 const COMMENT: &str = "comment_manuscript";
 /// The tool that puts a card of buttons under the answer: the window keeps its arguments (`Chat::offer`).
@@ -5271,8 +5272,8 @@ impl Workspace {
             // In the conversation that writes a manuscript the pen was handed over: writing that manuscript is not asked about again.
             let handed = about.as_ref().is_some_and(|about| tools::MANUSCRIPT.contains(&call.name.as_str()) && args.as_ref().is_ok_and(|args| args["manuscript"].as_str() == Some(about)));
             // A call that cannot run as written has nothing to ask about: it fails by itself. Nor has one that writes a
-            // Word file anew: the person says where it goes in the save dialog, which is their yes (`place_outputs`).
-            let asks = args.is_ok() && tool.is_some_and(|t| t.confirm) && !handed && call.name != RESTYLE;
+            // new file (a Word file cited anew, slides): the person says where it goes in the save dialog, which is their yes (`place_outputs`).
+            let asks = args.is_ok() && tool.is_some_and(|t| t.confirm) && !handed && !PLACED.contains(&call.name.as_str());
             // What it would change, for the card that asks; one that would be refused anyway is not asked about.
             let details = match &args {
                 Ok(args) if asks => tools::preview_call(store, &call.name, args).ok(),
@@ -5289,22 +5290,31 @@ impl Workspace {
         self.place_outputs(talk, prepared, first, 0, cx);
     }
 
-    /// Before a call that writes a Word file anew runs (`restyle_docx`), the person says where the new file goes: the
-    /// save dialog 导出 uses, opened beside the file given. Closing it is a no to that call. The file given is never
-    /// the one written, and a file already there is not written over: the new one gets a free name beside it. Then the
-    /// calls run (`execute_tools`).
+    /// Before a call that writes a new file runs (`PLACED`: a Word file cited anew, slides), the person says where the
+    /// file goes: the save dialog 导出 uses, opened beside the file given, or in the person's documents for slides, which
+    /// are named by their title. Closing it is a no to that call. The file given is never the one written, and a file
+    /// already there is not written over: the new one gets a free name beside it. Then the calls run (`execute_tools`).
     fn place_outputs(&mut self, talk: Talk, mut calls: Vec<PreparedCall>, first: usize, from: usize, cx: &mut Context<Self>) {
-        let next = calls.iter().enumerate().skip(from).find(|(_, call)| call.name == RESTYLE && call.outside.is_none() && call.args.is_ok()).map(|(n, _)| n);
+        let next = calls.iter().enumerate().skip(from).find(|(_, call)| PLACED.contains(&call.name.as_str()) && call.outside.is_none() && call.args.is_ok()).map(|(n, _)| n);
         let (Some(at), Some(lib)) = (next, self.lib.as_mut()) else { return self.execute_tools(talk, calls, first, true, cx) };
         let (library, generation, key) = (lib.info.id.clone(), lib.chat(talk).generation, lib.chat(talk).key);
         let args = calls[at].args.clone().unwrap_or_default();
-        let source = PathBuf::from(args["path"].as_str().unwrap_or(""));
-        // `draft-nature.docx`: the file's name and the style's.
-        let style = args["style"].as_str().and_then(|key| key.split(':').nth(1)).map(|name| name.trim_end_matches(".csl").to_string()).filter(|name| !name.is_empty()).unwrap_or_else(|| "restyled".into());
-        let name = format!("{}-{style}.docx", source.file_stem().map(|stem| stem.to_string_lossy().to_string()).unwrap_or_else(|| "document".into()));
-        let directory = source.parent().filter(|folder| folder.is_dir()).map(std::path::Path::to_path_buf).or_else(dirs::document_dir).or_else(dirs::home_dir).unwrap_or_else(|| self.root.clone());
-        // A scripted run has nobody at a dialog: the file goes beside the one given.
         let scripted = wisp_core::settings::env("DEV").is_some();
+        let (name, directory, ending) = if calls[at].name == SLIDES {
+            // The deck's title, or that of the paper it is about.
+            let title = args["title"].as_str().map(str::trim).filter(|title| !title.is_empty()).or_else(|| args["paperId"].as_str().and_then(|id| lib.papers.iter().find(|paper| paper.id == id)).map(|paper| paper.title.as_str())).unwrap_or("");
+            let stem: String = wisp_core::archive::file_stem(title, "slides").chars().take(80).collect();
+            // A scripted run writes nothing into the person's documents.
+            let directory = if scripted { self.root.clone() } else { dirs::document_dir().or_else(dirs::home_dir).unwrap_or_else(|| self.root.clone()) };
+            (format!("{stem}.pptx"), directory, "pptx")
+        } else {
+            let source = PathBuf::from(args["path"].as_str().unwrap_or(""));
+            // `draft-nature.docx`: the file's name and the style's.
+            let style = args["style"].as_str().and_then(|key| key.split(':').nth(1)).map(|name| name.trim_end_matches(".csl").to_string()).filter(|name| !name.is_empty()).unwrap_or_else(|| "restyled".into());
+            let name = format!("{}-{style}.docx", source.file_stem().map(|stem| stem.to_string_lossy().to_string()).unwrap_or_else(|| "document".into()));
+            (name, source.parent().filter(|folder| folder.is_dir()).map(std::path::Path::to_path_buf).or_else(dirs::document_dir).or_else(dirs::home_dir).unwrap_or_else(|| self.root.clone()), "docx")
+        };
+        // A scripted run has nobody at a dialog: the file goes beside the one given.
         let picked = (!scripted).then(|| cx.prompt_for_new_path(&directory, Some(&name)));
         cx.spawn(async move |this, cx| {
             let chosen = match picked {
@@ -5316,11 +5326,11 @@ impl Workspace {
                 if !this.lib.as_mut().is_some_and(|lib| lib.chat_mut(talk).generation == generation) { return }
                 match chosen {
                     Some(mut path) => {
-                        if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("docx")) { path.set_extension("docx"); }
+                        if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case(ending)) { path.set_extension(ending); }
                         let (folder, stem) = (path.parent().map(std::path::Path::to_path_buf).unwrap_or_default(), path.file_stem().map(|stem| stem.to_string_lossy().to_string()).unwrap_or_default());
                         let mut n = 2;
                         while path.exists() {
-                            path = folder.join(format!("{stem} ({n}).docx"));
+                            path = folder.join(format!("{stem} ({n}).{ending}"));
                             n += 1;
                         }
                         if let Ok(args) = calls[at].args.as_mut() { args["output"] = Value::String(path.display().to_string()) }
