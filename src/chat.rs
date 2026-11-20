@@ -1546,6 +1546,8 @@ impl Workspace {
             .gap(px(2.))
             .children(history.iter().map(|conversation| {
                 let current = conversation.id == chat.id;
+                // Set aside by 新对话 while it answered, it goes on: said until the answer is in, and a click takes it up as it stands.
+                let aside = self.lib.as_ref().and_then(|lib| lib.aside.iter().find(|aside| aside.id == conversation.id)).map(|aside| Self::at_work_mark(SharedString::from(format!("aside-{}", conversation.id)), aside.pending.is_some()));
                 let group = SharedString::from(format!("history-row-{}", conversation.id));
                 div()
                     .group(group.clone())
@@ -1577,7 +1579,8 @@ impl Workspace {
                                     .text_size(text_px(12.))
                                     .text_color(Theme::text_tertiary())
                                     .child(tf!("{} · {} 个问题", "{} · {} questions", time::short_time(&conversation.updated_at), conversation.questions))
-                                    .when(current, |d| d.child(div().text_color(Theme::accent()).child(t("正在进行")))),
+                                    .when(current, |d| d.child(div().text_color(Theme::accent()).child(t("正在进行"))))
+                                    .children(aside),
                             ),
                     )
                     .child(ui::ghost_button(SharedString::from(format!("history-remove-{side}-{}", conversation.id)), Some("bin"), None).invisible().group_hover(group, |s| s.visible()).on_click(self.on(Cmd::AskRemoveChat(talk, conversation.id.clone()), cx)))

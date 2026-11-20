@@ -12,6 +12,7 @@ use gpui::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use serde_json::Value;
 use wisp_core::ai::{self, ChatEvent, Protocol, Scope, ToolCall};
@@ -1310,6 +1311,17 @@ pub struct Chat {
     pub retracted: Option<Retracted>,
     /// How wide the conversation was last drawn: its column of the reading width is centred in it (`chat::reading_pad`).
     pub drawn_width: f32,
+    /// Which conversation this is while the window runs: what a step of its answer finds it by, in its place or set aside (`Workspace::in_chat`).
+    pub key: u64,
+}
+
+/// Where `Chat::key` comes from.
+static CHAT_KEYS: AtomicU64 = AtomicU64::new(1);
+
+/// Put `other` in a conversation's place and the one there in `other`. The box stays where it is: it is the place's, heard by the window.
+fn exchange(place: &mut Chat, other: &mut Chat) {
+    std::mem::swap(place, other);
+    std::mem::swap(&mut place.input, &mut other.input);
 }
 
 /// What 撤回 took out of a conversation, and what the box held before.
@@ -1529,6 +1541,9 @@ pub struct Library {
     pub gallery: crate::figures::Gallery,
     /// 提取: the assistant's proposals for the custom fields, its run over the papers, and their confirmation.
     pub extract: crate::extract::Extract,
+    /// Conversations with the library set aside by 新对话 (or another taken up from 历史) while they were answering: they go
+    /// on off screen and are let go when the answer is in; 历史 takes one up again (`Workspace::chat_aside`, `in_chat`).
+    pub aside: Vec<Chat>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -1625,6 +1640,7 @@ impl Chat {
             started: None,
             retracted: None,
             drawn_width: 0.,
+            key: CHAT_KEYS.fetch_add(1, Ordering::Relaxed),
         }
     }
 
@@ -1769,7 +1785,12 @@ impl Library {
 
     /// Whether one of its conversations is answering, or waits for the person's yes to a tool.
     pub(crate) fn answering(&self) -> bool {
-        [Talk::Library, Talk::Paper, Talk::Write].into_iter().any(|talk| self.chat(talk).busy)
+        !self.aside.is_empty() || [Talk::Library, Talk::Paper, Talk::Write].into_iter().any(|talk| self.chat(talk).busy)
+    }
+
+    /// Whether one of its conversations, in its place or set aside, waits for the person's yes to a tool.
+    pub(crate) fn waits_for_yes(&self) -> bool {
+        self.aside.iter().any(|chat| chat.pending.is_some()) || [Talk::Library, Talk::Paper, Talk::Write].into_iter().any(|talk| self.chat(talk).pending.is_some())
     }
 
     pub fn chat(&self, talk: Talk) -> &Chat {
@@ -3028,8 +3049,10 @@ impl Workspace {
                 self.chat_input(Talk::Library, InputEvent::Changed, cx);
             }
             Cmd::NewChat(paper) => {
-                // An answer still arriving is stopped first, so that what there is of it is kept.
-                self.stop_chat(paper, cx);
+                // The library's conversation, answering, goes on off screen (历史 takes it up again); another's answer
+                // still arriving is stopped first, so that what there is of it is kept.
+                let aside = paper == Talk::Library && self.lib.as_ref().is_some_and(|lib| lib.library_chat.busy);
+                if aside { self.chat_aside(cx) } else { self.stop_chat(paper, cx) }
                 // A conversation whose last save failed is tried once more; if that fails too, it says so itself.
                 if self.lib.as_ref().is_some_and(|lib| !lib.chat(paper).kept) { self.save_chat(paper, cx) }
                 let mut kept = false;
@@ -3041,7 +3064,7 @@ impl Workspace {
                     // A new conversation with the library is about the list on show again.
                     if paper == Talk::Library { lib.scope_reset(cx) }
                 }
-                if kept { self.say(t("上一段对话已保存，在「历史」里可以找到。"), cx) }
+                if aside { self.say(t("上一段对话还在后台回答，在「历史」里可以找到。"), cx) } else if kept { self.say(t("上一段对话已保存，在「历史」里可以找到。"), cx) }
             }
             Cmd::StopChat(paper) => self.stop_chat(paper, cx),
             Cmd::ToggleHistory(paper) => {
@@ -3055,8 +3078,15 @@ impl Workspace {
                 }
             }
             Cmd::OpenChat(paper, id) => {
-                self.stop_chat(paper, cx);
-                self.open_chat(paper, &id, cx);
+                // The conversation on show, answering: 历史 only closes over it.
+                let here = self.lib.as_ref().is_some_and(|lib| lib.chat(paper).busy && lib.chat(paper).id == id);
+                if here {
+                    if let Some(lib) = self.lib.as_mut() { lib.chat_mut(paper).history = None }
+                } else {
+                    // The library's conversation, answering, goes on off screen as another is taken up; one off screen is taken up as it stands.
+                    if paper == Talk::Library && self.lib.as_ref().is_some_and(|lib| lib.library_chat.busy) { self.chat_aside(cx) } else { self.stop_chat(paper, cx) }
+                    if paper != Talk::Library || !self.take_aside(&id) { self.open_chat(paper, &id, cx) }
+                }
                 if let Some(lib) = self.lib.as_ref() { lib.chat(paper).input.read(cx).focus(window) }
             }
             Cmd::AskRemoveChat(paper, id) => {
@@ -3074,6 +3104,8 @@ impl Workspace {
                     // The conversation in hand, once removed, would only be saved again with the next answer;
                     // the papers it was kept to go with it, as for any new conversation.
                     let in_hand = lib.chat(paper).id == id;
+                    // One answering off screen goes with it: what still arrives for it finds nothing.
+                    lib.aside.retain(|chat| chat.id != id);
                     if in_hand && paper == Talk::Library { lib.scope_reset(cx) }
                     let chat = lib.chat_mut(paper);
                     if in_hand {
@@ -3649,6 +3681,50 @@ impl Workspace {
         Some(result)
     }
 
+    /// Run `f` with the conversation `key` in `talk`'s place of the open library: the one there, or one set aside while it
+    /// was answering (`Library::aside`), exchanged with it for the call and back after. None when it is neither: it was
+    /// stopped, removed or let go.
+    pub(crate) fn in_chat<R>(&mut self, talk: Talk, key: u64, cx: &mut Context<Self>, f: impl FnOnce(&mut Self, &mut Context<Self>) -> R) -> Option<R> {
+        let lib = self.lib.as_mut()?;
+        if lib.chat(talk).key == key { return Some(f(self, cx)) }
+        let at = lib.aside.iter().position(|chat| chat.key == key).filter(|_| talk == Talk::Library)?;
+        let mut aside = lib.aside.remove(at);
+        exchange(&mut lib.library_chat, &mut aside);
+        let result = f(self, cx);
+        let lib = self.lib.as_mut()?;
+        exchange(&mut lib.library_chat, &mut aside);
+        if aside.busy {
+            lib.aside.insert(at.min(lib.aside.len()), aside);
+        } else {
+            // Kept as it went (`save_chat`): 历史 has it, and lists it anew if it is open.
+            if lib.library_chat.history.is_some() { lib.library_chat.history = lib.store.list_conversations("").ok() }
+            self.say(t("放到后台的那段对话答完了，在「历史」里可以找到"), cx);
+        }
+        cx.notify();
+        Some(result)
+    }
+
+    /// The library's conversation, answering, makes room for another: it goes on off screen (`Library::aside`) and its
+    /// place gets an empty one, with the same box.
+    fn chat_aside(&mut self, cx: &mut Context<Self>) {
+        let mut fresh = Chat::new("", cx);
+        let Some(lib) = self.lib.as_mut() else { return };
+        exchange(&mut lib.library_chat, &mut fresh);
+        fresh.history = None;
+        lib.aside.push(fresh);
+    }
+
+    /// Take up from 历史 a conversation set aside while it answers, as it stands. True when `id` was one.
+    fn take_aside(&mut self, id: &str) -> bool {
+        let Some(lib) = self.lib.as_mut() else { return false };
+        let Some(at) = lib.aside.iter().position(|chat| !id.is_empty() && chat.id == id) else { return false };
+        let mut taken = lib.aside.remove(at);
+        exchange(&mut lib.library_chat, &mut taken);
+        lib.library_chat.history = None;
+        lib.library_chat.scroll.scroll_to_bottom();
+        true
+    }
+
     /// A conversation left while it was answering has its answer: it was kept with the library as it went, the library
     /// is let go, and the person is told where it is.
     fn parked_done(&mut self, lib: Library, cx: &mut Context<Self>) {
@@ -3826,6 +3902,7 @@ impl Workspace {
             citing,
             gallery,
             extract: crate::extract::Extract::new(),
+            aside: vec![],
             _subscriptions: subscriptions,
         };
         if let Err(err) = lib.reload() {
@@ -5064,7 +5141,7 @@ impl Workspace {
         chat.busy = true;
         chat.steps += 1;
         chat.scroll.scroll_to_bottom();
-        let generation = chat.generation;
+        let (generation, key) = (chat.generation, chat.key);
         let library = lib.info.id.clone();
 
         let (sender, events) = async_channel::unbounded();
@@ -5072,8 +5149,8 @@ impl Workspace {
         cx.background_executor().spawn(async move { wisp_net::stream_chat(request, protocol, sender) }).detach();
         cx.spawn(async move |this, cx| {
             while let Ok(event) = events.recv().await {
-                // The conversation's library, on show or answering off screen (`in_library`).
-                let alive = this.update(cx, |this, cx| this.in_library(&library, cx, |this, cx| {
+                // The conversation's library, on show or answering off screen (`in_library`), and the conversation, in its place or set aside (`in_chat`).
+                let alive = this.update(cx, |this, cx| this.in_library(&library, cx, |this, cx| this.in_chat(talk, key, cx, |this, cx| {
                     let Some(lib) = this.lib.as_mut() else { return false };
                     let chat = chat_of!(lib, talk);
                     if chat.generation != generation { return false }
@@ -5126,7 +5203,7 @@ impl Workspace {
                     if ended { this.save_chat(talk, cx) }
                     cx.notify();
                     more
-                }).unwrap_or(false));
+                }).unwrap_or(false)).unwrap_or(false));
                 if !matches!(alive, Ok(true)) { break }
             }
         })
@@ -5194,7 +5271,7 @@ impl Workspace {
     fn place_outputs(&mut self, talk: Talk, mut calls: Vec<PreparedCall>, first: usize, from: usize, cx: &mut Context<Self>) {
         let next = calls.iter().enumerate().skip(from).find(|(_, call)| call.name == RESTYLE && call.outside.is_none() && call.args.is_ok()).map(|(n, _)| n);
         let (Some(at), Some(lib)) = (next, self.lib.as_mut()) else { return self.execute_tools(talk, calls, first, true, cx) };
-        let (library, generation) = (lib.info.id.clone(), lib.chat_mut(talk).generation);
+        let (library, generation, key) = (lib.info.id.clone(), lib.chat(talk).generation, lib.chat(talk).key);
         let args = calls[at].args.clone().unwrap_or_default();
         let source = PathBuf::from(args["path"].as_str().unwrap_or(""));
         // `draft-nature.docx`: the file's name and the style's.
@@ -5209,7 +5286,7 @@ impl Workspace {
                 Some(picked) => picked.await.ok().and_then(Result::ok).flatten(),
                 None => Some(directory.join(&name)),
             };
-            this.update(cx, |this, cx| this.in_library(&library, cx, |this, cx| {
+            this.update(cx, |this, cx| this.in_library(&library, cx, |this, cx| this.in_chat(talk, key, cx, |this, cx| {
                 // Another conversation by now: its calls are not run for this one.
                 if !this.lib.as_mut().is_some_and(|lib| lib.chat_mut(talk).generation == generation) { return }
                 match chosen {
@@ -5226,7 +5303,7 @@ impl Workspace {
                     None => calls[at].args = Err("用户关掉了保存对话框，没有选保存位置，新文件没有写。不要重试；问用户是否还要输出。".into()),
                 }
                 this.place_outputs(talk, calls, first, at + 1, cx);
-            }))
+            })))
             .ok();
         })
         .detach();
@@ -5243,7 +5320,7 @@ impl Workspace {
         let chat = lib.chat_mut(talk);
         let Some(protocol) = chat.protocol else { return };
         let sources: Arc<Vec<ai::Source>> = Arc::new(chat.sources().to_vec());
-        let generation = chat.generation;
+        let (generation, key) = (chat.generation, chat.key);
         chat.running = calls.iter().map(|call| call.id.clone()).collect();
         let wrote = calls.iter().any(|call| call.writes && (allowed || !call.confirm));
         let composed = calls.iter().any(|call| tools::MANUSCRIPT.contains(&call.name.as_str()) && (allowed || !call.confirm));
@@ -5274,22 +5351,25 @@ impl Workspace {
                 if composed { this.manuscripts_synced(cx) }
                 // Comments left on a manuscript: they are shown on it, the section on show first.
                 if commented { this.comments_arrived(cx) }
-                let Some(lib) = this.lib.as_mut() else { return };
-                // Papers brought in by a tool are citable from the next step on, under labels that follow the ones in use.
-                if wrote && let Some(ctx) = chat_of!(lib, talk).ctx.as_mut() { ctx.add_sources(&lib.papers) }
-                let chat = lib.chat_mut(talk);
-                if chat.generation == generation {
-                    for (n, (_, _, failed, shown)) in done.iter().enumerate() {
-                        if let Some(ChatItem::Tool { result, .. }) = chat.messages.get_mut(first + n) { *result = Some((shown.clone(), *failed)) }
+                // The rest is the conversation's, in its place or set aside (`in_chat`).
+                this.in_chat(talk, key, cx, |this, cx| {
+                    let Some(lib) = this.lib.as_mut() else { return };
+                    // Papers brought in by a tool are citable from the next step on, under labels that follow the ones in use.
+                    if wrote && let Some(ctx) = chat_of!(lib, talk).ctx.as_mut() { ctx.add_sources(&lib.papers) }
+                    let chat = lib.chat_mut(talk);
+                    if chat.generation == generation {
+                        for (n, (_, _, failed, shown)) in done.iter().enumerate() {
+                            if let Some(ChatItem::Tool { result, .. }) = chat.messages.get_mut(first + n) { *result = Some((shown.clone(), *failed)) }
+                        }
+                        let results: Vec<(String, String, bool)> = done.into_iter().map(|(id, output, failed, _)| (id, output, failed)).collect();
+                        let mut results = ai::tool_results(protocol, &results);
+                        // One step is left: the model is told to answer with what it has.
+                        if chat.steps + 1 >= MAX_CHAT_STEPS { results = ai::with_note(protocol, results, ai::LAST_STEP_NOTE) }
+                        chat.wire.extend(results);
+                        chat.running.clear();
+                        if !this.chat_step(talk, cx) { this.save_chat(talk, cx) }
                     }
-                    let results: Vec<(String, String, bool)> = done.into_iter().map(|(id, output, failed, _)| (id, output, failed)).collect();
-                    let mut results = ai::tool_results(protocol, &results);
-                    // One step is left: the model is told to answer with what it has.
-                    if chat.steps + 1 >= MAX_CHAT_STEPS { results = ai::with_note(protocol, results, ai::LAST_STEP_NOTE) }
-                    chat.wire.extend(results);
-                    chat.running.clear();
-                    if !this.chat_step(talk, cx) { this.save_chat(talk, cx) }
-                }
+                });
                 if let Err(err) = reloaded { this.fail(format!("{err:#}"), cx) }
                 cx.notify();
             }))
@@ -7089,6 +7169,8 @@ impl Workspace {
                     None
                 }
                 "history" => Some(Cmd::ToggleHistory(Talk::Library)),
+                // `openchat:<n>` takes up the n-th conversation 历史 lists (it must be open), as a click on its row does.
+                "openchat" => self.lib.as_ref().and_then(|lib| lib.library_chat.history.as_ref()?.get(arg.parse::<usize>().unwrap_or(0)).map(|c| Cmd::OpenChat(Talk::Library, c.id.clone()))),
                 "settings" => Some(match arg {
                     "ai" | "models" => Cmd::AiTab(AiTab::Models),
                     "tasks" => Cmd::AiTab(AiTab::Tasks),

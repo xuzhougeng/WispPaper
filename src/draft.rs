@@ -406,13 +406,17 @@ impl Workspace {
     /// it is still at work, or waits for the person's yes to a tool. None for one not answering off screen.
     pub(crate) fn off_screen_mark(&self, id: &str) -> Option<Div> {
         let lib = self.parked.iter().find(|lib| lib.info.id == id)?;
-        let waits = [Talk::Library, Talk::Paper, Talk::Write].into_iter().any(|talk| lib.chat(talk).pending.is_some());
+        Some(Self::at_work_mark(SharedString::from(format!("off-screen-{id}")), lib.waits_for_yes()))
+    }
+
+    /// 回答中 with a spinner, or 等你同意: said of a conversation at work that is not on show.
+    pub(crate) fn at_work_mark(id: SharedString, waits: bool) -> Div {
         let mark = div().flex().flex_none().items_center().gap(px(5.)).text_size(text_px(12.));
-        Some(if waits {
+        if waits {
             mark.text_color(Theme::accent()).child(ui::icon("info", 12., Theme::accent())).child(t("等你同意"))
         } else {
-            mark.text_color(Theme::text_secondary()).child(ui::spinner(SharedString::from(format!("off-screen-{id}")), 11., Theme::accent())).child(t("回答中"))
-        })
+            mark.text_color(Theme::text_secondary()).child(ui::spinner(id, 11., Theme::accent())).child(t("回答中"))
+        }
     }
 
     /// The conversations, latest first, as plain rows: the title, at the right the papers kept (when there are any) and
