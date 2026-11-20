@@ -102,6 +102,10 @@ wisp search_fulltext --help             # 一个工具的参数
 | `suggest_screening` | 为一篇文献提出收录建议（结论、理由、逐字引文、把握）；不改变收录判断，由用户在筛选页确认 |
 | `suggest_field` | 为一篇文献的一个自定义词条提出取值（附逐字引文）；不改动词条，由用户在提取页确认。单选词条只接受它的选项 |
 | `organise_papers` | 整理已有的文献：`changes` 是一个 JSON 数组，每项给出文献 `id` 和要改的方面（`addTags`、`removeTags`、`starred`、`reading`、`note`）；全部写入或全部不写。不能改收录判断和自定义词条 |
+| `list_cite_styles` | 列出导出 Word 时可用的引用样式（CSL）：常用的内置样式、自己添加的和 Zotero 里装的、全部内置样式 |
+| `read_cite_style` | 读取一个引用样式的 CSL 定义（`--style csl:nature`）；只读 |
+| `try_cite_style` | 用文献库里的文献试排一个样式（`--style` 已有样式，或 `--csl` 一份 CSL 定义），不保存：正文引用和参考文献条目各是什么样子 |
+| `save_cite_style` | 把一份 CSL 定义存为自己的引用样式（`--name my-journal.csl --csl …`），写在数据文件夹的 `styles/` 下，之后可在写作页「导出」菜单里选用 |
 | `list_manuscripts` | 列出写作页的稿件：题目、语言、各节的名称和字数 |
 | `read_manuscript` | 读取一份稿件的正文，可以只读一节；只读 |
 | `edit_section` | 写或修改稿件的一节：`--edits` 是一个 JSON 数组，每项是 `old`（从这一节逐字摘出的原文，留空表示加在末尾）和 `new`（改成的文字，留空表示删去）；或用 `--text` 给出这一节的全部新正文。引用写作 `[@Key]` 或 `[@文献ID]`。改动前的文字留作这一节的一个历史版本（会改动稿件） |

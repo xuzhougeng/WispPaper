@@ -40,6 +40,7 @@ pub mod comment;
 pub mod complete;
 pub mod compose;
 pub mod connector;
+pub mod csl;
 pub mod docx;
 pub mod export;
 pub mod extract;

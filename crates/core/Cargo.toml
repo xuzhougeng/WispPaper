@@ -18,6 +18,8 @@ hayro-interpret = "0.9"
 # Word files are zip archives, packed with deflate (`docx.rs`); the PDF readers bring it along already.
 flate2 = "1"
 icu_segmenter = "2"
+# CSL citation styles, the files Zotero uses (`csl.rs`); `archive` carries the common styles and every locale.
+hayagriva = { version = "0.10", default-features = false, features = ["archive"] }
 
 [lints]
 workspace = true

@@ -718,14 +718,25 @@ fn word_date(stamp: &str) -> String {
     }
 }
 
+/// How a Word file cites: the manuscript's citations written for a reader (`cite::Formatter`), with the library they are found in.
+pub struct Cites<'a> {
+    pub format: &'a cite::Formatter,
+    pub index: &'a cite::Index<'a>,
+}
+
 /// The manuscript's paragraphs as a Word file is to say them, each with the
 /// comments made here on it. With a `source`, they are the paragraphs of
 /// the file the manuscript came from; without, those `docx` writes.
-pub fn wanted(manuscript: &Manuscript, source: Option<&Source>, comments: &[Comment]) -> Vec<docx::Wanted> {
+///
+/// With `cites` the citations are written for a reader: each one leads to
+/// its paper's entry in the reference list, which stands after the last
+/// section under a heading of the manuscript's language.
+pub fn wanted(manuscript: &Manuscript, source: Option<&Source>, comments: &[Comment], cites: Option<&Cites>) -> Vec<docx::Wanted> {
     let mut out: Vec<docx::Wanted> = vec![];
     // Where each section's paragraphs are in `out`: its heading, and its lines.
     let mut places: Vec<(&str, Option<usize>, Range<usize>)> = vec![];
-    let paragraph = |text: &str, role: docx::Role| docx::Wanted { text: text.to_string(), role, notes: vec![] };
+    let paragraph = |text: &str, role: docx::Role| docx::Wanted { text: text.to_string(), role, ..Default::default() };
+    let set = |rich: cite::Rich| docx::Wanted { text: rich.text, looks: rich.looks, links: rich.links.into_iter().map(|(range, to)| docx::Link { range, to }).collect(), ..Default::default() };
     match source {
         Some(source) => {
             if source.titled && !manuscript.title.trim().is_empty() { out.push(paragraph(manuscript.title.trim(), docx::Role::Title)) }
@@ -741,7 +752,10 @@ pub fn wanted(manuscript: &Manuscript, source: Option<&Source>, comments: &[Comm
         });
         let start = out.len();
         // What a paragraph says, as the editor draws it: a Word file has its own bold and headings.
-        out.extend(paragraphs(&markdown::plain(&section.body)).map(|line| paragraph(line, docx::Role::Body)));
+        out.extend(paragraphs(&markdown::plain(&section.body)).map(|line| match cites {
+            Some(cites) => set(cites.format.rich(line, cites.index)),
+            None => paragraph(line, docx::Role::Body),
+        }));
         places.push((section.id.as_str(), heading, start..out.len()));
     }
     for comment in comments.iter().filter(|comment| comment.origin != comment::FILE && comment.state != comment::DONE) {
@@ -749,7 +763,9 @@ pub fn wanted(manuscript: &Manuscript, source: Option<&Source>, comments: &[Comm
         if said.is_empty() { continue }
         let Some((_, heading, lines)) = places.iter().find(|(id, _, _)| *id == comment.section_id) else { continue };
         // Its words, in the paragraph that has them; a comment whose words were written over since goes on the section's heading, with the words it was about.
+        // The words are those of the file: their citations written as the paragraph's are.
         let quote = markdown::plain(&comment.quote);
+        let quote = cites.map_or(quote.clone(), |cites| cites.format.apply(&quote, cites.index));
         let first = quote.lines().next().unwrap_or("").trim();
         let found = lines.clone().find_map(|n| out[n].text.find(first).filter(|_| !first.is_empty()).map(|at| (n, at..at + first.len())));
         let named = heading.filter(|n| !first.is_empty() && out[*n].text.contains(first)).map(|n| (n, 0..0));
@@ -761,6 +777,10 @@ pub fn wanted(manuscript: &Manuscript, source: Option<&Source>, comments: &[Comm
             }
         };
         out[at].notes.push(docx::Note { range, author: comment.author.clone(), date: word_date(&comment.created_at), body });
+    }
+    if let Some(cites) = cites.filter(|cites| !cites.format.references().is_empty()) {
+        out.push(paragraph(cites.format.heading(), docx::Role::Heading));
+        out.extend(cites.format.references().iter().map(|(paper, entry)| docx::Wanted { anchor: Some(paper.clone()), ..set(entry.clone()) }));
     }
     out
 }
@@ -818,31 +838,26 @@ impl Store {
     /// Citations are written in `style` (`cite::Formatter`), and the papers
     /// they name are listed after the last section under a heading of the
     /// manuscript's language: the file is for a reader, who has no keys.
+    /// Each citation is a field that jumps to its entry in that list.
     pub fn manuscript_word(&self, manuscript: &Manuscript, comments: &[Comment], track: bool, author: &str, style: cite::Style) -> Result<(docx::Rewritten, bool)> {
-        let (manuscript, comments) = &self.cited_for_word(manuscript, comments, style)?;
-        let source = self.manuscript_source(&manuscript.id)?.filter(|source| source.kind == "docx" && !source.path.is_empty());
-        if let Some(source) = &source && let Ok(bytes) = std::fs::read(self.source_file(source)) {
-            let options = docx::Options { track, author: author.to_string(), date: word_date(&now_iso()) };
-            return Ok((docx::rewrite(&bytes, &wanted(manuscript, Some(source), comments), &options)?, true));
-        }
-        Ok((docx::rewrite(&docx(manuscript), &wanted(manuscript, None, comments), &docx::Options::default())?, false))
-    }
-
-    /// The manuscript with its citations written in `style` and its reference list as a last section,
-    /// and the comments with the words they are about written the same way, so they are found again.
-    fn cited_for_word(&self, manuscript: &Manuscript, comments: &[Comment], style: cite::Style) -> Result<(Manuscript, Vec<Comment>)> {
         let (papers, trash, kept) = (self.list_papers()?, self.list_trash()?, self.cite_keys()?);
         let index = cite::Index::new(&papers, trash.iter().map(|entry| &entry.paper), &kept);
         let bodies: Vec<&str> = manuscript.sections.iter().map(|section| section.body.as_str()).collect();
-        let format = cite::Formatter::new(&bodies, &index, style, &manuscript.language);
-        let mut out = manuscript.clone();
-        for section in &mut out.sections { section.body = format.apply(&section.body, &index) }
-        if !format.references().is_empty() {
-            let body = format.references().iter().map(|entry| escape_markdown(entry)).collect::<Vec<_>>().join("\n\n");
-            out.sections.push(Section { name: format.heading().to_string(), kind: "other".into(), body, ..Default::default() });
+        let format = cite::Formatter::new(&bodies, &index, &style, &manuscript.language);
+        let cites = Cites { format: &format, index: &index };
+        let source = self.manuscript_source(&manuscript.id)?.filter(|source| source.kind == "docx" && !source.path.is_empty());
+        if let Some(source) = &source && let Ok(bytes) = std::fs::read(self.source_file(source)) {
+            let options = docx::Options { track, author: author.to_string(), date: word_date(&now_iso()) };
+            return Ok((docx::rewrite(&bytes, &wanted(manuscript, Some(source), comments, Some(&cites)), &options)?, true));
         }
-        let comments = comments.iter().map(|comment| Comment { quote: format.apply(&comment.quote, &index), ..comment.clone() }).collect();
-        Ok((out, comments))
+        // The document made here says what `wanted` says, the list included: what is written into it is the fields and the looks.
+        let mut said = manuscript.clone();
+        for section in &mut said.sections { section.body = format.apply(&section.body, &index) }
+        if !format.references().is_empty() {
+            let body = format.references().iter().map(|(_, entry)| escape_markdown(&entry.text)).collect::<Vec<_>>().join("\n\n");
+            said.sections.push(Section { name: format.heading().to_string(), kind: "other".into(), body, ..Default::default() });
+        }
+        Ok((docx::rewrite(&docx(&said), &wanted(manuscript, None, comments, Some(&cites)), &docx::Options::default())?, false))
     }
 }
 
@@ -1460,7 +1475,7 @@ mod tests {
     fn word_file() -> Vec<u8> {
         let section = |name: &str, body: &str| Section { name: name.into(), kind: "other".into(), body: body.into(), ..Default::default() };
         let written = Manuscript { title: "Roots".into(), language: "en".into(), sections: vec![section("Introduction", "Roots grow down into the soil.\n\nThey take up water."), section("Methods", "We grew plants.")], ..Default::default() };
-        let mut paragraphs = wanted(&written, None, &[]);
+        let mut paragraphs = wanted(&written, None, &[], None);
         paragraphs[1 + 1].notes.push(docx::Note { range: 11..15, author: "Li Hua".into(), date: "2026-01-02T03:04:05Z".into(), body: "How far down?".into() });
         docx::rewrite(&docx(&written), &paragraphs, &docx::Options::default()).unwrap().bytes
     }
@@ -1654,6 +1669,16 @@ mod tests {
         };
         assert_eq!(said(cite::Style::AuthorYear), ["Roots", "Introduction", "Roots differ (Zhang et al., 2024) and [@Nobody2001].", "References", "Zhang, W., Li, Q., & Wang, F. (2024). Single-cell atlas of roots. Nature Plants."]);
         assert_eq!(said(cite::Style::Numeric)[2..], ["Roots differ [1] and [@Nobody2001].", "References", "[1] Zhang, W., Li, Q., & Wang, F. (2024). Single-cell atlas of roots. Nature Plants."]);
+        // Each citation is a field that jumps to the bookmark on its paper's entry; a journal's style sets its own looks.
+        let xml = |style: cite::Style| docx::Zip::read(&store.manuscript_word(&now, &[], false, "Xu", style).unwrap().0.bytes).unwrap().text("word/document.xml").unwrap();
+        let numbered = xml(cite::Style::Numeric);
+        assert!(numbered.contains(r#"<w:instrText xml:space="preserve"> HYPERLINK \l "_WPREF_1" </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t xml:space="preserve">1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:t xml:space="preserve">] and"#), "{numbered}");
+        assert!(numbered.contains(r#"<w:bookmarkStart w:id="1" w:name="_WPREF_1"/><w:r><w:t xml:space="preserve">[1] Zhang, W."#) && numbered.contains(r#"<w:bookmarkEnd w:id="1"/></w:p>"#), "{numbered}");
+        let nature = cite::Style::Csl(std::sync::Arc::new(crate::csl::load("csl:nature", std::path::Path::new("/nowhere")).unwrap()));
+        assert_eq!(said(nature.clone())[2..], ["Roots differ 1 and [@Nobody2001].", "References", "1. Zhang, W., Li, Q. & Wang, F. Single-cell atlas of roots. Nature Plants (2024)."]);
+        let set = xml(nature);
+        assert!(set.contains(r#"<w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:t xml:space="preserve">1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#), "{set}");
+        assert!(set.contains(r#"<w:r><w:rPr><w:i/></w:rPr><w:t xml:space="preserve">Nature Plants</w:t></w:r>"#), "{set}");
         // The manuscript itself keeps its keys.
         assert!(store.manuscript(&made.id).unwrap().unwrap().sections[1].body.contains("[@Zhang2024 p.2"));
     }

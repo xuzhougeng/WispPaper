@@ -44,7 +44,7 @@ fn main() -> anyhow::Result<()> {
     };
     let out = args.get(2).map(String::as_str).unwrap_or("out.docx");
     let guessed = |n: usize| mode == "guessed" && draft.headings.iter().any(|guess| guess.paragraph == n && guess.likely);
-    let mut wanted: Vec<Wanted> = read.paragraphs.iter().enumerate().map(|(n, para)| Wanted { text: para.text.clone(), role: if para.title { Role::Title } else if para.level.is_some() || guessed(n) { Role::Heading } else { Role::Body }, notes: vec![] }).collect();
+    let mut wanted: Vec<Wanted> = read.paragraphs.iter().enumerate().map(|(n, para)| Wanted { text: para.text.clone(), role: if para.title { Role::Title } else if para.level.is_some() || guessed(n) { Role::Heading } else { Role::Body }, ..Default::default() }).collect();
     if mode != "same" && mode != "guessed" {
         let author = std::env::var("DOCX_AUTHOR").unwrap_or_else(|_| "Wisp Paper 助手".into());
         let note = |range: std::ops::Range<usize>, body: &str| Note { range, author: author.clone(), date: "2026-11-12T08:00:00Z".into(), body: body.into() };
@@ -63,8 +63,8 @@ fn main() -> anyhow::Result<()> {
         }
         if let Some(&n) = bodies.get(2) { wanted.remove(n); }
         let at = bodies.first().map_or(wanted.len(), |n| n + 1).min(wanted.len());
-        wanted.insert(at, Wanted { text: "这是新加的一段。A paragraph that was not in the file.".into(), role: Role::Body, notes: vec![note(0..0, "新增的一段")] });
-        wanted.push(Wanted { text: "新的一节".into(), role: Role::Heading, notes: vec![] });
+        wanted.insert(at, Wanted { text: "这是新加的一段。A paragraph that was not in the file.".into(), notes: vec![note(0..0, "新增的一段")], ..Default::default() });
+        wanted.push(Wanted { text: "新的一节".into(), role: Role::Heading, ..Default::default() });
     }
     let done = docx::rewrite(&bytes, &wanted, &Options { track: mode == "track", author: "审阅者".into(), date: "2026-11-12T08:00:00Z".into() })?;
     std::fs::write(out, &done.bytes)?;

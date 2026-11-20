@@ -570,26 +570,59 @@ fn page_of(locator: &str) -> Option<usize> {
 /// How the citations of a manuscript exported to Word are written. In the
 /// app they stay keys (`[@Zhang2024]`), which find their paper by lookup;
 /// a reader of the exported file sees a journal's form and a reference list.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub enum Style {
     /// `(Zhang et al., 2024)`, the list by author and year.
     #[default]
     AuthorYear,
     /// `[1]`, numbered in the order first cited, the list in that order.
     Numeric,
+    /// A journal's own form, as a CSL file defines it (`csl`).
+    Csl(std::sync::Arc<crate::csl::Loaded>),
 }
 
 impl Style {
-    /// As kept in the settings: `numeric`, else author-year.
+    /// The two simple styles as kept in the settings: `numeric`, else author-year. A CSL style is read by `csl::style`.
     pub fn from_key(key: &str) -> Style {
         if key == "numeric" { Style::Numeric } else { Style::AuthorYear }
     }
 
-    pub fn key(self) -> &'static str {
+    pub fn key(&self) -> &str {
         match self {
             Style::AuthorYear => "author-year",
             Style::Numeric => "numeric",
+            Style::Csl(style) => &style.key,
         }
+    }
+}
+
+/// A text as a Word file sets it: what is in italics, bold or raised, and
+/// which of its words are a citation of which paper (by the paper's id),
+/// so the file can lead from a citation to its entry in the list.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Rich {
+    pub text: String,
+    pub looks: Vec<(Range<usize>, crate::docx::Look)>,
+    pub links: Vec<(Range<usize>, String)>,
+}
+
+impl Rich {
+    fn push(&mut self, text: &str) {
+        self.text.push_str(text);
+    }
+
+    /// Text that cites a paper.
+    fn push_linked(&mut self, text: &str, paper_id: &str) {
+        let start = self.text.len();
+        self.text.push_str(text);
+        self.links.push((start..self.text.len(), paper_id.to_string()));
+    }
+
+    fn append(&mut self, other: &Rich) {
+        let base = self.text.len();
+        self.text.push_str(&other.text);
+        self.looks.extend(other.looks.iter().map(|(range, look)| (base + range.start..base + range.end, *look)));
+        self.links.extend(other.links.iter().map(|(range, to)| (base + range.start..base + range.end, to.clone())));
     }
 }
 
@@ -605,14 +638,27 @@ pub struct Formatter {
     /// Paper id → `Zhang et al., 2024a` (author-year) or its number.
     labels: HashMap<String, String>,
     numbers: HashMap<String, usize>,
-    list: Vec<String>,
+    /// The reference list in the style's order: the paper, and its entry.
+    list: Vec<(String, Rich)>,
+    /// A CSL style: how each group of papers is written, by the papers it cites in the order written. A group
+    /// cited again reads as it did the first time, also in a style that would shorten a later citation.
+    groups: HashMap<Vec<String>, Rich>,
+}
+
+/// The papers a group cites, each once in the order written; none when a key of it names no paper.
+fn cited_ids(group: &[Cited], known: impl Fn(&str) -> bool) -> Option<Vec<&str>> {
+    let mut ids: Vec<&str> = group.iter().map(|one| one.found.paper().filter(|id| known(id))).collect::<Option<_>>()?;
+    let mut seen = HashSet::new();
+    ids.retain(|id| seen.insert(*id));
+    Some(ids)
 }
 
 impl Formatter {
-    pub fn new(texts: &[&str], index: &Index, style: Style, language: &str) -> Formatter {
+    pub fn new(texts: &[&str], index: &Index, style: &Style, language: &str) -> Formatter {
         let chinese = language == "zh";
-        let groups: Vec<Vec<Cited>> = texts.iter().flat_map(|text| written_groups(text, index)).collect();
-        let cited: Vec<Cited> = groups.into_iter().flatten().collect();
+        // Only the groups that will be written count: a paper cited beside a key nothing has gets no number and no entry from that group.
+        let groups: Vec<Vec<Cited>> = texts.iter().flat_map(|text| written_groups(text, index)).filter(|group| group.iter().all(|one| one.found.paper().is_some_and(|id| index.paper(id).is_some()))).collect();
+        let cited: Vec<Cited> = groups.iter().flatten().cloned().collect();
         let mut numbers: HashMap<String, usize> = HashMap::new();
         let mut order: Vec<String> = vec![];
         for one in &cited {
@@ -622,8 +668,10 @@ impl Formatter {
             numbers.insert(id.to_string(), order.len());
         }
         let mut labels = HashMap::new();
+        let mut written = HashMap::new();
+        let plain = |text: String| Rich { text, ..Default::default() };
         let list = match style {
-            Style::Numeric => order.iter().filter_map(|id| Some(format!("[{}] {}", numbers[id], reference(index.paper(id)?)))).collect(),
+            Style::Numeric => order.iter().filter_map(|id| Some((id.clone(), plain(format!("[{}] {}", numbers[id], reference(index.paper(id)?)))))).collect(),
             Style::AuthorYear => {
                 let listed = references(&cited, index);
                 // Two papers that would read alike, `Zhang et al., 2024`, are 2024a and 2024b, in the list's order.
@@ -642,41 +690,81 @@ impl Formatter {
                         _ => year,
                     };
                     labels.insert(one.paper_id.clone(), format!("{name}, {year}"));
-                    out.push(reference_dated(paper, &year));
+                    out.push((one.paper_id.clone(), plain(reference_dated(paper, &year))));
                 }
                 out
             }
+            Style::Csl(csl) => {
+                // Every group as the processor is to see it: in the order written, the ones with a key nothing has left out.
+                let asked: Vec<Vec<&str>> = groups.iter().filter_map(|group| cited_ids(group, |id| numbers.contains_key(id))).collect();
+                let papers: Vec<Vec<&Paper>> = asked.iter().map(|ids| ids.iter().filter_map(|id| index.paper(id)).collect()).collect();
+                let (cited, list) = crate::csl::render(csl, &papers, language);
+                for (ids, rich) in asked.iter().zip(cited) { written.entry(ids.iter().map(|id| id.to_string()).collect()).or_insert(rich); }
+                list
+            }
         };
-        Formatter { style, chinese, labels, numbers, list }
+        Formatter { style: style.clone(), chinese, labels, numbers, list, groups: written }
     }
 
-    /// `text` with each citation group that names papers written in the style; the rest as it was.
-    pub fn apply(&self, text: &str, index: &Index) -> String {
-        let mut out = text.to_string();
-        for group in written_groups(text, index).into_iter().rev() {
-            let Some(first) = group.first() else { continue };
-            let ids: Option<Vec<&str>> = group.iter().map(|one| one.found.paper().filter(|id| self.numbers.contains_key(*id))).collect();
-            let Some(mut ids) = ids else { continue };
-            let mut seen = HashSet::new();
-            ids.retain(|id| seen.insert(*id));
-            let written = match self.style {
-                Style::Numeric => {
-                    let mut numbers: Vec<usize> = ids.iter().map(|id| self.numbers[*id]).collect();
-                    numbers.sort_unstable();
-                    format!("[{}]", runs(&numbers))
+    /// How a group that cites these papers is written.
+    fn written(&self, ids: &[&str]) -> Option<Rich> {
+        let mut out = Rich::default();
+        match &self.style {
+            Style::Numeric => {
+                let mut numbered: Vec<(usize, &str)> = ids.iter().map(|id| (self.numbers[*id], *id)).collect();
+                numbered.sort_unstable();
+                out.push("[");
+                // `1, 3–5, 7`: three numbers in a row or more as a range, which names its two ends.
+                let mut at = 0;
+                while at < numbered.len() {
+                    let mut end = at;
+                    while end + 1 < numbered.len() && numbered[end + 1].0 == numbered[end].0 + 1 { end += 1 }
+                    if at > 0 { out.push(", ") }
+                    out.push_linked(&numbered[at].0.to_string(), numbered[at].1);
+                    if end > at {
+                        out.push(if end - at == 1 { ", " } else { "–" });
+                        out.push_linked(&numbered[end].0.to_string(), numbered[end].1);
+                    }
+                    at = end + 1;
                 }
-                Style::AuthorYear => {
-                    let names: Vec<&str> = ids.iter().filter_map(|id| self.labels.get(*id).map(String::as_str)).collect();
-                    if self.chinese { format!("（{}）", names.join("；")) } else { format!("({})", names.join("; ")) }
+                out.push("]");
+            }
+            Style::AuthorYear => {
+                out.push(if self.chinese { "（" } else { "(" });
+                for (n, id) in ids.iter().filter(|id| self.labels.contains_key(**id)).enumerate() {
+                    if n > 0 { out.push(if self.chinese { "；" } else { "; " }) }
+                    out.push_linked(&self.labels[*id], id);
                 }
-            };
-            out.replace_range(first.group.clone(), &written);
+                out.push(if self.chinese { "）" } else { ")" });
+            }
+            Style::Csl(_) => return self.groups.get(&ids.iter().map(|id| id.to_string()).collect::<Vec<_>>()).cloned(),
         }
+        Some(out)
+    }
+
+    /// `text` with each citation group that names papers written in the
+    /// style, the rest as it was; with what the style sets apart, and
+    /// which words cite which paper.
+    pub fn rich(&self, text: &str, index: &Index) -> Rich {
+        let (mut out, mut at) = (Rich::default(), 0);
+        for group in written_groups(text, index) {
+            let Some(first) = group.first() else { continue };
+            let Some(written) = cited_ids(&group, |id| self.numbers.contains_key(id)).and_then(|ids| self.written(&ids)) else { continue };
+            out.push(&text[at..first.group.start]);
+            out.append(&written);
+            at = first.group.end;
+        }
+        out.push(&text[at..]);
         out
     }
 
-    /// The reference list, one entry each, in the style's order.
-    pub fn references(&self) -> &[String] {
+    /// `rich` as words alone.
+    pub fn apply(&self, text: &str, index: &Index) -> String {
+        self.rich(text, index).text
+    }
+
+    /// The reference list in the style's order: each paper's id and its entry.
+    pub fn references(&self) -> &[(String, Rich)] {
         &self.list
     }
 
@@ -696,23 +784,6 @@ fn written_groups(text: &str, index: &Index) -> Vec<Vec<Cited>> {
         }
     }
     groups
-}
-
-/// `1, 3–5, 7`: three numbers in a row or more as a range.
-fn runs(numbers: &[usize]) -> String {
-    let mut out: Vec<String> = vec![];
-    let mut at = 0;
-    while at < numbers.len() {
-        let mut end = at;
-        while end + 1 < numbers.len() && numbers[end + 1] == numbers[end] + 1 { end += 1 }
-        match end - at {
-            0 => out.push(numbers[at].to_string()),
-            1 => out.extend([numbers[at].to_string(), numbers[end].to_string()]),
-            _ => out.push(format!("{}–{}", numbers[at], numbers[end])),
-        }
-        at = end + 1;
-    }
-    out.join(", ")
 }
 
 /// Who a paper is in an author-year citation: `Zhang`, `Zhang & Li`, `Zhang et al.`; `张等` for a name in Chinese.
@@ -1023,21 +1094,36 @@ mod tests {
         let one = "Roots [@Zhang2024 p.2 \"quoted\"] and shoots [@Smith2019; @Zhang2024b] [@Gone2000].";
         let two = "Again [@DeNovo2020; @Zhang2024; @Smith2019; @Zhang2024b] (Zhang et al., 2024).";
         // Author and year: two papers that read alike get letters, the list by author.
-        let format = Formatter::new(&[one, two], &index, Style::AuthorYear, "en");
+        let format = Formatter::new(&[one, two], &index, &Style::AuthorYear, "en");
         assert_eq!(format.apply(one, &index), "Roots (Zhang et al., 2024a) and shoots (Smith & Jones, 2019; Zhang et al., 2024b) [@Gone2000].");
         assert_eq!(format.apply(two, &index), "Again (De Novo Domestication, 2020; Zhang et al., 2024a; Smith & Jones, 2019; Zhang et al., 2024b) (Zhang et al., 2024).");
         assert_eq!(format.references().len(), 4);
-        assert!(format.references()[2].starts_with("Zhang, W., Li, Q., & Wang, F. (2024a). Single-cell"), "{:?}", format.references());
-        assert!(format.references()[3].contains("(2024b). WOX5"));
+        assert!(format.references()[2].1.text.starts_with("Zhang, W., Li, Q., & Wang, F. (2024a). Single-cell"), "{:?}", format.references());
+        assert!(format.references()[3].1.text.contains("(2024b). WOX5"));
         assert_eq!(format.heading(), "References");
         // Numbered in the order first cited, three in a row as a range.
-        let format = Formatter::new(&[one, two], &index, Style::Numeric, "zh");
+        let format = Formatter::new(&[one, two], &index, &Style::Numeric, "zh");
         assert_eq!(format.apply(one, &index), "Roots [1] and shoots [2, 3] [@Gone2000].");
         assert_eq!(format.apply(two, &index), "Again [1–4] (Zhang et al., 2024).");
-        assert!(format.references()[0].starts_with("[1] Zhang, W.") && format.references()[3].starts_with("[4] De Novo"));
+        assert!(format.references()[0].1.text.starts_with("[1] Zhang, W.") && format.references()[3].1.text.starts_with("[4] De Novo"));
         assert_eq!(format.heading(), "参考文献");
-        let chinese = Formatter::new(&["差异[@Smith2019]。"], &index, Style::AuthorYear, "zh");
+        let chinese = Formatter::new(&["差异[@Smith2019]。"], &index, &Style::AuthorYear, "zh");
         assert_eq!(chinese.apply("差异[@Smith2019]。", &index), "差异（Smith & Jones, 2019）。");
-        assert_eq!(runs(&[1, 2, 4, 5, 6, 9]), "1, 2, 4–6, 9");
+        // Which words cite which paper: a range by its two ends, an author-year group name by name.
+        let linked = |rich: Rich| rich.links.iter().map(|(range, to)| (rich.text[range.clone()].to_string(), index.key(to).unwrap_or("").to_string())).collect::<Vec<_>>();
+        let pair = |words: &str, key: &str| (words.to_string(), key.to_string());
+        assert_eq!(linked(format.rich(two, &index)), [pair("1", "Zhang2024"), pair("4", "DeNovo2020")]);
+        assert_eq!(linked(format.rich(one, &index)), [pair("1", "Zhang2024"), pair("2", "Smith2019"), pair("3", "Zhang2024b")]);
+        assert_eq!(linked(chinese.rich("差异[@Smith2019]。", &index)), [pair("Smith & Jones, 2019", "Smith2019")]);
+        // A journal's style: the same groups, as its CSL file says.
+        let nature = Style::Csl(std::sync::Arc::new(crate::csl::load("csl:nature", std::path::Path::new("/nowhere")).unwrap()));
+        let format = Formatter::new(&[one, two], &index, &nature, "en");
+        let rich = format.rich(one, &index);
+        assert_eq!(rich.text, "Roots 1 and shoots 2,3 [@Gone2000].");
+        assert_eq!(linked(rich.clone()), [pair("1", "Zhang2024"), pair("2", "Smith2019"), pair("3", "Zhang2024b")]);
+        assert!(rich.looks.iter().all(|(_, look)| look.sup) && !rich.looks.is_empty());
+        assert_eq!(format.apply(two, &index), "Again 1–4 (Zhang et al., 2024).");
+        assert_eq!(format.references().len(), 4);
+        assert!(format.references()[0].1.text.starts_with("1. Zhang, W., Li, Q. & Wang, F."), "{:?}", format.references()[0]);
     }
 }

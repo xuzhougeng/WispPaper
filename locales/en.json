@@ -1481,6 +1481,7 @@
   "已分支为新对话，原对话仍在「历史」里": "Branched into a new conversation; the original is still in History",
   "Word 里的引用：作者-年份 (Zhang et al., 2024)": "Citations in Word: author–year (Zhang et al., 2024)",
   "Word 里的引用：编号 [1]": "Citations in Word: numbered [1]",
+  "添加引用样式文件（Zotero 的 .csl）…": "Add a citation style file (Zotero’s .csl)…",
   "导出 Word 时按这种格式写引用，文末列出参考文献；稿件里仍是引用键": "Word exports will cite in this style, with a reference list at the end; the manuscript keeps its citation keys",
   "收起参考文献": "Close references",
   "预览中：再点一下回到编辑": "Previewing: click again to go back to editing",
