@@ -407,19 +407,23 @@ impl Workspace {
                             })
                             .collect();
                         let nothing = rows.is_empty();
+                        let (by, title) = (candidate.by, if form.by_id { tf!("按 {} 补全 · 核对这条记录", "Look up by {} · Review record", candidate.by) } else { t("按题目补全 · 核对这条记录").to_string() });
+                        let unlike = if form.by_id { tf!("这条记录的题目和这篇文献的不一样：这个 {by} 可能不是它的（比如 PDF 首页印的是所引文献的 DOI），所以没有预先勾选任何字段。", "This record’s title differs from the paper’s: the {by} may belong to another paper (a PDF’s first page may print a cited paper’s DOI), so no fields are pre-selected.") } else { t("这条记录的题目和所查的不一样，很可能是另一篇文献，所以没有预先勾选任何字段。").to_string() };
+                        let about = if form.by_id { t("默认只勾选现在空着的字段，以及只是文件名的题目；已有的内容，勾选后才会被替换。拿不准时打开网页对照。") } else { t("默认只勾选现在空着的字段，以及只是文件名的题目；已有的内容，勾选后才会被替换。题目相近不等于同一篇：拿不准时打开网页对照，或返回看别的候选。") };
+                        let same_line = if form.by_id { tf!("与这篇一致：{}", "Matches this paper: {}", candidate.same.join("，")) } else { tf!("与所查一致：{}", "Matches query: {}", candidate.same.join("，")) };
                         ui::dialog(640.)
-                            .child(ui::dialog_title(t("按题目补全 · 核对这条记录")))
+                            .child(ui::dialog_title(title))
                             .child(
                                 body()
                                     .child(div().flex().items_start().gap(px(10.)).p(px(12.)).rounded(px(10.)).bg(Theme::bg_sunken()).child(div().flex().flex_col().flex_1().min_w_0().gap(px(4.)).child(summary(record)).child(small(tf!("来自 {}", "From {}", candidate.sources.join("、")), Theme::text_tertiary()))).when(!link.is_empty(), |d| d.child(ui::secondary_button("complete-open", t("打开网页")).h(text_px(28.)).on_click(self.on(Cmd::OpenUrl(link.clone()), cx)))))
-                                    .when(!candidate.same.is_empty(), |d| d.child(small(tf!("与所查一致：{}", "Matches query: {}", candidate.same.join("，")), ok)))
+                                    .when(!candidate.same.is_empty(), |d| d.child(small(same_line, ok)))
                                     .when(!candidate.differs.is_empty(), |d| d.child(small(tf!("不一致：{}", "Differs: {}", candidate.differs.join("，")), Theme::warning())))
-                                    .when(candidate.similarity < complete::ALIKE_ENOUGH, |d| d.child(small(t("这条记录的题目和所查的不一样，很可能是另一篇文献，所以没有预先勾选任何字段。").into(), Theme::warning())))
+                                    .when(candidate.similarity < complete::ALIKE_ENOUGH, |d| d.child(small(unlike, Theme::warning())))
                                     .when(candidate.partial_authors, |d| d.child(small(t("这个来源只给了部分作者，名单不完整：写入后请对照原文补齐。").into(), Theme::warning())))
                                     .children(held_line(form.held.get(at).unwrap_or(&None)))
                                     .child(div().flex().flex_col().gap(px(2.)).children(rows))
                                     .when(nothing, |d| d.child(small(t("这条记录没有比现有内容多出什么。").into(), Theme::text_tertiary())))
-                                    .child(small(t("默认只勾选现在空着的字段，以及只是文件名的题目；已有的内容，勾选后才会被替换。题目相近不等于同一篇：拿不准时打开网页对照，或返回看别的候选。").into(), Theme::text_tertiary()))
+                                    .child(small(about.into(), Theme::text_tertiary()))
                                     .child(error),
                             )
                             .child(
@@ -430,11 +434,27 @@ impl Workspace {
                                     .gap(px(8.))
                                     .px(px(20.))
                                     .py(px(14.))
-                                    .child(ui::ghost_button("complete-back", Some("arrow-left"), Some(t("返回候选").into())).h(text_px(32.)).on_click(self.on(Cmd::CompleteChoose(None), cx)))
+                                    .when(!form.by_id, |d| d.child(ui::ghost_button("complete-back", Some("arrow-left"), Some(t("返回候选").into())).h(text_px(32.)).on_click(self.on(Cmd::CompleteChoose(None), cx))))
                                     .child(div().flex_1())
                                     .child(ui::secondary_button("modal-cancel", t("取消")).on_click(self.on(Cmd::CloseModal, cx)))
                                     .child(ui::primary_button("modal-ok", tf!("写入 {} 个字段", "Save {} fields", form.fields.len())).on_click(self.on(Cmd::SubmitModal, cx))),
                             )
+                    }
+                    // By the paper's number: asking, or why nothing came of it.
+                    None if form.by_id => {
+                        let by = if paper.doi.is_empty() { format!("PMID {}", paper.pmid) } else { format!("DOI {}", paper.doi) };
+                        let sources = if paper.doi.is_empty() { "Europe PMC" } else { "Crossref、Europe PMC" };
+                        let failed = !form.busy && !self.modal_error.is_empty();
+                        ui::dialog(560.)
+                            .child(ui::dialog_title(if paper.doi.is_empty() { t("按 PMID 补全") } else { t("按 DOI 补全") }))
+                            .child(
+                                body()
+                                    .child(div().flex().items_center().gap(px(8.)).when(form.busy, |d| d.child(ui::spinner("complete-busy", 14., Theme::text_tertiary()))).child(div().min_w_0().child(if failed { tf!("查询 {by} 没有成功。", "Looking up {by} did not succeed.") } else { tf!("正在向 {sources} 查 {by} …", "Asking {sources} about {by}…") })))
+                                    .child(small(t("只发出这个编号，不上传 PDF。查到后逐个字段核对，勾选的才会写入。").into(), Theme::text_tertiary()))
+                                    .when(failed, |d| d.child(small(t("编号有误时，用「编辑信息与词条」改正后再查。").into(), Theme::text_secondary())))
+                                    .child(error),
+                            )
+                            .child(footer(if form.busy { t("正在查询…") } else { t("重新查询") }, false, self, cx))
                     }
                     // What to look for, and the records found.
                     None => {

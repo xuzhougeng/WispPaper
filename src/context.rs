@@ -155,7 +155,7 @@ impl Workspace {
 
                 breaks.push(items.len());
                 items.push(item(t("编辑题目、信息与词条…"), Cmd::EditPaper(id.clone())));
-                if p.doi.is_empty() && p.pmid.is_empty() { items.push(item(t("按题目补全…"), Cmd::CompletePaper(id.clone()))) }
+                if p.doi.is_empty() && p.pmid.is_empty() { items.push(item(t("按题目补全…"), Cmd::CompletePaper(id.clone()))) } else { items.push(item(if p.doi.is_empty() { t("按 PMID 补全…") } else { t("按 DOI 补全…") }, Cmd::CompleteById(id.clone()))) }
                 items.push(item(if pdf.is_some() { t("再添加一个文件…") } else { t("添加 PDF 或附件…") }, Cmd::AttachPdf(id.clone())));
                 if pdf.is_none() && wisp_core::openaccess::lookable(p) { items.push(item(t("查找开放全文"), Cmd::FindPdfs(Some(id.clone())))) }
                 if !lib.fields.is_empty() { items.push(item(t("让助手填写词条…"), Cmd::Extract(crate::extract::Do::Open(Some(vec![id.clone()]))))) }
