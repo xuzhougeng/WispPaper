@@ -102,6 +102,8 @@ A conversation started from the home page is a library with `LibraryInfo::draft`
 
 `comment_manuscript` (in `WRITING`, not in `CONFIRMING`: a comment changes no word) leaves the assistant's remarks on a section as comments (`Store::add_remarks`, `origin` assistant); each quotation goes through `comment::remarks_in`, the same reading as a window review's `parse_review`, so a remark whose words the section does not hold is not kept and is returned in `missed`.
 
+`offer_action` (`offer.rs`; neither `writes` nor `confirm`: it does nothing) is a card the assistant puts under its answer: a sentence and one to three buttons, each of the fixed `offer::KINDS` (`reply` with the words it says for the person, `promote_library`, `find_pdfs`, `open_page` with one of `offer::PAGES`). `offer::parse` refuses any other kind, so a model can offer only what the window knows how to run, and only the person's press runs it. Outside the window there is no card: the result tells the caller to say the options in words. `ai::draft_instructions` asks for one with 建成文献库 once papers came in.
+
 ## Conversations
 
 Conversations are kept per library, under what they are about (`conversations.paper_id`: empty for the library's, a paper's id, or a manuscript's id for the conversation that writes it; `Library::talk_about`): `conversations` holds an `ai::Transcript` (what was said, and the sources its answers cite) as JSON, `conversation_images` the pictures. What the model read is not kept: a conversation reopened from the history builds its context anew, and `ai::build_context` takes the transcript's sources as `known` so the labels in old answers still name the same papers.

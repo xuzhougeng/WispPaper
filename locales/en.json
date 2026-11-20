@@ -1539,6 +1539,7 @@
   "重命名对话": "Rename conversation",
   "让模型按这次对话拟名称和主题": "Have the model propose a name and topic from this conversation",
   "建成文献库": "Make it a library",
+  "稍后": "Later",
   "对话、收进的文献和交来的稿件都留在原处，成为这个文献库的内容。文献库是独立的文件夹：自己的数据库、PDF 和自定义词条，可以单独备份或拷走。": "The conversation, the papers kept and any manuscript stay where they are and become this library's. A library is a folder of its own: its own database, PDFs and custom fields, to back up or move on its own.",
   "首页": "Home",
   "还没有文献库：需要文献时，助手到文献数据库里检索": "No library yet: the assistant searches the literature databases when it needs papers",

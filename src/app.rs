@@ -466,6 +466,8 @@ pub enum Cmd {
     Ask(Talk),
     /// Ask one of the suggested questions.
     Suggest(Talk, String),
+    /// The assistant's card under its answer (`Chat::offer`): press its n-th button, or put it away (`None`).
+    Offer(Talk, Option<usize>),
     /// Leave a slash command in the assistant's box, for its words to follow.
     StartCommand(&'static str),
     NewChat(Talk),
@@ -989,6 +991,8 @@ pub enum ChatItem {
 const RESTYLE: &str = "restyle_docx";
 /// The tool that leaves the assistant's remarks on a manuscript as comments: they are read again after it ran (`comments_arrived`).
 const COMMENT: &str = "comment_manuscript";
+/// The tool that puts a card of buttons under the answer: the window keeps its arguments (`Chat::offer`).
+const OFFER: &str = "offer_action";
 
 /// The tool that takes a file in as a manuscript: the writing page shows it once it ran (`manuscript_arrived`).
 const TAKE_IN: &str = "import_manuscript";
@@ -1316,6 +1320,9 @@ pub struct Chat {
     pub drawn_width: f32,
     /// Which conversation this is while the window runs: what a step of its answer finds it by, in its place or set aside (`Workspace::in_chat`).
     pub key: u64,
+    /// The card the assistant put under its answer (`offer_action`), with how many messages there were then: it is drawn while no question came
+    /// after it, and goes once a button of it is pressed or it is put away (`Cmd::Offer`). Not kept with the conversation.
+    pub offer: Option<(usize, wisp_core::offer::Offer)>,
 }
 
 /// Where `Chat::key` comes from.
@@ -1644,6 +1651,7 @@ impl Chat {
             retracted: None,
             drawn_width: 0.,
             key: CHAT_KEYS.fetch_add(1, Ordering::Relaxed),
+            offer: None,
         }
     }
 
@@ -3038,6 +3046,20 @@ impl Workspace {
             }
 
             Cmd::Ask(paper) => self.ask(paper, cx),
+            Cmd::Offer(talk, pressed) => {
+                let Some((_, offer)) = self.lib.as_mut().and_then(|lib| lib.chat_mut(talk).offer.take()) else { return };
+                // Put away in a conversation not yet a library, it does not give way to the window's own card of 建成文献库: that is 稍后 as well.
+                if pressed.is_none() && self.in_draft() { return self.run(Cmd::Draft(crate::draft::Do::Later), window, cx) }
+                let Some(action) = pressed.and_then(|n| offer.actions.get(n)).filter(|action| self.offer_fits(action)) else { return cx.notify() };
+                let draft = self.lib.as_ref().map(|lib| lib.info.id.clone()).filter(|_| self.in_draft());
+                let cmd = match action.kind.as_str() {
+                    "reply" => Cmd::Suggest(talk, action.arg.clone()),
+                    "promote_library" => match draft { Some(id) => Cmd::Draft(crate::draft::Do::Promote(id)), None => return },
+                    "find_pdfs" => Cmd::FindPdfs(None),
+                    _ => Cmd::SetPage(Page::from_key(&action.arg)),
+                };
+                self.run(cmd, window, cx);
+            }
             Cmd::Suggest(paper, question) => {
                 if let Some(lib) = self.lib.as_ref() {
                     lib.chat(paper).input.update(cx, |input, cx| input.set_text(&question, cx));
@@ -5329,6 +5351,8 @@ impl Workspace {
         let composed = calls.iter().any(|call| tools::MANUSCRIPT.contains(&call.name.as_str()) && (allowed || !call.confirm));
         let commented = calls.iter().any(|call| call.name == COMMENT);
         let taken_in = calls.iter().any(|call| call.name == TAKE_IN && call.outside.is_none() && (allowed || !call.confirm));
+        // The last card offered in this step; arguments that are no card are the tool's to refuse.
+        let offer = calls.iter().filter(|call| call.name == OFFER).filter_map(|call| call.args.as_ref().ok().and_then(|args| wisp_core::offer::parse(args).ok())).next_back();
         let library = info.id.clone();
         let executor = cx.background_executor().clone();
         let tasks: Vec<gpui::Task<Vec<(String, String, bool, String)>>> = if wrote || calls.len() == 1 {
@@ -5367,6 +5391,7 @@ impl Workspace {
                         for (n, (_, _, failed, shown)) in done.iter().enumerate() {
                             if let Some(ChatItem::Tool { result, .. }) = chat.messages.get_mut(first + n) { *result = Some((shown.clone(), *failed)) }
                         }
+                        if let Some(offer) = offer { chat.offer = Some((chat.messages.len(), offer)) }
                         let results: Vec<(String, String, bool)> = done.into_iter().map(|(id, output, failed, _)| (id, output, failed)).collect();
                         let mut results = ai::tool_results(protocol, &results);
                         // One step is left: the model is told to answer with what it has.

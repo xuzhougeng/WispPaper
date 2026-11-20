@@ -56,6 +56,8 @@ pub struct Home {
     pub open: bool,
     /// Inside a conversation, 历史 lists the other conversations in its place.
     pub listing: bool,
+    /// 稍后 on the card that offers 建成文献库: that conversation, and how many papers it held then. The card is back once more come in.
+    pub later: Option<(String, usize)>,
     _heard: Subscription,
 }
 
@@ -67,7 +69,7 @@ impl Home {
             input
         });
         let heard = cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| if *event == InputEvent::Submit { this.draft_send(window, cx) });
-        Home { input, files: vec![], collect: false, waiting: None, focus: false, open: false, listing: false, _heard: heard }
+        Home { input, files: vec![], collect: false, waiting: None, focus: false, open: false, listing: false, later: None, _heard: heard }
     }
 }
 
@@ -93,6 +95,8 @@ pub enum Do {
     Rename(String),
     /// 建成文献库: the new-library dialog, set for this conversation.
     Promote(String),
+    /// 稍后 on the card under the conversation that offers 建成文献库.
+    Later,
     /// The sparkle by that dialog's name and topic: the model proposes both from the conversation.
     Propose,
     /// The manuscript beside the conversation: shown (稿件 in the conversation's header), or closed (its ×) so the conversation has the page.
@@ -148,6 +152,7 @@ impl Workspace {
                 if self.lib.as_ref().is_some_and(|lib| lib.info.id == id) { self.run(Cmd::EditLibrary(id), window, cx) }
             }
             Do::Propose => self.draft_propose(cx),
+            Do::Later => self.home.later = self.lib.as_ref().map(|lib| (lib.info.id.clone(), lib.papers.len())),
             Do::Manuscript(show) => {
                 let Some(lib) = self.lib.as_mut() else { return };
                 lib.writing.away = !show;
@@ -170,6 +175,16 @@ impl Workspace {
     /// Whether the open library is a conversation not yet made one.
     pub(crate) fn in_draft(&self) -> bool {
         self.lib.as_ref().is_some_and(|lib| lib.info.draft)
+    }
+
+    /// Whether a button of the assistant's card can be pressed here: 建成文献库 only in a conversation not yet a library,
+    /// the library's pages and its search for full texts only in a library.
+    pub(crate) fn offer_fits(&self, action: &wisp_core::offer::Action) -> bool {
+        match action.kind.as_str() {
+            "reply" => true,
+            "promote_library" => self.in_draft(),
+            _ => self.lib.is_some() && !self.in_draft(),
+        }
     }
 
     /// Files for the first question: dropped on the home page or picked. A box without words is given the
