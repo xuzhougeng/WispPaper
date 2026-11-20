@@ -313,7 +313,7 @@
   "本节": "This section",
   "旧式引用改为引用键": "Convert legacy citations to keys",
   "导出 BibTeX": "Export BibTeX",
-  "在候选句上点「引用」，或在这里找一篇文献。引用写作 [@Zhang2024]，导出的 Markdown 和 BibTeX 可以直接交给 Pandoc。每篇文献下面是出处：引用它的那句话依据的文献原文，点一下在 PDF 里看。": "Click “Cite” on a candidate sentence or find a paper here. Citations use [@Zhang2024]; exported Markdown and BibTeX work with Pandoc. Under each paper are its source passages: the paper’s own sentences that the citing sentences rest on. Click one to see it in the PDF.",
+  "在候选句上点「引用」，或在这里找一篇文献。引用写作 [@Zhang2024]，导出的 Markdown 和 BibTeX 可以直接交给 Pandoc；导出 Word 时写成作者-年份或编号（在「导出」里选），文末附参考文献表。每篇文献下面是出处：引用它的那句话依据的文献原文，点一下在 PDF 里看。": "Click “Cite” on a candidate sentence, or find a paper here. Citations are written as [@Zhang2024]; the exported Markdown and BibTeX go straight to Pandoc, and a Word export writes them author–year or numbered (chosen under Export) with a reference list at the end. Under each paper is its source: the sentence of the paper the citing sentence rests on; click to see it in the PDF.",
   "这一节还没有引用": "No citations in this section yet",
   "在候选句上点「引用」，或在上面按作者、题目找一篇文献，就引用到光标处。": "Click “Cite” on a candidate sentence, or find a paper above by author or title, to cite it at the caret.",
   "没有对得上的文献": "No matching papers",
@@ -1475,5 +1475,11 @@
   "撤回：这个问题和之后的对话撤下，原话回到输入框，改了可以再发": "Take back: this question and everything after it leave the conversation; the words return to the box to edit and send again",
   "重新回答": "Answer again",
   "从这里分支：到这条回答为止另开一个对话，原对话留在历史里": "Branch from here: a new conversation up to this answer; the original stays in History",
-  "已分支为新对话，原对话仍在「历史」里": "Branched into a new conversation; the original is still in History"
+  "已分支为新对话，原对话仍在「历史」里": "Branched into a new conversation; the original is still in History",
+  "Word 里的引用：作者-年份 (Zhang et al., 2024)": "Citations in Word: author–year (Zhang et al., 2024)",
+  "Word 里的引用：编号 [1]": "Citations in Word: numbered [1]",
+  "导出 Word 时按这种格式写引用，文末列出参考文献；稿件里仍是引用键": "Word exports will cite in this style, with a reference list at the end; the manuscript keeps its citation keys",
+  "收起参考文献": "Close references",
+  "预览中：再点一下回到编辑": "Previewing: click again to go back to editing",
+  "预览：看排好版的全文，Markdown 照它写的样子画出来": "Preview: the whole manuscript laid out, with its Markdown drawn"
 }

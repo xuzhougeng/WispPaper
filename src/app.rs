@@ -622,6 +622,8 @@ pub enum Cmd {
     /// The top-left arrow of a manuscript: out of 写作, back to the page it was opened from.
     LeaveWrite,
     ExportManuscript(ManuscriptExport),
+    /// How a manuscript exported to Word cites (`cite::Style::key`).
+    CiteStyle(String),
     /// The section's earlier versions.
     WriteHistory,
     HistoryPick(usize),
@@ -2105,7 +2107,7 @@ impl Workspace {
                 items.push(item(t("从 Zotero 导入…"), Cmd::ImportZotero));
                 items.push(item(t("手动录入…"), Cmd::AddManual));
             }
-            MenuKind::Manuscripts | MenuKind::Section(_) | MenuKind::ManuscriptExport | MenuKind::WriteLanguage => items = self.manuscript_menu(&kind),
+            MenuKind::Manuscripts | MenuKind::Section(_) | MenuKind::ManuscriptExport | MenuKind::WriteLanguage => (items, breaks) = self.manuscript_menu(&kind),
             MenuKind::WriteNarrow => items = self.narrowing_menu(),
             MenuKind::Export => {
                 items.push(item("BibTeX（.bib）", Cmd::Export(ExportKind::Bibtex)));
@@ -2581,12 +2583,21 @@ impl Workspace {
                 if let Some(lib) = self.lib.as_mut() { lib.citing.whole = whole }
             }
             Cmd::WriteCiteFix(pieces) => self.cite_fix(pieces, cx),
+            Cmd::CiteStyle(style) => {
+                self.settings.cite_style = style;
+                self.save_settings(cx);
+                self.say(t("导出 Word 时按这种格式写引用，文末列出参考文献；稿件里仍是引用键"), cx);
+            }
             Cmd::WriteCopyReferences => self.copy_references(cx),
             Cmd::WriteSide(side) => {
                 if let Some(lib) = self.lib.as_mut() { lib.writing.side = side }
             }
             Cmd::WriteReferences => {
-                if let Some(lib) = self.lib.as_mut() {
+                // Beside the conversation the list is a column of its own: the row opens and closes it.
+                let agent = self.settings.agent_writing;
+                if let Some(lib) = self.lib.as_mut() && agent && !lib.writing.reading && lib.writing.side == Side::References && lib.citing.whole {
+                    lib.writing.side = Side::Candidates;
+                } else if let Some(lib) = self.lib.as_mut() {
                     (lib.writing.side, lib.citing.whole) = (Side::References, true);
                     // Read through, the manuscript ends in its references: there is no panel beside it.
                     if lib.writing.reading { lib.citing.read_scroll.scroll_to_bottom() }
@@ -3524,6 +3535,12 @@ impl Workspace {
             if *event != InputEvent::Changed { return }
             let text = input.read(cx).text().to_string();
             this.write_typed(text, cx);
+        }));
+        // A citation pointed at says what it rests on; ⌘ or Ctrl with a click opens that sentence in its paper (write_source.rs).
+        subscriptions.push(cx.subscribe_in(&editor, window, |this, _, event: &InputEvent, window, cx| match *event {
+            InputEvent::LinkHovered => cx.notify(),
+            InputEvent::LinkClicked(n, at) => this.citation_follow(n, at, window, cx),
+            _ => {}
         }));
         // Candidates are asked for: the find box on Enter, the manuscript by the shortcut.
         subscriptions.push(cx.subscribe(&find, |this, _, event: &InputEvent, cx| if *event == InputEvent::Submit { this.write_find(true, cx) }));

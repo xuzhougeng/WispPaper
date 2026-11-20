@@ -546,7 +546,7 @@ impl Workspace {
     fn manuscript_word(&self, manuscript: &Manuscript, track: bool) -> Result<(Vec<u8>, String), String> {
         let Some(lib) = self.lib.as_ref() else { return Err(String::new()) };
         let comments = lib.store.comments(&manuscript.id).map_err(|err| format!("{err:#}"))?;
-        let (done, from_file) = lib.store.manuscript_word(manuscript, &comments, track, &self.settings.author_name()).map_err(|err| tf!("没有导出：{err:#}", "Not exported: {err:#}"))?;
+        let (done, from_file) = lib.store.manuscript_word(manuscript, &comments, track, &self.settings.author_name(), wisp_core::cite::Style::from_key(&self.settings.cite_style)).map_err(|err| tf!("没有导出：{err:#}", "Not exported: {err:#}"))?;
         let mut said = vec![];
         if from_file {
             if done.changed + done.added + done.removed == 0 { said.push(t("文字与原文件相同").to_string()) }
@@ -571,10 +571,10 @@ impl Workspace {
     }
 
     /// The items of the writing page's menus.
-    pub(crate) fn manuscript_menu(&self, kind: &MenuKind) -> Vec<MenuItem> {
+    pub(crate) fn manuscript_menu(&self, kind: &MenuKind) -> (Vec<MenuItem>, Vec<usize>) {
         let item = |label: String, checked: bool, cmd: Cmd| MenuItem { label: label.into(), checked, note: None, cmd };
-        let Some(writing) = self.lib.as_ref().map(|l| &l.writing) else { return vec![] };
-        let mut items = vec![];
+        let Some(writing) = self.lib.as_ref().map(|l| &l.writing) else { return (vec![], vec![]) };
+        let (mut items, mut breaks) = (vec![], vec![]);
         match kind {
             MenuKind::Manuscripts => {
                 for m in &writing.manuscripts {
@@ -593,7 +593,7 @@ impl Workspace {
                 }
             }
             MenuKind::Section(id) => {
-                let Some(m) = writing.current() else { return items };
+                let Some(m) = writing.current() else { return (items, breaks) };
                 let at = m.sections.iter().position(|s| s.id == *id).unwrap_or(0);
                 items.push(item(t("名称与类型…").into(), false, Cmd::EditSection(Some(id.clone()))));
                 if at > 0 { items.push(item(t("前移").into(), false, Cmd::MoveSection(id.clone(), -1))) }
@@ -612,13 +612,19 @@ impl Workspace {
                     items.push(item(if writing.comments.list.is_empty() { "Word（.docx）".into() } else { t("Word（.docx），带批注").into() }, false, Cmd::ExportManuscript(ManuscriptExport::Docx)));
                 }
                 items.push(item(t("复制全文").into(), false, Cmd::ExportManuscript(ManuscriptExport::Copy)));
+                // How the Word file cites: the manuscript keeps its keys, a reader of the file gets a journal's form and the list.
+                let style = wisp_core::cite::Style::from_key(&self.settings.cite_style);
+                breaks.push(items.len());
+                for (to, name) in [(wisp_core::cite::Style::AuthorYear, "Word 里的引用：作者-年份 (Zhang et al., 2024)"), (wisp_core::cite::Style::Numeric, "Word 里的引用：编号 [1]")] {
+                    items.push(item(t(name).into(), style == to, Cmd::CiteStyle(to.key().to_string())));
+                }
             }
             MenuKind::WriteLanguage => {
                 for (code, name) in LANGUAGES { items.push(item(format!("{} ({code})", t(name)), writing.language() == code, Cmd::WriteLanguage(code.to_string()))) }
             }
             _ => {}
         }
-        items
+        (items, breaks)
     }
 
     // ---- render
@@ -736,7 +742,6 @@ impl Workspace {
                             .when(unresolved, |d| d.child(div().flex_none().size(px(6.)).rounded(px(3.)).bg(Theme::danger())))
                             .when(cited > 0, |d| d.child(div().flex_none().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(cited.to_string()))),
                     )
-                    .child(small_row("outline-reading", "eye", t("通读全文").into(), writing.reading).on_click(self.on(Cmd::WriteReading(!writing.reading), cx)))
                     .child(small_row("outline-manuscripts", "list", tf!("稿件 {}", "Manuscripts {}", writing.manuscripts.len()), false).on_click(self.on_menu(MenuKind::Manuscripts, cx))),
             )
             .into_any_element()
@@ -788,6 +793,22 @@ impl Workspace {
             .collect();
         let add = div().id("write-part-add").flex().flex_none().items_center().justify_center().size(px(28.)).rounded(px(14.)).cursor_pointer().border_1().border_color(Theme::line()).hover(|s| s.bg(Theme::hover())).on_click(self.on(Cmd::EditSection(None), cx)).child(ui::icon("plus", 14., Theme::text_secondary()));
         let title_focused = writing.title.focus_handle(cx).is_focused(window);
+        let reading = writing.reading;
+        let preview_tip = if reading { t("预览中：再点一下回到编辑") } else { t("预览：看排好版的全文，Markdown 照它写的样子画出来") };
+        let preview = div()
+            .id("write-preview")
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .size(text_px(26.))
+            .rounded(px(6.))
+            .cursor_pointer()
+            .when(reading, |d| d.bg(Theme::accent_soft()))
+            .when(!reading, |d| d.hover(|s| s.bg(Theme::hover())))
+            .on_click(self.on(Cmd::WriteReading(!reading), cx))
+            .tooltip(move |_, cx| cx.new(|_| crate::write_assist::Tip(preview_tip.to_string())).into())
+            .child(ui::icon("eye", 14., if reading { Theme::accent() } else { Theme::text_secondary() }));
         // The outline in the sidebar has the title, who writes, the sections and the manuscripts: here they are only while it is put away.
         let outlined = self.outline_shown() && !self.settings.sidebar_hidden;
         div()
@@ -814,13 +835,13 @@ impl Workspace {
                             .child(writing.title.clone()),
                     )
                     .when(!outlined, |d| d.child(self.render_mode_switch(cx)).child(tool("write-manuscripts", "list", Some(tf!("稿件 {}", "Manuscript {}", writing.manuscripts.len()).into())).on_click(self.on_menu(MenuKind::Manuscripts, cx))))
+                    // 预览 shows the whole manuscript as it reads, Markdown drawn; lit while it does, a click goes back to writing.
+                    .child(preview)
                     // The language is said even in a narrow column: there is no icon that says it.
                     .child(ui::ghost_button("write-language", Some("chevron-down"), Some(language.to_string().into())).h(text_px(26.)).px(px(7.)).text_size(text_px(12.)).on_click(self.on_menu(MenuKind::WriteLanguage, cx)))
                     .children(if self.settings.agent_writing { self.render_version_stepper(cx) } else { None })
                     .child(tool("write-history", "history", None).on_click(self.on(Cmd::WriteHistory, cx)))
-                    .child(tool("write-export", "export", Some(t("导出").into())).on_click(self.on_menu(MenuKind::ManuscriptExport, cx)))
-                    // Beside the outline its 通读全文 row is the one way in; a section there is the way back.
-                    .when(!outlined, |d| d.child(if writing.reading { tool("write-reading", "pen-line", Some(t("写作").into())).on_click(self.on(Cmd::WriteReading(false), cx)) } else { tool("write-reading", "eye", Some(t("通读").into())).on_click(self.on(Cmd::WriteReading(true), cx)) })),
+                    .child(tool("write-export", "export", Some(t("导出").into())).on_click(self.on_menu(MenuKind::ManuscriptExport, cx))),
             )
             .when(!outlined, |d| d.child(div().flex().items_center().flex_wrap().gap(px(6.)).px(px(16.)).pt(px(12.)).children(pills).child(add)))
     }
