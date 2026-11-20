@@ -7,6 +7,7 @@
 //! confirmation flow. Reading a stored PDF may also fill its text cache.
 
 mod local;
+mod web;
 
 use crate::complete;
 use crate::extract::{self, Proposal};
@@ -39,14 +40,14 @@ pub struct ToolDef {
 }
 
 /// The tools that change the library.
-const WRITING: [&str; 22] = ["create_library", "import_library", "export_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "suggest_field", "sync_searches", "find_pdf", "organise_papers", "edit_section", "set_outline", "export_note", "save_note_to_notion", "resolve_note_save", "save_cite_style", "restyle_docx"];
+const WRITING: [&str; 23] = ["create_library", "import_library", "export_library", "import_pdf", "import_references", "import_zotero", "save_search", "remove_search", "run_search", "undo_import", "suggest_screening", "suggest_field", "sync_searches", "find_pdf", "import_url", "organise_papers", "edit_section", "set_outline", "export_note", "save_note_to_notion", "resolve_note_save", "save_cite_style", "restyle_docx"];
 /// Of those, the ones the window's assistant runs only with the person's
 /// consent. Saving a search, suggesting a screening decision or proposing
 /// a field's value changes nothing a person has not yet to act on, so they
 /// run as asked. The two that write a manuscript (`MANUSCRIPT`) are asked
 /// about everywhere but in the conversation that writes that manuscript,
 /// where the person has handed the pen over.
-const CONFIRMING: [&str; 16] = ["import_library", "export_library", "import_pdf", "import_references", "import_zotero", "run_search", "undo_import", "remove_search", "find_pdf", "organise_papers", "edit_section", "set_outline", "export_note", "save_note_to_notion", "resolve_note_save", "restyle_docx"];
+const CONFIRMING: [&str; 17] = ["import_library", "export_library", "import_pdf", "import_references", "import_zotero", "run_search", "undo_import", "remove_search", "find_pdf", "import_url", "organise_papers", "edit_section", "set_outline", "export_note", "save_note_to_notion", "resolve_note_save", "restyle_docx"];
 /// The tools that write a manuscript (`compose`).
 pub const MANUSCRIPT: [&str; 2] = ["edit_section", "set_outline"];
 
@@ -297,6 +298,13 @@ pub fn catalog() -> Vec<ToolDef> {
                 "lookOnly": {"type": "boolean", "description": "只查找、不下载：返回每篇文献的候选地址。"},
             }),
             &[],
+        ),
+        scoped(
+            "import_url",
+            "按网址添加",
+            "把一个网址作为一篇文献加进文献库：文献在出版商网站上的页面，或者 PDF 本身的地址。只请求这一个网址一次（用本机的网络，校园网能下载的就能取到），读网页上的 citation_doi、citation_pmid、citation_pdf_url 等标签，按 DOI / PMID 查询题目、作者等信息后添加（已有的文献不重复添加），再下载网页给出的 PDF；拿不到时再找开放获取的版本（同 find_pdf）。网页打不开但网址里写着 DOI 时，按这个 DOI 添加。不登录，不带 cookie，不冒充浏览器，不跟随网页上的其他链接；遇到付费墙或验证页如实说明，并告诉用户可以在浏览器里下载后把 PDF 拖进窗口。认不出 DOI、PMID 也没有 PDF 时不添加。会把 DOI 或 PMID 发给 Crossref、Europe PMC 和 OpenAlex。",
+            json!({"url": {"type": "string", "description": "以 http:// 或 https:// 开头的文献页面或 PDF 地址，一次一个。"}}),
+            &["url"],
         ),
         scoped(
             "suggest_screening",
@@ -613,6 +621,7 @@ fn dispatch(store: &mut Store, info: &LibraryInfo, name: &str, args: &Value, fet
         "import_references" => local::import_references(store, args),
         "import_zotero" => local::import_zotero(store, args),
         "find_pdf" => find_pdf(store, args, fetch, download),
+        "import_url" => web::import_url(store, args, fetch, download),
         "find_citations" => find_citations(store, args),
         "find_passages" => find_passages(store, args),
         "find_sentences" => find_sentences(store, args),
@@ -1061,9 +1070,20 @@ fn file_name(paper: &Paper) -> String {
 
 /// Look for an open-access full text of one paper and keep it with the paper.
 fn fetch_pdf(store: &mut Store, paper: &Paper, look_only: bool, fetch: Fetch, download: Download) -> Result<Value> {
-    let (candidates, mut failures) = openaccess::candidates(paper, fetch);
-    let listed: Vec<Value> = candidates.iter().map(|c| json!({"url": c.url, "source": c.source, "version": c.version})).collect();
+    fetch_pdf_from(store, paper, None, look_only, fetch, download)
+}
+
+/// `fetch_pdf`, with an address to try before the indexes are asked: the PDF a publisher's page names
+/// (`import_url`). What came of it is among the reasons when nothing else is had either.
+fn fetch_pdf_from(store: &mut Store, paper: &Paper, first: Option<openaccess::Candidate>, look_only: bool, fetch: Fetch, download: Download) -> Result<Value> {
     let mut row = json!({"paperId": paper.id, "title": paper.title});
+    let mut failures = vec![];
+    if let Some(first) = first.as_ref().filter(|_| !look_only) && try_candidate(store, paper, first, download, &mut row, &mut failures)? { return Ok(row) }
+    // A caller with a time to keep (`sources::within`: a pasted address) goes no further once it is up.
+    let (mut candidates, notes) = if sources::out_of_time(&mut failures) { (vec![], vec![]) } else { openaccess::candidates(paper, fetch) };
+    failures.extend(notes);
+    if let Some(first) = &first { candidates.retain(|candidate| candidate.url != first.url) }
+    let listed: Vec<Value> = candidates.iter().map(|c| json!({"url": c.url, "source": c.source, "version": c.version})).collect();
     if look_only {
         row["outcome"] = json!(if candidates.is_empty() { "not_found" } else { "candidates" });
         row["candidates"] = json!(listed);
@@ -1071,41 +1091,55 @@ fn fetch_pdf(store: &mut Store, paper: &Paper, look_only: bool, fetch: Fetch, do
         return Ok(row);
     }
     for candidate in &candidates {
-        match download(&candidate.url) {
-            Ok(bytes) if openaccess::is_pdf(&bytes) => {
-                // Read before it is kept: a repository lists a paper's supplement among its files, and that is not its full text.
-                let pages = fulltext::pdf_pages(&bytes);
-                if pages.as_ref().is_ok_and(|pages| openaccess::supplement(pages)) {
-                    failures.push(format!("{}：给出的文件是补充材料（附图、附表），不是正文，没有保存", candidate.source));
-                    continue;
-                }
-                let file = store.import_fetched(&paper.id, &file_name(paper), &bytes, "fulltext", &candidate.url, &candidate.source, candidate.version)?;
-                // Saved is not yet readable: what came of reading its text is kept and said.
-                store.save_fulltext_pages(&file.id, &pages)?;
-                row["outcome"] = json!("saved");
-                row["source"] = json!(candidate.source);
-                row["version"] = json!(candidate.version);
-                row["url"] = json!(candidate.url);
-                row["sizeBytes"] = json!(file.size_bytes);
-                match pages {
-                    Ok(pages) => row["pages"] = json!(pages.len()),
-                    Err(reason) => {
-                        row["textKind"] = json!(fulltext::failure_kind(&reason));
-                        row["textReason"] = json!(reason);
-                    }
-                }
-                return Ok(row);
-            }
-            Ok(_) => failures.push(format!("{}：返回的不是 PDF，多半是登录页或验证页", candidate.source)),
-            Err(err) => failures.push(format!("{}：{err}", candidate.source)),
-        }
+        if sources::out_of_time(&mut failures) { break }
+        if try_candidate(store, paper, candidate, download, &mut row, &mut failures)? { return Ok(row) }
     }
-    row["outcome"] = json!(if candidates.is_empty() { "not_found" } else { "failed" });
+    let tried = first.is_some() || !candidates.is_empty();
+    row["outcome"] = json!(if tried { "failed" } else { "not_found" });
     // A file is listed and was not handed out: some publishers give it to a browser only.
-    if !candidates.is_empty() { failures.push("拿不到文件时，可以在浏览器里打开文献的链接下载，再把 PDF 拖进窗口".into()) }
-    if candidates.is_empty() && failures.is_empty() { failures.push("没有找到开放获取的全文。可以打开文献的链接自己下载，再把 PDF 拖进窗口：它会附到这一条上。".into()) }
+    if tried { failures.push("拿不到文件时，可以在浏览器里打开文献的链接下载，再把 PDF 拖进窗口".into()) }
+    if !tried && failures.is_empty() { failures.push("没有找到开放获取的全文。可以打开文献的链接自己下载，再把 PDF 拖进窗口：它会附到这一条上。".into()) }
     row["reason"] = json!(sources::reasons(&failures));
     Ok(row)
+}
+
+/// Download one candidate and keep it with the paper if it is its full text; `false`, with the reason among
+/// `failures`, when it is not.
+fn try_candidate(store: &mut Store, paper: &Paper, candidate: &openaccess::Candidate, download: Download, row: &mut Value, failures: &mut Vec<String>) -> Result<bool> {
+    match download(&candidate.url) {
+        Ok(bytes) if openaccess::is_pdf(&bytes) => {
+            // Read before it is kept: a repository lists a paper's supplement among its files, and that is not its full text.
+            let pages = fulltext::pdf_pages(&bytes);
+            if pages.as_ref().is_ok_and(|pages| openaccess::supplement(pages)) {
+                failures.push(format!("{}：给出的文件是补充材料（附图、附表），不是正文，没有保存", candidate.source));
+                return Ok(false);
+            }
+            let file = store.import_fetched(&paper.id, &file_name(paper), &bytes, "fulltext", &candidate.url, &candidate.source, candidate.version)?;
+            // Saved is not yet readable: what came of reading its text is kept and said.
+            store.save_fulltext_pages(&file.id, &pages)?;
+            row["outcome"] = json!("saved");
+            row["source"] = json!(candidate.source);
+            row["version"] = json!(candidate.version);
+            row["url"] = json!(candidate.url);
+            row["sizeBytes"] = json!(file.size_bytes);
+            match pages {
+                Ok(pages) => row["pages"] = json!(pages.len()),
+                Err(reason) => {
+                    row["textKind"] = json!(fulltext::failure_kind(&reason));
+                    row["textReason"] = json!(reason);
+                }
+            }
+            Ok(true)
+        }
+        Ok(_) => {
+            failures.push(format!("{}：返回的不是 PDF，多半是登录页或验证页", candidate.source));
+            Ok(false)
+        }
+        Err(err) => {
+            failures.push(format!("{}：{err}", candidate.source));
+            Ok(false)
+        }
+    }
 }
 
 fn find_pdf(store: &mut Store, args: &Value, fetch: Fetch, download: Download) -> Result<Value> {
@@ -2494,7 +2528,7 @@ pub(crate) mod tests {
             // Only a tool that changes the library has anything to ask the person about.
             assert!(tool.writes || !tool.confirm, "{}", tool.name);
         }
-        assert_eq!(library_catalog().iter().filter(|tool| tool.confirm).map(|tool| tool.name).collect::<Vec<_>>().len(), 15);
+        assert_eq!(library_catalog().iter().filter(|tool| tool.confirm).map(|tool| tool.name).collect::<Vec<_>>().len(), 16);
         // The tools that write a manuscript are asked about outside the conversation that writes it.
         assert!(MANUSCRIPT.iter().all(|name| catalog().iter().any(|tool| tool.name == *name && tool.writes && tool.confirm)));
         std::fs::remove_dir_all(root).ok();
