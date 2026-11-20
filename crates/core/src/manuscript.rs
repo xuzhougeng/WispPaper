@@ -15,6 +15,7 @@
 //! formatting, tables and pictures, the text as it now stands, and the
 //! comments made here.
 
+use crate::cite;
 use crate::comment::{self, Comment};
 use crate::docx;
 use crate::headings;
@@ -787,13 +788,35 @@ impl Store {
     /// Word file is that file written again, with `track` its changes as
     /// revisions by `author`; any other is a plain document made here. The
     /// second value says whether the file it came from was written again.
-    pub fn manuscript_word(&self, manuscript: &Manuscript, comments: &[Comment], track: bool, author: &str) -> Result<(docx::Rewritten, bool)> {
+    ///
+    /// Citations are written in `style` (`cite::Formatter`), and the papers
+    /// they name are listed after the last section under a heading of the
+    /// manuscript's language: the file is for a reader, who has no keys.
+    pub fn manuscript_word(&self, manuscript: &Manuscript, comments: &[Comment], track: bool, author: &str, style: cite::Style) -> Result<(docx::Rewritten, bool)> {
+        let (manuscript, comments) = &self.cited_for_word(manuscript, comments, style)?;
         let source = self.manuscript_source(&manuscript.id)?.filter(|source| source.kind == "docx" && !source.path.is_empty());
         if let Some(source) = &source && let Ok(bytes) = std::fs::read(self.source_file(source)) {
             let options = docx::Options { track, author: author.to_string(), date: word_date(&now_iso()) };
             return Ok((docx::rewrite(&bytes, &wanted(manuscript, Some(source), comments), &options)?, true));
         }
         Ok((docx::rewrite(&docx(manuscript), &wanted(manuscript, None, comments), &docx::Options::default())?, false))
+    }
+
+    /// The manuscript with its citations written in `style` and its reference list as a last section,
+    /// and the comments with the words they are about written the same way, so they are found again.
+    fn cited_for_word(&self, manuscript: &Manuscript, comments: &[Comment], style: cite::Style) -> Result<(Manuscript, Vec<Comment>)> {
+        let (papers, trash, kept) = (self.list_papers()?, self.list_trash()?, self.cite_keys()?);
+        let index = cite::Index::new(&papers, trash.iter().map(|entry| &entry.paper), &kept);
+        let bodies: Vec<&str> = manuscript.sections.iter().map(|section| section.body.as_str()).collect();
+        let format = cite::Formatter::new(&bodies, &index, style, &manuscript.language);
+        let mut out = manuscript.clone();
+        for section in &mut out.sections { section.body = format.apply(&section.body, &index) }
+        if !format.references().is_empty() {
+            let body = format.references().iter().map(|entry| escape_markdown(entry)).collect::<Vec<_>>().join("\n\n");
+            out.sections.push(Section { name: format.heading().to_string(), kind: "other".into(), body, ..Default::default() });
+        }
+        let comments = comments.iter().map(|comment| Comment { quote: format.apply(&comment.quote, &index), ..comment.clone() }).collect();
+        Ok((out, comments))
     }
 }
 
@@ -1420,7 +1443,7 @@ mod tests {
         assert_eq!(theirs.iter().map(|c| (c.origin.as_str(), c.author.as_str(), c.quote.as_str(), c.body.as_str(), c.section_id == made.sections[0].id)).collect::<Vec<_>>(), [("file", "Li Hua", "down", "How far down?", true)]);
 
         // Nothing changed: the file is written again as it was, and their comment is not put in twice.
-        let (same, from_file) = store.manuscript_word(&made, &theirs, true, "Xu").unwrap();
+        let (same, from_file) = store.manuscript_word(&made, &theirs, true, "Xu", cite::Style::AuthorYear).unwrap();
         assert!(from_file);
         assert_eq!((same.kept, same.changed, same.added, same.removed, same.comments), (6, 0, 0, 0, 0));
 
@@ -1432,7 +1455,7 @@ mod tests {
         let remark = store.add_remarks(&made.id, &methods, &[comment::Remark { quote: "We grew plants.".into(), body: "说明品种".into(), suggestion: "We grew Arabidopsis.".into() }]).unwrap();
         store.add_comment(&made.id, &methods, "words that are gone", "Lost its place.", "Xu", comment::PERSON).unwrap();
         let now = store.manuscript(&made.id).unwrap().unwrap();
-        let (out, _) = store.manuscript_word(&now, &store.comments(&made.id).unwrap(), true, "Xu").unwrap();
+        let (out, _) = store.manuscript_word(&now, &store.comments(&made.id).unwrap(), true, "Xu", cite::Style::AuthorYear).unwrap();
         assert_eq!((out.kept, out.changed, out.added, out.removed, out.comments), (5, 1, 2, 0, 3));
         let read = docx::read(&out.bytes).unwrap();
         assert_eq!(read.paragraphs.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["Roots", "Introduction", "Roots grow two metres down into the soil.", "They take up water.", "A new paragraph.", "Methods", "We grew plants.", "Outlook"]);
@@ -1444,13 +1467,13 @@ mod tests {
         store.save_section_body(&methods, "We grew Arabidopsis.").unwrap();
         store.save_comment(&remark[0].taken()).unwrap();
         let now = store.manuscript(&made.id).unwrap().unwrap();
-        let (out, _) = store.manuscript_word(&now, &store.comments(&made.id).unwrap(), false, "Xu").unwrap();
+        let (out, _) = store.manuscript_word(&now, &store.comments(&made.id).unwrap(), false, "Xu", cite::Style::AuthorYear).unwrap();
         let read = docx::read(&out.bytes).unwrap();
         assert!(read.comments.iter().any(|c| c.quote == "We grew Arabidopsis." && c.body == "说明品种") && !read.tracked);
 
         // Without its file a manuscript is a plain document, comments included.
         std::fs::remove_file(store.source_file(&source)).unwrap();
-        let (plain, from_file) = store.manuscript_word(&now, &store.comments(&made.id).unwrap(), true, "Xu").unwrap();
+        let (plain, from_file) = store.manuscript_word(&now, &store.comments(&made.id).unwrap(), true, "Xu", cite::Style::AuthorYear).unwrap();
         assert!(!from_file && docx::read(&plain.bytes).unwrap().comments.len() == 3);
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1498,7 +1521,7 @@ mod tests {
         let made = store.import_manuscript(&draft, "docx", "综述.docx", Some(&bytes)).unwrap();
         let unchanged = |store: &Store| {
             let now = store.manuscript(&made.id).unwrap().unwrap();
-            let (out, from_file) = store.manuscript_word(&now, &store.comments(&made.id).unwrap(), true, "Xu").unwrap();
+            let (out, from_file) = store.manuscript_word(&now, &store.comments(&made.id).unwrap(), true, "Xu", cite::Style::AuthorYear).unwrap();
             assert!(from_file);
             // Every paragraph as it was: no heading style put on the headings guessed, nothing tracked.
             assert_eq!((out.kept, out.changed, out.added, out.removed), (9, 0, 0, 0));
@@ -1539,7 +1562,7 @@ mod tests {
         let named = store.split_section(&whole.sections[0].id, 0.."摘要".len(), true).unwrap();
         assert_eq!((named.id == whole.sections[0].id, named.name.as_str(), named.kind.as_str(), named.bare, named.body.starts_with("单细胞转录组测序技术能够")), (true, "摘要", "abstract", false, true));
         let now = store.manuscript(&whole.id).unwrap().unwrap();
-        let (out, _) = store.manuscript_word(&now, &[], false, "Xu").unwrap();
+        let (out, _) = store.manuscript_word(&now, &[], false, "Xu", cite::Style::AuthorYear).unwrap();
         assert_eq!((out.kept, out.changed, out.added, out.removed), (9, 0, 0, 0));
         // A paragraph written in Markdown names the section by its words.
         let typed = store.create_manuscript("Typed", "en").unwrap();
@@ -1578,6 +1601,24 @@ mod tests {
         assert!(text.contains("<w:p><w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr><w:r><w:t xml:space=\"preserve\">Roots</w:t></w:r></w:p>"));
         assert!(text.contains("<w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">grew</w:t></w:r>"));
         assert!(!text.contains("**") && !text.contains("---"));
+    }
+
+    #[test]
+    fn a_word_file_cites_for_a_reader_and_lists_the_references() {
+        let mut store = Store::in_memory(Path::new(".")).unwrap();
+        let paper = store.add_paper(crate::model::Paper { title: "Single-cell atlas of roots".into(), authors: "Zhang, Wei; Li, Qiang; Wang, Fang".into(), year: Some(2024), journal: "Nature Plants".into(), ..Default::default() }).unwrap();
+        let made = store.create_manuscript("Roots", "en").unwrap();
+        store.save_section_body(&made.sections[1].id, "Roots differ [@Zhang2024 p.2 \"a core set of genes\"] and [@Nobody2001].").unwrap();
+        store.keep_cite_key(&paper.id, "Zhang2024").unwrap();
+        let now = store.manuscript(&made.id).unwrap().unwrap();
+        let said = |style| -> Vec<String> {
+            let (out, _) = store.manuscript_word(&now, &[], false, "Xu", style).unwrap();
+            docx::read(&out.bytes).unwrap().paragraphs.into_iter().map(|p| p.text).collect()
+        };
+        assert_eq!(said(cite::Style::AuthorYear), ["Roots", "Introduction", "Roots differ (Zhang et al., 2024) and [@Nobody2001].", "References", "Zhang, W., Li, Q., & Wang, F. (2024). Single-cell atlas of roots. Nature Plants."]);
+        assert_eq!(said(cite::Style::Numeric)[2..], ["Roots differ [1] and [@Nobody2001].", "References", "[1] Zhang, W., Li, Q., & Wang, F. (2024). Single-cell atlas of roots. Nature Plants."]);
+        // The manuscript itself keeps its keys.
+        assert!(store.manuscript(&made.id).unwrap().unwrap().sections[1].body.contains("[@Zhang2024 p.2"));
     }
 
     #[test]

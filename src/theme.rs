@@ -154,6 +154,8 @@ impl Theme {
     pub fn star() -> Hsla { pick(0xE0A100, 0xE8B92E) }
     pub fn accent() -> Hsla { ACCENTS[ACCENT.load(Ordering::Relaxed)].strong() }
     pub fn accent_soft() -> Hsla { ACCENTS[ACCENT.load(Ordering::Relaxed)].soft() }
+    /// Behind a link of a text field (a citation) while the pointer is on it.
+    pub fn link_hover() -> Hsla { Self::accent().opacity(if dark() { 0.16 } else { 0.10 }) }
     /// Text and icons on an accent or danger fill: the dark set's fills are
     /// bright, so they carry dark text.
     pub fn on_accent() -> Hsla { pick(0xFFFFFF, 0x141518) }

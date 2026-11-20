@@ -10,7 +10,7 @@
 //! own Undo, the section changed is shown, and what changed is lit the way
 //! 改稿 lights it (`Revising::show`), each change to be gone to or taken back.
 
-use crate::app::{Cmd, Edge, Talk, Workspace};
+use crate::app::{Cmd, Edge, Side, Talk, Workspace};
 use crate::i18n::t;
 use crate::theme::{Theme, text_px};
 use crate::ui;
@@ -251,6 +251,9 @@ impl Workspace {
         if event.pressed_button != Some(MouseButton::Left) { return self.end_drag(cx) }
         let right = f32::from(window.viewport_size().width) - self.detail_width(window);
         let page = right - self.sidebar_width(window);
+        // An open reference list takes its width off the right of both.
+        let references = self.agent_references_width(page);
+        let (right, page) = (right - references, page - references);
         let width = (right - f32::from(event.position.x)).min(page - CHAT_MIN).max(MANUSCRIPT_MIN.min(page * 0.5));
         if (width - self.settings.agent_manuscript_width).abs() < 0.5 { return }
         self.settings.agent_manuscript_width = width;
@@ -259,6 +262,9 @@ impl Workspace {
 
     /// 写作 with the assistant leading: the conversation, and the manuscript to its right.
     pub(crate) fn render_write_agent(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        // The reference list, when it is asked for (the outline's 参考文献), stands at the right of the manuscript.
+        let references_width = self.agent_references_width(width);
+        let width = width - references_width;
         let manuscript_width = self.agent_manuscript_width(width);
         let chat = self.render_chat(Talk::Write, window, cx);
         let manuscript = self.render_manuscript_column(manuscript_width, true, false, window, cx);
@@ -269,7 +275,7 @@ impl Workspace {
             .group("agent-edge")
             .absolute()
             .top_0()
-            .right(px(manuscript_width - 4.))
+            .right(px(manuscript_width + references_width - 4.))
             .w(px(9.))
             .h_full()
             .flex()
@@ -297,8 +303,24 @@ impl Workspace {
             .child(div().flex_none().w(px(width - manuscript_width)).h_full().overflow_hidden().child(chat))
             // The column fills a place of its own: it comes as one that shares a row, and its basis would outdo a width given to it here.
             .child(div().relative().flex().flex_none().w(px(manuscript_width)).h_full().border_l_1().border_color(Theme::line()).child(ui::strip_cap(Theme::bg_body())).child(manuscript))
+            .when(references_width > 0., |d| d.child(self.render_agent_references(references_width, window, cx)))
             .child(between)
             .into_any_element()
+    }
+
+    /// How wide the reference list beside the manuscript is in this mode; nothing while it is closed or the manuscript is read through.
+    pub(crate) fn agent_references_width(&self, page: f32) -> f32 {
+        let open = self.lib.as_ref().is_some_and(|lib| lib.writing.side == Side::References && !lib.writing.reading);
+        if !open { 0. } else if page > 1280. { 360. } else { 300. }
+    }
+
+    /// The manuscript's reference list at the right of the page, with a way to close it: the same page the other mode has beside its manuscript.
+    fn render_agent_references(&self, width: f32, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let head = ui::column_head()
+            .px(px(14.))
+            .child(div().flex_1().min_w_0().text_size(text_px(13.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text()).child(t("参考文献")))
+            .child(ui::icon_action("agent-references-close", "x", Theme::text_tertiary(), t("收起参考文献")).on_click(self.on(Cmd::WriteSide(Side::Candidates), cx)));
+        div().relative().flex().flex_col().flex_none().w(px(width)).h_full().border_l_1().border_color(Theme::line()).bg(Theme::bg_sunken()).child(ui::strip_cap(Theme::bg_sunken())).child(head).child(self.render_references(width, window, cx))
     }
 
     /// The two ways of writing, to choose between, as two icons: beside the outline's title, or among the manuscript's buttons while the outline is away.

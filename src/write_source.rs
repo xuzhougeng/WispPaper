@@ -566,6 +566,132 @@ impl Workspace {
     }
 }
 
+/// The key that, with a click, follows a citation: as the platform names it.
+fn follow_key() -> &'static str {
+    if cfg!(target_os = "macos") { "⌘" } else { "Ctrl" }
+}
+
+/// One paper a citation pointed at names, with the sentence of it that the citation rests on.
+struct Pointed {
+    key: String,
+    paper: Option<String>,
+    /// The paper's sentence and its page (0 when none is known): quoted in the citation, else the passage kept for it.
+    sentence: Option<(String, usize)>,
+}
+
+impl Workspace {
+    /// The citation groups of the part being written, in order: what the editor lets the pointer find.
+    pub(crate) fn citation_links(&self) -> Vec<std::ops::Range<usize>> {
+        let Some(lib) = self.lib.as_ref() else { return vec![] };
+        let mut out: Vec<std::ops::Range<usize>> = vec![];
+        for one in &lib.citing.listed.cited_here {
+            if out.last() != Some(&one.group) { out.push(one.group.clone()) }
+        }
+        out
+    }
+
+    /// What a citation group of the part being written names: each paper once, with the sentence it rests on.
+    fn pointed(&self, group: &std::ops::Range<usize>, cx: &App) -> Vec<Pointed> {
+        let Some(lib) = self.lib.as_ref() else { return vec![] };
+        let listed = &lib.citing.listed;
+        let editor = lib.writing.editor.read(cx);
+        let text = editor.text();
+        let mut out: Vec<Pointed> = vec![];
+        for one in listed.cited_here.iter().filter(|one| one.group == *group) {
+            let paper = one.found.paper().map(str::to_string);
+            if paper.is_some() && out.iter().any(|seen| seen.paper == paper) { continue }
+            let said = wisp_core::cite::said(text, one);
+            let kept = listed.standing.iter().find(|standing| standing.section == lib.writing.section_id && standing.citation.at == one.range).and_then(|standing| standing.rests).and_then(|rests| lib.citing.sources.kept.get(rests.passage)).filter(|passage| passage.found());
+            let sentence = match (said.quote, kept) {
+                (Some(quote), kept) => Some((quote, said.page.or(kept.map(|passage| passage.page)).unwrap_or(0))),
+                (None, Some(passage)) => Some((passage.passage.clone(), passage.page)),
+                (None, None) => None,
+            };
+            out.push(Pointed { key: one.written.trim_start_matches('@').to_string(), paper, sentence });
+        }
+        out
+    }
+
+    /// The card under a citation the pointer is on: the papers it names, the sentence each rests on, and how to open it.
+    pub(crate) fn render_citation_hint(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let lib = self.lib.as_ref()?;
+        let (n, line) = lib.writing.editor.read(cx).hovered_link()?;
+        let group = self.citation_links().get(n)?.clone();
+        let pointed = self.pointed(&group, cx);
+        if pointed.is_empty() { return None }
+        let opens_pdf = pointed.iter().any(|one| one.sentence.as_ref().is_some_and(|(_, page)| *page > 0));
+        let rows: Vec<AnyElement> = pointed
+            .iter()
+            .map(|one| {
+                let Some(paper) = one.paper.as_deref().and_then(|id| lib.paper(id)) else {
+                    return div().text_size(text_px(12.)).text_color(Theme::danger()).child(tf!("@{} · 库里没有这个引用键", "@{} · No paper has this key", one.key)).into_any_element();
+                };
+                let about = [paper.journal.trim().to_string(), paper.year.map(|year| year.to_string()).unwrap_or_default()].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" · ");
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(3.))
+                    .child(div().flex().items_baseline().gap(px(6.)).text_size(text_px(11.)).child(div().flex_none().text_color(Theme::accent()).child(format!("@{}", one.key))).child(div().min_w_0().text_color(Theme::text_tertiary()).child(paper.citation())))
+                    .child(div().text_size(text_px(13.)).line_height(text_px(18.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text()).child(paper.title.clone()))
+                    .when(!about.is_empty(), |d| d.child(div().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(about)))
+                    .when_some(one.sentence.clone(), |d, (sentence, page)| {
+                        let shown: String = if sentence.chars().count() > 320 { format!("{}…", sentence.chars().take(320).collect::<String>()) } else { sentence };
+                        d.child(
+                            div()
+                                .mt(px(4.))
+                                .pl(px(8.))
+                                .border_l_2()
+                                .border_color(Theme::accent())
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.))
+                                .child(div().text_size(text_px(12.)).line_height(text_px(18.)).text_color(Theme::text_secondary()).child(shown))
+                                .when(page > 0, |d| d.child(div().text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(tf!("第 {} 页", "Page {}", page)))),
+                        )
+                    })
+                    .into_any_element()
+            })
+            .collect();
+        let named = pointed.iter().any(|one| one.paper.is_some());
+        let hint = if opens_pdf { tf!("{}+点击：在右侧打开原文，定位到这句", "{}+click: open the paper on the right at this sentence", follow_key()) } else { tf!("{}+点击：在右侧打开这篇文献", "{}+click: open the paper on the right", follow_key()) };
+        let card = div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .w(px(380.))
+            .px(px(12.))
+            .py(px(10.))
+            .rounded(px(10.))
+            .border_1()
+            .border_color(Theme::line_strong())
+            .bg(Theme::bg_body())
+            .shadow(crate::theme::shadow_panel())
+            .children(rows)
+            .when(named, |d| d.child(div().pt(px(6.)).border_t_1().border_color(Theme::line()).text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(hint)));
+        // Under the line the pointer is on, so the card never covers the words pointed at.
+        Some(deferred(anchored().position(point(line.left(), line.bottom() + px(4.))).snap_to_window_with_margin(px(8.)).child(card)).with_priority(2).into_any_element())
+    }
+
+    /// ⌘ or Ctrl and a click on a citation: the paper it names opens on the right, at the sentence the citation rests on when its page is known.
+    /// `at` is where the click was, which tells the papers of a group apart.
+    pub(crate) fn citation_follow(&mut self, n: usize, at: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(group) = self.citation_links().get(n).cloned() else { return };
+        let Some(lib) = self.lib.as_ref() else { return };
+        // The citation clicked: the last of the group that begins before the click.
+        let cited: Vec<&Cited> = lib.citing.listed.cited_here.iter().filter(|one| one.group == group).collect();
+        let Some(one) = cited.iter().rev().find(|one| one.range.start <= at).or(cited.first()) else { return };
+        let key = one.written.trim_start_matches('@').to_string();
+        let pointed = self.pointed(&group, cx);
+        let Some(target) = pointed.into_iter().find(|p| p.key == key || (p.paper.is_some() && p.paper.as_deref() == one.found.paper())) else { return };
+        let Some(paper) = target.paper else { return self.fail(tf!("库里没有引用键 @{}", "No paper has the key @{}", key), cx) };
+        let cmd = match target.sentence {
+            Some((sentence, page)) if page > 0 => Cmd::GotoSource(paper, Some(page), sentence),
+            _ => Cmd::GotoSource(paper, None, String::new()),
+        };
+        self.run(cmd, window, cx);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::standing;
