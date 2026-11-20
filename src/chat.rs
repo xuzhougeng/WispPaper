@@ -1420,7 +1420,24 @@ impl Workspace {
         }
         // A review's next move comes last: it is about the answer just read. Not while an answer is arriving or a tool waits for a yes.
         if let Some(review) = review.filter(|_| !chat.busy && chat.pending.is_none()) { items.push(self.render_review_next(chat, review, cx)) }
+        // A conversation not yet made a library that has taken papers in offers to become one once the answer is in: until then the home page has none of it.
+        if draft && !chat.busy && chat.pending.is_none() && matches!(chat.messages.last(), Some(ChatItem::Answer(_))) { items.extend(self.render_promote_offer(cx)) }
         items
+    }
+
+    /// The card under a draft's conversation: what it took in is no library on the home page until 建成文献库, the same dialog as the button in its header.
+    /// 稍后 puts it away until more papers come in.
+    fn render_promote_offer(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let lib = self.lib.as_ref()?;
+        let count = lib.papers.len();
+        if count == 0 || self.home.later.as_ref().is_some_and(|(id, at)| *id == lib.info.id && *at >= count) { return None }
+        let words = tf!("这次对话收进了 {count} 篇文献。建成文献库后，它会出现在首页。", "This conversation has taken in {count} papers. Make it a library to see it on the home page.");
+        Some(div().flex().flex_wrap().items_center().gap(px(10.)).px(px(14.)).py(px(10.)).rounded(px(12.)).border_1().border_color(Theme::line_strong()).bg(Theme::bg_sunken())
+            .child(div().flex_1().min_w(px(240.)).line_height(theme::body_line(21.)).child(words))
+            .child(div().flex().flex_none().items_center().gap(px(8.))
+                .child(ui::primary_button("draft-offer-promote", t("建成文献库")).h(text_px(28.)).on_click(self.on(Cmd::Draft(crate::draft::Do::Promote(lib.info.id.clone())), cx)))
+                .child(ui::secondary_button("draft-offer-later", t("稍后")).h(text_px(28.)).on_click(self.on(Cmd::Draft(crate::draft::Do::Later), cx))))
+            .into_any_element())
     }
 
     /// The review's next move, under the conversation, where the answer it is about ends: taking that answer for the step in hand,

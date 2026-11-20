@@ -783,6 +783,9 @@ fn library_status(store: &mut Store, info: &LibraryInfo) -> Result<Value> {
         "id": info.id,
         "name": info.name,
         "topic": info.topic,
+        // A conversation from the home page not yet made a library: the model is not to call it one.
+        "draft": info.draft,
+        "note": if info.draft { "这是从首页开始的一次对话，还不是文献库：首页上没有它，用户点「建成文献库」后才是。name 是这次对话的名称。" } else { "" },
         // What screening suggestions judge against; empty means by the topic.
         "screeningGoal": info.criteria,
         "folder": info.dir.display().to_string(),
@@ -1957,7 +1960,11 @@ pub(crate) mod tests {
         // Its name does not find it, and is not offered; its id does.
         let refused = call(&root, "library_status", &json!({"library": "根毛"})).unwrap_err();
         assert!(refused.ends_with("现有：「根」"), "{refused}");
-        assert_eq!(call(&root, "library_status", &json!({"library": draft.id})).unwrap()["papers"], 0);
+        let status = call(&root, "library_status", &json!({"library": draft.id})).unwrap();
+        assert_eq!((status["papers"].as_u64(), status["draft"].as_bool()), (Some(0), Some(true)));
+        assert!(status["note"].as_str().unwrap().contains("还不是文献库"));
+        let shelved = call(&root, "library_status", &json!({})).unwrap();
+        assert_eq!((shelved["draft"].as_bool(), shelved["note"].as_str()), (Some(false), Some("")));
         // A data folder holding only conversations has no library.
         let alone = std::env::temp_dir().join(format!("wisp-tools-{}", new_id("T")));
         libraries::create_draft(&alone, "x").unwrap();
