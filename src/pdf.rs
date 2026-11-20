@@ -1446,14 +1446,17 @@ impl PdfView {
         // Boxes, hollow so what they frame stays clear; the one chosen with its four corners to size it by.
         let chosen = self.mark_menu.as_ref().map(|menu| menu.id.clone());
         let free = self.tool == Tool::Select && !cutting;
-        let shapes: Vec<Div> = self.annotations.iter().filter(|a| a.page == index + 1 && a.kind == Kind::Box).map(|a| {
+        // A piece marked to be cut out later is a dashed frame in the accent, and says it can be clicked.
+        let shapes: Vec<Div> = self.annotations.iter().filter(|a| a.page == index + 1 && matches!(a.kind, Kind::Box | Kind::Cut)).map(|a| {
             let [x0, y0, x1, y1] = self.rect_of(a);
-            let color = Theme::highlight_swatch(&a.color);
+            let marked = a.kind == Kind::Cut;
+            let color = if marked { Theme::accent() } else { Theme::highlight_swatch(&a.color) };
             let picked = chosen.as_deref() == Some(a.id.as_str());
             let grips = picked.then(|| [(0., 0.), (1., 0.), (1., 1.), (0., 1.)].map(|(fx, fy)| {
                 div().absolute().left(px((x1 - x0) * scale * fx - GRIP / 2. + 1.)).top(px((y1 - y0) * scale * fy - GRIP / 2. + 1.)).size(px(GRIP)).rounded(px(2.)).bg(gpui::white()).border_1().border_color(color)
             }));
             div().absolute().left(px(x0 * scale - 1.)).top(px(y0 * scale - 1.)).w(px((x1 - x0) * scale + 2.)).h(px((y1 - y0) * scale + 2.)).border_2().border_color(color).rounded(px(2.))
+                .when(marked, |d| d.border_dashed().when(self.tool == Tool::Select, |d| d.cursor_pointer()).when(picked, |d| d.bg(Theme::selection())))
                 .children(grips.into_iter().flatten())
         }).collect();
         // A box being drawn.
@@ -1538,6 +1541,8 @@ impl PdfView {
             // A piece of the page is cut out from here.
             self.cut = self.locate(pane, event.position).map(|(page, x, y)| (page, [x, y, x, y]));
             self.selecting = self.cut.is_some();
+            // A click on a piece marked before is for that mark, not a new piece.
+            self.pressed_mark = self.cut.and_then(|(page, [x, y, ..])| Some((self.cut_mark_at(page, x, y)?, event.position)));
             return cx.notify();
         }
         let Some((page, x, y)) = self.locate(pane, event.position) else {
@@ -1571,7 +1576,7 @@ impl PdfView {
         }
         self.mark_menu = None;
         if self.note_draft.is_none() && !self.note_editing { self.note_open = None }
-        self.pressed_mark = self.highlight_at(page, x, y).map(|(id, line)| (MarkMenu { id, page, x, line }, event.position));
+        self.pressed_mark = self.highlight_at(page, x, y).map(|(id, line)| MarkMenu { id, page, x, line }).or_else(|| self.cut_mark_at(page, x, y)).map(|menu| (menu, event.position));
         if let Some((marks, at)) = self.marks.get(&page).and_then(|marks| Some((marks, pdftext::mark_at(marks, x, y)?))) {
             self.selection = Some(Selection { page, anchor: at, focus: at });
             self.selecting = true;
@@ -1592,6 +1597,15 @@ impl PdfView {
         self.annotations.iter().rev().filter(|a| a.kind == Kind::Highlight && a.page == page + 1).find_map(|a| {
             let line = a.boxes.iter().find(|b| x >= b[0] - 1. && x <= b[2] + 1. && y >= b[1] - 1. && y <= b[3] + 1.)?;
             Some((a.id.clone(), (line[1], line[3])))
+        })
+    }
+
+    /// The piece marked to be cut out under a point of a 0-based page, as the menu a click on it opens: the
+    /// one made last where they overlap. Its edge is taken hold of by `shape_at`; this is the whole of it.
+    fn cut_mark_at(&self, page: usize, x: f32, y: f32) -> Option<MarkMenu> {
+        self.annotations.iter().rev().filter(|a| a.kind == Kind::Cut && a.page == page + 1).find_map(|a| {
+            let [x0, y0, x1, y1] = self.rect_of(a);
+            (x >= x0 && x <= x1 && y >= y0 && y <= y1).then(|| MarkMenu { id: a.id.clone(), page, x: x0, line: (y0, y1) })
         })
     }
 
@@ -1726,9 +1740,14 @@ impl PdfView {
         self.cutting
     }
 
-    /// The piece cut out, as a PNG: taken from the picture the page is drawn with.
+    /// The piece cut out, as a PNG.
     fn cut_picture(&self) -> Option<Vec<u8>> {
-        let (page, [x0, y0, x1, y1]) = self.cut?;
+        let (page, rect) = self.cut?;
+        self.picture_of(page, rect)
+    }
+
+    /// A piece of a 0-based page as a PNG: taken from the picture the page is drawn with.
+    fn picture_of(&self, page: usize, [x0, y0, x1, y1]: [f32; 4]) -> Option<Vec<u8>> {
         let (image, scale, _) = self.images.get(&page)?;
         let (width, height) = (image.size(0).width.0 as u32, image.size(0).height.0 as u32);
         let edge = |at: f32, most: u32| ((at * scale).round().max(0.) as u32).min(most);
@@ -1761,6 +1780,39 @@ impl PdfView {
         let bbox = [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)];
         let caption = self.marks.get(&page).and_then(|marks| wisp_core::figure::caption(marks, bbox));
         cx.emit(PdfEvent::Figure(Piece { png, page: page + 1, bbox, caption }));
+    }
+
+    /// Leave the piece cut out marked on its page, a dashed frame to click later: for the figure library or
+    /// a question then. Cutting stays on for the next one.
+    fn mark_cut(&mut self, cx: &mut Context<Self>) {
+        let Some((page, rect)) = self.cut.take() else { return };
+        cx.emit(PdfEvent::AddShape { paper: self.paper_id.clone(), resource: self.resource_id.clone(), page: page + 1, kind: Kind::Cut, rect, note: String::new() });
+        cx.notify();
+    }
+
+    /// The piece of the menu's mark, with its 0-based page and its place there.
+    fn marked_piece(&self) -> Option<(Vec<u8>, usize, [f32; 4])> {
+        let menu = self.mark_menu.as_ref()?;
+        let mark = self.annotations.iter().find(|a| a.id == menu.id && a.kind == Kind::Cut)?;
+        let (page, rect) = (mark.page.checked_sub(1)?, self.rect_of(mark));
+        Some((self.picture_of(page, rect)?, page, rect))
+    }
+
+    /// Hand the piece of the menu's mark to the figure library, as `collect_cut` does a piece just cut. The mark stays.
+    fn collect_mark(&mut self, cx: &mut Context<Self>) {
+        let Some((png, page, bbox)) = self.marked_piece() else { return };
+        self.mark_menu = None;
+        let caption = self.marks.get(&page).and_then(|marks| wisp_core::figure::caption(marks, bbox));
+        cx.emit(PdfEvent::Figure(Piece { png, page: page + 1, bbox, caption }));
+        cx.notify();
+    }
+
+    /// Hand the piece of the menu's mark to a conversation as a picture, and go back to selecting text. The mark stays.
+    fn send_mark(&mut self, to_library: bool, cx: &mut Context<Self>) {
+        let Some((png, ..)) = self.marked_piece() else { return };
+        (self.mark_menu, self.cut, self.cutting) = (None, None, false);
+        cx.emit(PdfEvent::Picture(png, to_library));
+        cx.notify();
     }
 
     /// The piece cut out is in the figure library: the next one can be cut.
@@ -2018,19 +2070,24 @@ impl PdfView {
                 .when(piece, |d| d.child(button("pdf-cut-keep", t("收藏到图片库")).text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.collect_cut(cx)))))
                 .when(piece && self.library_chat, |d| d.child(button("pdf-cut-library", t("截图加到文献库对话")).on_click(cx.listener(|this, _, _, cx| this.send_cut(true, cx)))).child(button("pdf-cut-paper", t("截图加到这篇的对话")).on_click(cx.listener(|this, _, _, cx| this.send_cut(false, cx)))))
                 .when(piece && !self.library_chat, |d| d.child(button("pdf-cut-paper", t("用这张截图提问")).on_click(cx.listener(|this, _, _, cx| this.send_cut(false, cx)))))
+                // Or left on the page as a mark, to come back to.
+                .when(piece, |d| d.child(button("pdf-cut-mark", t("标记")).tooltip(ui::tip(t("在页面上留一圈虚线，之后点它再收藏或提问"))).on_click(cx.listener(|this, _, _, cx| this.mark_cut(cx)))))
                 .when(piece, |d| d.child(button("pdf-cut-cancel", t("取消")).on_click(cx.listener(|this, _, _, cx| this.toggle_cutting(cx)))))
                 .into_any_element(),
         )
     }
 
     /// What can be done with a highlight clicked, under the line clicked (over it at the viewer's foot):
-    /// its colours, the one it has ringed, and 删除高亮. The same small bar as the selection's.
+    /// its colours, the one it has ringed, and 删除高亮. The same small bar as the selection's. A piece marked
+    /// to be cut out has what a piece just cut has instead of colours: the figure library, a question.
     fn mark_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let menu = self.mark_menu.as_ref()?;
         let mark = self.annotations.iter().find(|a| a.id == menu.id)?;
         let scale = self.scale_of(menu.page);
         let (x, y) = self.sheet_place(menu.page)?;
         const HEIGHT: f32 = 34.;
+        let marked = mark.kind == Kind::Cut;
+        let button = |id: &'static str, label: &'static str| div().id(id).flex().flex_none().items_center().h(text_px(26.)).px(px(9.)).rounded(px(6.)).cursor_pointer().hover(|s| s.bg(Theme::hover())).child(label);
         let below = y + menu.line.1 * scale + 6.;
         let top = if below + HEIGHT + 8. <= self.height { below } else { y + menu.line.0 * scale - 6. - HEIGHT };
         let swatches = COLORS.iter().zip(COLOR_NAMES).map(|(&key, name)| {
@@ -2053,7 +2110,7 @@ impl PdfView {
             div()
                 .id("pdf-mark-menu")
                 .absolute()
-                .left(px((x + menu.x * scale - 16.).clamp(8., (self.width - 240.).max(8.))))
+                .left(px((x + menu.x * scale - if marked { 0. } else { 16. }).clamp(8., (self.width - if marked { 420. } else { 240. }).max(8.))))
                 .top(px(top.clamp(8., (self.height - HEIGHT - 8.).max(8.))))
                 .flex()
                 .items_center()
@@ -2069,9 +2126,12 @@ impl PdfView {
                 // A press on the menu is not a press on the page; one anywhere else puts it away.
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| if this.mark_menu.take().is_some() { cx.notify() }))
-                .children(swatches)
+                .when(!marked, |d| d.children(swatches))
+                .when(marked, |d| d.child(button("pdf-mark-keep", t("收藏到图片库")).text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.collect_mark(cx)))))
+                .when(marked && self.library_chat, |d| d.child(button("pdf-mark-library", t("截图加到文献库对话")).on_click(cx.listener(|this, _, _, cx| this.send_mark(true, cx)))).child(button("pdf-mark-paper", t("截图加到这篇的对话")).on_click(cx.listener(|this, _, _, cx| this.send_mark(false, cx)))))
+                .when(marked && !self.library_chat, |d| d.child(button("pdf-mark-paper", t("用这张截图提问")).on_click(cx.listener(|this, _, _, cx| this.send_mark(false, cx)))))
                 .child(div().flex_none().w(px(1.)).h(px(16.)).mx(px(4.)).bg(Theme::line()))
-                .child(div().id("pdf-mark-remove").flex().flex_none().items_center().h(text_px(26.)).px(px(9.)).rounded(px(6.)).cursor_pointer().text_color(Theme::danger()).hover(|s| s.bg(Theme::hover())).child(if mark.kind == Kind::Box { t("删除方框") } else { t("删除高亮") }).on_click(cx.listener(|this, _, _, cx| this.remove_mark(cx))))
+                .child(div().id("pdf-mark-remove").flex().flex_none().items_center().h(text_px(26.)).px(px(9.)).rounded(px(6.)).cursor_pointer().text_color(Theme::danger()).hover(|s| s.bg(Theme::hover())).child(match mark.kind { Kind::Box => t("删除方框"), Kind::Cut => t("删除标记"), _ => t("删除高亮") }).on_click(cx.listener(|this, _, _, cx| this.remove_mark(cx))))
                 .into_any_element(),
         )
     }
@@ -2087,7 +2147,7 @@ impl PdfView {
                 let (page, top) = (annotation.page, annotation.boxes.first().map(|b| b[1]).unwrap_or(0.));
                 let note = annotation.note.clone();
                 let editing = self.annotation_edit.as_deref() == Some(id.as_str());
-                let kind = match annotation.kind { Kind::Underline => t("下划线"), Kind::Highlight => t("高亮"), Kind::Box => t("方框"), Kind::Note => t("便签") };
+                let kind = match annotation.kind { Kind::Underline => t("下划线"), Kind::Highlight => t("高亮"), Kind::Box => t("方框"), Kind::Note => t("便签"), Kind::Cut => t("截图标记") };
                 div().id(SharedString::from(id)).p(px(10.)).border_b_1().border_color(Theme::line()).flex().flex_col().gap(px(7.))
                     .child(div().flex().flex_wrap().items_center().gap(px(4.))
                         .children(matches!(annotation.kind, Kind::Highlight | Kind::Box).then(|| div().flex_none().size(px(8.)).mr(px(2.)).rounded_full().bg(Theme::highlight_swatch(&annotation.color))))
