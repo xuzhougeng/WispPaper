@@ -649,6 +649,8 @@ pub enum Cmd {
     WriteStop,
     /// Look for candidates: the selected text, or the paragraph at the caret.
     WriteFind,
+    /// Show (true) or hide the card under the citation the pointer is on (`Settings::citation_cards_hidden`).
+    CitationCards(bool),
     /// Only the papers with this tag (empty: any), and only the starred ones.
     WriteOnly(String, bool),
     /// Show or hide the sentences around a candidate, by its card's id.
@@ -2617,6 +2619,10 @@ impl Workspace {
             Cmd::WriteExportCited => self.export_cited(cx),
             Cmd::WriteRun(reading) => self.write_run_start(reading, None, cx),
             Cmd::WriteFind => self.write_find(false, cx),
+            Cmd::CitationCards(on) => {
+                self.settings.citation_cards_hidden = !on;
+                self.save_settings(cx);
+            }
             Cmd::WriteOnly(tag, starred) => self.write_narrow(tag, starred, cx),
             Cmd::WriteUnfold(card) => {
                 if let Some(unfolded) = self.lib.as_mut().map(|lib| &mut lib.writing.search.unfolded) && !unfolded.remove(&card) { unfolded.insert(card); }

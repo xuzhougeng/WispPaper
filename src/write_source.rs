@@ -567,7 +567,7 @@ impl Workspace {
 }
 
 /// The key that, with a click, follows a citation: as the platform names it.
-fn follow_key() -> &'static str {
+pub(crate) fn follow_key() -> &'static str {
     if cfg!(target_os = "macos") { "⌘" } else { "Ctrl" }
 }
 
@@ -614,6 +614,7 @@ impl Workspace {
 
     /// The card under a citation the pointer is on: the papers it names, the sentence each rests on, and how to open it.
     pub(crate) fn render_citation_hint(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.settings.citation_cards_hidden { return None }
         let lib = self.lib.as_ref()?;
         let (n, line) = lib.writing.editor.read(cx).hovered_link()?;
         let group = self.citation_links().get(n)?.clone();
