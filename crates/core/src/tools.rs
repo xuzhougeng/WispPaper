@@ -508,6 +508,13 @@ pub fn catalog() -> Vec<ToolDef> {
             }),
             &[],
         ),
+        scoped(
+            "offer_action",
+            "请用户决定",
+            "在这条回答的下面放一张卡片：一句话和 1 到 3 个按钮，用户按下才执行，现在什么都不做。用在一件事做完、下一步该由用户决定的时候，例如收进文献后请用户把对话建成文献库，或给出几个可选的下一步（reply）。不要每条回答都用；同样的意思不要在回答里再问一遍。按钮只能是固定的几种（见 actions）。",
+            crate::offer::properties(),
+            &["text", "actions"],
+        ),
     ]
 }
 
@@ -712,6 +719,7 @@ fn dispatch(store: &mut Store, info: &LibraryInfo, name: &str, args: &Value, fet
         "edit_section" => crate::compose::edit(store, args),
         "set_outline" => crate::compose::outline(store, args),
         "library_status" => library_status(store, info),
+        "offer_action" => crate::offer::offered(args),
         "list_papers" => list_papers(store, info, args),
         "list_figures" => list_figures(store, info, args),
         "list_pdf_annotations" => list_pdf_annotations(store, args),

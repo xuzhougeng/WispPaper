@@ -28,6 +28,7 @@
 //! - `settings` settings.json, and where it and the libraries live
 //! - `tools`    what an agent can do with a library: the one table behind the command line, MCP and the assistant
 //! - `mcp`      the Model Context Protocol replies for those tools
+//! - `offer`    a card of buttons the assistant puts under its answer, run only when the person presses one
 //! - `connector` the person's own MCP servers the assistant may call; `oauth` signing in to one in the browser
 //! - `update`   which release is the newest, and whether it is newer than this build
 
@@ -57,6 +58,7 @@ pub mod lookup;
 pub mod manuscript;
 pub mod markdown;
 pub mod mcp;
+pub mod offer;
 pub mod model;
 pub mod notes;
 pub mod oauth;

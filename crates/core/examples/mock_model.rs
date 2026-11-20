@@ -24,7 +24,8 @@
 //! one containing 「试试整理」 makes it call `organise_papers` for the first
 //! two papers, whose changes the window lists before it asks; one containing
 //! 「建成一个文献库」 (the home page's start 从 Word 建文献库) calls `import_docx_references`
-//! on the Word file it came with, without the network. In the
+//! on the Word file it came with, without the network, and then `offer_action` with a card of 建成文献库; a question containing
+//! 「试试卡片」 ends in a card of 去筛选, 查找开放全文 and a reply. In the
 //! conversation that writes a manuscript (助手写) it calls `edit_section`
 //! and puts a paragraph citing the first paper at the end of the section on
 //! show; asked there to 「试试大纲」, it calls `set_outline` with three sections.
@@ -377,6 +378,17 @@ fn answer(mut stream: TcpStream, delay: u64) {
             events.push_str(&event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#));
             events.push_str(&event(&format!(r#"{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":{}}}}}"#, quoted(reply))));
             events.push_str(&event(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#));
+        } else if answered && ["建成一个文献库", "试试卡片"].iter().filter_map(|asked| request.rfind(asked)).max().is_some_and(|asked| request.rfind("toolu_offer").is_none_or(|offered| offered < asked)) {
+            // Once the step is done, a card under the answer: in a conversation not yet a library, 建成文献库; in a library, a page and its full texts. Then the answer.
+            let card = if request.rfind("试试卡片") < request.rfind("建成一个文献库") {
+                r#"{"text": "（假模型）参考文献已经收进这次对话。建成文献库后，它会出现在首页。", "actions": [{"kind": "promote_library"}, {"kind": "reply", "label": "先找全文", "text": "先为这些文献找开放全文。"}]}"#
+            } else {
+                r#"{"text": "（假模型）文献都在库里了，下一步可以筛选，或者先找全文。", "actions": [{"kind": "open_page", "page": "screen", "label": "去筛选"}, {"kind": "find_pdfs"}, {"kind": "reply", "text": "再找几篇综述。"}]}"#
+            };
+            events.push_str(&event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#));
+            events.push_str(&event(r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_offer","name":"offer_action","input":{}}}"#));
+            events.push_str(&event(&format!(r#"{{"type":"content_block_delta","index":1,"delta":{{"type":"input_json_delta","partial_json":{}}}}}"#, quoted(card))));
+            events.push_str(&event(r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"}}"#));
         } else if answered {
             let label = first_label(&request);
             events.push_str(&event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#));

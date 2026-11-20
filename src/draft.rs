@@ -177,6 +177,16 @@ impl Workspace {
         self.lib.as_ref().is_some_and(|lib| lib.info.draft)
     }
 
+    /// Whether a button of the assistant's card can be pressed here: 建成文献库 only in a conversation not yet a library,
+    /// the library's pages and its search for full texts only in a library.
+    pub(crate) fn offer_fits(&self, action: &wisp_core::offer::Action) -> bool {
+        match action.kind.as_str() {
+            "reply" => true,
+            "promote_library" => self.in_draft(),
+            _ => self.lib.is_some() && !self.in_draft(),
+        }
+    }
+
     /// Files for the first question: dropped on the home page or picked. A box without words is given the
     /// words that say what the file is for; nothing is sent by itself.
     pub(crate) fn home_attach(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
