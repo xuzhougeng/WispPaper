@@ -10,6 +10,7 @@ use gpui::{prelude::FluentBuilder, *};
 use wisp_core::model::*;
 use wisp_core::store::translation_key;
 use wisp_core::{ai, time};
+use wisp_core::floating as geo;
 
 /// The narrowest detail panel that shows a PDF and the paper's conversation side by side.
 pub const SPLIT_MIN: f32 = 760.;
@@ -475,10 +476,13 @@ impl Workspace {
             pdf.set_width(width);
             pdf.library_chat = library_chat;
         });
-        let (page, count, percent, zoom, cutting, split, pen) = {
+        let (page, count, percent, zoom, cutting, split, pen, marks_open, pdf_height) = {
             let view = pdf.read(cx);
-            (view.current_page(), view.page_count(), view.percent(), view.zoom(), view.cutting(), view.split(), view.tool())
+            (view.current_page(), view.page_count(), view.percent(), view.zoom(), view.cutting(), view.split(), view.tool(), view.annotations_open(), view.height())
         };
+        // The tools stand in the toolbar, or float at the page's right edge: a habit, kept for every paper.
+        let floating = self.settings.pdf_tools_floating;
+        let docked = count > 0 && !floating;
         let split_label = match split { Split::Off => t("分屏"), Split::Side => t("左右分屏"), Split::Stacked => t("上下分屏") };
         // The fit the reader reads at, which a zoom by hand goes back to.
         let fit = lib.zoom;
@@ -528,19 +532,84 @@ impl Workspace {
                         )
                     })
                     // The same file twice, side by side or one over the other: a figure in one half, the page that speaks of it in the other.
-                    .when(count > 0, |d| d.child(ui::ghost_button("pdf-split", None, Some(split_label.into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).when(split != Split::Off, |d| d.text_color(Theme::accent())).on_click(self.on_menu(MenuKind::PdfSplit, cx))))
+                    .when(docked, |d| d.child(ui::ghost_button("pdf-split", None, Some(split_label.into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).when(split != Split::Off, |d| d.text_color(Theme::accent())).on_click(self.on_menu(MenuKind::PdfSplit, cx))))
                     // Cut a piece out of a page (a figure, a table): to keep in the figure library, or as a picture for the next question.
-                    .when(count > 0, |d| d.child(ui::ghost_button("pdf-cut", None, Some(if cutting { t("取消截图").into() } else { t("截图").into() })).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).when(cutting, |d| d.text_color(Theme::accent())).on_click(self.on(Cmd::PdfCut, cx))))
+                    .when(docked, |d| d.child(ui::ghost_button("pdf-cut", None, Some(if cutting { t("取消截图").into() } else { t("截图").into() })).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).when(cutting, |d| d.text_color(Theme::accent())).on_click(self.on(Cmd::PdfCut, cx))))
                     // Marks placed on the page rather than its text: a box round a figure or a passage, a sticky note anywhere.
-                    .when(count > 0, |d| d.child(ui::ghost_button("pdf-box", Some("square"), Some(t("方框").into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).when(pen == Tool::Box, |d| d.text_color(Theme::accent())).tooltip(ui::tip(t("在页面上拖出方框，框住图表或文字"))).on_click(self.on(Cmd::PdfTool(Tool::Box), cx))))
-                    .when(count > 0, |d| d.child(ui::ghost_button("pdf-note", Some("sticky-note"), Some(t("便签").into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).when(pen == Tool::Note, |d| d.text_color(Theme::accent())).tooltip(ui::tip(t("点击页面任意位置添加便签"))).on_click(self.on(Cmd::PdfTool(Tool::Note), cx))))
+                    .when(docked, |d| d.child(ui::ghost_button("pdf-box", Some("square"), Some(t("方框").into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).when(pen == Tool::Box, |d| d.text_color(Theme::accent())).tooltip(ui::tip(t("在页面上拖出方框，框住图表或文字"))).on_click(self.on(Cmd::PdfTool(Tool::Box), cx))))
+                    .when(docked, |d| d.child(ui::ghost_button("pdf-note", Some("sticky-note"), Some(t("便签").into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).when(pen == Tool::Note, |d| d.text_color(Theme::accent())).tooltip(ui::tip(t("点击页面任意位置添加便签"))).on_click(self.on(Cmd::PdfTool(Tool::Note), cx))))
                     // The whole window for this paper; in reading mode the way back is at the top.
-                    .when(!reading, |d| d.child(ui::ghost_button("pdf-reading", None, Some(t("阅读模式").into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).on_click(self.on(Cmd::ToggleReading, cx))))
-                    .child(ui::ghost_button("pdf-open", Some("link"), (width >= 700.).then(|| t("用系统应用打开").into())).h(text_px(24.)).on_click(self.on(Cmd::OpenFile(file_id), cx)))
+                    // Its shortcut in the tooltip: the way in from the list without opening the paper first.
+                    .when(!reading, |d| {
+                        let key = crate::shortcuts::key_of("reading", &self.settings.shortcuts);
+                        d.child(ui::ghost_button("pdf-reading", None, Some(t("阅读模式").into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).when(!key.is_empty(), |d| d.tooltip(ui::tip(tf!("阅读模式 {}", "Reading mode {}", crate::shortcuts::pretty(&key))))).on_click(self.on(Cmd::ToggleReading, cx)))
+                    })
+                    // Floating, the column has it; a file that could not be read keeps it here, the way to read it elsewhere.
+                    .when(!floating || count == 0, |d| d.child(ui::ghost_button("pdf-open", Some("link"), (width >= 700.).then(|| t("用系统应用打开").into())).h(text_px(24.)).on_click(self.on(Cmd::OpenFile(file_id.clone()), cx))))
+                    // Where the tools stand; always the bar's last button, so the same click in the same place puts them back.
+                    .when(count > 0, |d| d.child(ui::ghost_button("pdf-tools-float", None, None).h(text_px(24.)).min_w(px(24.)).child(ui::icon("panel-right", 16., if floating { Theme::accent() } else { Theme::text_secondary() })).tooltip(ui::tip(if floating { t("把工具放回工具栏") } else { t("工具悬浮在页面右侧") })).on_click(self.on(Cmd::FloatPdfTools(!floating), cx))))
                     // Beside the conversation: put the PDF away again.
                     .when(beside, |d| d.child(tool("pdf-beside-close", "x").on_click(self.on(Cmd::BesidePdf(false), cx)))),
             )
-            .child(div().flex_1().min_h_0().child(pdf))
+            .child(div().flex_1().min_h_0().relative().child(pdf).when(floating && count > 0, |d| d.child(self.pdf_tool_column(file_id, width, pdf_height, cutting, split, pen, marks_open, cx))))
+            .into_any_element()
+    }
+
+    /// The PDF's tools as a column of icons at the page's right edge, under 标注 (or beside its list
+    /// while that is open): at hand wherever the page is read, the names in the tooltips.
+    #[allow(clippy::too_many_arguments)]
+    fn pdf_tool_column(&self, file_id: String, width: f32, pdf_height: f32, cutting: bool, split: Split, pen: Tool, marks_open: bool, cx: &mut Context<Self>) -> AnyElement {
+        let tool = |id: &'static str, icon: &'static str, lit: bool, tip: &'static str| ui::ghost_button(id, None, None).size(px(28.)).child(ui::icon(icon, 16., if lit { Theme::accent() } else { Theme::text_secondary() })).tooltip(ui::tip(t(tip)));
+        let line = || div().flex_none().h(px(1.)).mx(px(4.)).my(px(2.)).bg(Theme::line());
+        // Where the reader dragged it, or under 标注; there, it stands to the left of the list of marks
+        // while that is open and leaves room (as wide as `PdfView::annotation_panel` makes it).
+        let area = (width, pdf_height);
+        let (mut right, top) = geo::tools_at(self.settings.pdf_tools_at, area);
+        let list = (width - 16.).clamp(0., 360.);
+        if self.settings.pdf_tools_at.is_none() && marks_open && width - list - 16. >= geo::TOOLS.0 + 8. { right = list + 16. }
+        let held = self.lib.as_ref().and_then(|lib| lib.float_drag).is_some_and(|drag| drag.held_tools());
+        let split_tip = match split { Split::Off => "分屏", Split::Side => "左右分屏", Split::Stacked => "上下分屏" };
+        div()
+            .absolute()
+            .top(px(top))
+            .right(px(right))
+            .w(px(geo::TOOLS.0))
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .p(px(3.))
+            .rounded(px(8.))
+            .bg(Theme::bg_body())
+            .border_1()
+            .border_color(Theme::line_strong())
+            // A press on the column is not a press on the page: no selection, cut or mark starts under it.
+            .occlude()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            // The grip: drag the column anywhere over the page; twice, it goes home under 标注.
+            .child(
+                div()
+                    .id("pdf-float-grip")
+                    .flex()
+                    .flex_none()
+                    .justify_center()
+                    .items_center()
+                    .h(px(10.))
+                    .rounded(px(4.))
+                    .cursor(if held { CursorStyle::ClosedHand } else { CursorStyle::OpenHand })
+                    .hover(|s| s.bg(Theme::hover()))
+                    .child(div().w(px(14.)).h(px(2.)).rounded(px(1.)).bg(Theme::line_strong()))
+                    .tooltip(ui::tip(t("拖动以移动，双击放回原处")))
+                    .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        this.tools_press(event, cx);
+                    })),
+            )
+            .child(tool("pdf-float-split", "columns-2", split != Split::Off, split_tip).on_click(self.on_menu(MenuKind::PdfSplit, cx)))
+            .child(tool("pdf-float-cut", "scissors", cutting, if cutting { "取消截图" } else { "截图" }).on_click(self.on(Cmd::PdfCut, cx)))
+            .child(tool("pdf-float-box", "square", pen == Tool::Box, "在页面上拖出方框，框住图表或文字").on_click(self.on(Cmd::PdfTool(Tool::Box), cx)))
+            .child(tool("pdf-float-note", "sticky-note", pen == Tool::Note, "点击页面任意位置添加便签").on_click(self.on(Cmd::PdfTool(Tool::Note), cx)))
+            .child(line())
+            .child(tool("pdf-float-open", "link", false, "用系统应用打开").on_click(self.on(Cmd::OpenFile(file_id), cx)))
             .into_any_element()
     }
 }

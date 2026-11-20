@@ -130,6 +130,10 @@ pub struct Settings {
     pub columns_hidden: Vec<String>,
     /// A paper's PDF at the left of its conversation and the conversation at the right; false is the order it comes with.
     pub pdf_first: bool,
+    /// The PDF's tools (分屏, 截图, 方框, 便签, 用系统应用打开) float in a column at the page's right edge instead of standing in its toolbar.
+    pub pdf_tools_floating: bool,
+    /// Where the reader dragged that column: its distance from the PDF's right edge and from its top (`floating::tools_at`); None is under 标注.
+    pub pdf_tools_at: Option<(f32, f32)>,
     /// The paper's conversation over its PDF instead of beside it, and where its window was left.
     pub floating: crate::floating::Floating,
     /// Closing the window keeps the app running in the background (macOS: the Dock, Windows: the tray) instead of quitting.
@@ -147,7 +151,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         let providers = provider::DEFAULT_PRESETS.iter().filter_map(|key| provider::preset(key)).map(Provider::from_preset).collect();
-        let mut settings = Settings { data_dir: String::new(), providers, legacy_profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translate_workers: 4, translation_prompt: String::new(), commands: vec![], connectors: vec![], skills_off: vec![], auto_update: true, auto_download: true, restore_session: true, appearance: String::new(), high_contrast: false, language: Language::default(), density: String::new(), font_family: String::new(), cjk_font_family: String::new(), font_size: DEFAULT_FONT_SIZE, reading_appearance: ReadingAppearance::default(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., pdf_first: false, column_widths: BTreeMap::new(), columns_hidden: vec![], floating: Default::default(), keep_running: true, agent_writing: false, agent_manuscript_width: 0., author: String::new(), cite_style: String::new() };
+        let mut settings = Settings { data_dir: String::new(), providers, legacy_profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translate_workers: 4, translation_prompt: String::new(), commands: vec![], connectors: vec![], skills_off: vec![], auto_update: true, auto_download: true, restore_session: true, appearance: String::new(), high_contrast: false, language: Language::default(), density: String::new(), font_family: String::new(), cjk_font_family: String::new(), font_size: DEFAULT_FONT_SIZE, reading_appearance: ReadingAppearance::default(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., pdf_first: false, pdf_tools_floating: false, pdf_tools_at: None, column_widths: BTreeMap::new(), columns_hidden: vec![], floating: Default::default(), keep_running: true, agent_writing: false, agent_manuscript_width: 0., author: String::new(), cite_style: String::new() };
         settings.tidy();
         settings
     }
@@ -643,11 +647,15 @@ mod tests {
     fn pane_order_is_remembered_and_old_settings_keep_the_conversation_first() {
         let old: Settings = serde_json::from_str(r#"{"chatWidth":420}"#).unwrap();
         assert!(!old.pdf_first);
-        let swapped = Settings { pdf_first: true, ..old };
+        assert!(!old.pdf_tools_floating);
+        let swapped = Settings { pdf_first: true, pdf_tools_floating: true, pdf_tools_at: Some((40., 200.)), ..old };
         let saved = serde_json::to_string(&swapped).unwrap();
         assert!(saved.contains(r#""pdfFirst":true"#));
         let loaded: Settings = serde_json::from_str(&saved).unwrap();
         assert!(loaded.pdf_first);
+        assert!(saved.contains(r#""pdfToolsFloating":true"#) && loaded.pdf_tools_floating);
+        assert_eq!(loaded.pdf_tools_at, Some((40., 200.)));
+        assert_eq!(old.pdf_tools_at, None);
         assert_eq!(loaded.chat_width, 420.);
     }
 

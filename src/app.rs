@@ -430,6 +430,8 @@ pub enum Cmd {
     BesidePdf(bool),
     /// The paper's PDF and its conversation change places (`Settings::pdf_first`).
     SwapPanes,
+    /// The PDF's tools float at the page's right edge, or stand in its toolbar (`Settings::pdf_tools_floating`).
+    FloatPdfTools(bool),
     /// Out of the layout for asking about a paper: the tab it was come to from, with the library around it.
     LeaveAsk,
     /// The paper's conversation floats over its PDF, or stands beside it (`Settings::floating`).
@@ -2812,6 +2814,11 @@ impl Workspace {
             Cmd::SwapPanes => {
                 // Only the order is drawn anew: the PDF, the conversation and the question being typed stay as they are.
                 self.settings.pdf_first = !self.settings.pdf_first;
+                self.save_settings(cx);
+            }
+            Cmd::FloatPdfTools(on) => {
+                // Only where the tools are drawn changes; a tool in use stays in use.
+                self.settings.pdf_tools_floating = on;
                 self.save_settings(cx);
             }
             Cmd::FloatChat(on) => self.float_chat(on, window, cx),
@@ -6492,6 +6499,8 @@ impl Workspace {
                 "beside" => Some(Cmd::BesidePdf(arg != "off")),
                 // `swap` puts the paper's PDF and its conversation at each other's side.
                 "swap" => Some(Cmd::SwapPanes),
+                // `pdftools` / `pdftools:bar`: the PDF's tools floating at the page's right edge, or back in its toolbar.
+                "pdftools" => Some(Cmd::FloatPdfTools(arg != "bar")),
                 // `float` / `float:off`: the paper's conversation over its PDF, or beside it; `fold` / `fold:off` folds it up or opens it.
                 "float" => Some(Cmd::FloatChat(arg != "off")),
                 "fold" => Some(Cmd::FoldChat(arg != "off")),
