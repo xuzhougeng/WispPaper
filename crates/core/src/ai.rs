@@ -241,7 +241,9 @@ pub fn draft_instructions(ctx: &Context) -> String {
 这次对话没有文献库，上面的规则按下面的理解：\n\
 - 从用户的想法或文件本身出发作答。材料里没有文献时，不要只说「文献库里没有相关信息」就停下：需要文献时用 search_online 在 PubMed、Europe PMC、Crossref、arXiv 里检索（检索式写得具体些，先试一两个来源），依据检索结果里的题目和摘要回答，提到一篇文献时写出第一作者、年份和题目（有 DOI 时附上）；没有检索到的文献不要凭印象列出。\n\
 - 值得留下的文献可以收进这次对话：用 save_search 保存一个只命中它们的窄检索式（例如按 DOI 或 PMID），再用 run_search 导入，导入前用户会在窗口里确认。收进来的文献之后可以用 [P1] 这样的标签引用，find_pdf 可以为它们找开放全文；用户把这次对话建成文献库时，它们就是文献库的文献。\n\
-- 用户可以随时在窗口里把这次对话建成文献库（对话上方的「建成文献库」）；不要用工具替用户新建文献库。"
+- 用户可以随时在窗口里把这次对话建成文献库（对话上方的「建成文献库」）；不要用工具替用户新建文献库。\n\
+- 收进来的文献只在这次对话里，首页上还没有这个文献库，在用户点「建成文献库」之前也不会有。不要说文献库已经建成或已经新建；工具结果里的名称是这次对话的名称，不是文献库的。说到收进的文献在哪里时，提醒用户点「建成文献库」把它变成首页上的文献库。\n\
+- 收进文献的一步做完后，用 offer_action 在回答下面放一张卡片，第一个按钮是 promote_library，需要时再加一两个 reply 作为可选的下一步；回答里就不必再问。"
     )
 }
 
@@ -1857,6 +1859,8 @@ mod tests {
         let a = paper("a", "Root hairs", "Ethylene.");
         let kept = build_context("x", "", &[&a], &[], &BTreeMap::new(), &[], &Scope::Library, "q", &[]);
         assert!(draft_instructions(&kept).contains("已经收进了 1 篇文献"));
+        // What was taken in is no library on the home page until the person makes it one.
+        assert!(told.contains("首页上还没有这个文献库") && told.contains("不要说文献库已经建成") && told.contains("offer_action"));
         // The rest of the library's instructions are unchanged by being shared.
         assert!(kept.instructions.starts_with("你是 Wisp Study 里的文献助手，帮助用户理解和整理文献库「x」。") && kept.instructions.ends_with("不必复述材料。"));
 

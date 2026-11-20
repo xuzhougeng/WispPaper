@@ -1420,7 +1420,50 @@ impl Workspace {
         }
         // A review's next move comes last: it is about the answer just read. Not while an answer is arriving or a tool waits for a yes.
         if let Some(review) = review.filter(|_| !chat.busy && chat.pending.is_none()) { items.push(self.render_review_next(chat, review, cx)) }
+        // A conversation not yet made a library that has taken papers in offers to become one once the answer is in: until then the home page has none of it.
+        let idle = !chat.busy && chat.pending.is_none();
+        // The assistant's own card stands for the window's: one card under an answer.
+        let offered = idle.then(|| self.render_offer(talk, chat, cx)).flatten();
+        let had_offer = offered.is_some();
+        items.extend(offered);
+        if draft && idle && !had_offer && matches!(chat.messages.last(), Some(ChatItem::Answer(_))) { items.extend(self.render_promote_offer(cx)) }
         items
+    }
+
+    /// The card the assistant put under its answer (`offer_action`): its sentence, the buttons that can be pressed here, and a × that puts it away.
+    /// Drawn until a question comes after it; a button the window cannot run here (建成文献库 in a library) is left out, and so is a card left with none.
+    fn render_offer(&self, talk: Talk, chat: &Chat, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (at, offer) = chat.offer.as_ref()?;
+        if *at > chat.messages.len() || chat.messages[*at..].iter().any(|item| matches!(item, ChatItem::User { .. })) { return None }
+        let side = talk.side();
+        let buttons: Vec<AnyElement> = offer.actions.iter().enumerate().filter(|(_, action)| self.offer_fits(action)).enumerate().map(|(shown, (n, action))| {
+            let label: SharedString = if action.label.is_empty() { offer_label(action).into() } else { action.label.clone().into() };
+            let id = SharedString::from(format!("offer-{side}-{n}"));
+            let cmd = self.on(Cmd::Offer(talk, Some(n)), cx);
+            // The first is what the assistant recommends.
+            if shown == 0 { ui::primary_button(id, label).h(text_px(28.)).on_click(cmd).into_any_element() } else { ui::secondary_button(id, label).h(text_px(28.)).on_click(cmd).into_any_element() }
+        }).collect();
+        if buttons.is_empty() { return None }
+        Some(div().flex().flex_wrap().items_center().gap(px(10.)).px(px(14.)).py(px(10.)).rounded(px(12.)).border_1().border_color(Theme::line_strong()).bg(Theme::bg_sunken())
+            .child(div().flex_1().min_w(px(240.)).line_height(theme::body_line(21.)).child(offer.text.clone()))
+            .child(div().flex().flex_none().flex_wrap().items_center().gap(px(8.)).children(buttons)
+                .child(ui::ghost_button(SharedString::from(format!("offer-{side}-away")), Some("x"), None).h(text_px(28.)).min_w(px(28.)).tooltip(ui::tip(t("收起"))).on_click(self.on(Cmd::Offer(talk, None), cx))))
+            .into_any_element())
+    }
+
+    /// The card under a draft's conversation: what it took in is no library on the home page until 建成文献库, the same dialog as the button in its header.
+    /// 稍后 puts it away until more papers come in.
+    fn render_promote_offer(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let lib = self.lib.as_ref()?;
+        let count = lib.papers.len();
+        if count == 0 || self.home.later.as_ref().is_some_and(|(id, at)| *id == lib.info.id && *at >= count) { return None }
+        let words = tf!("这次对话收进了 {count} 篇文献。建成文献库后，它会出现在首页。", "This conversation has taken in {count} papers. Make it a library to see it on the home page.");
+        Some(div().flex().flex_wrap().items_center().gap(px(10.)).px(px(14.)).py(px(10.)).rounded(px(12.)).border_1().border_color(Theme::line_strong()).bg(Theme::bg_sunken())
+            .child(div().flex_1().min_w(px(240.)).line_height(theme::body_line(21.)).child(words))
+            .child(div().flex().flex_none().items_center().gap(px(8.))
+                .child(ui::primary_button("draft-offer-promote", t("建成文献库")).h(text_px(28.)).on_click(self.on(Cmd::Draft(crate::draft::Do::Promote(lib.info.id.clone())), cx)))
+                .child(ui::secondary_button("draft-offer-later", t("稍后")).h(text_px(28.)).on_click(self.on(Cmd::Draft(crate::draft::Do::Later), cx))))
+            .into_any_element())
     }
 
     /// The review's next move, under the conversation, where the answer it is about ends: taking that answer for the step in hand,
@@ -1770,6 +1813,20 @@ impl Workspace {
                     ),
             )
             .child(div().flex().gap(px(8.)).px(px(4.)).text_size(text_px(11.)).text_color(Theme::text_placeholder()).child(div().flex_1().min_w_0().truncate().child(if talk == Talk::Paper { t("Enter 发送 · 回答可能有误，请对照原文") } else { t("Enter 发送，Shift+Enter 换行 · 回答可能有误，请对照原文") })).child(div().flex_none().max_w(relative(0.4)).truncate().child(model.to_string())))
+    }
+}
+
+/// The window's words for a button of the assistant's card that came without its own.
+fn offer_label(action: &wisp_core::offer::Action) -> &'static str {
+    match (action.kind.as_str(), action.arg.as_str()) {
+        ("promote_library", _) => t("建成文献库"),
+        ("find_pdfs", _) => t("查找开放全文"),
+        (_, "screen") => t("筛选"),
+        (_, "write") => t("写作"),
+        (_, "figures") => t("图片库"),
+        (_, "extract") => t("提取"),
+        (_, "sources") => t("检索与导入"),
+        _ => t("文献"),
     }
 }
 
