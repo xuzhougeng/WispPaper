@@ -16,6 +16,7 @@ mod context;
 mod custom;
 mod detail;
 mod extract;
+mod facing;
 mod figures;
 mod floating;
 mod dialogs;

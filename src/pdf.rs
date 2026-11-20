@@ -93,6 +93,36 @@ pub struct Piece {
     pub caption: Option<wisp_core::figure::Caption>,
 }
 
+/// A paragraph of a page with its translation, set in its place on the facing copy of the page.
+pub struct FacingPiece {
+    /// Where the paragraph stands: `[left, top, right, bottom]` in the page's points.
+    pub rect: [f32; 4],
+    /// The size the paragraph is set in.
+    pub size: f32,
+    /// The translation, once there is one; until then the page shows the paragraph itself.
+    pub text: Option<SharedString>,
+    /// Being asked for.
+    pub busy: bool,
+}
+
+/// The colour a paragraph stands on, read off the page's picture just outside its box (left, right and
+/// above; what two of the three agree on, else the first), and black or white to write on it.
+fn ground(image: &RenderImage, page: (f32, f32), rect: [f32; 4]) -> Option<(Hsla, Hsla)> {
+    let (size, bytes) = (image.size(0), image.as_bytes(0)?);
+    let (width, height) = (i32::from(size.width) as f32, i32::from(size.height) as f32);
+    let at = |x: f32, y: f32| {
+        let (column, row) = ((x / page.0 * width).clamp(0., width - 1.) as usize, (y / page.1 * height).clamp(0., height - 1.) as usize);
+        // BGRA, as the picture is handed to the window.
+        bytes.get((row * width as usize + column) * 4..).and_then(|pixel| Some([*pixel.get(2)?, *pixel.get(1)?, *pixel.first()?]))
+    };
+    let [x0, y0, x1, y1] = rect;
+    let seen = [at(x0 - 3., (y0 + y1) / 2.)?, at(x1 + 3., (y0 + y1) / 2.)?, at((x0 + x1) / 2., y0 - 3.)?];
+    let near = |a: [u8; 3], b: [u8; 3]| a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 6);
+    let [r, g, b] = if near(seen[1], seen[2]) && !near(seen[0], seen[1]) { seen[1] } else { seen[0] };
+    let light = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32 > 140.;
+    Some((gpui::rgb((r as u32) << 16 | (g as u32) << 8 | b as u32).into(), if light { gpui::black() } else { gpui::white() }))
+}
+
 /// The translation of the selected text, on a card beside it. It lasts as long as that selection.
 struct Translation {
     selection: Selection,
@@ -639,6 +669,11 @@ pub struct PdfView {
     /// The views of the pages: the second is on show only while the viewer is split.
     panes: [Pane; 2],
     split: Split,
+    /// 译文: the second half shows the pages with their paragraphs translated in place, and the two halves
+    /// scroll as one. By page (0-based), what stands in place of what (`Workspace::sync_facing`).
+    facing: Option<HashMap<usize, Vec<FacingPiece>>>,
+    /// How the viewer was split before the translation took its second half.
+    facing_was: Split,
     /// The half the pointer last worked in: the one the page number, the keys and a citation speak of.
     active: usize,
     /// The half the selection, the piece cut out or the highlight clicked was made in: what is offered for it stands there.
@@ -732,6 +767,8 @@ impl PdfView {
             pending: HashSet::new(),
             panes: [Pane::new(), Pane::new()],
             split: Split::Off,
+            facing: None,
+            facing_was: Split::Off,
             active: 0,
             held: 0,
             requests,
@@ -1107,6 +1144,8 @@ impl PdfView {
     /// second half starts where the first is; put away, the half last worked
     /// in is the one that stays.
     pub fn set_split(&mut self, split: Split, cx: &mut Context<Self>) {
+        // The translation keeps its half: side by side or one over the other, as chosen.
+        if self.facing.is_some() && split == Split::Off { return }
         if split == self.split { return }
         let was = self.split;
         if split == Split::Off && self.active == 1 { self.panes.swap(0, 1) }
@@ -1123,6 +1162,31 @@ impl PdfView {
 
     pub fn zoom(&self) -> Zoom {
         self.zoom
+    }
+
+    /// Show the pages' translation in the second half (`Some`: the paragraphs of each page, 0-based), or
+    /// put it away. The viewer is split for it, side by side where it is wide enough for two pages, and
+    /// goes back to how it was split before.
+    pub fn set_facing(&mut self, pieces: Option<HashMap<usize, Vec<FacingPiece>>>, cx: &mut Context<Self>) {
+        match (self.facing.is_some(), pieces.is_some()) {
+            (false, true) => {
+                self.facing_was = self.split;
+                if self.split == Split::Off { self.set_split(if self.width >= crate::facing::FACING_MIN { Split::Side } else { Split::Stacked }, cx) }
+                self.facing = pieces;
+            }
+            (true, false) => {
+                self.facing = None;
+                // The original is the half that stays.
+                self.active = 0;
+                self.set_split(self.facing_was, cx);
+            }
+            _ => self.facing = pieces,
+        }
+        cx.notify();
+    }
+
+    pub fn facing(&self) -> bool {
+        self.facing.is_some()
     }
 
     /// How large the page in view is drawn, in percent of its own size.
@@ -1485,6 +1549,31 @@ impl PdfView {
             .map(|(current, line)| div().absolute().left(px(line[0] * scale - 1.)).top(px(line[1] * scale)).w(px((line[2] - line[0]) * scale + 2.)).h(px((line[3] - line[1]) * scale)).rounded(px(2.)).bg(if current { Theme::found_current() } else { Theme::found() }))
             .collect();
         let sheet = div().relative().flex_none().ml(px(self.sheet_left(pane, width))).w(px(width)).h(px(height)).bg(gpui::white()).border_1().border_color(Theme::line()).overflow_hidden();
+        // The facing copy of the page: each paragraph translated stands in the paragraph's own box, on the
+        // page's white, set no larger than the paragraph and as small as it takes to stand in it
+        // (`translation::fit`). One being asked for is tinted; the rest of the page is as it was.
+        if pane == 1 && let Some(facing) = &self.facing {
+            let picture = image.as_ref().map(|(image, _)| image.clone());
+            let pieces = facing.get(&index).map(Vec::as_slice).unwrap_or_default().iter().filter_map(|piece| {
+                let [x0, y0, x1, y1] = piece.rect;
+                // The colour the paragraph stands on (a tinted box, a table's band), read off the page beside it.
+                let (paper, ink) = picture.as_ref().and_then(|image| ground(image, (w, h), piece.rect)).unwrap_or((gpui::white(), gpui::black()));
+                let place = div().absolute().left(px((x0 - 1.) * scale)).top(px((y0 - 0.5) * scale)).w(px((x1 - x0 + 2.) * scale));
+                match &piece.text {
+                    Some(text) => {
+                        let size = wisp_core::translation::fit(text, x1 - x0, y1 - y0, piece.size);
+                        Some(place.min_h(px((y1 - y0 + 1.) * scale)).max_h(px((y1 - y0).max(size * wisp_core::translation::LEADING) * scale + size * scale)).overflow_hidden().bg(paper).text_color(ink).text_size(px(size * scale)).line_height(px(size * wisp_core::translation::LEADING * scale)).child(text.clone()))
+                    }
+                    None if piece.busy => Some(place.h(px((y1 - y0 + 1.) * scale)).rounded(px(2.)).bg(Theme::accent().opacity(0.10))),
+                    None => None,
+                }
+            });
+            let sheet = match image {
+                Some((image, _)) => sheet.child(img(image).w(px(width)).h(px(height))).children(pieces),
+                None => sheet.flex().items_center().justify_center().text_size(text_px(12.)).text_color(Theme::text_placeholder()).child(tf!("第 {} 页", "Page {}", index + 1)),
+            };
+            return div().w_full().flex().pb(px(PAGE_GAP)).child(sheet).into_any_element();
+        }
         let sheet = match image {
             Some((image, _)) => sheet.when(cutting || !free, |d| d.cursor_crosshair()).when(free, |d| d.cursor_text()).child(img(image).w(px(width)).h(px(height))).children(annotations).children(selected).children(marks).children(found).children(cut).children(shapes).children(drawing).children(notes),
             None => sheet.flex().items_center().justify_center().text_size(text_px(12.)).text_color(Theme::text_placeholder()).child(if self.broken.contains(&index) { tf!("第 {} 页无法渲染", "Cannot render page {}", index + 1) } else { tf!("第 {} 页", "Page {}", index + 1) }),
@@ -2221,6 +2310,13 @@ impl Render for PdfView {
             return ui::empty_state("file-text", t("正在打开 PDF…"), "").size_full().into_any_element();
         }
         self.device_scale = window.scale_factor();
+        // The page and its translation are read as one: the half last scrolled leads the other.
+        if self.facing.is_some() && self.split != Split::Off {
+            let (lead, other) = (self.active, 1 - self.active);
+            let (top, theirs) = (self.panes[lead].list.logical_scroll_top(), self.panes[other].list.logical_scroll_top());
+            if top.item_ix != theirs.item_ix || top.offset_in_item != theirs.offset_in_item { self.panes[other].list.scroll_to(top) }
+            self.panes[other].scroll_x = self.panes[lead].scroll_x;
+        }
         let (measured, wheel, slid) = (cx.entity(), cx.entity(), cx.entity());
         let bars = [0, 1].map(|pane| self.sideways_bar(pane, cx));
         let mut bars = bars.into_iter();
