@@ -918,6 +918,8 @@ pub struct Writing {
     pub agent: crate::write_agent::Agent,
     /// Looking for words in the manuscript (`write_seek.rs`).
     pub seek: crate::write_seek::Seek,
+    /// Beside a draft's conversation the manuscript was closed: the conversation has the page until one is shown again (`write_show`).
+    pub away: bool,
 }
 
 /// The pages of the panel beside the manuscript: what there is to draw on, what was said about the text, what it cites.
@@ -1537,6 +1539,9 @@ pub struct Workspace {
     pub root: PathBuf,
     pub libraries: Vec<LibraryInfo>,
     pub lib: Option<Library>,
+    /// Libraries left while one of their conversations was still answering: kept off screen until the answer is in
+    /// (`close_library`, `in_library`), and taken up again as they are when opened.
+    pub parked: Vec<Library>,
     /// 设置, shown instead of the home page or the library while it is open.
     pub settings_view: Option<SettingsView>,
     /// 连接器: where the connection of each one tried stands (`custom.rs`).
@@ -1760,6 +1765,11 @@ impl Library {
     pub(crate) fn enter_write(&mut self) {
         if self.page != Page::Write { self.write_from = self.page }
         self.page = Page::Write;
+    }
+
+    /// Whether one of its conversations is answering, or waits for the person's yes to a tool.
+    pub(crate) fn answering(&self) -> bool {
+        [Talk::Library, Talk::Paper, Talk::Write].into_iter().any(|talk| self.chat(talk).busy)
     }
 
     pub fn chat(&self, talk: Talk) -> &Chat {
@@ -2051,7 +2061,7 @@ impl Workspace {
         shortcuts::rebuild(&settings.shortcuts, cx);
         let libraries = libraries::list(&root);
         let home = crate::draft::Home::new(window, cx);
-        let mut this = Workspace { focus, settings, settings_path, root, libraries, lib: None, settings_view: None, connections: vec![], skills: vec![], update: UpdateState::Idle, update_told: None, session: Session::default(), modal: None, modal_error: String::new(), modal_subscriptions: vec![], menu: None, palette: None, toast, home_scroll: ScrollHandle::new(), home, resizing: None, column_drag: None, picked: None, pinning: false, filters_over: [false; 2], filters_drawn: false };
+        let mut this = Workspace { focus, settings, settings_path, root, libraries, lib: None, parked: vec![], settings_view: None, connections: vec![], skills: vec![], update: UpdateState::Idle, update_told: None, session: Session::default(), modal: None, modal_error: String::new(), modal_subscriptions: vec![], menu: None, palette: None, toast, home_scroll: ScrollHandle::new(), home, resizing: None, column_drag: None, picked: None, pinning: false, filters_over: [false; 2], filters_drawn: false };
         this.apply_appearance(window);
         this.apply_typography(window, cx);
         cx.observe_window_appearance(window, |this, window, _| this.apply_appearance(window)).detach();
@@ -2369,7 +2379,7 @@ impl Workspace {
             }
             Cmd::GoHome => {
                 self.write_snapshot("leave");
-                self.lib = None;
+                self.close_library();
                 // One level up: from a conversation, or the assistant's page, to the home page.
                 (self.home.open, self.home.listing) = (false, false);
                 self.settings_view = None;
@@ -2404,8 +2414,9 @@ impl Workspace {
             }
             Cmd::RemoveLibrary(id) => {
                 self.modal = None;
-                // The database must be closed before its folder can move.
+                // The database must be closed before its folder can move; one answering off screen goes with it.
                 if self.lib.as_ref().is_some_and(|l| l.info.id == id) { self.lib = None }
+                self.parked.retain(|lib| lib.info.id != id);
                 let Some(info) = self.libraries.iter().find(|l| l.id == id).cloned() else { return };
                 match libraries::remove(&self.root, &info) {
                     Ok(target) => self.say(tf!("已移到 {}", "Moved to {}", target.display()), cx),
@@ -3615,8 +3626,61 @@ impl Workspace {
 
     // ---- libraries
 
+    /// Leave the open library. One whose conversation is still answering is kept, off screen, until the answer is in:
+    /// leaving a conversation does not stop it.
+    pub(crate) fn close_library(&mut self) {
+        let Some(lib) = self.lib.take() else { return };
+        if lib.answering() { self.parked.push(lib) }
+    }
+
+    /// Run `f` with the library `id` as the open one: the open library itself, or one answering off screen (`parked`),
+    /// put in its place meanwhile and back after. What a conversation's answer brings is so handled the same way
+    /// whether or not the person is looking at it. None when neither is that library.
+    pub(crate) fn in_library<R>(&mut self, id: &str, cx: &mut Context<Self>, f: impl FnOnce(&mut Self, &mut Context<Self>) -> R) -> Option<R> {
+        if self.lib.as_ref().is_some_and(|lib| lib.info.id == id) { return Some(f(self, cx)) }
+        let at = self.parked.iter().position(|lib| lib.info.id == id)?;
+        let parked = self.parked.remove(at);
+        let open = self.lib.replace(parked);
+        let result = f(self, cx);
+        let back = std::mem::replace(&mut self.lib, open);
+        if let Some(back) = back.filter(|lib| lib.info.id == id) {
+            if back.answering() { self.parked.insert(at.min(self.parked.len()), back) } else { self.parked_done(back, cx) }
+        }
+        Some(result)
+    }
+
+    /// A conversation left while it was answering has its answer: it was kept with the library as it went, the library
+    /// is let go, and the person is told where it is.
+    fn parked_done(&mut self, lib: Library, cx: &mut Context<Self>) {
+        let name = lib.info.name.clone();
+        drop(lib);
+        self.libraries = libraries::list(&self.root);
+        self.say(tf!("「{name}」里的助手答完了，打开它就能看到", "The assistant has finished in “{name}”; open it to see the answer"), cx);
+        cx.notify();
+    }
+
     pub(crate) fn open_library(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(mut info) = self.libraries.iter().find(|l| l.id == id).cloned() else { return };
+        // The library on show, answering: it stays as it is, not opened a second time.
+        if self.lib.as_ref().is_some_and(|lib| lib.info.id == id && lib.answering()) { return }
+        // One answering off screen is taken up as it stands: the answer goes on arriving where it is read.
+        if let Some(at) = self.parked.iter().position(|lib| lib.info.id == id) {
+            self.write_snapshot("leave");
+            let mut lib = self.parked.remove(at);
+            info.opened_at = time::now_iso();
+            let _ = libraries::save(&info);
+            theme::set_accent(&info.color);
+            window.set_window_title(&format!("{} — Wisp Study", info.name));
+            // What the home page knows of it is newer (a name changed meanwhile).
+            lib.info = info;
+            if lib.info.draft { lib.page = Page::Ask }
+            if let Err(err) = lib.reload() { self.fail(format!("{err:#}"), cx) }
+            self.close_library();
+            self.lib = Some(lib);
+            window.focus(&self.focus);
+            self.extract_missing(cx);
+            return;
+        }
         let store = match Store::open(&info.dir) {
             Ok(store) => store,
             Err(err) => return self.fail(format!("{err:#}"), cx),
@@ -3696,7 +3760,7 @@ impl Workspace {
         subscriptions.extend(heard);
         let revise = crate::revise::Revising::new(&mut subscriptions, cx);
         let seek = crate::write_seek::Seek::new(&mut subscriptions, cx);
-        let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new(), assist: Default::default(), revise, comments, editor_scroll: ScrollHandle::new(), side: Side::default(), side_open: false, agent: Default::default(), seek };
+        let writing = Writing { manuscripts, manuscript, section_id, reading: false, title, typed: 0, editor, find, search: Default::default(), structures: BTreeMap::new(), sorting: Sorting::default(), scroll: ScrollHandle::new(), assist: Default::default(), revise, comments, editor_scroll: ScrollHandle::new(), side: Side::default(), side_open: false, agent: Default::default(), seek, away: false };
         let citing = crate::cite::Citing::new(&store, &writing.manuscript, &mut subscriptions, cx);
         let gallery = crate::figures::Gallery::new(&mut subscriptions, cx);
         let filters = Filters { sort: info.sort.clone(), ..Default::default() };
@@ -3771,6 +3835,7 @@ impl Workspace {
         let draft = lib.info.draft;
         if draft { lib.page = Page::Ask }
         let last = if draft { lib.store.list_conversations("").ok().and_then(|list| list.into_iter().next()) } else { None };
+        self.close_library();
         self.lib = Some(lib);
         window.focus(&self.focus);
         if let Some(last) = last { self.open_chat(Talk::Library, &last.id, cx) }
@@ -5007,8 +5072,9 @@ impl Workspace {
         cx.background_executor().spawn(async move { wisp_net::stream_chat(request, protocol, sender) }).detach();
         cx.spawn(async move |this, cx| {
             while let Ok(event) = events.recv().await {
-                let alive = this.update(cx, |this, cx| {
-                    let Some(lib) = this.lib.as_mut().filter(|l| l.info.id == library) else { return false };
+                // The conversation's library, on show or answering off screen (`in_library`).
+                let alive = this.update(cx, |this, cx| this.in_library(&library, cx, |this, cx| {
+                    let Some(lib) = this.lib.as_mut() else { return false };
                     let chat = chat_of!(lib, talk);
                     if chat.generation != generation { return false }
                     // Keep following the answer while the reader is at the bottom.
@@ -5060,7 +5126,7 @@ impl Workspace {
                     if ended { this.save_chat(talk, cx) }
                     cx.notify();
                     more
-                });
+                }).unwrap_or(false));
                 if !matches!(alive, Ok(true)) { break }
             }
         })
@@ -5143,9 +5209,9 @@ impl Workspace {
                 Some(picked) => picked.await.ok().and_then(Result::ok).flatten(),
                 None => Some(directory.join(&name)),
             };
-            this.update(cx, |this, cx| {
-                // Another library or another conversation by now: its calls are not run for this one.
-                if !this.lib.as_mut().is_some_and(|lib| lib.info.id == library && lib.chat_mut(talk).generation == generation) { return }
+            this.update(cx, |this, cx| this.in_library(&library, cx, |this, cx| {
+                // Another conversation by now: its calls are not run for this one.
+                if !this.lib.as_mut().is_some_and(|lib| lib.chat_mut(talk).generation == generation) { return }
                 match chosen {
                     Some(mut path) => {
                         if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("docx")) { path.set_extension("docx"); }
@@ -5160,7 +5226,7 @@ impl Workspace {
                     None => calls[at].args = Err("用户关掉了保存对话框，没有选保存位置，新文件没有写。不要重试；问用户是否还要输出。".into()),
                 }
                 this.place_outputs(talk, calls, first, at + 1, cx);
-            })
+            }))
             .ok();
         })
         .detach();
@@ -5200,8 +5266,8 @@ impl Workspace {
             for task in tasks {
                 done.extend(task.await);
             }
-            this.update(cx, |this, cx| {
-                let Some(lib) = this.lib.as_mut().filter(|l| l.info.id == library) else { return };
+            this.update(cx, |this, cx| this.in_library(&library, cx, |this, cx| {
+                let Some(lib) = this.lib.as_mut() else { return };
                 // A change was made whether or not its answer is still wanted: the window reads the library again.
                 let reloaded = if wrote { lib.reload() } else { Ok(()) };
                 // And the manuscripts, when one was written: the editor follows, and what changed is shown.
@@ -5226,7 +5292,7 @@ impl Workspace {
                 }
                 if let Err(err) = reloaded { this.fail(format!("{err:#}"), cx) }
                 cx.notify();
-            })
+            }))
             .ok();
         })
         .detach();
@@ -6439,6 +6505,8 @@ impl Workspace {
                 "assistant" => Some(Cmd::Draft(crate::draft::Do::Begin)),
                 "drafts" => Some(Cmd::Draft(crate::draft::Do::History)),
                 "newdraft" => Some(Cmd::Draft(crate::draft::Do::New)),
+                // `draftmanuscript:off` closes the manuscript beside a conversation (its ×), `draftmanuscript:on` brings it back (稿件 in the header).
+                "draftmanuscript" => Some(Cmd::Draft(crate::draft::Do::Manuscript(arg != "off"))),
                 "homefile" => {
                     self.home_attach(vec![arg.into()], cx);
                     None

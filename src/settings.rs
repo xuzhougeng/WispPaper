@@ -430,8 +430,9 @@ impl Workspace {
         // The default folder is stored as "unset", so it follows the user's Documents folder.
         self.settings.data_dir = if root == default { String::new() } else { root.to_string_lossy().to_string() };
         self.root = root;
-        // The open library belongs to the old folder.
+        // The open library belongs to the old folder, and those answering off screen.
         self.lib = None;
+        self.parked.clear();
         theme::set_accent("blue");
         self.libraries = libraries::list(&self.root);
         self.save_settings(cx);

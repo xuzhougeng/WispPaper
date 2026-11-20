@@ -1553,5 +1553,10 @@
   "网址导入完成": "Web address import complete",
   "收起批注": "Hide comments",
   "助手想收进或改动这次对话里的文献，等你同意": "The assistant wants to add or change papers in this conversation; it waits for your consent",
-  "助手：新对话": "Assistant: new conversation"
+  "助手：新对话": "Assistant: new conversation",
+  "稿件": "Manuscript",
+  "把稿件放回对话右边": "Put the manuscript back beside the conversation",
+  "关闭稿件：对话占满页面，稿件留在对话里，点对话上方的「稿件」再打开": "Close the manuscript: the conversation takes the page. The manuscript stays with the conversation; click “Manuscript” above it to open it again.",
+  "回答中": "Answering",
+  "等你同意": "Waiting for you"
 }

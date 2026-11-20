@@ -803,6 +803,8 @@ impl Workspace {
                     .when(draft, |d| d.child(ui::ghost_button(SharedString::from(format!("chat-history-{side}")), Some(if self.home.listing { "arrow-left" } else { "history" }), Some(if self.home.listing { t("返回").into() } else { t("历史").into() })).on_click(self.on(Cmd::Draft(crate::draft::Do::History), cx))))
                     .when(!chat.messages.is_empty() && !listing && !draft, |d| d.child(ui::ghost_button(SharedString::from(format!("chat-new-{side}")), Some("plus"), Some(t("新对话").into())).on_click(self.on(Cmd::NewChat(talk), cx))))
                     .when(draft && !self.home.listing, |d| d.child(ui::ghost_button(SharedString::from(format!("chat-new-{side}")), Some("plus"), Some(t("新对话").into())).on_click(self.on(Cmd::Draft(crate::draft::Do::New), cx))))
+                    // A manuscript closed beside the conversation is a click away.
+                    .when(draft && !self.home.listing && self.draft_manuscript() && lib.writing.away, |d| d.child(ui::ghost_button("draft-manuscript-show", Some("file-text"), Some(t("稿件").into())).tooltip(ui::tip(t("把稿件放回对话右边"))).on_click(self.on(Cmd::Draft(crate::draft::Do::Manuscript(true)), cx))))
                     .when(draft, |d| d.child(ui::secondary_button("draft-promote", t("建成文献库")).h(text_px(28.)).px(px(10.)).ml(px(4.)).text_size(text_px(12.)).on_click(self.on(Cmd::Draft(crate::draft::Do::Promote(lib.info.id.clone())), cx)))),
             )
             // Under the header, everything the panel of papers floats over: it pushes nothing down.

@@ -239,6 +239,8 @@ impl Workspace {
         let (body, title) = (section.map(|s| s.body.clone()).unwrap_or_default(), manuscript.title.clone());
         writing.section_id = section.map(|s| s.id.clone()).unwrap_or_default();
         writing.manuscript = manuscript.id.clone();
+        // A manuscript shown is on show: one closed beside a draft's conversation comes back (a menu, a new one, comments arriving).
+        writing.away = false;
         writing.assist.leave();
         writing.revise.leave();
         writing.editor.update(cx, |input, cx| input.set_text(&body, cx));
@@ -606,7 +608,8 @@ impl Workspace {
                     let words: usize = m.sections.iter().map(|s| s.body.split_whitespace().count()).sum();
                     items.push(MenuItem { label: crate::i18n::manuscript_title(m).to_string().into(), checked: m.id == writing.manuscript, note: Some(tf!("{words} 词", "{words} words").into()), cmd: Cmd::WriteManuscript(m.id.clone()) });
                 }
-                items.push(item(t("新建稿件").into(), false, Cmd::NewManuscript));
+                // Beside a draft's conversation an empty manuscript would not be shown: there a manuscript is handed in or saved from an answer.
+                if !self.in_draft() { items.push(item(t("新建稿件").into(), false, Cmd::NewManuscript)) }
                 items.push(item(t("导入 Word / Markdown 文件…").into(), false, Cmd::Comment(crate::comments::Do::Import)));
                 // What the assistant wrote as a review can be gone on with here.
                 for (conversation, title, sections) in self.reviews_written().into_iter().take(5) {
@@ -872,14 +875,18 @@ impl Workspace {
                     )
                     // Beside the conversation of a draft the manuscript is one to review: there is no other mode to switch to.
                     .when(!outlined && !self.in_draft(), |d| d.child(self.render_mode_switch(cx)))
-                    .when(!outlined, |d| d.child(tool("write-manuscripts", "list", Some(tf!("稿件 {}", "Manuscript {}", writing.manuscripts.len()).into())).on_click(self.on_menu(MenuKind::Manuscripts, cx))))
+                    // Beside a draft's conversation it says its name even in a narrow column: it is where the manuscripts are switched and removed.
+                    .when(!outlined && !self.in_draft(), |d| d.child(tool("write-manuscripts", "list", Some(tf!("稿件 {}", "Manuscript {}", writing.manuscripts.len()).into())).on_click(self.on_menu(MenuKind::Manuscripts, cx))))
+                    .when(!outlined && self.in_draft(), |d| d.child(ui::ghost_button("write-manuscripts", Some("list"), Some(tf!("稿件 {}", "Manuscript {}", writing.manuscripts.len()).into())).h(text_px(26.)).px(px(7.)).text_size(text_px(12.)).on_click(self.on_menu(MenuKind::Manuscripts, cx))))
                     // 预览 shows the whole manuscript as it reads, Markdown drawn; lit while it does, a click goes back to writing.
                     .child(preview)
                     // The language is said even in a narrow column: there is no icon that says it.
                     .child(ui::ghost_button("write-language", Some("chevron-down"), Some(language.to_string().into())).h(text_px(26.)).px(px(7.)).text_size(text_px(12.)).on_click(self.on_menu(MenuKind::WriteLanguage, cx)))
                     .children(if self.settings.agent_writing && !self.in_draft() { self.render_version_stepper(cx) } else { None })
                     .child(tool("write-history", "history", None).on_click(self.on(Cmd::WriteHistory, cx)))
-                    .child(tool("write-export", "export", Some(t("导出").into())).on_click(self.on_menu(MenuKind::ManuscriptExport, cx))),
+                    .child(tool("write-export", "export", Some(t("导出").into())).on_click(self.on_menu(MenuKind::ManuscriptExport, cx)))
+                    // Beside a draft's conversation the manuscript can be closed: the conversation has the page, 稿件 in its header brings it back.
+                    .when(self.in_draft(), |d| d.child(ui::ghost_button("draft-manuscript-close", Some("x"), None).h(text_px(26.)).px(px(7.)).tooltip(ui::tip(t("关闭稿件：对话占满页面，稿件留在对话里，点对话上方的「稿件」再打开"))).on_click(self.on(Cmd::Draft(crate::draft::Do::Manuscript(false)), cx)))),
             )
             .when(!outlined, |d| d.child(div().flex().items_center().flex_wrap().gap(px(6.)).px(px(16.)).pt(px(12.)).children(pills).child(add)))
     }
