@@ -95,6 +95,8 @@ pub enum Do {
     Promote(String),
     /// The sparkle by that dialog's name and topic: the model proposes both from the conversation.
     Propose,
+    /// The manuscript beside the conversation: shown (稿件 in the conversation's header), or closed (its ×) so the conversation has the page.
+    Manuscript(bool),
 }
 
 /// Whether a file can start a conversation: a Word file (a manuscript to review) or a PDF (a paper to talk about).
@@ -146,6 +148,11 @@ impl Workspace {
                 if self.lib.as_ref().is_some_and(|lib| lib.info.id == id) { self.run(Cmd::EditLibrary(id), window, cx) }
             }
             Do::Propose => self.draft_propose(cx),
+            Do::Manuscript(show) => {
+                let Some(lib) = self.lib.as_mut() else { return };
+                lib.writing.away = !show;
+                if show { lib.writing.editor.read(cx).focus(window) } else { lib.library_chat.input.read(cx).focus(window) }
+            }
         }
         cx.notify();
     }
@@ -153,6 +160,11 @@ impl Workspace {
     /// The conversations of the home page, latest first.
     pub(crate) fn conversations(&self) -> impl Iterator<Item = &wisp_core::libraries::LibraryInfo> {
         self.libraries.iter().filter(|info| info.draft)
+    }
+
+    /// Whether the open conversation not yet made a library holds a manuscript with text: one to stand beside it.
+    pub(crate) fn draft_manuscript(&self) -> bool {
+        self.lib.as_ref().is_some_and(|lib| lib.info.draft && lib.writing.current().is_some_and(|m| m.sections.iter().any(|s| !s.body.trim().is_empty())))
     }
 
     /// Whether the open library is a conversation not yet made one.
@@ -390,6 +402,19 @@ impl Workspace {
             .child(div().flex().flex_wrap().items_center().gap(px(2.)).ml(px(-8.)).children(starts))
     }
 
+    /// A library left while one of its conversations was answering (`Workspace::parked`): a mark for its row or card that says
+    /// it is still at work, or waits for the person's yes to a tool. None for one not answering off screen.
+    pub(crate) fn off_screen_mark(&self, id: &str) -> Option<Div> {
+        let lib = self.parked.iter().find(|lib| lib.info.id == id)?;
+        let waits = [Talk::Library, Talk::Paper, Talk::Write].into_iter().any(|talk| lib.chat(talk).pending.is_some());
+        let mark = div().flex().flex_none().items_center().gap(px(5.)).text_size(text_px(12.));
+        Some(if waits {
+            mark.text_color(Theme::accent()).child(ui::icon("info", 12., Theme::accent())).child(t("等你同意"))
+        } else {
+            mark.text_color(Theme::text_secondary()).child(ui::spinner(SharedString::from(format!("off-screen-{id}")), 11., Theme::accent())).child(t("回答中"))
+        })
+    }
+
     /// The conversations, latest first, as plain rows: the title, at the right the papers kept (when there are any) and
     /// the date; a right click renames, makes a library or removes. On the assistant's page under 最近对话, and in a
     /// conversation's 历史.
@@ -414,6 +439,8 @@ impl Workspace {
                     .on_mouse_down(MouseButton::Right, self.on_context(crate::app::MenuKind::Draft(info.id.clone()), cx))
                     .child(ui::icon("message-square", 14., Theme::text_tertiary()))
                     .child(div().flex_1().min_w_0().truncate().child(ui::one_line(&info.name)))
+                    // Left while it was answering, it goes on: said here until the answer is in.
+                    .children(self.off_screen_mark(&info.id))
                     .when(info.paper_count > 0, |d| d.child(div().flex_none().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(tf!("{} 篇", "{} papers", info.paper_count))))
                     .child(div().flex_none().w(px(84.)).text_right().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(time::date_text(&info.opened_at)))
                     .into_any_element()
@@ -432,7 +459,8 @@ impl Workspace {
     /// The page of a conversation not yet made a library: the conversation alone, or, once a manuscript was
     /// handed in, the conversation with the manuscript at its right and, where the page has room, its comments.
     pub(crate) fn render_draft(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let reviewing = self.lib.as_ref().is_some_and(|lib| lib.writing.current().is_some_and(|m| m.sections.iter().any(|s| !s.body.trim().is_empty())));
+        // A manuscript closed with its × leaves the conversation the page; 稿件 in the conversation's header brings it back.
+        let reviewing = self.draft_manuscript() && self.lib.as_ref().is_some_and(|lib| !lib.writing.away);
         if !reviewing { return self.render_chat(Talk::Library, window, cx) }
         let comments_width = if width >= ROOM_FOR_COMMENTS { COMMENTS_W } else { 0. };
         let rest = width - comments_width;

@@ -296,7 +296,11 @@ impl Workspace {
                                     .text_size(text_px(12.))
                                     .text_color(Theme::text_tertiary())
                                     .child(tf!("{} 篇文献", "{} papers", info.paper_count))
-                                    .child(tf!("打开于 {}", "Opened {}", time::date_text(&info.opened_at))),
+                                    // Left while its assistant was answering, it goes on: said in place of when it was opened.
+                                    .child(match self.off_screen_mark(&info.id) {
+                                        Some(mark) => mark.into_any_element(),
+                                        None => div().child(tf!("打开于 {}", "Opened {}", time::date_text(&info.opened_at))).into_any_element(),
+                                    }),
                             ),
                     )
                     .into_any_element()
