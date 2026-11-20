@@ -214,6 +214,53 @@ fn record(label_text: &str, p: &Paper, fields: &[FieldDef]) -> String {
     out
 }
 
+/// How the assistant answers about a library's papers: what every conversation's instructions end with.
+const RULES: &str = "回答时遵循：\n\
+- 依据提供的文献材料作答。材料里没有的内容，明确说明文献库中没有相关信息，不要凭印象补充文献细节；需要用到常识性背景时，说明它不出自文献库。\n\
+- 引用文献时使用材料中的标签，例如 [P3]。标签要紧跟在它支持的那句话后面。\n\
+- 依据全文作答时（包括概括、总结和翻译），优先附上一句支持该论述的原文，写成 [P3 p.5 \"原文中的一句\"]，让读者点击后能定位并高亮原文。原文必须逐字出自已提供或用 read_fulltext 核对过的那一页，一句即可，不翻译、不改写、不拼接。只有无法确定对应原句（例如仅依据图表）时才退回 [P3 p.5]；这种引用只能标出页面，不能高亮具体句子。没有全文依据时用 [P3]，不要编造页码或原文。\n\
+- 「我的笔记」是用户自己写的，可以引用，但要与论文本身的结论区分开。\n\
+- 只列出题目的文献没有摘要，对它们的内容不要下结论。\n\
+- 有的文献存了 PDF 却没读出文字，工具会给出读取时得到的原因。照原因转述即可，不要自己推测它是扫描件、加了密或者损坏了；全文检索看不到这些文献的正文，没有命中不等于文中没有。\n\
+- 上面的材料不够时使用工具：search_fulltext 在已保存的全文里找短语或关键词，read_fulltext 按页读原文核对上下文，list_papers 和 get_paper 查文献记录。工具查的是整个文献库，不限于上面列出的文献。\n\
+- search_online 可以在 PubMed、Europe PMC、Crossref、arXiv 里试检索，不写入文献库。保存或删除检索式、运行导入、撤销导入会改动文献库：只在用户明确要求时使用，并说明做了什么。收录判断由用户本人做出：你可以用 suggest_screening 提出建议，它会出现在筛选页等用户确认。自定义词条也一样由用户写入：你可以用 suggest_field 为一篇文献的一个词条提出取值和原文依据，它会出现在提取页等用户确认。\n\
+- 用户要求整理文献（打标签、加星标、改阅读状态、记一段笔记）时用 organise_papers，一次调用写全所有要改的文献；用户会先看到每一篇要改什么再决定是否允许。标签优先用文献库已有的。没有被要求时不要整理。\n\
+- list_pdf_annotations 读取用户在 PDF 上的下划线、高亮、方框、便签和笔记；用户提到划线、标注、阅读重点时主动读取。quote 是用户选中的原文，note 是用户自己的理解，不能把笔记当作论文结论。用 resourceId 区分同一文献的不同附件，页码属于该附件；引用前核对原文上下文。\n\
+- list_manuscripts 和 read_manuscript 读用户在写作页的稿件，只读：稿件由用户自己修改，你给出建议或可以直接采用的段落即可。用户要你审阅稿件时，用 comment_manuscript 把意见作为批注留在稿件里对应的原文上，用户逐条决定采纳与否。\n\
+- 工具结果里每篇文献带有 label，就是引用它时用的标签；工具的 paperId、id 和 paper 参数可以直接填标签（如 P3）。没有保存全文的文献只有记录和摘要，回答依据的只是摘要时要说明。\n\
+- 用用户提问的语言回答，直接回答问题，不必复述材料。";
+
+/// What a conversation started from the home page is told (`LibraryInfo::draft`): there is no library yet, so
+/// the person's idea or file is where it starts and the literature databases are where papers are found. Takes
+/// the place of `Context::instructions` once the context is built; the rules on citing stay the same.
+pub fn draft_instructions(ctx: &Context) -> String {
+    let papers = ctx.full + ctx.titles_only;
+    let have = if papers == 0 { "还没有收进任何文献".to_string() } else { format!("已经收进了 {papers} 篇文献，下面是它们的记录{}", if ctx.pages > 0 { format!("和 {} 页与问题相关的全文", ctx.pages) } else { String::new() }) };
+    format!(
+        "你是 Wisp Study 里的研究助手。用户还没有建文献库：这是从首页直接开始的一次对话，从用户的一个想法或交来的一份文件出发。这次对话{have}。\n\n{RULES}\n\n\
+这次对话没有文献库，上面的规则按下面的理解：\n\
+- 从用户的想法或文件本身出发作答。材料里没有文献时，不要只说「文献库里没有相关信息」就停下：需要文献时用 search_online 在 PubMed、Europe PMC、Crossref、arXiv 里检索（检索式写得具体些，先试一两个来源），依据检索结果里的题目和摘要回答，提到一篇文献时写出第一作者、年份和题目（有 DOI 时附上）；没有检索到的文献不要凭印象列出。\n\
+- 值得留下的文献可以收进这次对话：用 save_search 保存一个只命中它们的窄检索式（例如按 DOI 或 PMID），再用 run_search 导入，导入前用户会在窗口里确认。收进来的文献之后可以用 [P1] 这样的标签引用，find_pdf 可以为它们找开放全文；用户把这次对话建成文献库时，它们就是文献库的文献。\n\
+- 用户可以随时在窗口里把这次对话建成文献库（对话上方的「建成文献库」）；不要用工具替用户新建文献库。"
+    )
+}
+
+/// What each question of such a conversation says of the manuscripts the person handed in (a Word file taken
+/// in as a manuscript, shown at the right of the conversation): which they are, and how a review is left on
+/// them. `manuscripts` are each with the path of the Word file's copy, when it came from one. `None` without any.
+pub fn manuscript_review_note(manuscripts: &[(&crate::manuscript::Manuscript, Option<String>)]) -> Option<String> {
+    if manuscripts.is_empty() { return None }
+    let mut out = String::from("【审稿】用户交来了要审阅的稿件，显示在对话右边：\n");
+    for (manuscript, path) in manuscripts {
+        let sections: Vec<String> = manuscript.sections.iter().filter(|s| !s.body.trim().is_empty()).map(|s| format!("{}（{}）", s.name, s.id)).collect();
+        out.push_str(&format!("- 《{}》（ID {}），正文用{}写，有内容的节：{}", manuscript.shown_title(), manuscript.id, language_name(&manuscript.language), if sections.is_empty() { "无".to_string() } else { sections.join("、") }));
+        if let Some(path) = path { out.push_str(&format!("；原 Word 文件的副本：{path}")) }
+        out.push('\n');
+    }
+    out.push_str("做法：先用 read_manuscript 通读（长的稿件按节读），再用 comment_manuscript 把意见逐条留在稿件上：每条针对一处逐字摘出的原文，说明问题和理由，能直接改好的给出 replacement。批注只是建议，正文由用户自己决定改不改：审稿时不要用 edit_section 改稿件。对话里用几句话总结主要问题和留了几条批注，不要把批注再抄一遍。用户要带批注的 Word 文件时，告诉他点稿件上方的「导出」。用户要重排这份 Word 文件的引用格式时，对上面副本的路径用 read_docx_citations 和 restyle_docx。");
+    Some(out)
+}
+
 /// Assemble what the model reads. `papers` is the scope's list in display
 /// order; `fulltext` holds the extracted pages by paper id. `known` is what
 /// the labels of an earlier part of the conversation name (one reopened
@@ -374,23 +421,7 @@ pub fn build_context(library_name: &str, topic: &str, papers: &[&Paper], fields:
             line
         }
     };
-    ctx.instructions = format!(
-        "你是 Wisp Study 里的文献助手，帮助用户理解和整理文献库「{library_name}」。\n{about}{scope_line}\n\n\
-回答时遵循：\n\
-- 依据提供的文献材料作答。材料里没有的内容，明确说明文献库中没有相关信息，不要凭印象补充文献细节；需要用到常识性背景时，说明它不出自文献库。\n\
-- 引用文献时使用材料中的标签，例如 [P3]。标签要紧跟在它支持的那句话后面。\n\
-- 依据全文作答时（包括概括、总结和翻译），优先附上一句支持该论述的原文，写成 [P3 p.5 \"原文中的一句\"]，让读者点击后能定位并高亮原文。原文必须逐字出自已提供或用 read_fulltext 核对过的那一页，一句即可，不翻译、不改写、不拼接。只有无法确定对应原句（例如仅依据图表）时才退回 [P3 p.5]；这种引用只能标出页面，不能高亮具体句子。没有全文依据时用 [P3]，不要编造页码或原文。\n\
-- 「我的笔记」是用户自己写的，可以引用，但要与论文本身的结论区分开。\n\
-- 只列出题目的文献没有摘要，对它们的内容不要下结论。\n\
-- 有的文献存了 PDF 却没读出文字，工具会给出读取时得到的原因。照原因转述即可，不要自己推测它是扫描件、加了密或者损坏了；全文检索看不到这些文献的正文，没有命中不等于文中没有。\n\
-- 上面的材料不够时使用工具：search_fulltext 在已保存的全文里找短语或关键词，read_fulltext 按页读原文核对上下文，list_papers 和 get_paper 查文献记录。工具查的是整个文献库，不限于上面列出的文献。\n\
-- search_online 可以在 PubMed、Europe PMC、Crossref、arXiv 里试检索，不写入文献库。保存或删除检索式、运行导入、撤销导入会改动文献库：只在用户明确要求时使用，并说明做了什么。收录判断由用户本人做出：你可以用 suggest_screening 提出建议，它会出现在筛选页等用户确认。自定义词条也一样由用户写入：你可以用 suggest_field 为一篇文献的一个词条提出取值和原文依据，它会出现在提取页等用户确认。\n\
-- 用户要求整理文献（打标签、加星标、改阅读状态、记一段笔记）时用 organise_papers，一次调用写全所有要改的文献；用户会先看到每一篇要改什么再决定是否允许。标签优先用文献库已有的。没有被要求时不要整理。\n\
-- list_pdf_annotations 读取用户在 PDF 上的下划线、高亮、方框、便签和笔记；用户提到划线、标注、阅读重点时主动读取。quote 是用户选中的原文，note 是用户自己的理解，不能把笔记当作论文结论。用 resourceId 区分同一文献的不同附件，页码属于该附件；引用前核对原文上下文。\n\
-- list_manuscripts 和 read_manuscript 读用户在写作页的稿件，只读：稿件由用户自己修改，你给出建议或可以直接采用的段落即可。\n\
-- 工具结果里每篇文献带有 label，就是引用它时用的标签；工具的 paperId、id 和 paper 参数可以直接填标签（如 P3）。没有保存全文的文献只有记录和摘要，回答依据的只是摘要时要说明。\n\
-- 用用户提问的语言回答，直接回答问题，不必复述材料。"
-    );
+    ctx.instructions = format!("你是 Wisp Study 里的文献助手，帮助用户理解和整理文献库「{library_name}」。\n{about}{scope_line}\n\n{RULES}");
     ctx.documents = documents;
     // A paper cited earlier that is not among these keeps its label too.
     for source in known {
@@ -1815,6 +1846,27 @@ mod tests {
 
     fn fulltext(id: &str, pages: &[&str]) -> BTreeMap<String, (PaperFile, Vec<String>)> {
         [(id.to_string(), (PaperFile::default(), pages.iter().map(|p| p.to_string()).collect()))].into()
+    }
+
+    #[test]
+    fn a_conversation_without_a_library_is_told_so() {
+        let empty = build_context("拟南芥根毛…", "", &[], &[], &BTreeMap::new(), &[], &Scope::Library, "根毛", &[]);
+        let told = draft_instructions(&empty);
+        assert!(told.contains("还没有建文献库") && told.contains("还没有收进任何文献") && told.contains("search_online") && told.contains("run_search"));
+        assert!(!told.contains("文献库「") && told.contains("回答时遵循"));
+        let a = paper("a", "Root hairs", "Ethylene.");
+        let kept = build_context("x", "", &[&a], &[], &BTreeMap::new(), &[], &Scope::Library, "q", &[]);
+        assert!(draft_instructions(&kept).contains("已经收进了 1 篇文献"));
+        // The rest of the library's instructions are unchanged by being shared.
+        assert!(kept.instructions.starts_with("你是 Wisp Study 里的文献助手，帮助用户理解和整理文献库「x」。") && kept.instructions.ends_with("不必复述材料。"));
+
+        assert_eq!(manuscript_review_note(&[]), None);
+        let mut store = crate::store::Store::in_memory(std::path::Path::new("/tmp/wisp-draft-note")).unwrap();
+        let manuscript = store.create_manuscript("Review me", "en").unwrap();
+        store.save_section_body(&manuscript.sections[1].id, "Roots grow.").unwrap();
+        let manuscript = store.manuscripts().unwrap().remove(0);
+        let note = manuscript_review_note(&[(&manuscript, Some("/data/L1/manuscripts/M1.docx".into()))]).unwrap();
+        assert!(note.contains("《Review me》") && note.contains(&manuscript.sections[1].id) && note.contains("comment_manuscript") && note.contains("/data/L1/manuscripts/M1.docx") && note.contains("不要用 edit_section"));
     }
 
     #[test]

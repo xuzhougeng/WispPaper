@@ -179,6 +179,8 @@ pub enum MenuKind {
     Reading(String),
     Screening(String),
     LibraryCard(String),
+    /// A conversation of the home page's 最近对话: rename it, make it a library, remove it.
+    Draft(String),
     /// The sections of the manuscript an answer can be added to: the text, or `None` for what is selected in the library's conversation.
     InsertInto(Option<String>),
     /// Which model a task uses (设置 › AI).
@@ -272,6 +274,8 @@ pub enum Cmd {
     /// A `.wispstudy` file from another Wisp Study, taken in as a new library.
     ImportLibrary,
     GoHome,
+    /// The home page's assistant and the conversations not yet made libraries (`draft.rs`).
+    Draft(crate::draft::Do),
     RevealFolder,
     OpenUrl(String),
     NoteOpen(Option<Talk>, bool),
@@ -976,6 +980,8 @@ pub enum ChatItem {
 
 /// The tool that writes a Word file's citations anew: where its file goes is asked in a save dialog (`place_outputs`).
 const RESTYLE: &str = "restyle_docx";
+/// The tool that leaves the assistant's remarks on a manuscript as comments: they are read again after it ran (`comments_arrived`).
+const COMMENT: &str = "comment_manuscript";
 
 /// What the person says to the assistant wanting to change the library.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1296,6 +1302,8 @@ pub struct Chat {
     pub started: Option<Instant>,
     /// What the last 撤回 took away, until the next question: it can be put back (`Cmd::Unretract`).
     pub retracted: Option<Retracted>,
+    /// How wide the conversation was last drawn: its column of the reading width is centred in it (`chat::reading_pad`).
+    pub drawn_width: f32,
 }
 
 /// What 撤回 took out of a conversation, and what the box held before.
@@ -1371,7 +1379,11 @@ pub struct IdRun {
 
 pub enum Modal {
     ExportNote(Box<crate::notes::Form>),
-    Library { editing: Option<String>, name: Entity<TextInput>, topic: Entity<TextInput>, color: String },
+    /// A library new or edited; one that is a conversation not yet made a library is made one (建成文献库).
+    /// `proposing` while the model proposes its name and topic (the sparkle).
+    Library { editing: Option<String>, name: Entity<TextInput>, topic: Entity<TextInput>, color: String, proposing: bool },
+    /// Another name for a conversation of the home page.
+    Rename { id: String, name: Entity<TextInput> },
     /// `run` while the identifiers are looked up.
     AddById { input: Entity<TextInput>, run: Option<IdRun> },
     Paper(Box<PaperForm>),
@@ -1537,6 +1549,8 @@ pub struct Workspace {
     pub palette: Option<crate::palette::Palette>,
     pub toast: Option<Toast>,
     pub home_scroll: ScrollHandle,
+    /// The home page's assistant: the box of a first question and its files (`draft.rs`).
+    pub home: crate::draft::Home,
     /// The edge being dragged: the sidebar's, the detail panel's, or the one between a paper's conversation and its PDF.
     pub resizing: Option<Edge>,
     pub column_drag: Option<ColumnDrag>,
@@ -1598,6 +1612,7 @@ impl Chat {
             checks: HashMap::new(),
             started: None,
             retracted: None,
+            drawn_width: 0.,
         }
     }
 
@@ -1815,7 +1830,7 @@ impl Library {
     /// The panel of the papers in scope is on show over the library's conversation.
     pub fn materials_shown(&self) -> bool {
         let chat = &self.library_chat;
-        self.page == Page::Ask && chat.materials_open && chat.history.is_none() && (chat.ctx.is_some() || chat.messages.is_empty())
+        self.page == Page::Ask && chat.materials_open && chat.history.is_none() && (chat.ctx.is_some() || chat.messages.is_empty() || self.info.draft)
     }
 
     pub fn selected_paper(&self) -> Option<&Paper> {
@@ -2028,7 +2043,8 @@ impl Workspace {
         theme::set_accent("blue");
         shortcuts::rebuild(&settings.shortcuts, cx);
         let libraries = libraries::list(&root);
-        let mut this = Workspace { focus, settings, settings_path, root, libraries, lib: None, settings_view: None, connections: vec![], skills: vec![], update: UpdateState::Idle, update_told: None, session: Session::default(), modal: None, modal_error: String::new(), modal_subscriptions: vec![], menu: None, palette: None, toast, home_scroll: ScrollHandle::new(), resizing: None, column_drag: None, picked: None, pinning: false, filters_over: [false; 2], filters_drawn: false };
+        let home = crate::draft::Home::new(window, cx);
+        let mut this = Workspace { focus, settings, settings_path, root, libraries, lib: None, settings_view: None, connections: vec![], skills: vec![], update: UpdateState::Idle, update_told: None, session: Session::default(), modal: None, modal_error: String::new(), modal_subscriptions: vec![], menu: None, palette: None, toast, home_scroll: ScrollHandle::new(), home, resizing: None, column_drag: None, picked: None, pinning: false, filters_over: [false; 2], filters_drawn: false };
         this.apply_appearance(window);
         this.apply_typography(window, cx);
         cx.observe_window_appearance(window, |this, window, _| this.apply_appearance(window)).detach();
@@ -2173,6 +2189,12 @@ impl Workspace {
                     items.push(item(t("整个文献库，含 PDF（.wispstudy）…"), Cmd::ExportLibrary(id.clone(), true)));
                     items.push(item(t("整个文献库，不含 PDF（.wispstudy）…"), Cmd::ExportLibrary(id, false)));
                 }
+            }
+            MenuKind::Draft(id) => {
+                items.push(item(t("重命名…"), Cmd::Draft(crate::draft::Do::Rename(id.clone()))));
+                items.push(item(t("建成文献库…"), Cmd::Draft(crate::draft::Do::Promote(id.clone()))));
+                breaks.push(items.len());
+                items.push(item(t("删除…"), Cmd::AskRemoveLibrary(id)));
             }
             MenuKind::LibraryCard(id) => {
                 items.push(item(t("打开"), Cmd::OpenLibrary(id.clone())));
@@ -2335,6 +2357,8 @@ impl Workspace {
             Cmd::GoHome => {
                 self.write_snapshot("leave");
                 self.lib = None;
+                // One level up: from a conversation, or the assistant's page, to the home page.
+                (self.home.open, self.home.listing) = (false, false);
                 self.settings_view = None;
                 self.modal = None;
                 theme::set_accent("blue");
@@ -2342,11 +2366,22 @@ impl Workspace {
                 window.set_window_title("Wisp Study");
                 window.focus(&self.focus);
             }
+            Cmd::Draft(what) => self.run_draft(what, window, cx),
             Cmd::NewLibrary => self.library_dialog(None, window, cx),
             Cmd::EditLibrary(id) => self.library_dialog(Some(id), window, cx),
             Cmd::AskRemoveLibrary(id) => {
                 let Some(info) = self.libraries.iter().find(|l| l.id == id).or(self.lib.as_ref().map(|l| &l.info)) else { return };
                 self.modal_error.clear();
+                // A conversation goes the way a library goes: its folder to removed/, nothing deleted.
+                if info.draft {
+                    self.modal = Some(Modal::Confirm {
+                        title: tf!("删除对话「{}」？", "Delete conversation “{}”?", info.name),
+                        message: tf!("对话会从「最近对话」里消失。它的文件夹（对话、{} 篇收进的文献和交来的稿件）会移到数据目录下的 removed 文件夹，不会被删除，需要时可以手动移回。", "The conversation will disappear from Recent conversations. Its folder (the conversation, {} papers kept and any manuscript) moves to removed in the data directory. You can move it back manually.", info.paper_count),
+                        action: t("删除").into(),
+                        cmd: Cmd::RemoveLibrary(id),
+                    });
+                    return;
+                }
                 self.modal = Some(Modal::Confirm {
                     title: tf!("移除文献库「{}」？", "Remove library “{}”?", info.name),
                     message: tf!("文献库会从首页消失。它的文件夹（{} 篇文献、PDF 和笔记）会移到数据目录下的 removed 文件夹，不会被删除，需要时可以手动移回。", "The library will disappear from home. Its folder ({} papers, PDFs and notes) moves to removed in the data directory. You can move it back manually.", info.paper_count),
@@ -3034,15 +3069,17 @@ impl Workspace {
                 if let Some(lib) = self.lib.as_ref() { lib.chat(paper).input.read(cx).focus(window) }
             }
             Cmd::AttachImages(paper) => {
-                // The assistant of the library also takes a Word file, to restyle its citations.
+                // The assistant of the library also takes a Word file, to restyle its citations; in a conversation not yet
+                // made a library a Word file is a manuscript to review and a PDF a paper, taken in as a drop takes them.
                 let documents = paper == Talk::Library;
-                let extensions: Vec<SharedString> = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff"].into_iter().chain(documents.then_some("docx")).map(SharedString::from).collect();
-                let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some(if documents { t("添加图片或 Word 文件") } else { t("添加图片") }.into()), extensions: Some(extensions) });
+                let draft = documents && self.in_draft();
+                let extensions: Vec<SharedString> = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff"].into_iter().chain(documents.then_some("docx")).chain(draft.then_some("pdf")).map(SharedString::from).collect();
+                let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some(if draft { t("添加图片、Word 文件或 PDF") } else if documents { t("添加图片或 Word 文件") } else { t("添加图片") }.into()), extensions: Some(extensions) });
                 cx.spawn(async move |this, cx| {
                     if let Ok(Ok(Some(paths))) = picked.await {
                         this.update(cx, |this, cx| {
-                            let (files, pictures): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|path| documents && crate::comments::is_word(path));
-                            if !files.is_empty() { this.attach_documents(paper, files, cx) }
+                            let (files, pictures): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|path| documents && (crate::comments::is_word(path) || (draft && crate::draft::starts_one(path))));
+                            if draft && !files.is_empty() { this.import_paths(files, cx) } else if !files.is_empty() { this.attach_documents(paper, files, cx) }
                             if !pictures.is_empty() { this.attach_images(paper, pictures.into_iter().map(Picture::File).collect(), cx) }
                         })
                         .ok();
@@ -3460,6 +3497,9 @@ impl Workspace {
                 }
             }
         }
+        // A conversation not yet made a library has one page, its conversation: whatever asked for another (a view,
+        // a filter, a search, the import of a file) leaves it where it is (`draft.rs`).
+        if let Some(lib) = self.lib.as_mut().filter(|lib| lib.info.draft && lib.page != Page::Ask) { lib.page = Page::Ask }
     }
 
     pub fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
@@ -3471,6 +3511,9 @@ impl Workspace {
         } else if self.dismiss_font_picker(window, cx) {
         } else if self.settings_view.is_some() {
             self.close_settings(window, cx);
+        } else if self.lib.is_none() && self.home.open {
+            // The assistant's page goes back to the home page; what is in its box stays.
+            self.run(Cmd::GoHome, window, cx);
         } else if self.lib.as_ref().is_some_and(|l| l.page == Page::Write && l.writing.seek.open) {
             // The search over the manuscript, from its own field or the manuscript: before a paper beside it is closed.
             self.run(Cmd::Seek(crate::write_seek::Do::Close), window, cx);
@@ -3510,8 +3553,12 @@ impl Workspace {
             "settings" if !in_settings => Cmd::OpenSettings(SettingsPage::General),
             "home" => Cmd::GoHome,
             "new-library" if !in_settings && self.lib.is_none() => Cmd::NewLibrary,
+            // On the home side, "ask the assistant" is its page.
+            "ask" if !in_settings && self.lib.is_none() => Cmd::Draft(crate::draft::Do::Begin),
             // The rest act on the open library, when it is the one in view.
             _ if in_settings || self.lib.is_none() => return,
+            // A conversation not yet made a library has no list to search or add to, no sidebar and no manuscript to find for.
+            "search" | "add" | "import-pdf" | "ask" | "sidebar" | "write-find" if self.in_draft() => return,
             // On the writing page the words are looked for in the manuscript, not among the papers (a PDF with the keyboard looks in itself, pdf.rs).
             "search" if self.lib.as_ref().is_some_and(|l| l.page == Page::Write && !l.reading) => return self.seek_open(window, cx),
             "search" => {
@@ -3554,7 +3601,7 @@ impl Workspace {
 
     // ---- libraries
 
-    fn open_library(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_library(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(mut info) = self.libraries.iter().find(|l| l.id == id).cloned() else { return };
         let store = match Store::open(&info.dir) {
             Ok(store) => store,
@@ -3706,8 +3753,13 @@ impl Workspace {
         if let Err(err) = lib.reload() {
             return self.fail(format!("{err:#}"), cx);
         }
+        // A conversation not yet made a library is its conversation: the page 助手, its last conversation taken up again.
+        let draft = lib.info.draft;
+        if draft { lib.page = Page::Ask }
+        let last = if draft { lib.store.list_conversations("").ok().and_then(|list| list.into_iter().next()) } else { None };
         self.lib = Some(lib);
         window.focus(&self.focus);
+        if let Some(last) = last { self.open_chat(Talk::Library, &last.id, cx) }
         self.extract_missing(cx);
     }
 
@@ -4056,9 +4108,11 @@ impl Workspace {
         let (archives, paths): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|path| path.is_file() && archive::is_archive_name(path));
         for path in archives { self.import_library(path, cx) }
         if paths.is_empty() { return }
-        if self.lib.is_none() { return self.fail(t("请先打开一个文献库，再拖入文件。"), cx) }
+        // On the home page a Word file or a PDF goes with the first question to its assistant (`draft.rs`).
+        if self.lib.is_none() { return self.home_attach(paths, cx) }
         // On the assistant's page a Word file goes with the next question: it was written elsewhere and stays so, its citations are what is asked about.
-        let (documents, paths): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|path| self.lib.as_ref().is_some_and(|lib| lib.page == Page::Ask) && path.is_file() && crate::comments::is_word(path));
+        // In a conversation not yet made a library it is the manuscript to review, as below.
+        let (documents, paths): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|path| self.lib.as_ref().is_some_and(|lib| lib.page == Page::Ask && !lib.info.draft) && path.is_file() && crate::comments::is_word(path));
         if !documents.is_empty() { self.attach_documents(Talk::Library, documents, cx) }
         if paths.is_empty() { return }
         // Elsewhere a Word file is a manuscript to go on with; Markdown and plain text are, on the writing page.
@@ -4161,7 +4215,7 @@ impl Workspace {
     /// joins the import's report; a single file says so at once instead.
     /// `tags` (the folders the file lay in) go to the paper, a paper already
     /// held included.
-    fn add_pdf(&mut self, path: &std::path::Path, tags: &[String], pages: Result<Vec<String>, String>, found: Option<Paper>, cx: &mut Context<Self>) {
+    pub(crate) fn add_pdf(&mut self, path: &std::path::Path, tags: &[String], pages: Result<Vec<String>, String>, found: Option<Paper>, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
         let stem = path.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| t("未命名文献").into());
         let recognised = found.is_some();
@@ -4598,6 +4652,11 @@ impl Workspace {
         self.send_question(talk, None, cx);
     }
 
+    /// Ask what the library's box holds: the first question of a conversation started on the home page.
+    pub(crate) fn ask_library(&mut self, cx: &mut Context<Self>) {
+        self.ask(Talk::Library, cx);
+    }
+
     /// Ask what is in the box; or, with `again`, a question asked before
     /// (its words, pictures and files), leaving the box alone. True when it was sent.
     fn send_question(&mut self, talk: Talk, again: Option<(String, Vec<ChatImage>, Vec<String>)>, cx: &mut Context<Self>) -> bool {
@@ -4612,6 +4671,13 @@ impl Workspace {
         } else {
             None
         };
+        // A conversation not yet made a library: what it was handed to review, said with every question, as the
+        // manuscript is to the conversation that writes it (the manuscript can come after the first question).
+        let draft = talk == Talk::Library && self.in_draft();
+        let reviewing = self.lib.as_ref().filter(|_| draft).and_then(|lib| {
+            let handed: Vec<(&Manuscript, Option<String>)> = lib.writing.manuscripts.iter().filter(|m| m.sections.iter().any(|s| !s.body.trim().is_empty())).map(|m| (m, lib.store.manuscript_source(&m.id).ok().flatten().filter(|source| source.kind == "docx").map(|source| lib.store.source_file(&source).display().to_string()))).collect();
+            ai::manuscript_review_note(&handed)
+        });
         let Some(lib) = self.lib.as_mut() else { return false };
         let paper_id = lib.selected.clone();
         let chat = chat_of!(lib, talk);
@@ -4672,14 +4738,15 @@ impl Workspace {
             // A question about one paper reads that paper; one about the library reads the current list.
             let papers: Vec<&Paper> = match &scope {
                 Scope::Paper(_) => lib.papers.iter().collect(),
-                // The assistant that writes draws on the whole library, whatever the list shows.
-                Scope::Library if talk == Talk::Write => lib.papers.iter().collect(),
+                // The assistant that writes draws on the whole library, whatever the list shows; so does a conversation not yet made a library, which has no list.
+                Scope::Library if talk == Talk::Write || draft => lib.papers.iter().collect(),
                 // As `Library::scope_papers`, field by field: the conversation is held meanwhile.
                 Scope::Library if !lib.asked.is_empty() => lib.papers.iter().filter(|p| lib.asked.contains(&p.id)).collect(),
                 Scope::Library => lib.shown.iter().map(|&i| &lib.papers[i]).filter(|p| lib.scope_hits.as_ref().is_none_or(|hits| hits.contains(&p.id))).collect(),
             };
             // A Word file to restyle needs no paper of the library.
-            if papers.is_empty() && talk != Talk::Write && files.is_empty() {
+            // Nor does a conversation not yet made a library: it starts from an idea, and looks in the literature databases.
+            if papers.is_empty() && talk != Talk::Write && files.is_empty() && !draft {
                 chat.error = t("当前列表里没有文献。先添加文献，或清空筛选条件。").into();
                 cx.notify();
                 return false;
@@ -4693,6 +4760,8 @@ impl Workspace {
             let mut ctx = ai::build_context(&lib.info.name, &lib.info.topic, &papers, &lib.fields, &fulltext, &attachments, &scope, &prompt, &chat.known);
             // The tools reach every paper of the library, so every paper can be cited.
             ctx.add_sources(&lib.papers);
+            // Without a library the model is told so, and where papers are found then.
+            if draft { ctx.instructions = ai::draft_instructions(&ctx) }
             chat.ctx = Some(ctx);
             // The panel over the conversation lists what was handed over from here on: all of it, not what its search had narrowed the list to.
             if talk == Talk::Library && lib.scope_hits.take().is_some() {
@@ -4744,7 +4813,7 @@ impl Workspace {
             None => prompt,
         };
         // The same for the conversation that writes a manuscript: where the manuscript stands, what is on show and selected in it.
-        let prompt = match composing {
+        let prompt = match composing.or(reviewing) {
             Some(note) => format!("{prompt}\n\n{note}"),
             None => prompt,
         };
@@ -5010,7 +5079,7 @@ impl Workspace {
             let line = tools::describe_call(&call.name, call.args.as_ref().unwrap_or(&Value::Null));
             chat.messages.push(ChatItem::Tool { call: line.clone(), result: None });
             // The model may name a paper by its label.
-            let composes = tools::MANUSCRIPT.contains(&call.name.as_str()) || ["read_manuscript"].contains(&call.name.as_str());
+            let composes = tools::MANUSCRIPT.contains(&call.name.as_str()) || ["read_manuscript", COMMENT].contains(&call.name.as_str());
             let args = call.args.map(|mut args| {
                 ai::resolve_labels(&mut args, chat.sources());
                 // Said of no manuscript, a call of that conversation is about its own.
@@ -5098,6 +5167,7 @@ impl Workspace {
         chat.running = calls.iter().map(|call| call.id.clone()).collect();
         let wrote = calls.iter().any(|call| call.writes && (allowed || !call.confirm));
         let composed = calls.iter().any(|call| tools::MANUSCRIPT.contains(&call.name.as_str()) && (allowed || !call.confirm));
+        let commented = calls.iter().any(|call| call.name == COMMENT);
         let library = info.id.clone();
         let executor = cx.background_executor().clone();
         let tasks: Vec<gpui::Task<Vec<(String, String, bool, String)>>> = if wrote || calls.len() == 1 {
@@ -5122,7 +5192,11 @@ impl Workspace {
                 let reloaded = if wrote { lib.reload() } else { Ok(()) };
                 // And the manuscripts, when one was written: the editor follows, and what changed is shown.
                 if composed { this.manuscripts_synced(cx) }
+                // Comments left on a manuscript: they are shown on it, the section on show first.
+                if commented { this.comments_arrived(cx) }
                 let Some(lib) = this.lib.as_mut() else { return };
+                // Papers brought in by a tool are citable from the next step on, under labels that follow the ones in use.
+                if wrote && let Some(ctx) = chat_of!(lib, talk).ctx.as_mut() { ctx.add_sources(&lib.papers) }
                 let chat = lib.chat_mut(talk);
                 if chat.generation == generation {
                     for (n, (_, _, failed, shown)) in done.iter().enumerate() {
@@ -5393,11 +5467,17 @@ impl Workspace {
         self.modal_subscriptions.clear();
         self.modal_error.clear();
         let current = editing.as_ref().and_then(|id| self.libraries.iter().find(|l| &l.id == id).or(self.lib.as_ref().map(|l| &l.info)).cloned());
-        let (name, topic, color) = current.map_or((String::new(), String::new(), libraries::COLORS[self.libraries.len() % libraries::COLORS.len()].to_string()), |l| (l.name, l.topic, l.color));
+        // A new library, or a conversation about to be made one, takes the next colour of the shelf.
+        let next = libraries::COLORS[self.libraries.iter().filter(|l| !l.draft).count() % libraries::COLORS.len()].to_string();
+        let (name, topic, color) = match current {
+            Some(l) if l.draft => (l.name, l.topic, next),
+            Some(l) => (l.name, l.topic, l.color),
+            None => (String::new(), String::new(), next),
+        };
         let name = self.modal_input("例如：植物根尖单细胞", &name, false, window, cx);
         let topic = self.modal_input("这个文献库收集什么？关注哪些问题？（会作为 AI 提问的背景）", &topic, true, window, cx);
         name.read(cx).focus(window);
-        self.modal = Some(Modal::Library { editing, name, topic, color });
+        self.modal = Some(Modal::Library { editing, name, topic, color, proposing: false });
     }
 
     fn paper_dialog(&mut self, id: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
@@ -5958,7 +6038,7 @@ impl Workspace {
             Modal::Zotero { .. } => self.run(Cmd::PickZotero, window, cx),
             Modal::ZoteroReport => self.run(Cmd::CloseModal, window, cx),
             Modal::FetchReport => self.run(Cmd::CloseModal, window, cx),
-            Modal::Library { editing, name, topic, color } => {
+            Modal::Library { editing, name, topic, color, .. } => {
                 let (name, topic, color) = (text(name, cx), text(topic, cx), color.clone());
                 let mut created = None;
                 let result = match editing.clone() {
@@ -5966,8 +6046,12 @@ impl Workspace {
                     Some(id) => {
                         // The open library's own record is the newer one: its screening goal is typed on 筛选 and kept there, not in the home page's list.
                         let Some(mut info) = self.lib.as_ref().filter(|l| l.info.id == id).map(|l| l.info.clone()).or_else(|| self.libraries.iter().find(|l| l.id == id).cloned()) else { return };
-                        (info.name, info.topic, info.color) = (name, topic, color);
-                        libraries::save(&info).map(|_| {
+                        // 建成文献库: the conversation is the library from now on, in place (`draft.rs`).
+                        let made = if info.draft { libraries::promote(&mut info, &name, &topic, &color) } else {
+                            (info.name, info.topic, info.color) = (name, topic, color);
+                            libraries::save(&info)
+                        };
+                        made.map(|_| {
                             if let Some(lib) = self.lib.as_mut().filter(|l| l.info.id == info.id) {
                                 theme::set_accent(&info.color);
                                 window.set_window_title(&format!("{} — Wisp Study", info.name));
@@ -5988,6 +6072,22 @@ impl Workspace {
                             self.run(Cmd::OpenLibrary(id), window, cx);
                             self.run(Cmd::OpenGuide(true), window, cx);
                         }
+                    }
+                    Err(err) => self.modal_error = format!("{err:#}"),
+                }
+            }
+            Modal::Rename { id, name } => {
+                let (id, name) = (id.clone(), text(name, cx));
+                let Some(mut info) = self.lib.as_ref().filter(|l| l.info.id == id).map(|l| l.info.clone()).or_else(|| self.libraries.iter().find(|l| l.id == id).cloned()) else { return };
+                info.name = name;
+                match libraries::save(&info) {
+                    Ok(()) => {
+                        if let Some(lib) = self.lib.as_mut().filter(|l| l.info.id == id) {
+                            lib.info.name = info.name.clone();
+                            window.set_window_title(&format!("{} — Wisp Study", info.name));
+                        }
+                        self.libraries = libraries::list(&self.root);
+                        self.run(Cmd::CloseModal, window, cx);
                     }
                     Err(err) => self.modal_error = format!("{err:#}"),
                 }
@@ -6254,7 +6354,38 @@ impl Workspace {
                     "guide-search" => Some(Cmd::OpenGuide(false)),
                     _ => None,
                 },
-                "open" => self.libraries.get(arg.parse::<usize>().unwrap_or(0)).map(|l| Cmd::OpenLibrary(l.id.clone())),
+                // The n-th library card of the home page; the conversations of 最近对话 are `conv:<n>`.
+                "open" => self.libraries.iter().filter(|l| !l.draft).nth(arg.parse::<usize>().unwrap_or(0)).map(|l| Cmd::OpenLibrary(l.id.clone())),
+                // `conv:<n>` by place (latest opened first), or `conv:<words>` the first whose name starts so.
+                "conv" => match arg.parse::<usize>() {
+                    Ok(n) => self.conversations().nth(n),
+                    Err(_) => self.conversations().find(|l| l.name.starts_with(arg)),
+                }
+                .map(|l| Cmd::Draft(crate::draft::Do::Open(l.id.clone()))),
+                // The home page's assistant: `home:<words>` leaves them in its box, `homefile:<path>` puts a Word file or a PDF with them
+                // (as dropping it on the home page does), `homeask:<words>` sends them, which makes the conversation.
+                "home" => {
+                    self.home.input.update(cx, |input, cx| input.set_text(arg, cx));
+                    self.home.input.read(cx).focus(window);
+                    Some(Cmd::Draft(crate::draft::Do::Begin))
+                }
+                // `assistant` is the home page's corner button; `drafts` 历史 inside a conversation (again: back to it).
+                "assistant" => Some(Cmd::Draft(crate::draft::Do::Begin)),
+                "drafts" => Some(Cmd::Draft(crate::draft::Do::History)),
+                "newdraft" => Some(Cmd::Draft(crate::draft::Do::New)),
+                "homefile" => {
+                    self.home_attach(vec![arg.into()], cx);
+                    None
+                }
+                "homeask" => {
+                    if !arg.is_empty() { self.home.input.update(cx, |input, cx| input.set_text(arg, cx)) }
+                    Some(Cmd::Draft(crate::draft::Do::Send))
+                }
+                // `promote` is 建成文献库 for the conversation on show (the dialog; `submit` makes it one), `promote:propose` its sparkle;
+                // `rename` the dialog that names the conversation anew.
+                "promote" if arg == "propose" => Some(Cmd::Draft(crate::draft::Do::Propose)),
+                "promote" => self.lib.as_ref().map(|lib| Cmd::Draft(crate::draft::Do::Promote(lib.info.id.clone()))),
+                "rename" => self.lib.as_ref().map(|lib| Cmd::Draft(crate::draft::Do::Rename(lib.info.id.clone()))),
                 "select" => self.lib.as_ref().and_then(|l| l.shown.get(arg.parse::<usize>().unwrap_or(0)).map(|&i| Cmd::Select(l.papers[i].id.clone()))),
                 "tab" => Some(Cmd::SetTab(Tab::from_key(arg))),
                 "page" => Some(Cmd::SetPage(Page::from_key(arg))),

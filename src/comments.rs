@@ -172,6 +172,18 @@ impl Workspace {
         lib.writing.comments.source = lib.store.manuscript_source(&id).ok().flatten();
     }
 
+    /// The assistant left comments with a tool (`comment_manuscript`): they are read again, and when the section on show
+    /// has none waiting, the first section that has is shown, so what was said is in view.
+    pub(crate) fn comments_arrived(&mut self, cx: &mut Context<Self>) {
+        self.comments_load();
+        let Some(lib) = self.lib.as_ref() else { return };
+        let writing = &lib.writing;
+        if writing.comments.open_in(&writing.section_id) > 0 { return cx.notify() }
+        let Some(section) = writing.current().and_then(|m| m.sections.iter().find(|s| writing.comments.open_in(&s.id) > 0)).map(|s| s.id.clone()) else { return cx.notify() };
+        let manuscript = writing.manuscript.clone();
+        self.write_show(manuscript, section, cx);
+    }
+
     /// The words comments are about, in the section being written: where they stand now, with the tint each is drawn on, and the comment.
     pub(crate) fn comment_marks(&self, text: &str) -> Vec<(Range<usize>, Hsla, &Comment)> {
         let Some(lib) = self.lib.as_ref() else { return vec![] };
@@ -492,10 +504,22 @@ impl Workspace {
 
     fn manuscript_taken(&mut self, library: &str, path: &Path, taken: Result<Taken, String>, cx: &mut Context<Self>) {
         let name = path.file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_default();
-        let taken = match taken {
+        let mut taken = match taken {
             Ok(taken) => taken,
-            Err(error) => return self.fail(tf!("「{name}」没有导入：{error}", "“{name}” not imported: {error}"), cx),
+            Err(error) => {
+                self.fail(tf!("「{name}」没有导入：{error}", "“{name}” not imported: {error}"), cx);
+                // A first question that waited for this file goes without it.
+                return self.draft_file_done(library, cx);
+            }
         };
+        // Handed in for review in a conversation not yet made a library, a Word file without heading styles is cut where
+        // its headings most likely are, without asking: the review reads it whole, and the sections only say where it is.
+        let reviewing = self.lib.as_ref().is_some_and(|lib| lib.info.id == library && lib.info.draft);
+        if reviewing && !taken.draft.headings.is_empty() {
+            let likely: Vec<usize> = taken.draft.headings.iter().filter(|guess| guess.likely).map(|guess| guess.paragraph).collect();
+            if let Some(read) = taken.read.as_ref() { taken.draft = manuscript::from_word_with(read, &name, Some(&likely)) }
+            taken.draft.headings.clear();
+        }
         // A Word file without heading styles is cut only where the person says.
         if !taken.draft.headings.is_empty() {
             if let Some(Modal::Headings(form)) = self.modal.as_mut() {
@@ -537,7 +561,10 @@ impl Workspace {
         let Some(lib) = self.lib.as_mut().filter(|lib| lib.info.id == library) else { return };
         let made = match lib.store.import_manuscript(&taken.draft, taken.kind, &name, taken.bytes.as_deref()) {
             Ok(made) => made,
-            Err(err) => return self.fail(tf!("「{name}」没有导入：{err:#}", "“{name}” not imported: {err:#}"), cx),
+            Err(err) => {
+                self.fail(tf!("「{name}」没有导入：{err:#}", "“{name}” not imported: {err:#}"), cx);
+                return self.draft_file_done(library, cx);
+            }
         };
         let draft = &taken.draft;
         // Opened where there is something to do: the first section with a comment, else the first under a heading that has text.
@@ -552,11 +579,13 @@ impl Workspace {
         lib.writing.reading = false;
         lib.writing.side = if draft.comments.is_empty() { Side::Candidates } else { Side::Comments };
         lib.writing.structures = lib.store.structures().unwrap_or_default();
-        lib.enter_write();
+        // In a conversation not yet made a library the manuscript stands beside the conversation: the page stays.
+        if !lib.info.draft { lib.enter_write() }
         self.write_retire_blank(&id);
         self.write_show(id, section, cx);
         self.write_texts_changed(cx);
         self.say(said, cx);
+        self.draft_file_done(library, cx);
     }
 
     /// The reviews the assistant wrote sections for, for the manuscripts' menu: (conversation, title, sections).

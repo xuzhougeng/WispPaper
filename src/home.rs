@@ -18,6 +18,9 @@ impl Render for Workspace {
             self.render_settings(window, cx)
         } else if self.lib.is_some() {
             self.render_library(window, cx)
+        } else if self.home.open {
+            // The assistant's page with nothing said yet: the box of a first question and the conversations (`draft.rs`).
+            self.render_start_page(window, cx)
         } else {
             self.render_home(cx)
         };
@@ -128,6 +131,9 @@ impl Render for Workspace {
     }
 }
 
+/// How far the assistant's button stands from the window's bottom right corner.
+const CORNER_GAP: f32 = 24.;
+
 impl Workspace {
     fn render_menu(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let menu = self.menu.as_ref()?;
@@ -189,12 +195,15 @@ impl Workspace {
     }
 
     fn render_home(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        // The conversations not yet made libraries are the assistant's, behind the button in the corner, not among the libraries.
         let cards: Vec<AnyElement> = self
             .libraries
             .iter()
+            .filter(|info| !info.draft)
             .map(|info| {
                 let accent = theme::accent_of(&info.color);
-                let topic = if info.topic.is_empty() { t("还没有写主题描述").to_string() } else { info.topic.clone() };
+                // Three lines of the card hold about this much; a longer topic ends in 「…」 on a whole character instead of being clipped mid-glyph.
+                let topic = if info.topic.is_empty() { t("还没有写主题描述").to_string() } else if info.topic.chars().count() > 60 { format!("{}…", info.topic.chars().take(58).collect::<String>().trim_end()) } else { info.topic.clone() };
                 div()
                     .id(SharedString::from(format!("library-{}", info.id)))
                     .flex()
@@ -270,7 +279,7 @@ impl Workspace {
             .on_click(self.on(Cmd::NewLibrary, cx))
             .child(ui::icon("plus", 20., Theme::text_secondary()))
             .child(t("新建文献库"));
-        let empty = self.libraries.is_empty();
+        let empty = self.libraries.iter().all(|info| info.draft);
         let new_version = match &self.update {
             UpdateState::Available(release, _) | UpdateState::Downloading(release) | UpdateState::Ready(release, ..) => Some(release.version.clone()),
             _ => None,
@@ -322,6 +331,28 @@ impl Workspace {
                     .child(div().flex().flex_wrap().gap(px(16.)).children(cards).child(new_card)),
             )
             ;
-        div().flex().flex_col().size_full().child(ui::title_strip()).child(page).into_any_element()
+        // The assistant: one button in the window's corner, drawn as the floating conversation's is; it does not scroll with the cards.
+        let assistant = div()
+            .id("home-assistant")
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(px(wisp_core::floating::BUTTON))
+            .rounded_full()
+            .bg(Theme::accent())
+            .cursor_pointer()
+            .hover(|s| s.opacity(0.9))
+            .tooltip(ui::tip(t("助手")))
+            .on_click(self.on(Cmd::Draft(crate::draft::Do::Begin), cx))
+            .child(ui::icon("sparkle", 20., Theme::on_accent()));
+        div()
+            .relative()
+            .flex()
+            .flex_col()
+            .size_full()
+            .child(ui::title_strip())
+            .child(page)
+            .child(div().absolute().right(px(CORNER_GAP)).bottom(px(CORNER_GAP)).rounded_full().shadow(theme::shadow_panel()).child(assistant))
+            .into_any_element()
     }
 }

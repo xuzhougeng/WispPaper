@@ -187,15 +187,23 @@ pub fn parse_review(reply: &str, text: &str) -> Result<(Vec<Remark>, usize), Str
     let wrong = "模型的回答不是要求的格式。";
     let (start, end) = reply.find('[').zip(reply.rfind(']')).filter(|(start, end)| start < end).ok_or(wrong)?;
     let list: Vec<Value> = serde_json::from_str(&reply[start..=end]).map_err(|_| wrong)?;
+    let (remarks, lost) = remarks_in(&list, text);
+    Ok((remarks, lost.len()))
+}
+
+/// The remarks of a list a model wrote (`quote`, `comment`, `replacement`), each with its quotation as `text`
+/// has it; and the quotations of those left out because the text does not hold them. Kept only where found:
+/// a remark on words that are not there would be a remark on nothing.
+pub fn remarks_in(list: &[Value], text: &str) -> (Vec<Remark>, Vec<String>) {
     let field = |item: &Value, names: &[&str]| names.iter().find_map(|name| item[*name].as_str()).unwrap_or("").trim().to_string();
-    let (mut remarks, mut lost): (Vec<Remark>, usize) = (vec![], 0);
+    let (mut remarks, mut lost): (Vec<Remark>, Vec<String>) = (vec![], vec![]);
     let mut taken: Vec<Range<usize>> = vec![];
     for item in list.iter().take(MAX_REMARKS * 2) {
         let (quote, body, suggestion) = (field(item, &["quote", "原文"]), field(item, &["comment", "批注"]), field(item, &["replacement", "改为", "suggestion"]));
         if quote.is_empty() || (body.is_empty() && suggestion.is_empty()) { continue }
         // The quotation as the text has it, within one paragraph; one that overlaps an earlier remark's would be changed twice.
         let Some(found) = locate(text, &quote, None).filter(|found| !text[found.clone()].contains('\n')) else {
-            lost += 1;
+            lost.push(quote);
             continue;
         };
         if taken.iter().any(|other| other.start < found.end && found.start < other.end) { continue }
@@ -207,7 +215,7 @@ pub fn parse_review(reply: &str, text: &str) -> Result<(Vec<Remark>, usize), Str
         remarks.push(Remark { quote, body, suggestion });
         if remarks.len() == MAX_REMARKS { break }
     }
-    Ok((remarks, lost))
+    (remarks, lost)
 }
 
 const COLUMNS: &str = "id, manuscript_id, section_id, quote, body, author, origin, suggestion, replaced, state, created_at";
