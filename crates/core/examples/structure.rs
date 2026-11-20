@@ -24,6 +24,15 @@ fn main() {
         }
         return;
     }
+    // What 译文 would translate, one line per request: the page, the box it stands in, the text.
+    if mode == "passages" {
+        let Some(pages) = std::fs::read(&path).ok().and_then(wisp_core::pdftext::file_marks) else { return println!("cannot read {}", path.display()) };
+        for (index, passage) in wisp_core::translation::passages(&pages).iter().enumerate() {
+            let [x0, y0, x1, y1] = passage.rect;
+            println!("{index:4} p{:<3} {} [{x0:.0},{y0:.0} {x1:.0},{y1:.0}] {:.1}pt {}", passage.page, if passage.heading { "H" } else { "P" }, passage.size, passage.text.chars().take(90).collect::<String>());
+        }
+        return;
+    }
     let pages = match wisp_core::fulltext::file_pages(&path) {
         Ok(pages) => pages,
         Err(err) => return println!("{err}"),

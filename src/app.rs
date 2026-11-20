@@ -451,6 +451,11 @@ pub enum Cmd {
     TranslatePapers(Vec<String>, wisp_core::translation::Field),
     StopBatchTranslation,
     DismissBatchTranslation,
+    /// Show the pages again beside themselves with their paragraphs translated in place, or put that away (`src/facing.rs`).
+    ToggleFacing,
+    /// Translate the paragraphs not translated yet; this is also how a run stopped halfway goes on.
+    FacingRun,
+    FacingStop,
     // Custom fields
     ManageFields,
     EditField(String),
@@ -1532,6 +1537,15 @@ pub struct Library {
     /// Whether the detail panel shows the selected paper translated. It
     /// stays on from paper to paper, so each one opened is translated.
     pub show_translation: bool,
+    /// Whether the PDF tab shows the full text's translation beside the pages. Like `show_translation`
+    /// it stays on from paper to paper; nothing is asked of a model until the person says so.
+    pub facing: bool,
+    /// The paragraphs of the file read, while `facing` is on (`Workspace::load_facing`).
+    pub facing_text: Option<crate::facing::Facing>,
+    /// The switch was just turned on: translate as soon as the paragraphs are read.
+    pub facing_start: bool,
+    /// The run translating them.
+    pub facing_run: Option<crate::translate::TranslationRun>,
     pub searches: Vec<SavedSearch>,
     /// The latest import batches, newest first.
     pub batches: Vec<ImportBatch>,
@@ -2961,6 +2975,8 @@ impl Workspace {
                 cx.notify();
             }
             Cmd::AttachAs(paper, kind) => self.pick_attachment(paper, Some(kind), cx),
+            // With the translation in the second half, one page again is putting the translation away.
+            Cmd::PdfSplit(Split::Off) if self.lib.as_ref().is_some_and(|lib| lib.facing && lib.tab == Tab::Pdf) => self.toggle_facing(cx),
             Cmd::PdfSplit(split) => {
                 // It is for this paper: the next one opens whole.
                 if let Some(pdf) = self.lib.as_ref().and_then(|lib| lib.pdf.clone()) { pdf.update(cx, |pdf, cx| pdf.set_split(split, cx)) }
@@ -3002,6 +3018,9 @@ impl Workspace {
             Cmd::StopBatchTranslation => {
                 if let Some(run) = self.lib.as_mut().and_then(|lib| lib.translation_run.as_mut()) { run.batch.stop() }
             }
+            Cmd::ToggleFacing => self.toggle_facing(cx),
+            Cmd::FacingRun => self.run_facing(cx),
+            Cmd::FacingStop => self.stop_facing(cx),
             Cmd::DismissBatchTranslation => {
                 if let Some(lib) = self.lib.as_mut().filter(|lib| lib.translation_run.as_ref().is_some_and(|run| !run.batch.running())) { lib.translation_run = None }
             }
@@ -3915,6 +3934,10 @@ impl Workspace {
             translation_run: None,
             translation_session: Arc::new(()),
             show_translation: false,
+            facing: false,
+            facing_text: None,
+            facing_start: false,
+            facing_run: None,
             searches: vec![],
             batches: vec![],
             trial: None,
@@ -4006,7 +4029,13 @@ impl Workspace {
     }
 
     /// Open the PDF viewer when its tab is showing and the paper has a PDF.
-    fn ensure_pdf(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn ensure_pdf(&mut self, cx: &mut Context<Self>) {
+        self.open_pdf(cx);
+        // The translation beside the pages follows the file on show.
+        self.load_facing(cx);
+    }
+
+    fn open_pdf(&mut self, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
         if !(lib.tab == Tab::Pdf || (lib.tab == Tab::Ask && lib.split)) || lib.pdf.is_some() { return }
         let Some(file) = lib.selected.as_deref().and_then(|id| lib.pdf_file(id)).cloned() else { return };
@@ -7127,6 +7156,9 @@ impl Workspace {
                     Some(Cmd::TranslatePapers(ids, if arg == "titles" { wisp_core::translation::Field::Title } else { wisp_core::translation::Field::Abstract }))
                 }
                 "translate" if arg == "stop" => Some(Cmd::StopBatchTranslation),
+                // `facing` shows the pages with their paragraphs translated beside the PDF and starts translating (or puts
+                // it away), `facing:run` translates what is not translated yet, `facing:stop` stops.
+                "facing" => Some(match arg { "run" => Cmd::FacingRun, "stop" => Cmd::FacingStop, _ => Cmd::ToggleFacing }),
                 "translate" => Some(Cmd::ToggleTranslation),
                 // `profile:1` shows the second provider on 设置 › AI › 模型.
                 "profile" => Some(Cmd::SelectProvider(arg.parse().unwrap_or(0))),

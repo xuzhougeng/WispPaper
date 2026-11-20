@@ -335,12 +335,11 @@ fn usual_leading(lines: &[Line]) -> impl Fn(f32) -> f32 {
     }
 }
 
-/// The text of a page from its marks: one line of text per line of the
-/// page, a blank line wherever the page shows a break.
-pub fn page_text(marks: &[Mark]) -> String {
-    let lines = lines(marks);
-    let leading = usual_leading(&lines);
-    let mut out = String::new();
+/// For each line of a page, whether the page shows a break before it: the
+/// line opens a paragraph, a title, another column.
+fn breaks(lines: &[Line]) -> Vec<bool> {
+    let leading = usual_leading(lines);
+    let mut out = vec![false; lines.len()];
     let mut opens = true;
     for (index, line) in lines.iter().enumerate() {
         if index > 0 {
@@ -359,8 +358,59 @@ pub fn page_text(marks: &[Mark]) -> String {
                 || numbered_title(line, size)
                 || numbered_title(last, size);
             opens = breaks;
-            out.push_str(if breaks { "\n\n" } else { "\n" });
+            out[index] = breaks;
         }
+    }
+    out
+}
+
+/// A paragraph as one page shows it: the lines between two breaks, with
+/// the box they stand in (`[left, top, right, bottom]`, points from the top
+/// left). One that runs on in the next column or page is two.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Paragraph {
+    pub text: String,
+    pub rect: [f32; 4],
+    /// The size its first line is set in.
+    pub size: f32,
+    pub bold: bool,
+    pub lines: usize,
+}
+
+/// The paragraphs of a page with where they stand, cut where `page_text`
+/// puts its blank lines: what a translation set in their place goes by.
+pub fn page_paragraphs(marks: &[Mark]) -> Vec<Paragraph> {
+    let lines = lines(marks);
+    let breaks = breaks(&lines);
+    let mut out: Vec<Paragraph> = vec![];
+    for (index, line) in lines.iter().enumerate() {
+        let rect = [line.x0, line.y - line.size * 0.8, line.x1, line.y + line.size * 0.25];
+        match out.last_mut().filter(|_| index > 0 && !breaks[index]) {
+            Some(paragraph) => {
+                let text = &mut paragraph.text;
+                // `devel-` / `opment`: one word. Chinese and Japanese run on without a space.
+                let broken = text.ends_with('-') && text.chars().rev().nth(1).is_some_and(char::is_alphabetic) && line.text.chars().next().is_some_and(char::is_lowercase);
+                let unspaced = text.chars().last().is_some_and(crate::structure::is_cjk) && line.text.chars().next().is_some_and(crate::structure::is_cjk);
+                if broken { text.pop(); } else if !unspaced { text.push(' ') }
+                text.push_str(line.text.trim());
+                paragraph.rect = [paragraph.rect[0].min(rect[0]), paragraph.rect[1].min(rect[1]), paragraph.rect[2].max(rect[2]), paragraph.rect[3].max(rect[3])];
+                paragraph.lines += 1;
+            }
+            None => out.push(Paragraph { text: line.text.trim().to_string(), rect, size: line.size, bold: line.bold, lines: 1 }),
+        }
+    }
+    out
+}
+
+/// The text of a page from its marks: one line of text per line of the
+/// page, a blank line wherever the page shows a break.
+pub fn page_text(marks: &[Mark]) -> String {
+    let lines = lines(marks);
+    let breaks = breaks(&lines);
+    let mut out = String::new();
+    for (index, line) in lines.iter().enumerate() {
+        let opens = index == 0 || breaks[index];
+        if index > 0 { out.push_str(if breaks[index] { "\n\n" } else { "\n" }) }
         // A bold title run into its paragraph: `Plant materials. Seeds were sown…`.
         let opening = &line.text[..line.bold_opening];
         if opens && opening.trim().chars().count() >= 8 && opening.split_whitespace().count() >= 2 && line.text.len() - line.bold_opening >= 20 {

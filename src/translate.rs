@@ -13,12 +13,20 @@ use wisp_core::translation::{Batch, Field};
 
 pub struct TranslationRun {
     pub batch: Batch,
-    profile: Profile,
-    prompt: String,
+    pub(crate) profile: Profile,
+    pub(crate) prompt: String,
     /// The model it was started with, as the card names it.
-    model: String,
+    pub(crate) model: String,
     /// How many requests are in flight at once (设置 › AI › 任务).
-    workers: usize,
+    pub(crate) workers: usize,
+}
+
+/// The two runs a library may have going: the marked papers' titles or
+/// abstracts, and the paragraphs of the paper read (`src/facing.rs`).
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Run {
+    Papers,
+    Facing,
 }
 
 impl Workspace {
@@ -61,16 +69,16 @@ impl Workspace {
         if batch.total == 0 { return }
         lib.show_translation = true;
         lib.translation_run = Some(TranslationRun { batch, model: profile.labelled(), profile, prompt, workers });
-        self.batch_translation_next(cx);
+        self.translation_next(Run::Papers, cx);
         cx.notify();
     }
 
     /// Keep `workers` requests of the batch in flight. A request already
     /// made by the detail panel is awaited, not sent twice; a previous
     /// failure can be retried. Called again whenever an answer comes in.
-    fn batch_translation_next(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn translation_next(&mut self, which: Run, cx: &mut Context<Self>) {
         // What came back since: this batch's answers, or the detail panel's for a text of it.
-        if let Some(lib) = self.lib.as_mut() && let Some(run) = lib.translation_run.as_mut() {
+        if let Some(lib) = self.lib.as_mut() && let Some(run) = (match which { Run::Papers => &mut lib.translation_run, Run::Facing => &mut lib.facing_run }).as_mut() {
             let settled: Vec<(String, Result<(), String>)> = run.batch.working.iter().filter_map(|job| match lib.translations.get(&job.key) {
                 Some(Translated::Busy) => None,
                 Some(Translated::Done(_)) => Some((job.key.clone(), Ok(()))),
@@ -79,14 +87,15 @@ impl Workspace {
             }).collect();
             for (key, result) in settled { run.batch.finish(&key, result, false) }
         }
+        if which == Run::Facing { self.facing_gave_up() }
         loop {
-            let Some(run) = self.lib.as_mut().and_then(|lib| lib.translation_run.as_mut()) else { return };
+            let Some(run) = self.lib.as_mut().and_then(|lib| match which { Run::Papers => lib.translation_run.as_mut(), Run::Facing => lib.facing_run.as_mut() }) else { return };
             if run.batch.working.len() >= run.workers { return }
             let Some(job) = run.batch.take() else { return };
             let (profile, prompt) = (run.profile.clone(), run.prompt.clone());
             self.translate_text(&job.text, &profile, &prompt, true, false, cx);
             let lib = self.lib.as_mut().unwrap();
-            let run = lib.translation_run.as_mut().unwrap();
+            let run = match which { Run::Papers => lib.translation_run.as_mut(), Run::Facing => lib.facing_run.as_mut() }.unwrap();
             match lib.translations.get(&job.key) {
                 // Asked for now, or already by the detail panel: its answer settles it.
                 Some(Translated::Busy) => {}
@@ -94,6 +103,7 @@ impl Workspace {
                 Some(Translated::Failed(error)) => run.batch.finish(&job.key, Err(error.clone()), false),
                 None => run.batch.finish(&job.key, Err(t("没有取得译文，请重试。").into()), false),
             }
+            if which == Run::Facing { self.facing_gave_up() }
         }
     }
 
@@ -144,9 +154,11 @@ impl Workspace {
                     if again { lib.store.replace_translation(&key, &text, &author) } else { lib.store.save_translation(&key, &text, &author) }.map_err(|e| tf!("无法保存译文：{e:#}", "Cannot save translation: {e:#}"))?;
                     Ok(text.trim().to_string())
                 });
-                lib.translations.insert(key, match saved { Ok(text) => Translated::Done(text), Err(error) => Translated::Failed(error) });
+                lib.translations.insert(key.clone(), match saved { Ok(text) => Translated::Done(text), Err(error) => Translated::Failed(error) });
                 this.sync_pdf_translation(cx);
-                this.batch_translation_next(cx);
+                this.translation_next(Run::Papers, cx);
+                this.translation_next(Run::Facing, cx);
+                this.sync_facing(cx);
                 cx.notify();
             }).ok();
         }).detach();
