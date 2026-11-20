@@ -1025,7 +1025,8 @@ fn shape(input: &TextInput, style: &TextStyle, window: &mut Window, wrap: Option
         None => vec![run],
     };
     let font_size = style.font_size.to_pixels(window.rem_size());
-    let line_height = window.line_height();
+    // From the style given, not the window's: the height is measured after the ancestors' text styles are gone.
+    let line_height = style.line_height_in_pixels(window.rem_size());
     let shaped = window.text_system().shape_text(text.into(), font_size, &runs, wrap, None).unwrap_or_default();
     let mut rows = vec![];
     let (mut start, mut top) = (0, px(0.));
@@ -1064,7 +1065,7 @@ fn shape_markdown(input: &TextInput, style: &TextStyle, window: &mut Window, wra
     let focused = input.focus.is_focused(window);
     let reveal = input.reveal_held.clone().unwrap_or(input.sel.clone());
     let font_size = style.font_size.to_pixels(window.rem_size());
-    let base_height = window.line_height();
+    let base_height = style.line_height_in_pixels(window.rem_size());
     let mut map = DisplayMap::default();
     let mut rows: Vec<Row> = vec![];
     let (mut start, mut top) = (0usize, px(0.));

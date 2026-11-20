@@ -22,6 +22,8 @@ const NARROWING_TAGS: usize = 24;
 
 /// The manuscript's right margin while comments mark it: room for their markers.
 const MARGIN: f32 = 36.;
+/// Room between the frame of the sheet being written and its text, at each side.
+const SHEET_MARGIN: f32 = 40.;
 
 /// What the empty manuscript says: to the person who writes it, and beside the conversation in which the assistant does.
 pub(crate) const PLACEHOLDER: &str = "在这里写。写好一段，按「查找候选句」的快捷键，右边就列出文献库里的文献在同一部分相近的写法；中文或别的语言也可以，先写下想表达的意思。";
@@ -94,15 +96,19 @@ impl Workspace {
         let picked = if agent && editing { text_length(writing.editor.read(cx).selected()).0 } else { 0 };
         // What the assistant changed in this section in answer to the last question: each change to go to or take back.
         let told = writing.revise.run.as_ref().filter(|run| agent && editing && run.section == writing.section_id);
+        // Under the bar everything is as wide as a sheet of the reading width, centred: in a wide window the
+        // room is left beside the sheet, not inside its frame, and the boxes under it keep its edges.
+        let sheet = f32::from(theme::manuscript_width()) + 2. * SHEET_MARGIN + 2. + 32.;
+        let inner = width.min(sheet);
 
-        div()
+        let body = div()
             .flex()
             .flex_col()
             .flex_1()
-            .min_w_0()
-            .h_full()
-            .when(stacked, |d| d.flex_none().h(px(800.)))
-            .child(self.render_manuscript_bar(width, window, cx))
+            .min_h_0()
+            .w_full()
+            .max_w(px(sheet))
+            .mx_auto()
             .child(
                 div().flex().flex_col().flex_1().min_h_0().px(px(16.)).pt(px(12.)).pb(px(8.)).child(if writing.reading { self.render_manuscript_reading(cx) } else if let Some(version) = version { self.render_version(version, cx) } else {
                     let page = div().relative().w_full().max_w(theme::manuscript_width()).mx_auto().pl(px(18.)).pr(px(if markers.is_empty() { 18. } else { MARGIN })).py(px(14.)).text_size(text_px(15.)).line_height(theme::body_line(26.)).text_color(Theme::text());
@@ -124,9 +130,9 @@ impl Workspace {
             // The citation the pointer is on: what it names and rests on, in a card under its line.
             .children(if editing { self.render_citation_hint(cx) } else { None })
             // With the caret in a citation: the paper it names and the passage of that paper its sentence rests on.
-            .children(if editing { self.render_source_strip(width - 32., cx) } else { None })
+            .children(if editing { self.render_source_strip(inner - 32., cx) } else { None })
             // Under the manuscript, the box where the assistant is told what to change in this section.
-            .when(!agent && editing, |d| d.child(self.render_revise(width - 32., window, cx)))
+            .when(!agent && editing, |d| d.child(self.render_revise(inner - 32., window, cx)))
             .when_some(told, |d, run| d.child(div().flex().flex_col().flex_none().mx(px(16.)).mb(px(8.)).px(px(10.)).pt(px(8.)).pb(px(2.)).rounded(px(10.)).border_1().border_color(Theme::line()).bg(Theme::bg_body()).child(self.render_revise_run(run, cx).border_b_0())))
             .child(div().flex().flex_none().px(px(18.)).pb(px(12.)).text_size(text_px(11.)).text_color(Theme::text_tertiary()).child(div().flex_1().min_w_0().child(if writing.reading {
                 let whole: String = writing.current().map_or(String::new(), |m| m.sections.iter().map(|s| s.body.as_str()).collect::<Vec<_>>().join("\n"));
@@ -141,7 +147,16 @@ impl Workspace {
                 tf!("{length} · 已保存 · 可以直接在这里改", "{length} · Saved · You can edit here")
             } else {
                 tf!("{length} · 已保存", "{length} · Saved")
-            })))
+            })));
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .when(stacked, |d| d.flex_none().h(px(800.)))
+            .child(self.render_manuscript_bar(width, window, cx))
+            .child(body)
     }
 
     /// The key that asks for candidates, as people read it.
