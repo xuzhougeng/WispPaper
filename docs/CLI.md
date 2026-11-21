@@ -86,7 +86,8 @@ wisp search_fulltext --help             # 一个工具的参数
 | `import_zotero` | 从本机 `zotero.sqlite` 迁移文献、笔记、标签和 PDF，`--path` 必填（会改动目标文献库） |
 | `library_status` | 一个库的概况：各状态的数量、自定义词条、状态值的显示名称 |
 | `list_papers` | 搜索、筛选、翻页；规则与界面上的列表相同 |
-| `get_paper` | 一篇文献的完整记录、词条和附件 |
+| `get_paper` | 一篇文献的完整记录、词条和附件；`journalMetrics` 是它的期刊的影响因子与分区（查不到为 null） |
+| `journal_metrics` | 查一种期刊的影响因子与分区（JCR 2025、中科院分区表升级版 2025、新锐期刊分区表 2026、国际期刊预警名单 2025）：`--journal` 给刊名（全称或缩写）或 ISSN，或 `--paper-id` 用一篇文献的期刊；数据随应用附带，不联网 |
 | `list_figures` | 图片库：从 PDF 里截下来收藏的图片，各自的图号、图注、标签、备注、出处（文献和页码）和图片文件的路径；可按 `--query`、`--tag`、`--paper` 筛选 |
 | `search_fulltext` | 在已保存的全文里找短语或关键词，返回页码和逐字片段 |
 | `read_fulltext` | 按页读取全文，一次最多 8 页 |

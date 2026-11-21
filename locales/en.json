@@ -1593,5 +1593,14 @@
   "播客：两位主持人聊这篇论文": "Podcast: two hosts talk this paper over",
   "一女一男两位主持人聊这篇论文：模型先写对话稿，再用 DeepSeek 的两种声音读出来；全部生成后，声音和稿子存为这篇的附件": "Two hosts, a woman and a man, talk this paper over: a model writes their script, DeepSeek's two voices speak it; once all of it is made, the sound and the script are kept as this paper's attachments",
   "播客用的是 DeepSeek 的语音服务：请先在「设置 › AI」添加 DeepSeek。": "A podcast uses DeepSeek's speech service: add DeepSeek in Settings › AI first.",
-  "播客的声音和稿子已存为这篇的附件": "The podcast's sound and script are kept as this paper's attachments"
+  "播客的声音和稿子已存为这篇的附件": "The podcast's sound and script are kept as this paper's attachments",
+  "影响因子": "Impact factor",
+  "分区": "Zone",
+  "期刊分区": "Journal zones",
+  "中科院": "CAS",
+  "新锐": "XR",
+  "影响因子 ↓": "Impact factor ↓",
+  "分区 1→4": "Zone 1→4",
+  "中科院大类": "CAS category",
+  "新锐大类": "XR category"
 }

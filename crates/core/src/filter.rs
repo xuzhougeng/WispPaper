@@ -1,6 +1,7 @@
 //! Search, filters and sorting of the paper list, plus the values the filter
 //! menus offer. Pure functions over `&[Paper]`.
 
+use crate::journals;
 use crate::model::Paper;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -111,7 +112,7 @@ pub fn says(p: &Paper, query: &str) -> bool {
 /// The key and direction of a sort value; anything unknown is "newest".
 pub fn sort_parts(sort: &str) -> (&str, bool) {
     match sort.rsplit_once('-') {
-        Some((key, dir)) if ["title", "year", "journal", "authors"].contains(&key) => (key, dir == "desc"),
+        Some((key, dir)) if ["title", "year", "journal", "authors", "impact", "cas", "xr", "jcr"].contains(&key) => (key, dir == "desc"),
         _ => ("added", true),
     }
 }
@@ -122,7 +123,7 @@ pub fn toggle_sort(current: &str, key: &str) -> String {
     if now == key {
         format!("{key}-{}", if desc { "asc" } else { "desc" })
     } else {
-        format!("{key}-{}", if key == "year" { "desc" } else { "asc" })
+        format!("{key}-{}", if key == "year" || key == "impact" { "desc" } else { "asc" })
     }
 }
 
@@ -151,7 +152,23 @@ fn compare(a: &Paper, b: &Paper, key: &str, desc: bool) -> Ordering {
             (_, None) => Ordering::Less,
             (Some(x), Some(y)) => if desc { y.cmp(&x) } else { x.cmp(&y) },
         },
+        // The journal's impact factor or zone (`journals`): papers of journals the table does not know sink.
+        "impact" => sunk(journals::find(&a.journal).and_then(|j| j.impact), journals::find(&b.journal).and_then(|j| j.impact), desc),
+        "cas" | "xr" | "jcr" => sunk(journals::find(&a.journal).and_then(|j| j.zone_rank(key)), journals::find(&b.journal).and_then(|j| j.zone_rank(key)), desc),
         _ => b.added_at.cmp(&a.added_at),
+    }
+}
+
+/// Order in either direction, with what has no value at the end.
+fn sunk<T: PartialOrd>(a: Option<T>, b: Option<T>, desc: bool) -> Ordering {
+    match (a, b) {
+        (None, None) => Ordering::Equal,
+        (None, _) => Ordering::Greater,
+        (_, None) => Ordering::Less,
+        (Some(x), Some(y)) => {
+            let order = x.partial_cmp(&y).unwrap_or(Ordering::Equal);
+            if desc { order.reverse() } else { order }
+        }
     }
 }
 
@@ -280,6 +297,20 @@ mod tests {
         assert_eq!(toggle_sort("newest", "year"), "year-desc");
         assert_eq!(toggle_sort("year-desc", "year"), "year-asc");
         assert_eq!(toggle_sort("year-asc", "title"), "title-asc");
+    }
+
+    #[test]
+    fn sorting_by_the_journal_metrics() {
+        let mut papers = library();
+        papers[0].journal = "PLoS One".into();
+        papers[1].journal = "Nature".into();
+        papers[2].journal = "No Such Journal Anywhere".into();
+        let sorted = |sort: &str| titles(&papers, &Filters { sort: sort.into(), ..Default::default() });
+        assert_eq!(sorted("impact-desc"), ["apple genome", "Zebra fish atlas", "Maize root cells"]);
+        assert_eq!(sorted("impact-asc"), ["Zebra fish atlas", "apple genome", "Maize root cells"]);
+        assert_eq!(sorted("cas-asc"), ["apple genome", "Zebra fish atlas", "Maize root cells"]);
+        assert_eq!(toggle_sort("newest", "impact"), "impact-desc");
+        assert_eq!(toggle_sort("newest", "cas"), "cas-asc");
     }
 
     #[test]

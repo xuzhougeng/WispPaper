@@ -270,6 +270,26 @@ impl Workspace {
         if !p.journal.is_empty() { source_line.push(format!("{} {}", p.journal, p.placed()).trim().to_string()) }
         if let Some(year) = p.year { source_line.push(year.to_string()) }
         if p.publication_status != "unknown" { source_line.push(label(&PUBLICATION_STATUSES, &p.publication_status).to_string()) }
+        // The journal's impact factor and zones, when the table the app carries knows it; its categories, editions and the name it was found under on hover.
+        let journal = wisp_core::journals::find(&p.journal).filter(|j| !crate::library::journal_line(j).is_empty() || !j.warning.is_empty());
+        let metrics = journal.map(|j| {
+            let mut about = vec![];
+            if wisp_core::journals::key(j.name()) != wisp_core::journals::key(&p.journal) { about.push(tf!("按「{}」查到", "Matched as \"{}\"", j.name())) }
+            if !j.quartile_category.is_empty() { about.push(format!("JCR {}：{}", j.quartile, j.quartile_category)) }
+            if !j.cas_category.is_empty() { about.push(format!("{}：{}", t("中科院大类"), j.cas_category)) }
+            if !j.xr_category.is_empty() { about.push(format!("{}：{}", t("新锐大类"), j.xr_category)) }
+            about.push(wisp_core::journals::EDITIONS.to_string());
+            div()
+                .id("detail-journal")
+                .flex()
+                .flex_wrap()
+                .gap(px(6.))
+                .text_size(text_px(12.))
+                .text_color(Theme::text_tertiary())
+                .child(crate::library::journal_line(j))
+                .when(!j.warning.is_empty(), |d| d.child(div().text_color(Theme::warning()).child(j.warning.clone())))
+                .tooltip(ui::tip(about.join("\n")))
+        });
         let identifiers: Vec<AnyElement> = [("DOI", &p.doi, format!("https://doi.org/{}", p.doi)), ("PMID", &p.pmid, format!("https://pubmed.ncbi.nlm.nih.gov/{}/", p.pmid))]
             .into_iter()
             .filter(|(_, value, _)| !value.is_empty())
@@ -404,6 +424,7 @@ impl Workspace {
                     .gap(px(6.))
                     .child(if p.authors.is_empty() { div().text_color(Theme::text_secondary()).child(t("作者待补")) } else { self.selectable("detail-authors", p.authors.clone(), cx).text_color(Theme::text_secondary()) })
                     .when(!source_line.is_empty(), |d| d.child(self.selectable("detail-source", source_line.join(" · "), cx).text_size(text_px(12.)).text_color(Theme::text_tertiary())))
+                    .children(metrics)
                     .children(identifiers),
             )
             .child(

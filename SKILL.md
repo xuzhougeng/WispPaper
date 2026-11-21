@@ -13,7 +13,7 @@ Wisp Study 是本地优先的文献管理软件。每个文献库是独立文件
 
 | 任务 | CLI / MCP 支持情况 | 操作入口 |
 |---|---|---|
-| 查看已有文献库、查询文献 | 支持 | `list_libraries`、`library_status`、`list_papers`、`get_paper` |
+| 查看已有文献库、查询文献 | 支持 | `list_libraries`、`library_status`、`list_papers`、`get_paper`、`journal_metrics`（期刊影响因子与分区） |
 | 新建文献库 | 支持 | `create_library` |
 | 把文献库交给另一台电脑 | 支持 | `export_library`（可不带 PDF）→ 对方 `import_library` |
 | 从在线数据库批量导入书目信息和摘要 | 支持 | `search_online` → `save_search` → `run_search` |

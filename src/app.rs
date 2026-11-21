@@ -303,6 +303,8 @@ pub enum Cmd {
     SetAppearance(String),
     SetLanguage(Language),
     SetDensity(String),
+    /// Which partition the 分区 column shows (`journals::ZONES`).
+    SetJournalZone(String),
     /// The voice 朗读 reads in, a key of `speech::VOICES`.
     SetSpeechVoice(String),
     /// The Latin or the Chinese interface font; empty is the platform's own.
@@ -2379,6 +2381,9 @@ impl Workspace {
                 for (value, label) in [("newest", t("最近添加")), ("year-desc", t("发表年份 ↓")), ("year-asc", t("发表年份 ↑")), ("title-asc", t("题目 A→Z")), ("title-desc", t("题目 Z→A")), ("journal-asc", t("期刊 A→Z")), ("authors-asc", t("作者 A→Z"))] {
                     items.push(MenuItem { label: label.into(), checked: current == value, note: None, cmd: Cmd::SetSort(value.into()) });
                 }
+                let zone = format!("{}-asc", crate::library::zone_sort(&self.settings));
+                items.push(MenuItem { label: t("影响因子 ↓").into(), checked: current == "impact-desc", note: None, cmd: Cmd::SetSort("impact-desc".into()) });
+                items.push(MenuItem { label: t("分区 1→4").into(), checked: current == zone, note: None, cmd: Cmd::SetSort(zone) });
             }
             MenuKind::Reading(id) => {
                 let Some(current) = self.lib.as_ref().and_then(|l| l.paper(&id)).map(|p| p.reading.clone()) else { return };
@@ -2635,6 +2640,19 @@ impl Workspace {
             }
             Cmd::SetDensity(value) => {
                 self.settings.density = value;
+                self.save_settings(cx);
+                window.refresh();
+            }
+            Cmd::SetJournalZone(value) => {
+                // A list sorted by the other partition is sorted by this one.
+                if let Some(lib) = self.lib.as_mut() {
+                    let (key, desc) = wisp_core::filter::sort_parts(&lib.filters.sort);
+                    if ["cas", "xr", "jcr"].contains(&key) {
+                        lib.filters.sort = format!("{}-{}", if value.is_empty() { "cas" } else { value.as_str() }, if desc { "desc" } else { "asc" });
+                        lib.refilter();
+                    }
+                }
+                self.settings.journal_zone = value;
                 self.save_settings(cx);
                 window.refresh();
             }
@@ -7618,6 +7636,7 @@ impl Workspace {
                 "paragraphspacing" => Some(Cmd::SetParagraphSpacing(match arg { "compact" => wisp_core::settings::Spacing::Compact, "relaxed" => wisp_core::settings::Spacing::Relaxed, _ => wisp_core::settings::Spacing::Standard })),
                 "textwidth" => Some(Cmd::SetTextWidth(match arg { "narrow" => wisp_core::settings::TextWidth::Narrow, "wide" => wisp_core::settings::TextWidth::Wide, _ => wisp_core::settings::TextWidth::Standard })),
                 "density" => Some(Cmd::SetDensity(arg.to_string())),
+                "zone" => Some(Cmd::SetJournalZone(arg.to_string())),
                 "contrast" => Some(Cmd::ToggleHighContrast),
                 "appearancereset" => Some(Cmd::ResetAppearance),
                 "language" => Some(Cmd::SetLanguage(if arg == "en" { Language::En } else { Language::Zh })),

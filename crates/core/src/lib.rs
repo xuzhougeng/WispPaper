@@ -11,6 +11,7 @@
 //! - `archive`  a whole library in one `.wispstudy` file (a gzipped tar) for another Wisp Study, and taking one in
 //! - `extract`  提取: a model's proposals for the custom fields of a paper, each with a sentence of the source
 //! - `figure`   图片库: pieces of PDF pages kept as pictures, and the caption a page gives each
+//! - `journals` 期刊分区与影响因子: the JCR, 中科院 and 新锐 tables the app carries, and finding a paper's journal in them
 //! - `lookup`   Crossref / Europe PMC records → `Paper`
 //! - `fulltext` page text of a stored PDF
 //! - `pdftext`  that text read off a PDF's glyphs, with the breaks the page shows
@@ -55,6 +56,7 @@ pub mod fulltext;
 pub mod headings;
 pub mod imagegen;
 pub mod import;
+pub mod journals;
 pub mod judge;
 pub mod libraries;
 pub mod lookup;

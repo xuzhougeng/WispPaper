@@ -68,7 +68,7 @@ pub(crate) const VIEWS: [(&str, &str, &str, View); 5] = [
 /// The columns of the paper table a right click on their names can put away, by the key they are kept under
 /// (`Settings::columns_hidden`, `Settings::column_widths`) and in the order they stand in. A custom field's
 /// column is `field:<id>`, on show while the field is `in_table`.
-pub const COLUMNS: [(&str, &str); 5] = [("journal", "期刊"), ("year", "年份"), ("fulltext", "全文"), ("reading", "阅读"), ("screening", "收录")];
+pub const COLUMNS: [(&str, &str); 7] = [("journal", "期刊"), ("impact", "影响因子"), ("zone", "分区"), ("year", "年份"), ("fulltext", "全文"), ("reading", "阅读"), ("screening", "收录")];
 /// How narrow and how wide a column can be dragged, and what the title keeps.
 const COLUMN_MIN: f32 = 44.;
 const COLUMN_MAX: f32 = 640.;
@@ -92,6 +92,9 @@ enum ColumnKind {
     Star,
     Title,
     Journal,
+    /// The journal's impact factor and its zone in the partition `Settings::journal_zone` names (`journals`).
+    Impact,
+    Zone,
     Year,
     Field(String),
     Fulltext,
@@ -102,7 +105,7 @@ enum ColumnKind {
 impl ColumnKind {
     /// A short value or a chip: its name and its cells stand centred, so the two line up whatever the chip's padding.
     fn centred(&self) -> bool {
-        matches!(self, ColumnKind::Year | ColumnKind::Fulltext | ColumnKind::Reading | ColumnKind::Screening)
+        matches!(self, ColumnKind::Impact | ColumnKind::Zone | ColumnKind::Year | ColumnKind::Fulltext | ColumnKind::Reading | ColumnKind::Screening)
     }
 
     fn key(&self) -> String {
@@ -110,6 +113,8 @@ impl ColumnKind {
             ColumnKind::Star => "star".into(),
             ColumnKind::Title => "title".into(),
             ColumnKind::Journal => "journal".into(),
+            ColumnKind::Impact => "impact".into(),
+            ColumnKind::Zone => "zone".into(),
             ColumnKind::Year => "year".into(),
             ColumnKind::Field(id) => format!("field:{id}"),
             ColumnKind::Fulltext => "fulltext".into(),
@@ -129,6 +134,36 @@ fn dragged(drag: &ColumnDrag, x: f32) -> (Option<f32>, f32) {
     };
     let by = (x - drag.x).clamp(-give.min((COLUMN_MAX - right).max(0.)), take.min((right - COLUMN_MIN).max(0.)));
     (drag.left.as_ref().map(|(_, left)| left + by), right - by)
+}
+
+/// The sort of the 分区 column: by the partition it shows.
+pub(crate) fn zone_sort(settings: &wisp_core::settings::Settings) -> &'static str {
+    match settings.journal_zone.as_str() {
+        "xr" => "xr",
+        "jcr" => "jcr",
+        _ => "cas",
+    }
+}
+
+/// A journal's zone in one partition as the window writes it: `1区 Top`, `Zone 1 Top`, `Q2`.
+pub(crate) fn zone_text(j: &wisp_core::journals::Journal, which: &str) -> Option<String> {
+    let zone = |z: Option<u8>, top: bool| z.map(|z| format!("{}{}", tf!("{}区", "Zone {}", z), if top { " Top" } else { "" }));
+    match which {
+        "jcr" => Some(j.quartile.clone()).filter(|q| !q.is_empty()),
+        "xr" => zone(j.xr, j.xr_top),
+        _ => zone(j.cas, j.cas_top),
+    }
+}
+
+/// Every metric of a journal in one line: `IF 18.1 · JCR Q1 · 中科院 1区 Top · 新锐 1区 Top`.
+pub(crate) fn journal_line(j: &wisp_core::journals::Journal) -> String {
+    let mut parts = vec![];
+    if let Some(impact) = j.impact_text() { parts.push(format!("IF {impact}")) }
+    if !j.quartile.is_empty() { parts.push(format!("JCR {}", j.quartile)) }
+    for (which, name) in [("cas", t("中科院")), ("xr", t("新锐"))] {
+        if let Some(zone) = zone_text(j, which) { parts.push(format!("{name} {zone}")) }
+    }
+    parts.join(" · ")
 }
 
 /// What a row of the paper table says in full, over a row that had to cut it.
@@ -557,6 +592,8 @@ impl Workspace {
         let mut optional = vec![column(t("阅读"), if english { 112. } else { 76. }, None, ColumnKind::Reading), column(t("年份"), 60., Some("year"), ColumnKind::Year), column(t("全文"), if english { 144. } else { 84. }, None, ColumnKind::Fulltext)];
         optional.extend(lib.fields.iter().filter(|f| f.in_table).map(|f| column(&f.name, 132., None, ColumnKind::Field(f.id.clone()))));
         optional.push(column(t("期刊"), 150., Some("journal"), ColumnKind::Journal));
+        optional.push(column(t("影响因子"), if english { 72. } else { 76. }, Some("impact"), ColumnKind::Impact));
+        optional.push(column(t("分区"), 76., Some(zone_sort(settings)), ColumnKind::Zone));
         optional.push(column(t("收录"), if english { 176. } else { 84. }, None, ColumnKind::Screening));
         optional.retain(|c| !settings.columns_hidden.contains(&c.key));
         let mut chosen = vec![];
@@ -573,11 +610,13 @@ impl Workspace {
         // Shown in reading order rather than the order they were admitted in.
         let rank = |c: &Column| match c.kind {
             ColumnKind::Journal => 0,
-            ColumnKind::Year => 1,
-            ColumnKind::Field(_) => 2,
-            ColumnKind::Fulltext => 3,
-            ColumnKind::Reading => 4,
-            ColumnKind::Screening => 5,
+            ColumnKind::Impact => 1,
+            ColumnKind::Zone => 2,
+            ColumnKind::Year => 3,
+            ColumnKind::Field(_) => 4,
+            ColumnKind::Fulltext => 5,
+            ColumnKind::Reading => 6,
+            ColumnKind::Screening => 7,
             _ => 0,
         };
         chosen.sort_by_key(rank);
@@ -1014,6 +1053,18 @@ impl Workspace {
                                 .into_any_element()
                             }
                             ColumnKind::Journal => tipped(cell.child(if p.journal.is_empty() { muted("—") } else { div().truncate().text_color(Theme::text_secondary()).child(p.journal.clone()) }), (wide(&p.journal, base, FontWeight::NORMAL) > room + 0.5).then(|| p.journal.clone())),
+                            ColumnKind::Impact | ColumnKind::Zone => {
+                                let journal = wisp_core::journals::find(&p.journal);
+                                let which = zone_sort(&self.settings);
+                                let said = journal.and_then(|j| if matches!(c.kind, ColumnKind::Impact) { j.impact_text() } else { zone_text(j, which) });
+                                // A journal a list warns against says so in the colour of a warning, and why under the pointer.
+                                let warned = journal.filter(|j| !j.warning.is_empty());
+                                let tip = journal.filter(|_| said.is_some()).map(|j| [j.name().to_string(), journal_line(j), j.warning.clone()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n"));
+                                tipped(cell.child(match said {
+                                    Some(said) => div().truncate().text_color(if warned.is_some() { Theme::warning() } else { Theme::text_secondary() }).child(said),
+                                    None => muted("—"),
+                                }), tip)
+                            }
                             ColumnKind::Year => cell.child(match p.year {
                                 Some(year) => div().text_color(Theme::text_secondary()).child(year.to_string()),
                                 None => muted("—"),
