@@ -483,7 +483,7 @@ impl Workspace {
                 .into_any_element();
         };
         let Some(pdf) = lib.pdf.clone() else { return div().into_any_element() };
-        let (file_id, file_title) = (file.id.clone(), file.title.clone());
+        let (file_id, file_title, paper_id) = (file.id.clone(), file.title.clone(), p.id.clone());
         // The paper's PDFs beyond the one on show: the title becomes a menu of them, saying which is read.
         let attachments = lib.attachments(&p.id);
         let number = attachments.iter().position(|f| f.id == file_id).map(|i| i + 1);
@@ -588,7 +588,7 @@ impl Workspace {
                     .when(docked, |d| d.child(ui::ghost_button("pdf-box", Some("square"), Some(t("方框").into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).when(pen == Tool::Box, |d| d.text_color(Theme::accent())).tooltip(ui::tip(t("在页面上拖出方框，框住图表或文字"))).on_click(self.on(Cmd::PdfTool(Tool::Box), cx))))
                     .when(docked, |d| d.child(ui::ghost_button("pdf-note", Some("sticky-note"), Some(t("便签").into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).when(pen == Tool::Note, |d| d.text_color(Theme::accent())).tooltip(ui::tip(t("点击页面任意位置添加便签"))).on_click(self.on(Cmd::PdfTool(Tool::Note), cx))))
                     // 朗读 from the page in view; while it reads, the same button stops it and says which page is heard.
-                    .when(docked, |d| d.child(self.read_aloud_button(Kind::Aloud, aloud.as_ref(), cx)).child(self.read_aloud_button(Kind::Podcast, aloud.as_ref(), cx)))
+                    .when(docked, |d| d.child(self.read_aloud_button(Kind::Aloud, aloud.as_ref(), cx)).child(self.read_aloud_button(Kind::Podcast, aloud.as_ref(), cx)).children(self.podcast_save_button("pdf-podcast-save", &paper_id, 24., cx)))
                     // The whole window for this paper; in reading mode the way back is at the top.
                     // Its shortcut in the tooltip: the way in from the list without opening the paper first.
                     .when(!reading, |d| {
@@ -614,8 +614,8 @@ impl Workspace {
         let (id, icon, cmd) = if podcast { ("pdf-podcast", "headphones", Cmd::Podcast) } else { ("pdf-read-aloud", "volume-2", Cmd::ReadAloud) };
         let button = ui::ghost_button(id, None, None).h(text_px(24.)).px(px(6.)).gap(px(4.)).text_size(text_px(12.)).on_click(self.on(cmd, cx));
         match aloud.filter(|(playing, _)| *playing == kind) {
-            None if podcast => button.child(ui::icon(icon, 14., Theme::text_secondary())).child(t("播客")).tooltip(ui::tip(t("一女一男两位主持人聊这篇论文：模型先写对话稿，再用 DeepSeek 的两种声音读出来；全部生成后，声音和稿子存为这篇的附件"))).into_any_element(),
-            None => button.child(ui::icon(icon, 14., Theme::text_secondary())).child(t("朗读")).tooltip(ui::tip(t("从这一页起朗读，读到参考文献为止"))).into_any_element(),
+            None if podcast => button.child(ui::icon(icon, 14., Theme::text_secondary())).child(t("播客")).tooltip(ui::tip(t("一女一男两位主持人聊这篇论文：模型先写对话稿，再用 DeepSeek 的两种声音读出来。离开这篇也接着播，窗口底部有回来的入口；全部生成后，声音和稿子存为这篇的附件，旁边的按钮可以下载"))).into_any_element(),
+            None => button.child(ui::icon(icon, 14., Theme::text_secondary())).child(t("朗读")).tooltip(ui::tip(t("从这一页起朗读，读到参考文献为止；读到哪一句，页面上就标出哪一句"))).into_any_element(),
             Some((_, status)) => {
                 let label = match (podcast, status.mark) {
                     (true, None) => t("正在写播客稿…").to_string(),
@@ -630,6 +630,84 @@ impl Workspace {
                     .into_any_element()
             }
         }
+    }
+
+    /// Beside 播客, once a podcast of the paper is kept: a menu to save its sound or its script elsewhere.
+    pub(crate) fn podcast_save_button(&self, id: &'static str, paper: &str, size: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let lib = self.lib.as_ref()?;
+        let (sound, script) = crate::app::podcast_files(lib, paper);
+        if sound.is_none() && script.is_none() { return None }
+        Some(ui::ghost_button(id, None, None).size(px(size)).child(ui::icon("export", if size >= 28. { 16. } else { 14. }, Theme::text_secondary())).tooltip(ui::tip(t("下载播客的音频或稿子"))).on_click(self.on_menu(MenuKind::PodcastFiles(paper.to_string()), cx)).into_any_element())
+    }
+
+    /// The podcast heard on after its paper was left: a bar at the window's foot with the paper, the turn
+    /// and the words being said; a click on it goes back to the paper's PDF. It stops there, and once
+    /// the podcast is kept, its sound and script can be saved from it.
+    pub(crate) fn podcast_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let lib = self.lib.as_ref()?;
+        let (paper, resource, status) = lib.podcast_away(cx)?;
+        let paper_id = paper.id.clone();
+        let title = ui::one_line(if paper.title.trim().is_empty() { t("未命名文献") } else { paper.title.trim() });
+        let turn = match status.mark { Some(turn) => tf!("第 {} 轮", "Turn {}", turn), None => t("正在写稿…").to_string() };
+        // Who says what is heard now, under the title.
+        let said = status.heard.as_ref().map(|heard| {
+            let host = wisp_core::podcast::HOSTS.iter().find(|(_, _, voice)| *voice == heard.voice).map_or("", |(_, name, _)| *name);
+            ui::one_line(&format!("{host}：{}", heard.sentence))
+        });
+        let icon = if status.waiting { ui::spinner("podcast-bar-wait", 16., Theme::accent()).into_any_element() } else { ui::icon("headphones", 16., Theme::accent()).into_any_element() };
+        Some(
+            div()
+                .absolute()
+                .bottom(px(44.))
+                .left_0()
+                .w_full()
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.))
+                        .w(px(460.))
+                        .p(px(4.))
+                        .rounded(px(12.))
+                        .bg(Theme::bg_body())
+                        .border_1()
+                        .border_color(Theme::line())
+                        .shadow(crate::theme::shadow_panel())
+                        .occlude()
+                        .child(
+                            div()
+                                .id("podcast-bar-back")
+                                .flex()
+                                .flex_1()
+                                .min_w_0()
+                                .items_center()
+                                .gap(px(10.))
+                                .px(px(8.))
+                                .py(px(4.))
+                                .rounded(px(8.))
+                                .cursor_pointer()
+                                .hover(|s| s.bg(Theme::hover()))
+                                .tooltip(ui::tip(t("回到这篇文献的 PDF")))
+                                .on_click(self.on(Cmd::ReadFile(resource), cx))
+                                .child(div().flex_none().child(icon))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .child(div().flex().items_center().gap(px(6.)).text_size(text_px(13.)).text_color(Theme::text()).child(div().flex_1().min_w_0().truncate().child(title)).child(div().flex_none().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(turn)))
+                                        .when_some(said, |d, said| d.child(div().w_full().truncate().text_size(text_px(12.)).text_color(Theme::text_secondary()).child(said))),
+                                ),
+                        )
+                        .children(self.podcast_save_button("podcast-bar-save", &paper_id, 28., cx))
+                        .when(!crate::app::podcast_list(lib).is_empty(), |d| d.child(ui::ghost_button("podcast-bar-list", None, None).size(px(28.)).child(ui::icon("list", 16., Theme::text_secondary())).tooltip(ui::tip(t("播放列表"))).on_click(self.on_menu(MenuKind::Podcasts, cx))))
+                        .child(ui::ghost_button("podcast-bar-stop", None, None).size(px(28.)).child(ui::icon("square", 13., Theme::text_secondary())).tooltip(ui::tip(t("停止播客"))).on_click(self.on(Cmd::StopReading, cx))),
+                )
+                .into_any_element(),
+        )
     }
 
     /// The PDF's tools as a column of icons at the page's right edge, under 标注 (or beside its list
@@ -689,6 +767,7 @@ impl Workspace {
             .child(tool("pdf-float-note", "sticky-note", pen == Tool::Note, "点击页面任意位置添加便签").on_click(self.on(Cmd::PdfTool(Tool::Note), cx)))
             .child(tool("pdf-float-read", "volume-2", aloud, if aloud { "停止朗读" } else { "从这一页起朗读" }).on_click(self.on(Cmd::ReadAloud, cx)))
             .child(tool("pdf-float-podcast", "headphones", podcast, if podcast { "停止播客" } else { "播客：两位主持人聊这篇论文" }).on_click(self.on(Cmd::Podcast, cx)))
+            .children(self.lib.as_ref().and_then(|lib| lib.files.iter().find(|f| f.id == file_id)).map(|f| f.paper_id.clone()).and_then(|paper| self.podcast_save_button("pdf-float-podcast-save", &paper, 28., cx)))
             .child(line())
             .child(tool("pdf-float-open", "link", false, "用系统应用打开").on_click(self.on(Cmd::OpenFile(file_id), cx)))
             .into_any_element()

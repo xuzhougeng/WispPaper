@@ -193,6 +193,37 @@ pub fn file_name(title: &str) -> String {
     if title.is_empty() { "播客".into() } else { format!("播客 - {}", title.trim_end_matches(['.', ' '])) }
 }
 
+/// Where each turn of a kept podcast stands in its sound of `samples`, as the sample it begins and ends at:
+/// the sound keeps no marks, so the turns share it by their length (`speech::billed`) after the `PAUSE`
+/// between speakers. Near enough to say the turn heard and show its words while it plays again.
+pub fn timings(turns: &[Turn], samples: usize) -> Vec<(usize, usize)> {
+    let pauses = turns.windows(2).filter(|pair| pair[0].host != pair[1].host).count() * PAUSE;
+    let said: usize = turns.iter().map(|turn| speech::billed(&turn.text)).sum();
+    let rate = samples.saturating_sub(pauses) as f64 / said.max(1) as f64;
+    let mut at = 0.;
+    let mut out = Vec::with_capacity(turns.len());
+    for (index, turn) in turns.iter().enumerate() {
+        if index > 0 && turns[index - 1].host != turn.host { at += PAUSE as f64 }
+        let end = at + speech::billed(&turn.text) as f64 * rate;
+        out.push((at as usize, (end as usize).min(samples)));
+        at = end;
+    }
+    out
+}
+
+/// The PCM bytes of a WAV file `wav` made: what follows its `data` header.
+pub fn pcm_of(wav: &[u8]) -> Option<&[u8]> {
+    let at = wav.windows(4).position(|w| w == b"data")?;
+    wav.get(at + 8..)
+}
+
+/// Whether an attachment is a kept podcast's (named by `file_name`), and which half: `Some(true)` the
+/// sound, `Some(false)` the script.
+pub fn kept(title: &str, format: &str) -> Option<bool> {
+    if !title.starts_with("播客") { return None }
+    match format { "wav" => Some(true), "md" => Some(false), _ => None }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,5 +280,10 @@ mod tests {
         assert_eq!(u32::from_le_bytes(file[40..44].try_into().unwrap()), 4);
         assert_eq!(file_name("A/B: c?"), "播客 - A B c");
         assert_eq!(file_name(" "), "播客");
+        assert_eq!(pcm_of(&wav(&[1, 0, 2, 0])), Some(&[1u8, 0, 2, 0][..]));
+        // Played again, the turns share the sound by their length after the pauses between speakers.
+        let turns = [Turn { host: 0, text: "ab".into() }, Turn { host: 0, text: "cd".into() }, Turn { host: 1, text: "efgh".into() }];
+        assert_eq!(timings(&turns, 800 + PAUSE), [(0, 200), (200, 400), (400 + PAUSE, 800 + PAUSE)]);
+        assert_eq!((kept("播客 - A.wav", "wav"), kept("播客 - A.md", "md"), kept("A.wav", "wav"), kept("播客.pdf", "pdf")), (Some(true), Some(false), None, None));
     }
 }

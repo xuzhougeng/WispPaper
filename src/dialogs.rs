@@ -95,7 +95,7 @@ impl Workspace {
                     .child(div().flex().flex_none().items_center().gap(px(8.)).px(px(20.)).py(px(14.)).border_t_1().border_color(Theme::line()).child(div().flex_1().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(if run.running { t("收起后继续在后台导入") } else { t("点击结果可查看文献") })).child(ui::primary_button("zotero-close", if run.running { t("收起") } else { crate::i18n::tc("dialog.close", "关闭") }).on_click(self.on(Cmd::CloseModal, cx))))
             }
             // Every other thing asked here takes something away; restarting into the new version does not.
-            Modal::Confirm { title, message, action, cmd } => ui::dialog(440.).child(ui::dialog_title(title.clone())).child(body().child(div().text_color(Theme::text_secondary()).line_height(text_px(21.)).child(message.clone())).child(error)).child(footer(action, !matches!(cmd, Cmd::InstallUpdate), self, cx)),
+            Modal::Confirm { title, message, action, cmd } => ui::dialog(440.).child(ui::dialog_title(title.clone())).child(body().child(div().text_color(Theme::text_secondary()).line_height(text_px(21.)).child(message.clone())).child(error)).child(footer(action, !matches!(cmd, Cmd::InstallUpdate | Cmd::SetUpSpeech), self, cx)),
 
             Modal::ImportReport => {
                 let lib = self.lib.as_ref()?;

@@ -131,23 +131,42 @@ fn sentence_end(text: &str, at: usize, c: char) -> bool {
     }
 }
 
-/// The text cut into pieces of at most `budget` (`billed`), at the ends of sentences where it can be,
-/// else at a comma or a space, else anywhere.
-pub fn pieces(text: &str, budget: usize) -> Vec<String> {
-    let budget = budget.max(16);
-    let mut sentences = vec![];
+/// The text cut after each sentence's end, nothing of it left out: a piece read aloud is followed on
+/// the page a sentence at a time.
+pub fn sentences(text: &str) -> Vec<&str> {
+    let mut out = vec![];
     let mut start = 0;
     for (at, c) in text.char_indices() {
         if sentence_end(text, at, c) {
             let end = at + c.len_utf8();
-            sentences.push(&text[start..end]);
+            out.push(&text[start..end]);
             start = end;
         }
     }
-    if start < text.len() { sentences.push(&text[start..]) }
+    if start < text.len() { out.push(&text[start..]) }
+    out
+}
+
+/// Which sentence of `text` is heard when `heard` (0 to 1) of its sound has played: the sentences take
+/// the time their length (`billed`) gives them. The sentence, trimmed; `None` when the text has none.
+pub fn sentence_at(text: &str, heard: f32) -> Option<&str> {
+    let all: Vec<&str> = sentences(text).into_iter().filter(|s| !s.trim().is_empty()).collect();
+    let total: usize = all.iter().map(|s| billed(s)).sum();
+    let mut passed = 0;
+    for sentence in &all {
+        passed += billed(sentence);
+        if passed as f32 >= heard.clamp(0., 1.) * total as f32 { return Some(sentence.trim()) }
+    }
+    all.last().map(|s| s.trim())
+}
+
+/// The text cut into pieces of at most `budget` (`billed`), at the ends of sentences where it can be,
+/// else at a comma or a space, else anywhere.
+pub fn pieces(text: &str, budget: usize) -> Vec<String> {
+    let budget = budget.max(16);
     let mut out: Vec<String> = vec![];
     let mut current = String::new();
-    for sentence in sentences.into_iter().flat_map(|s| cut(s, budget)) {
+    for sentence in sentences(text).into_iter().flat_map(|s| cut(s, budget)) {
         if !current.is_empty() && billed(&current) + billed(&sentence) > budget {
             out.push(current.trim().to_string());
             current.clear();
@@ -277,6 +296,17 @@ mod tests {
         assert!(cut.iter().all(|piece| billed(piece) <= 64));
         assert_eq!(cut.join(" ").split_whitespace().count(), 100);
         assert!(pieces("  ", 64).is_empty());
+    }
+
+    #[test]
+    fn the_sentence_heard_follows_the_time_played() {
+        let text = "One two. Three four five six seven eight. 九十。";
+        assert_eq!(sentences(text), ["One two.", " Three four five six seven eight.", " 九十。"]);
+        assert_eq!(sentence_at(text, 0.), Some("One two."));
+        assert_eq!(sentence_at(text, 0.5), Some("Three four five six seven eight."));
+        assert_eq!(sentence_at(text, 1.), Some("九十。"));
+        assert_eq!(sentence_at(text, 7.), Some("九十。"));
+        assert_eq!(sentence_at("  ", 0.5), None);
     }
 
     #[test]
