@@ -689,6 +689,8 @@ pub enum Cmd {
     WriteStop,
     /// Look for candidates: the selected text, or the paragraph at the caret.
     WriteFind,
+    /// 后退 (false) / 前进 (true) through the papers read (#194).
+    StepHistory(bool),
     /// Show (true) or hide the card under the citation the pointer is on (`Settings::citation_cards_hidden`).
     CitationCards(bool),
     /// Only the papers with this tag (empty: any), and only the starred ones.
@@ -905,6 +907,8 @@ impl Sorting {
 /// The pages of one file a model is asked to read in one run: a paper is
 /// rarely longer. What is left is read by the next run, from where this one stopped.
 pub const READ_PAGES: usize = 40;
+/// How many papers 后退 remembers.
+const HISTORY: usize = 50;
 
 /// The writing page: the manuscript and section being written, and the
 /// sentences the library's papers have in the same part. `Writing::kind`
@@ -1565,8 +1569,12 @@ pub struct Library {
     pub extracting: HashSet<String>,
     /// The file of each paper chosen to read, when it is not the main text (`Cmd::ReadFile`).
     pub read_file: HashMap<String, String>,
-    /// Where each file was read at when another took its place (`PdfView::place`).
+    /// Where each file was read at when another took its place or its paper was left (`PdfView::place`):
+    /// read from the library's database when it opens, written there by `keep_places` (#194).
     pub file_places: HashMap<String, (usize, f32)>,
+    /// The papers read before the one on show, the last one last, and those gone back from (`Workspace::step_history`).
+    pub back: Vec<String>,
+    pub forward: Vec<String>,
     pub guide: Guide,
     pub screen: Screen,
     /// The assistant's suggestion for each paper that has one.
@@ -1651,6 +1659,8 @@ pub struct Workspace {
     pub column_drag: Option<ColumnDrag>,
     /// What is selected in a text of the window that is not an answer or a text field.
     pub picked: Option<crate::select::Picked>,
+    /// The next `select` is a step through the papers read (`step_history`), not a paper chosen.
+    stepping: bool,
     /// A paper of the scope panel is held and on its way into the conversation (`chat::PaperDrag`).
     pub pinning: bool,
     /// The pointer is over the filters of a list too narrow for them, or over the card that shows them all.
@@ -1974,6 +1984,15 @@ impl Library {
         (self.pdf, self.pdf_events, self.beside) = (None, None, None);
     }
 
+    /// Note where the files on show are read at, here and in the library's database, before they are put
+    /// away: another paper opened, the library closed or the app quit (#194).
+    pub fn keep_places(&mut self, cx: &App) {
+        let views = self.pdf.iter().chain(self.beside.as_ref().map(|beside| &beside.view));
+        let places: Vec<(String, (usize, f32))> = views.map(|view| { let view = view.read(cx); (view.resource_id().to_string(), view.place()) }).collect();
+        for (id, place) in &places { self.file_places.insert(id.clone(), *place); }
+        let _ = self.store.save_reading_places(&places);
+    }
+
     /// Stop what is read aloud or talked over, and take the sentence it marked off the page.
     pub fn stop_reading(&mut self, cx: &mut App) {
         (self.aloud, self.aloud_shown) = (None, None);
@@ -2205,7 +2224,7 @@ impl Workspace {
         shortcuts::rebuild(&settings.shortcuts, cx);
         let libraries = libraries::list(&root);
         let home = crate::draft::Home::new(window, cx);
-        let mut this = Workspace { focus, settings, settings_path, root, libraries, lib: None, parked: vec![], settings_view: None, connections: vec![], skills: vec![], update: UpdateState::Idle, update_told: None, session: Session::default(), modal: None, modal_error: String::new(), modal_subscriptions: vec![], menu: None, palette: None, toast, home_scroll: ScrollHandle::new(), home, resizing: None, column_drag: None, picked: None, pinning: false, filters_over: [false; 2], filters_drawn: false };
+        let mut this = Workspace { focus, settings, settings_path, root, libraries, lib: None, parked: vec![], stepping: false, settings_view: None, connections: vec![], skills: vec![], update: UpdateState::Idle, update_told: None, session: Session::default(), modal: None, modal_error: String::new(), modal_subscriptions: vec![], menu: None, palette: None, toast, home_scroll: ScrollHandle::new(), home, resizing: None, column_drag: None, picked: None, pinning: false, filters_over: [false; 2], filters_drawn: false };
         this.apply_appearance(window);
         this.apply_typography(window, cx);
         cx.observe_window_appearance(window, |this, window, _| this.apply_appearance(window)).detach();
@@ -2221,6 +2240,12 @@ impl Workspace {
         // A scripted debug start says itself where it begins (its `restore` step is this).
         if self.settings.restore_session && wisp_core::settings::env("DEV").is_none() { self.restore_session(window, cx) }
         cx.observe_self(|this, _| this.keep_session()).detach();
+        // Quitting with a paper open: its file opens where it was left next time too (#194).
+        cx.on_app_quit(|this, cx| {
+            if let Some(lib) = this.lib.as_mut() { lib.keep_places(cx) }
+            async {}
+        })
+        .detach();
     }
 
     /// Write down where the window is whenever that changed, so the next start (after quitting,
@@ -2558,7 +2583,7 @@ impl Workspace {
             }
             Cmd::GoHome => {
                 self.write_snapshot("leave");
-                self.close_library();
+                self.close_library(cx);
                 // One level up: from a conversation, or the assistant's page, to the home page.
                 (self.home.open, self.home.listing) = (false, false);
                 self.settings_view = None;
@@ -2923,6 +2948,7 @@ impl Workspace {
             Cmd::WriteExportCited => self.export_cited(cx),
             Cmd::WriteRun(reading) => self.write_run_start(reading, None, cx),
             Cmd::WriteFind => self.write_find(false, cx),
+            Cmd::StepHistory(forward) => self.step_history(forward, window, cx),
             Cmd::CitationCards(on) => {
                 self.settings.citation_cards_hidden = !on;
                 self.save_settings(cx);
@@ -3880,6 +3906,8 @@ impl Workspace {
             "zoom-out" => Cmd::PdfZoom(ZoomTo::Out),
             "zoom-fit" => Cmd::PdfZoom(ZoomTo::Set(Zoom::FitWidth)),
             // The candidates stand beside the manuscript the person writes; beside the conversation that writes there are none to show.
+            "back" if self.lib.is_some() => Cmd::StepHistory(false),
+            "forward" if self.lib.is_some() => Cmd::StepHistory(true),
             "write-find" if !self.settings.agent_writing && self.lib.as_ref().is_some_and(|l| l.page == Page::Write) => Cmd::WriteFind,
             // What is selected in an answer: the paper's conversation first, when both have something.
             "copy-picked" if self.picked.is_some() => Cmd::CopySelected,
@@ -3896,8 +3924,9 @@ impl Workspace {
 
     /// Leave the open library. One whose conversation is still answering is kept, off screen, until the answer is in:
     /// leaving a conversation does not stop it.
-    pub(crate) fn close_library(&mut self) {
-        let Some(lib) = self.lib.take() else { return };
+    pub(crate) fn close_library(&mut self, cx: &App) {
+        let Some(mut lib) = self.lib.take() else { return };
+        lib.keep_places(cx);
         if lib.answering() { self.parked.push(lib) }
     }
 
@@ -3987,7 +4016,7 @@ impl Workspace {
             lib.info = info;
             if lib.info.draft { lib.page = Page::Ask }
             if let Err(err) = lib.reload() { self.fail(format!("{err:#}"), cx) }
-            self.close_library();
+            self.close_library(cx);
             self.lib = Some(lib);
             window.focus(&self.focus);
             self.extract_missing(cx);
@@ -3997,6 +4026,7 @@ impl Workspace {
             Ok(store) => store,
             Err(err) => return self.fail(format!("{err:#}"), cx),
         };
+        let file_places = store.reading_places().unwrap_or_default();
         self.write_snapshot("leave");
         info.opened_at = time::now_iso();
         let _ = libraries::save(&info);
@@ -4119,7 +4149,9 @@ impl Workspace {
             detail_scroll: ScrollHandle::new(),
             extracting: HashSet::new(),
             read_file: HashMap::new(),
-            file_places: HashMap::new(),
+            file_places,
+            back: vec![],
+            forward: vec![],
             guide,
             screen,
             suggestions: HashMap::new(),
@@ -4155,7 +4187,7 @@ impl Workspace {
         let draft = lib.info.draft;
         if draft { lib.page = Page::Ask }
         let last = if draft { lib.store.list_conversations("").ok().and_then(|list| list.into_iter().next()) } else { None };
-        self.close_library();
+        self.close_library(cx);
         self.lib = Some(lib);
         window.focus(&self.focus);
         if let Some(last) = last { self.open_chat(Talk::Library, &last.id, cx) }
@@ -4163,6 +4195,20 @@ impl Workspace {
     }
 
     // ---- one paper
+
+    /// 后退 / 前进 (#194): the paper read before the one on show, or the one gone back from; one taken away
+    /// since is passed over. Its file opens where it was left (`Library::keep_places`).
+    pub(crate) fn step_history(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(lib) = self.lib.as_mut() else { return };
+        let to = loop {
+            let Some(id) = (if forward { lib.forward.pop() } else { lib.back.pop() }) else { return };
+            if lib.paper(&id).is_some() && lib.selected.as_ref() != Some(&id) { break id }
+        };
+        if let Some(on_show) = lib.selected.clone() { if forward { lib.back.push(on_show) } else { lib.forward.push(on_show) } }
+        self.stepping = true;
+        self.select(Some(to), window, cx);
+        self.stepping = false;
+    }
 
     pub(crate) fn select(&mut self, id: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_ref() else { return };
@@ -4173,6 +4219,13 @@ impl Workspace {
         // The conversation with the paper being left is kept as far as it got.
         self.stop_chat(Talk::Paper, cx);
         let Some(lib) = self.lib.as_mut() else { return };
+        // The paper left is where 后退 goes (a step through them is not one more of them), and its file opens where it was left.
+        if !std::mem::take(&mut self.stepping) && let Some(left) = lib.selected.clone() {
+            if lib.back.last() != Some(&left) { lib.back.push(left) }
+            if lib.back.len() > HISTORY { lib.back.remove(0); }
+            lib.forward.clear();
+        }
+        lib.keep_places(cx);
         lib.selected = id;
         lib.close_pdf();
         lib.paper_chat.reset(cx);

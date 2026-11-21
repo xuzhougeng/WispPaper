@@ -5,7 +5,7 @@ use crate::i18n::t;
 use crate::app::{Cmd, Edge, MenuKind, Workspace};
 use crate::context::Nav;
 use crate::settings::{SettingsPage, UpdateState};
-use crate::shortcuts::{AskAssistant, DecideIncluded, DecideIrrelevant, DecidePending, DecideRelated, DecideUncertain, StarScreened, TakeSuggestion, TickSuggestion, TranslateScreened, UndoDecision, MarkAll, MarkDown, MarkUp, MoveDown, MoveFirst, MoveLast, MoveLeft, MovePageDown, MovePageUp, MoveRight, MoveUp, OpenSelected, TrashSelected, AddPaper, AskLibrary, FocusSearch, ImportPdf, NewLibrary, ShowHome, ShowPalette, ShowSettings, CopyPicked, FindCandidates, ToggleDetail, ToggleReading, ToggleSidebar, ZoomFit, ZoomIn, ZoomOut};
+use crate::shortcuts::{AskAssistant, DecideIncluded, DecideIrrelevant, DecidePending, DecideRelated, DecideUncertain, StarScreened, TakeSuggestion, TickSuggestion, TranslateScreened, UndoDecision, MarkAll, MarkDown, MarkUp, MoveDown, MoveFirst, MoveLast, MoveLeft, MovePageDown, MovePageUp, MoveRight, MoveUp, OpenSelected, TrashSelected, AddPaper, AskLibrary, FocusSearch, ImportPdf, NewLibrary, ShowHome, ShowPalette, ShowSettings, CopyPicked, FindCandidates, ToggleDetail, ToggleReading, ToggleSidebar, ZoomFit, ZoomIn, ZoomOut, PaperBack, PaperForward};
 use crate::theme::{self, Theme, text_px};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
@@ -60,6 +60,11 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ZoomFit, window, cx| this.shortcut("zoom-fit", window, cx)))
             .on_action(cx.listener(|this, _: &CopyPicked, window, cx| this.shortcut("copy-picked", window, cx)))
             .on_action(cx.listener(|this, _: &FindCandidates, window, cx| this.shortcut("write-find", window, cx)))
+            .on_action(cx.listener(|this, _: &PaperBack, window, cx| this.shortcut("back", window, cx)))
+            .on_action(cx.listener(|this, _: &PaperForward, window, cx| this.shortcut("forward", window, cx)))
+            // The mouse's side buttons step through the papers read, as in a browser.
+            .on_mouse_down(MouseButton::Navigate(NavigationDirection::Back), cx.listener(|this, _, window, cx| this.run(Cmd::StepHistory(false), window, cx)))
+            .on_mouse_down(MouseButton::Navigate(NavigationDirection::Forward), cx.listener(|this, _, window, cx| this.run(Cmd::StepHistory(true), window, cx)))
             .on_action(cx.listener(|this, _: &MoveUp, window, cx| this.nav(Nav::Up, window, cx)))
             .on_action(cx.listener(|this, _: &MoveDown, window, cx| this.nav(Nav::Down, window, cx)))
             .on_action(cx.listener(|this, _: &MoveLeft, window, cx| this.nav(Nav::Left, window, cx)))

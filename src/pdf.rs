@@ -1443,6 +1443,8 @@ impl PdfView {
     /// Where the view is read at: the 0-based page at its top, and how far down that page in its points.
     /// Kept by the owner when another file of the paper is shown, and handed back by `resume`.
     pub fn place(&self) -> (usize, f32) {
+        // Not open yet: where it is to open, not the top it shows meanwhile.
+        if self.sizes.is_empty() && let Some(place) = self.resume { return place }
         let top = self.list().logical_scroll_top();
         (top.item_ix, f32::from(top.offset_in_item) / self.scale_of(top.item_ix).max(0.01))
     }
