@@ -1586,5 +1586,14 @@
   "从这一页起朗读，读到参考文献为止": "Read aloud from this page up to the references",
   "这里没有可朗读的文字。": "There is no text here to read aloud.",
   "朗读用的是 DeepSeek 的语音服务：请先在「设置 › AI」添加 DeepSeek。": "Reading aloud uses DeepSeek's speech service: add DeepSeek in Settings › AI first.",
-  "PDF 工具栏和选中文字的「朗读」用 DeepSeek 的语音服务：先在「模型」里添加 DeepSeek 并填写 API Key。": "Read aloud (PDF toolbar and selected text) uses DeepSeek's speech service: add DeepSeek under Models and fill in its API key."
+  "PDF 工具栏和选中文字的「朗读」用 DeepSeek 的语音服务：先在「模型」里添加 DeepSeek 并填写 API Key。": "Read aloud (PDF toolbar and selected text) uses DeepSeek's speech service: add DeepSeek under Models and fill in its API key.",
+  "影响因子": "Impact factor",
+  "分区": "Zone",
+  "期刊分区": "Journal zones",
+  "中科院": "CAS",
+  "新锐": "XR",
+  "影响因子 ↓": "Impact factor ↓",
+  "分区 1→4": "Zone 1→4",
+  "中科院大类": "CAS category",
+  "新锐大类": "XR category"
 }
