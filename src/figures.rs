@@ -222,7 +222,9 @@ impl Workspace {
                 if figure.drawn() { return }
                 self.run(Cmd::CloseModal, window, cx);
                 if self.lib.as_ref().is_some_and(|lib| lib.paper(&figure.paper_id).is_none()) { return self.fail(t("这张图的文献已不在库里。"), cx) }
-                self.run(Cmd::GotoSource(figure.paper_id.clone(), (figure.page > 0).then_some(figure.page), String::new()), window, cx);
+                // The file it was cut from: an attachment's figure opens there, in the half that shows it when one does.
+                let attachment = self.lib.as_ref().and_then(|lib| lib.attachments(&figure.paper_id).iter().find(|f| f.id == figure.resource_id).map(|f| f.id.clone()));
+                self.run(Cmd::GotoFile(figure.paper_id.clone(), attachment, (figure.page > 0).then_some(figure.page), String::new()), window, cx);
                 // Where on the page it was cut from, once the page is at hand.
                 if let (Some(bbox), Some(pdf)) = (figure.bbox, self.lib.as_ref().and_then(|lib| lib.pdf.clone())) && figure.page > 0 {
                     pdf.update(cx, |pdf, cx| pdf.go_to_place(figure.page, bbox[1], cx));

@@ -425,6 +425,8 @@ pub enum Cmd {
     PdfZoom(ZoomTo),
     /// Show the PDF on show twice, each half scrolled on its own, or once again.
     PdfSplit(Split),
+    /// Show a file of the paper (its id) in the other half of the viewer; the file worked in is the viewer split on itself.
+    PdfBeside(String),
     /// Cut a piece out of a page as a picture for a question, or stop doing so.
     PdfCut,
     /// Draw boxes or place sticky notes on the pages, or go back to selecting text.
@@ -1459,6 +1461,18 @@ pub enum Modal {
     Headings(Box<crate::comments::HeadingsForm>),
 }
 
+/// The other half of a viewer split between two files of a paper (#185): the main text in one half, a
+/// supplement in the other, each a `PdfView` of its own with its own place, marks and selection.
+pub struct Beside {
+    /// The viewer not worked in now; `Library::pdf` is the one that is. The two change roles when the pointer goes to work in this one.
+    pub view: Entity<PdfView>,
+    _events: Subscription,
+    /// Side by side or one over the other; never `Off`.
+    pub split: Split,
+    /// `view` is drawn in the first half, at the left or the top.
+    pub first: bool,
+}
+
 pub struct Library {
     pub info: LibraryInfo,
     pub store: Store,
@@ -1508,8 +1522,11 @@ pub struct Library {
     pub float_area: (f32, f32),
     pub notes: Entity<TextInput>,
     pub note_links: BTreeMap<String, String>,
+    /// The viewer of the file worked in: the toolbar, the keys and a citation followed speak of it.
     pub pdf: Option<Entity<PdfView>>,
     pdf_events: Option<Subscription>,
+    /// Another file of the paper in the other half of the viewer (#185), while there is one.
+    pub beside: Option<Beside>,
     /// The fit PDF pages are drawn at (`Zoom::carried`): it stays from paper to paper, a percentage does not.
     pub zoom: Zoom,
     pub library_chat: Chat,
@@ -1923,6 +1940,30 @@ impl Library {
         self.paper_files(id).into_iter().filter(|f| f.kind != "fulltext" && f.format == "pdf").collect()
     }
 
+    /// Put the viewer away, both its halves while it shows two files.
+    pub fn close_pdf(&mut self) {
+        (self.pdf, self.pdf_events, self.beside) = (None, None, None);
+    }
+
+    /// The viewer's size as it was laid out, both halves of it while it shows two files.
+    pub fn pdf_area(&self, cx: &App) -> (f32, f32) {
+        let Some(pdf) = &self.pdf else { return (0., 0.) };
+        let (width, height) = { let view = pdf.read(cx); (view.width(), view.height()) };
+        let Some(beside) = &self.beside else { return (width, height) };
+        let other = beside.view.read(cx);
+        match beside.split {
+            Split::Stacked => (width, height + other.height() + crate::pdf::DIVIDER),
+            _ => (width + other.width() + crate::pdf::DIVIDER, height),
+        }
+    }
+
+    /// The paper's PDFs as the viewer offers them: the main text, then each attachment, labelled as the toolbar's title names them.
+    pub fn pdf_choices(&self, id: &str) -> Vec<(String, String)> {
+        let main = self.main_pdf(id).map(|f| (f.id.clone(), tf!("正文 · {}", "Main text · {}", f.title)));
+        let attachments = self.attachments(id).into_iter().enumerate().map(|(i, f)| (f.id.clone(), tf!("附件 S{} · {}", "Attachment S{} · {}", i + 1, f.title)));
+        main.into_iter().chain(attachments).collect()
+    }
+
     /// The number an attachment is cited by (`S2` is 2); `None` for the main text.
     pub fn attachment_number(&self, paper: &str, file: &str) -> Option<usize> {
         self.attachments(paper).iter().position(|f| f.id == file).map(|i| i + 1)
@@ -2073,7 +2114,7 @@ impl Library {
         self.filters.fields.retain(|id, _| known.contains(id.as_str()));
         if self.selected.as_ref().is_some_and(|id| self.paper(id).is_none()) {
             self.selected = None;
-            self.pdf = None;
+            self.close_pdf();
         }
         let held: HashSet<&str> = self.papers.iter().map(|p| p.id.as_str()).collect();
         self.screen.round.keep(|id| held.contains(id));
@@ -2278,9 +2319,23 @@ impl Workspace {
                 }
             }
             MenuKind::PdfSplit => {
-                let Some(current) = self.lib.as_ref().and_then(|lib| lib.pdf.as_ref()).map(|pdf| pdf.read(cx).split()) else { return };
+                let Some(lib) = &self.lib else { return };
+                let Some(pdf) = &lib.pdf else { return };
+                let view = pdf.read(cx);
+                let other = lib.beside.as_ref().map(|beside| beside.view.read(cx).resource_id().to_string());
+                let current = lib.beside.as_ref().map_or(view.split(), |beside| beside.split);
                 for (label, split) in [("不分屏", Split::Off), ("左右分屏", Split::Side), ("上下分屏", Split::Stacked)] {
                     items.push(MenuItem { label: t(label).into(), checked: current == split, note: None, cmd: Cmd::PdfSplit(split) });
+                }
+                // What the other half shows: the same file, or another of the paper's (a supplementary figure beside the text).
+                // The translation has the other half while it is on.
+                let choices = lib.selected.as_deref().map(|paper| lib.pdf_choices(paper)).unwrap_or_default();
+                if choices.len() > 1 && !(lib.facing && lib.tab == Tab::Pdf) {
+                    breaks.push(items.len());
+                    let shown = other.unwrap_or_else(|| if current == Split::Off { String::new() } else { view.resource_id().to_string() });
+                    for (id, label) in choices {
+                        items.push(MenuItem { label: tf!("另一半：{label}", "Other half: {label}").into(), checked: id == shown, note: None, cmd: Cmd::PdfBeside(id) });
+                    }
                 }
             }
             MenuKind::PdfFiles => {
@@ -2288,10 +2343,11 @@ impl Workspace {
                 let Some(lib) = &self.lib else { return };
                 let Some(paper) = lib.selected.clone() else { return };
                 let shown = lib.pdf_file(&paper).map(|f| f.id.clone());
-                let main = lib.main_pdf(&paper).map(|f| (f.id.clone(), tf!("正文 · {}", "Main text · {}", f.title)));
-                let attachments = lib.attachments(&paper).into_iter().enumerate().map(|(i, f)| (f.id.clone(), tf!("附件 S{} · {}", "Attachment S{} · {}", i + 1, f.title)));
-                for (id, label) in main.into_iter().chain(attachments) {
-                    items.push(MenuItem { label: label.into(), checked: shown.as_ref() == Some(&id), note: None, cmd: Cmd::ReadFile(id) });
+                // The file in the other half is said so: chosen, it is the half worked in.
+                let other = lib.beside.as_ref().map(|beside| beside.view.read(cx).resource_id().to_string());
+                for (id, label) in lib.pdf_choices(&paper) {
+                    let note = (other.as_ref() == Some(&id)).then(|| t("另一半").into());
+                    items.push(MenuItem { label: label.into(), checked: shown.as_ref() == Some(&id), note, cmd: Cmd::ReadFile(id) });
                 }
             }
             MenuKind::Columns => {
@@ -2914,7 +2970,7 @@ impl Workspace {
             }
             Cmd::RemoveFile(id) => {
                 if self.change(cx, |lib| lib.store.remove_file(&id)) {
-                    if let Some(lib) = self.lib.as_mut() { lib.pdf = None }
+                    if let Some(lib) = self.lib.as_mut() { lib.close_pdf() }
                     // Another PDF of the paper, if it has one, takes the viewer.
                     self.ensure_pdf(cx);
                     self.say(t("附件已移除（文件移到了 removed 文件夹）。"), cx);
@@ -2978,9 +3034,15 @@ impl Workspace {
             // With the translation in the second half, one page again is putting the translation away.
             Cmd::PdfSplit(Split::Off) if self.lib.as_ref().is_some_and(|lib| lib.facing && lib.tab == Tab::Pdf) => self.toggle_facing(cx),
             Cmd::PdfSplit(split) => {
+                // Two files: one again is the one worked in, else the two halves change how they stand.
+                if self.lib.as_ref().is_some_and(|lib| lib.beside.is_some()) {
+                    if split == Split::Off { self.close_beside(cx) } else if let Some(beside) = self.lib.as_mut().and_then(|lib| lib.beside.as_mut()) { beside.split = split }
+                    return cx.notify();
+                }
                 // It is for this paper: the next one opens whole.
                 if let Some(pdf) = self.lib.as_ref().and_then(|lib| lib.pdf.clone()) { pdf.update(cx, |pdf, cx| pdf.set_split(split, cx)) }
             }
+            Cmd::PdfBeside(file) => self.show_beside(file, cx),
             Cmd::BesidePdf(show) => {
                 // Beside the conversation the window is laid out for the two (`asking`); put away, the library is back around it.
                 if let Some(lib) = self.lib.as_mut() { lib.split = show }
@@ -3910,6 +3972,7 @@ impl Workspace {
             notes,
             pdf: None,
             pdf_events: None,
+            beside: None,
             zoom: Zoom::FitWidth,
             library_chat,
             paper_chat,
@@ -3980,7 +4043,7 @@ impl Workspace {
         self.stop_chat(Talk::Paper, cx);
         let Some(lib) = self.lib.as_mut() else { return };
         lib.selected = id;
-        lib.pdf = None;
+        lib.close_pdf();
         lib.paper_chat.reset(cx);
         lib.detail_scroll = ScrollHandle::new();
         match lib.selected_paper() {
@@ -4039,21 +4102,82 @@ impl Workspace {
         let Some(lib) = self.lib.as_mut() else { return };
         if !(lib.tab == Tab::Pdf || (lib.tab == Tab::Ask && lib.split)) || lib.pdf.is_some() { return }
         let Some(file) = lib.selected.as_deref().and_then(|id| lib.pdf_file(id)).cloned() else { return };
-        let path = lib.store.file_path(&file);
+        let Some((pdf, events)) = self.pdf_view(&file, cx) else { return };
+        let Some(lib) = self.lib.as_mut() else { return };
+        (lib.pdf, lib.pdf_events) = (Some(pdf), Some(events));
+    }
+
+    /// A viewer of a file of the selected paper, with its own marks, at the place it was left, and what it says heard.
+    fn pdf_view(&mut self, file: &PaperFile, cx: &mut Context<Self>) -> Option<(Entity<PdfView>, Subscription)> {
+        let lib = self.lib.as_mut()?;
+        let path = lib.store.file_path(file);
         let annotations = match lib.store.pdf_annotations(&file.paper_id, &file.id) {
             Ok(annotations) => annotations,
-            Err(error) => return self.fail(format!("{error:#}"), cx),
+            Err(error) => { self.fail(format!("{error:#}"), cx); return None }
         };
         let zoom = lib.zoom;
         let place = lib.file_places.get(&file.id).copied();
         let pdf = cx.new(|cx| {
-            let mut pdf = PdfView::new(&path, zoom, &file, annotations, cx);
+            let mut pdf = PdfView::new(&path, zoom, file, annotations, cx);
             // A file read before, of this paper, opens where it was left.
             if let Some(place) = place { pdf.resume(place, cx) }
             pdf
         });
-        lib.pdf_events = Some(cx.subscribe(&pdf, |this, _, event: &PdfEvent, cx| this.pdf_event(event, cx)));
-        lib.pdf = Some(pdf);
+        let events = cx.subscribe(&pdf, |this, view, event: &PdfEvent, cx| this.pdf_event(view, event, cx));
+        Some((pdf, events))
+    }
+
+    /// Show a file of the paper in the other half of the viewer (#185): a supplementary figure kept in view
+    /// while the text is read. Each half is a viewer of its own file, with its own place and marks. The file
+    /// worked in asked for is the viewer split on itself again, as 左右分屏 does.
+    fn show_beside(&mut self, file: String, cx: &mut Context<Self>) {
+        let Some(lib) = self.lib.as_mut() else { return };
+        let Some(pdf) = lib.pdf.clone() else { return };
+        let Some(paper) = lib.selected.clone() else { return };
+        // The translation keeps the other half while it is on.
+        if lib.facing && lib.tab == Tab::Pdf { return }
+        let (shown, inner, width) = { let view = pdf.read(cx); (view.resource_id().to_string(), view.split(), view.width()) };
+        // As the halves stand now; split anew, side by side where there is room for two pages.
+        let split = crate::pdf::beside_split(lib.beside.as_ref().map(|beside| beside.split), inner, width);
+        if file == shown {
+            self.close_beside(cx);
+            return pdf.update(cx, |pdf, cx| pdf.set_split(split, cx));
+        }
+        if lib.beside.as_ref().is_some_and(|beside| beside.view.read(cx).resource_id() == file) { return }
+        let Some(paper_file) = lib.paper_files(&paper).into_iter().find(|f| f.id == file && f.format == "pdf").cloned() else { return };
+        self.close_beside(cx);
+        // Each half is one file now: the viewer worked in shows its pages once.
+        pdf.update(cx, |pdf, cx| pdf.set_split(Split::Off, cx));
+        let Some((view, events)) = self.pdf_view(&paper_file, cx) else { return };
+        let Some(lib) = self.lib.as_mut() else { return };
+        lib.beside = Some(Beside { view, _events: events, split, first: false });
+        cx.notify();
+    }
+
+    /// The other half's file put away; it keeps its place for when it is shown again.
+    pub(crate) fn close_beside(&mut self, cx: &mut Context<Self>) {
+        let Some(lib) = self.lib.as_mut() else { return };
+        let Some(beside) = lib.beside.take() else { return };
+        let view = beside.view.read(cx);
+        lib.file_places.insert(view.resource_id().to_string(), view.place());
+        cx.notify();
+    }
+
+    /// The pointer went to work in a viewer. Beside another file it becomes the one worked in (`Library::pdf`):
+    /// the toolbar, the keys and a citation speak of it, and the paper is read in its file (`read_file`). The two
+    /// change roles, not places.
+    fn work_in(&mut self, view: &Entity<PdfView>, cx: &mut Context<Self>) {
+        let Some(lib) = self.lib.as_mut() else { return };
+        let Some(beside) = lib.beside.as_mut().filter(|beside| &beside.view == view) else { return };
+        let (Some(pdf), Some(events)) = (lib.pdf.as_mut(), lib.pdf_events.as_mut()) else { return };
+        std::mem::swap(pdf, &mut beside.view);
+        std::mem::swap(events, &mut beside._events);
+        beside.first = !beside.first;
+        let file = view.read(cx).resource_id().to_string();
+        if let Some(paper) = lib.selected.clone() {
+            if lib.main_pdf(&paper).is_some_and(|main| main.id == file) { lib.read_file.remove(&paper); } else { lib.read_file.insert(paper, file); }
+        }
+        cx.notify();
     }
 
     /// Show a file of a paper in the viewer: an attachment by its id, or (`None`) the main text. The file on
@@ -4065,6 +4189,11 @@ impl Workspace {
             None => lib.read_file.remove(paper),
         };
         let wanted = lib.pdf_file(paper).map(|f| f.id.clone());
+        // A file in the other half is gone to there; the half worked in keeps its own.
+        if lib.selected.as_deref() == Some(paper) && let Some(other) = lib.beside.as_ref().map(|beside| beside.view.clone()) && wanted.as_deref() == Some(other.read(cx).resource_id()) {
+            self.work_in(&other, cx);
+            return cx.notify();
+        }
         if let Some(pdf) = lib.pdf.clone() {
             let (shown, place) = { let view = pdf.read(cx); (view.resource_id().to_string(), view.place()) };
             if Some(&shown) != wanted.as_ref() {
@@ -4077,8 +4206,9 @@ impl Workspace {
     }
 
     /// What the PDF viewer reports: its selection copied, or handed to a conversation.
-    fn pdf_event(&mut self, event: &PdfEvent, cx: &mut Context<Self>) {
+    fn pdf_event(&mut self, view: Entity<PdfView>, event: &PdfEvent, cx: &mut Context<Self>) {
         match event {
+            PdfEvent::Worked => self.work_in(&view, cx),
             PdfEvent::Copied => self.say(t("已复制"), cx),
             PdfEvent::Translate(text, profile) => self.translate_passage(text.clone(), profile.clone(), cx),
             PdfEvent::Figure(piece) => self.collect_piece(piece, cx),
@@ -4095,7 +4225,7 @@ impl Workspace {
             PdfEvent::Quote(page, text, to_library) => {
                 let Some(lib) = self.lib.as_mut() else { return };
                 let Some(paper_id) = lib.selected.clone() else { return };
-                let file_id = lib.pdf.as_ref().map(|pdf| pdf.read(cx).resource_id().to_string()).unwrap_or_default();
+                let file_id = view.read(cx).resource_id().to_string();
                 let quote = ChatQuote { paper_id, file_id, page: *page, text: text.clone() };
                 let chat = lib.chat_mut(if *to_library { Talk::Library } else { Talk::Paper });
                 if chat.quotes.len() >= MAX_QUOTES { return self.fail(tf!("一个问题最多带 {MAX_QUOTES} 段原文。先发出去，或者去掉一段。", "A question can include at most {MAX_QUOTES} passages. Send it first or remove one."), cx) }
@@ -4113,11 +4243,11 @@ impl Workspace {
 
     fn change_pdf_annotation(&mut self, resource: &str, change: impl FnOnce(&mut Store) -> anyhow::Result<()>, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
-        // An event queued by an old viewer cannot edit the newly selected PDF.
-        if lib.selected.as_deref().and_then(|id| lib.pdf_file(id)).is_none_or(|file| file.id != resource) { return }
+        // An event queued by an old viewer cannot edit the newly selected PDF: the marks go to the half showing their file.
+        let Some(pdf) = lib.pdf.iter().chain(lib.beside.as_ref().map(|beside| &beside.view)).find(|view| view.read(cx).resource_id() == resource).cloned() else { return };
         match change(&mut lib.store).and_then(|()| lib.store.pdf_annotations("", resource)) {
             Ok(annotations) => {
-                if let Some(pdf) = lib.pdf.clone() { pdf.update(cx, |pdf, cx| pdf.annotations_saved(annotations, cx)) }
+                pdf.update(cx, |pdf, cx| pdf.annotations_saved(annotations, cx));
                 self.say(t("PDF 标注已保存"), cx);
             }
             Err(error) => self.fail(format!("{error:#}"), cx),
@@ -4299,7 +4429,7 @@ impl Workspace {
                         Ok(())
                     });
                     if added > 0 {
-                        if let Some(lib) = this.lib.as_mut() { lib.pdf = None }
+                        if let Some(lib) = this.lib.as_mut() { lib.close_pdf() }
                         this.ensure_pdf(cx);
                         this.extract_missing(cx);
                         this.say(tf!("已添加 {added} 个附件。", "Added {added} attachments."), cx);
@@ -4591,7 +4721,7 @@ impl Workspace {
                 // A paper or a PDF came in: the list, the detail panel and the next question see it.
                 let _ = lib.reload();
                 lib.texts_changed();
-                if row.paper_id == lib.selected { lib.pdf = None }
+                if row.paper_id == lib.selected { lib.close_pdf() }
             }
             let Some(run) = lib.import.as_mut() else { return };
             if let Some(at) = run.working.iter().position(|working| working == &url) { run.working.remove(at); }
@@ -6216,7 +6346,7 @@ impl Workspace {
                 // The paper has a PDF now: the list, the detail panel and the next question see it.
                 let _ = lib.reload();
                 lib.texts_changed();
-                if lib.selected.as_deref() == Some(paper_id.as_str()) { lib.pdf = None }
+                if lib.selected.as_deref() == Some(paper_id.as_str()) { lib.close_pdf() }
                 this.ensure_pdf(cx);
             }
             this.fetch_next(id, cx);
@@ -7059,7 +7189,16 @@ impl Workspace {
                     (arg == "go").then_some(Cmd::GuideGenerate)
                 }
                 // `quote:3|a sentence` opens the selected paper's PDF at page 3 with that sentence highlighted.
-                "quote" => self.lib.as_ref().and_then(|l| l.selected.clone()).zip(arg.split_once('|')).map(|(id, (page, quote))| Cmd::GotoSource(id, page.parse().ok(), quote.to_string())),
+                // `quote:S<n>;<page>|<sentence>` is the same in the n-th attachment, as a citation of it is followed.
+                "quote" => self.lib.as_ref().and_then(|l| {
+                    let id = l.selected.clone()?;
+                    let (page, quote) = arg.split_once('|')?;
+                    let (file, page) = match page.strip_prefix('S').and_then(|rest| rest.split_once(';')) {
+                        Some((n, page)) => (Some(l.attachments(&id).get(n.parse::<usize>().ok()?.checked_sub(1)?)?.id.clone()), page),
+                        None => (None, page),
+                    };
+                    Some(Cmd::GotoFile(id, file, page.parse().ok(), quote.to_string()))
+                }),
                 // `pdfpick:<page>;<from>;<to>` selects glyphs of a 1-based page of the PDF on show (after a `shot:` has drawn it);
                 // `pdftranslate` translates the selection, `pdftranslate:<n>` with the n-th model for this once.
                 "pdfpick" => {
@@ -7086,6 +7225,8 @@ impl Workspace {
                     let files: Vec<String> = lib.main_pdf(paper).into_iter().chain(lib.attachments(paper)).map(|f| f.id.clone()).collect();
                     files.get(arg.parse::<usize>().unwrap_or(0)).cloned().map(Cmd::ReadFile)
                 }),
+                // `pdfbeside:<n>` shows the n-th PDF of the selected paper (counted as `readfile:` does) in the other half of the viewer.
+                "pdfbeside" => self.lib.as_ref().and_then(|lib| lib.selected.as_deref().and_then(|paper| lib.pdf_choices(paper).into_iter().nth(arg.parse::<usize>().unwrap_or(0)))).map(|(id, _)| Cmd::PdfBeside(id)),
                 // `pdfcut:<page>;<x0>;<y0>;<x1>;<y1>` marks a piece of a 1-based page of the PDF on show as cut out, in the page's
                 // points (after a `shot:` has drawn the page); `collect` hands it to the figure library, as 收藏到图片库 does.
                 "pdfcut" => {
@@ -7170,7 +7311,7 @@ impl Workspace {
                     return;
                 }
                 "menu" => {
-                    let kind = match arg { "sort" => MenuKind::Sort, "columns" => MenuKind::Columns, "year" => MenuKind::Filter(FilterKey::Year), "zoom" => MenuKind::PdfZoom, "pdfsplit" => MenuKind::PdfSplit, "fulltext" => MenuKind::Filter(FilterKey::Fulltext), "manuscripts" => MenuKind::Manuscripts, "export" => MenuKind::ManuscriptExport, "retry" => MenuKind::ExtractRetry, _ => MenuKind::Add };
+                    let kind = match arg { "sort" => MenuKind::Sort, "columns" => MenuKind::Columns, "year" => MenuKind::Filter(FilterKey::Year), "zoom" => MenuKind::PdfZoom, "pdfsplit" => MenuKind::PdfSplit, "pdffiles" => MenuKind::PdfFiles, "fulltext" => MenuKind::Filter(FilterKey::Fulltext), "manuscripts" => MenuKind::Manuscripts, "export" => MenuKind::ManuscriptExport, "retry" => MenuKind::ExtractRetry, _ => MenuKind::Add };
                     self.open_menu(kind, point(px(if matches!(arg, "zoom" | "manuscripts" | "export" | "retry") { 900. } else { 20. }), px(120.)), cx);
                     return;
                 }

@@ -1,17 +1,23 @@
 //! Fill a data folder with two sample libraries, for trying the app out:
 //!
-//!     cargo run -p wisp_core --example seed -- <data folder> [a.pdf] [more.pdf …]
+//!     cargo run -p wisp_core --example seed -- <data folder> [a.pdf] [more.pdf …] [--supplement s1.pdf …]
 //!
 //! The first PDF is attached to the first paper of the first library; any
 //! further ones become papers of the second library, each with its PDF as
-//! full text, so 写作 has sentences to show.
+//! full text, so 写作 has sentences to show. PDFs after `--supplement` are
+//! the first paper's attachments S1, S2, …
 
 use wisp_core::libraries;
 use wisp_core::model::{FieldDef, FieldKind, Paper};
 use wisp_core::store::Store;
 
 fn main() -> anyhow::Result<()> {
-    let mut args = std::env::args().skip(1);
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let supplements: Vec<std::path::PathBuf> = match args.iter().position(|a| a == "--supplement") {
+        Some(at) => args.split_off(at).into_iter().skip(1).map(std::path::PathBuf::from).collect(),
+        None => vec![],
+    };
+    let mut args = args.into_iter();
     let root = std::path::PathBuf::from(args.next().expect("usage: seed <data folder> [a.pdf]"));
     let pdf = args.next().map(std::path::PathBuf::from);
     let more: Vec<std::path::PathBuf> = args.map(std::path::PathBuf::from).collect();
@@ -44,9 +50,12 @@ fn main() -> anyhow::Result<()> {
         let added = store.add_paper(paper)?;
         if i == 0 { first = Some(added.id) }
     }
-    if let (Some(id), Some(pdf)) = (first, pdf) {
-        let file = store.import_file(&id, &pdf, "fulltext")?;
+    if let (Some(id), Some(pdf)) = (first.as_ref(), pdf) {
+        let file = store.import_file(id, &pdf, "fulltext")?;
         store.save_fulltext_pages(&file.id, &wisp_core::fulltext::file_pages(&pdf))?;
+    }
+    if let Some(id) = &first {
+        for path in &supplements { store.import_file(id, path, "supplement")?; }
     }
 
     let roots = libraries::create(&root, "植物根尖单细胞", "根尖分生组织的单细胞转录组研究：细胞类型图谱、发育轨迹和干细胞微环境。", "green")?;

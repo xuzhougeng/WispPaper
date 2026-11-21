@@ -222,7 +222,7 @@ impl Workspace {
 
     /// The area the PDF's floating tools stand in: the viewer as it was laid out.
     fn tools_area(&self, cx: &App) -> (f32, f32) {
-        self.lib.as_ref().and_then(|lib| lib.pdf.as_ref()).map(|pdf| { let view = pdf.read(cx); (view.width(), view.height()) }).unwrap_or_default()
+        self.lib.as_ref().map(|lib| lib.pdf_area(cx)).unwrap_or_default()
     }
 
     /// A press on the grip of the PDF's floating tools: the column follows the
