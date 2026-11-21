@@ -579,7 +579,7 @@ impl Workspace {
                     })
                     // How the paper is read, a switch on what it changes: the pages again beside themselves, their
                     // paragraphs translated in place. Lit while on, with how far the translation is and the one thing to do next.
-                    .when(count > 0 && !beside, |d| d.child(ui::ghost_button("pdf-facing", Some("languages"), Some(t("译文").into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).when(facing, |d| d.text_color(Theme::accent())).tooltip(ui::tip(if facing { t("收起译文") } else { t("对照译文：左边原文，右边把每段换成译文的页面") })).on_click(self.on(Cmd::ToggleFacing, cx))).children(self.facing_controls(cx)))
+                    .when(count > 0, |d| d.child(ui::ghost_button("pdf-facing", Some("languages"), Some(t("译文").into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).when(facing, |d| d.text_color(Theme::accent())).tooltip(ui::tip(if facing { t("收起译文") } else { t("对照译文：左边原文，右边把每段换成译文的页面") })).on_click(self.on(Cmd::ToggleFacing, cx))).children(self.facing_controls(cx)))
                     // The same file twice, side by side or one over the other: a figure in one half, the page that speaks of it in the other.
                     .when(docked, |d| d.child(ui::ghost_button("pdf-split", None, Some(split_label.into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).when(split != Split::Off, |d| d.text_color(Theme::accent())).on_click(self.on_menu(MenuKind::PdfSplit, cx))))
                     // Cut a piece out of a page (a figure, a table): to keep in the figure library, or as a picture for the next question.

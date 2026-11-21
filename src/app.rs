@@ -1980,11 +1980,21 @@ impl Library {
         if let Some(pdf) = &self.pdf { pdf.update(cx, |pdf, cx| pdf.follow_spoken(None, cx)) }
     }
 
+    /// Whether the selected paper's PDF is on show: on its tab, or beside (or under) the paper's conversation.
+    pub fn pdf_on_show(&self) -> bool {
+        self.tab == Tab::Pdf || (self.tab == Tab::Ask && self.split)
+    }
+
+    /// Whether the translation is beside the pages now: the switch is on and the PDF is on show (#193).
+    pub fn facing_shown(&self) -> bool {
+        self.facing && self.pdf_on_show()
+    }
+
     /// The podcast heard on while its paper is not on show: the paper, its file and how it stands; the
     /// bar at the window's foot shows it, and leads back.
     pub fn podcast_away(&self, cx: &App) -> Option<(&Paper, String, crate::read_aloud::Status)> {
         let reading = self.aloud.as_ref().filter(|r| r.kind == crate::read_aloud::Kind::Podcast)?;
-        let viewing = matches!(self.tab, Tab::Pdf) || (self.tab == Tab::Ask && self.split);
+        let viewing = self.pdf_on_show();
         let on_show = self.selected.is_some() && viewing && self.pdf.as_ref().is_some_and(|pdf| pdf.read(cx).resource_id() == reading.resource);
         if on_show { return None }
         let paper = self.files.iter().find(|f| f.id == reading.resource).and_then(|f| self.papers.iter().find(|p| p.id == f.paper_id))?;
@@ -2376,7 +2386,7 @@ impl Workspace {
                 // What the other half shows: the same file, or another of the paper's (a supplementary figure beside the text).
                 // The translation has the other half while it is on.
                 let choices = lib.selected.as_deref().map(|paper| lib.pdf_choices(paper)).unwrap_or_default();
-                if choices.len() > 1 && !(lib.facing && lib.tab == Tab::Pdf) {
+                if choices.len() > 1 && !lib.facing_shown() {
                     breaks.push(items.len());
                     let shown = other.unwrap_or_else(|| if current == Split::Off { String::new() } else { view.resource_id().to_string() });
                     for (id, label) in choices {
@@ -3151,7 +3161,7 @@ impl Workspace {
             }
             Cmd::AttachAs(paper, kind) => self.pick_attachment(paper, Some(kind), cx),
             // With the translation in the second half, one page again is putting the translation away.
-            Cmd::PdfSplit(Split::Off) if self.lib.as_ref().is_some_and(|lib| lib.facing && lib.tab == Tab::Pdf) => self.toggle_facing(cx),
+            Cmd::PdfSplit(Split::Off) if self.lib.as_ref().is_some_and(|lib| lib.facing_shown()) => self.toggle_facing(cx),
             Cmd::PdfSplit(split) => {
                 // Two files: one again is the one worked in, else the two halves change how they stand.
                 if self.lib.as_ref().is_some_and(|lib| lib.beside.is_some()) {
@@ -4429,7 +4439,7 @@ impl Workspace {
 
     fn open_pdf(&mut self, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
-        if !(lib.tab == Tab::Pdf || (lib.tab == Tab::Ask && lib.split)) || lib.pdf.is_some() { return }
+        if !lib.pdf_on_show() || lib.pdf.is_some() { return }
         let Some(file) = lib.selected.as_deref().and_then(|id| lib.pdf_file(id)).cloned() else { return };
         let Some((pdf, events)) = self.pdf_view(&file, cx) else { return };
         let Some(lib) = self.lib.as_mut() else { return };
@@ -4464,7 +4474,7 @@ impl Workspace {
         let Some(pdf) = lib.pdf.clone() else { return };
         let Some(paper) = lib.selected.clone() else { return };
         // The translation keeps the other half while it is on.
-        if lib.facing && lib.tab == Tab::Pdf { return }
+        if lib.facing_shown() { return }
         let (shown, inner, width) = { let view = pdf.read(cx); (view.resource_id().to_string(), view.split(), view.width()) };
         // As the halves stand now; split anew, side by side where there is room for two pages.
         let split = crate::pdf::beside_split(lib.beside.as_ref().map(|beside| beside.split), inner, width);
