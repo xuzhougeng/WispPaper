@@ -414,6 +414,8 @@ pub fn build_context(library_name: &str, topic: &str, papers: &[&Paper], fields:
             let tag = ctx.sources.iter().find(|s| &s.paper_id == id).map_or("P1", |s| s.label.as_str());
             format!("用户正在阅读其中一篇文献，下面是它的记录、正文和 {} 个附件（补充材料）。附件的页面标为 [{tag} S1 p.2]：S1 是第一个附件，页码是附件自己的页码；正文的页面不带 S。回答时把正文和附件一起考虑，引用附件时照这样写出附件编号，例如 [{tag} S1 p.2 \"附件中的一句原文\"]。", attachments.len())
         }
+        // The window asks about an empty list only when the library itself has no paper yet (#192).
+        Scope::Library if papers.is_empty() => "文献库里还没有文献。".to_string(),
         Scope::Library => {
             let mut line = format!("下面是文献库中 {} 篇文献的记录", ctx.full);
             if ctx.titles_only > 0 { line.push_str(&format!("，另有 {} 篇只列出题目", ctx.titles_only)) }
@@ -424,6 +426,12 @@ pub fn build_context(library_name: &str, topic: &str, papers: &[&Paper], fields:
         }
     };
     ctx.instructions = format!("你是 Wisp Study 里的文献助手，帮助用户理解和整理文献库「{library_name}」。\n{about}{scope_line}\n\n{RULES}");
+    // An empty library is where a library starts: the databases are where its papers are found, and only the person brings them in.
+    if matches!(scope, Scope::Library) && papers.is_empty() {
+        ctx.instructions.push_str("\n\n文献库还是空的，上面的规则按下面的理解：\n\
+- 不要只说「文献库里没有相关信息」就停下：需要文献时用 search_online 在 PubMed、Europe PMC、Crossref、arXiv 里检索（检索式写得具体些，先试一两个来源），依据检索结果里的题目和摘要回答，提到一篇文献时写出第一作者、年份和题目（有 DOI 时附上）；没有检索到的文献不要凭印象列出。\n\
+- 用户要把文献收进文献库时，用 save_search 保存检索式，再用 run_search 导入，导入前用户会在窗口里确认；也可以提醒用户用「检索与导入」或「添加文献」。");
+    }
     ctx.documents = documents;
     // A paper cited earlier that is not among these keeps its label too.
     for source in known {
@@ -1861,6 +1869,16 @@ mod tests {
 
     fn fulltext(id: &str, pages: &[&str]) -> BTreeMap<String, (PaperFile, Vec<String>)> {
         [(id.to_string(), (PaperFile::default(), pages.iter().map(|p| p.to_string()).collect()))].into()
+    }
+
+    #[test]
+    fn an_empty_library_is_told_where_papers_are_found() {
+        let empty = build_context("L", "", &[], &[], &BTreeMap::new(), &[], &Scope::Library, "根毛", &[]);
+        assert!(empty.instructions.contains("文献库里还没有文献") && empty.instructions.contains("search_online") && empty.instructions.contains("run_search"));
+        assert!(!empty.instructions.contains("0 篇文献的记录"));
+        let a = paper("a", "Root hairs", "Ethylene.");
+        let kept = build_context("L", "", &[&a], &[], &BTreeMap::new(), &[], &Scope::Library, "q", &[]);
+        assert!(!kept.instructions.contains("文献库还是空的") && kept.instructions.contains("1 篇文献的记录"));
     }
 
     #[test]

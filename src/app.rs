@@ -5417,8 +5417,9 @@ impl Workspace {
             };
             // A Word file to restyle needs no paper of the library.
             // Nor does a conversation not yet made a library: it starts from an idea, and looks in the literature databases.
-            if papers.is_empty() && talk != Talk::Write && files.is_empty() && !draft {
-                chat.error = t("当前列表里没有文献。先添加文献，或清空筛选条件。").into();
+            // Nor a library with no paper yet, for the same reason (#192): only a list the filters emptied is a mistake to point out.
+            if papers.is_empty() && !lib.papers.is_empty() && talk != Talk::Write && files.is_empty() && !draft {
+                chat.error = t("当前列表里没有文献。清空筛选条件后再问。").into();
                 cx.notify();
                 return false;
             }

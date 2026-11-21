@@ -692,7 +692,7 @@
   "当前列表是空的，没有可导出的文献。": "The current list is empty. No papers to export.",
   "图片还在读取，稍等一下再发送。": "Images are still loading. Wait before sending.",
   "这段原文说了什么？在这篇文献里起什么作用？": "What does this passage mean, and what role does it play in this paper?",
-  "当前列表里没有文献。先添加文献，或清空筛选条件。": "No papers in the current list. Add papers or clear filters.",
+  "当前列表里没有文献。清空筛选条件后再问。": "No papers in the current list. Clear the filters, then ask.",
   "已达到单次提问的步数上限，工具没有执行。": "The step limit for this question was reached. The tool was not run.",
   "已达到单次提问的步数上限。可以继续提问，让它接着做。": "The step limit for this question was reached. Ask again to continue.",
   "回答被截断，工具没有执行。": "The response was truncated. The tool was not run.",
