@@ -101,7 +101,7 @@ WISP_STUDY_HOME=/tmp/wisp-demo cargo run
 
 | | |
 |---|---|
-| [教程](https://xuzhougeng.github.io/WispStudy/tutorials/) | 九篇按科研场景写的教程，带截图：建库、迁移、精读、提问、提取、写综述、写论文、改稿、跟进新文献 |
+| [教程](https://xuzhougeng.github.io/WispStudy/tutorials/) | 十一篇按科研场景写的教程，带截图：建库、先聊后建库、迁移、精读、组会幻灯片、提问、提取、写综述、写论文、改稿、跟进新文献 |
 | [建库案例](docs/TUTORIAL.md) | 从零建一个「植物单细胞转录组」文献库的原始记录（v0.2.0） |
 | [功能详解](docs/FEATURES.md) | 每个页面能做什么 |
 | [数据与隐私](docs/DATA.md) | 文件放在哪里，哪些数据会离开本机 |
