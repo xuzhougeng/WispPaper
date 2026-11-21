@@ -1277,6 +1277,8 @@ pub struct Chat {
     /// Why the last answer ended early, if it did; while one is awaited, what it is waiting for.
     pub note: String,
     pub scroll: ScrollHandle,
+    /// The question box's own scroll area: a long question scrolls inside it, the caret kept in sight (`TextInput::follow`).
+    pub input_scroll: ScrollHandle,
     /// The answers (by their place in `messages`) whose sources are all on show.
     pub sources_open: HashSet<usize>,
     /// Bumped by 新对话 and by stopping, so what still arrives for the old run is dropped.
@@ -1647,10 +1649,12 @@ pub struct Workspace {
 
 impl Chat {
     fn new(placeholder: &'static str, cx: &mut App) -> Chat {
+        let input_scroll = ScrollHandle::new();
         let input = cx.new(|cx| {
             let mut input = TextInput::new(placeholder, cx).multiline(1);
             input.submit_on_enter = true;
             input.accepts_images = true;
+            input.follow = Some(input_scroll.clone());
             input
         });
         Chat {
@@ -1664,6 +1668,7 @@ impl Chat {
             error: String::new(),
             note: String::new(),
             scroll: ScrollHandle::new(),
+            input_scroll,
             sources_open: Default::default(),
             generation: 0,
             id: String::new(),
