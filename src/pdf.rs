@@ -19,6 +19,8 @@ actions!(pdf, [CopySelection, FindInPdf]);
 
 /// What the viewer tells whoever shows it.
 pub enum PdfEvent {
+    /// The pointer went down or turned the wheel in the viewer: beside a viewer of another file of the paper, this is the one worked in from now on.
+    Worked,
     /// The selected text went to the clipboard.
     Copied,
     /// Add what is selected to a conversation: the 1-based page, the text, and whether to the library's (else the paper's own).
@@ -93,6 +95,36 @@ pub struct Piece {
     pub bbox: [f32; 4],
     /// What the page says about it, when a caption stands by it.
     pub caption: Option<wisp_core::figure::Caption>,
+}
+
+/// A paragraph of a page with its translation, set in its place on the facing copy of the page.
+pub struct FacingPiece {
+    /// Where the paragraph stands: `[left, top, right, bottom]` in the page's points.
+    pub rect: [f32; 4],
+    /// The size the paragraph is set in.
+    pub size: f32,
+    /// The translation, once there is one; until then the page shows the paragraph itself.
+    pub text: Option<SharedString>,
+    /// Being asked for.
+    pub busy: bool,
+}
+
+/// The colour a paragraph stands on, read off the page's picture just outside its box (left, right and
+/// above; what two of the three agree on, else the first), and black or white to write on it.
+fn ground(image: &RenderImage, page: (f32, f32), rect: [f32; 4]) -> Option<(Hsla, Hsla)> {
+    let (size, bytes) = (image.size(0), image.as_bytes(0)?);
+    let (width, height) = (i32::from(size.width) as f32, i32::from(size.height) as f32);
+    let at = |x: f32, y: f32| {
+        let (column, row) = ((x / page.0 * width).clamp(0., width - 1.) as usize, (y / page.1 * height).clamp(0., height - 1.) as usize);
+        // BGRA, as the picture is handed to the window.
+        bytes.get((row * width as usize + column) * 4..).and_then(|pixel| Some([*pixel.get(2)?, *pixel.get(1)?, *pixel.first()?]))
+    };
+    let [x0, y0, x1, y1] = rect;
+    let seen = [at(x0 - 3., (y0 + y1) / 2.)?, at(x1 + 3., (y0 + y1) / 2.)?, at((x0 + x1) / 2., y0 - 3.)?];
+    let near = |a: [u8; 3], b: [u8; 3]| a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 6);
+    let [r, g, b] = if near(seen[1], seen[2]) && !near(seen[0], seen[1]) { seen[1] } else { seen[0] };
+    let light = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32 > 140.;
+    Some((gpui::rgb((r as u32) << 16 | (g as u32) << 8 | b as u32).into(), if light { gpui::black() } else { gpui::white() }))
 }
 
 /// The translation of the selected text, on a card beside it. It lasts as long as that selection.
@@ -219,7 +251,8 @@ pub enum Split {
 }
 
 /// The band between the two halves, in logical pixels: wide enough to tell a page that both halves show from one page.
-const DIVIDER: f32 = 4.;
+/// Two viewers of two files of a paper side by side have the same band between them.
+pub const DIVIDER: f32 = 4.;
 
 /// The size of a half of a viewer of this size; all of it while it is not split.
 fn pane_size(split: Split, view: (f32, f32)) -> (f32, f32) {
@@ -227,6 +260,16 @@ fn pane_size(split: Split, view: (f32, f32)) -> (f32, f32) {
         Split::Off => view,
         Split::Side => (((view.0 - DIVIDER) / 2.).max(0.), view.1),
         Split::Stacked => (view.0, ((view.1 - DIVIDER) / 2.).max(0.)),
+    }
+}
+
+/// How the viewer stands once another file of the paper is put in its other half: as its halves stand
+/// now (two files, or one file twice), else side by side where a viewer `width` wide has room for two pages.
+pub fn beside_split(two_files: Option<Split>, one_file: Split, width: f32) -> Split {
+    match (two_files, one_file) {
+        (Some(split), _) if split != Split::Off => split,
+        (_, Split::Off) => if width >= crate::facing::FACING_MIN { Split::Side } else { Split::Stacked },
+        (_, split) => split,
     }
 }
 
@@ -641,6 +684,11 @@ pub struct PdfView {
     /// The views of the pages: the second is on show only while the viewer is split.
     panes: [Pane; 2],
     split: Split,
+    /// 译文: the second half shows the pages with their paragraphs translated in place, and the two halves
+    /// scroll as one. By page (0-based), what stands in place of what (`Workspace::sync_facing`).
+    facing: Option<HashMap<usize, Vec<FacingPiece>>>,
+    /// How the viewer was split before the translation took its second half.
+    facing_was: Split,
     /// The half the pointer last worked in: the one the page number, the keys and a citation speak of.
     active: usize,
     /// The half the selection, the piece cut out or the highlight clicked was made in: what is offered for it stands there.
@@ -734,6 +782,8 @@ impl PdfView {
             pending: HashSet::new(),
             panes: [Pane::new(), Pane::new()],
             split: Split::Off,
+            facing: None,
+            facing_was: Split::Off,
             active: 0,
             held: 0,
             requests,
@@ -1109,6 +1159,8 @@ impl PdfView {
     /// second half starts where the first is; put away, the half last worked
     /// in is the one that stays.
     pub fn set_split(&mut self, split: Split, cx: &mut Context<Self>) {
+        // The translation keeps its half: side by side or one over the other, as chosen.
+        if self.facing.is_some() && split == Split::Off { return }
         if split == self.split { return }
         let was = self.split;
         if split == Split::Off && self.active == 1 { self.panes.swap(0, 1) }
@@ -1125,6 +1177,31 @@ impl PdfView {
 
     pub fn zoom(&self) -> Zoom {
         self.zoom
+    }
+
+    /// Show the pages' translation in the second half (`Some`: the paragraphs of each page, 0-based), or
+    /// put it away. The viewer is split for it, side by side where it is wide enough for two pages, and
+    /// goes back to how it was split before.
+    pub fn set_facing(&mut self, pieces: Option<HashMap<usize, Vec<FacingPiece>>>, cx: &mut Context<Self>) {
+        match (self.facing.is_some(), pieces.is_some()) {
+            (false, true) => {
+                self.facing_was = self.split;
+                if self.split == Split::Off { self.set_split(if self.width >= crate::facing::FACING_MIN { Split::Side } else { Split::Stacked }, cx) }
+                self.facing = pieces;
+            }
+            (true, false) => {
+                self.facing = None;
+                // The original is the half that stays.
+                self.active = 0;
+                self.set_split(self.facing_was, cx);
+            }
+            _ => self.facing = pieces,
+        }
+        cx.notify();
+    }
+
+    pub fn facing(&self) -> bool {
+        self.facing.is_some()
     }
 
     /// How large the page in view is drawn, in percent of its own size.
@@ -1218,6 +1295,7 @@ impl PdfView {
     fn wheel(&mut self, event: &ScrollWheelEvent, bounds: Bounds<Pixels>, cx: &mut Context<Self>) -> bool {
         let delta = event.delta.pixel_delta(px(20.));
         let (dx, dy) = (f32::from(delta.x), f32::from(delta.y));
+        cx.emit(PdfEvent::Worked);
         // The half under the pointer is the one worked in from here on.
         let at = (f32::from(event.position.x - bounds.origin.x), f32::from(event.position.y - bounds.origin.y));
         let view = (f32::from(bounds.size.width), f32::from(bounds.size.height));
@@ -1253,6 +1331,7 @@ impl PdfView {
         let (thumb, left) = bar_thumb(self.pane_size().0, self.max_x, self.panes[pane].scroll_x);
         let at = f32::from(x - self.panes[pane].list.viewport_bounds().left()) - BAR_INSET;
         self.sliding = Some((pane, if at >= left && at <= left + thumb { at - left } else { thumb / 2. }));
+        cx.emit(PdfEvent::Worked);
         self.slide(x, cx);
     }
 
@@ -1448,14 +1527,17 @@ impl PdfView {
         // Boxes, hollow so what they frame stays clear; the one chosen with its four corners to size it by.
         let chosen = self.mark_menu.as_ref().map(|menu| menu.id.clone());
         let free = self.tool == Tool::Select && !cutting;
-        let shapes: Vec<Div> = self.annotations.iter().filter(|a| a.page == index + 1 && a.kind == Kind::Box).map(|a| {
+        // A piece marked to be cut out later is a dashed frame in the accent, and says it can be clicked.
+        let shapes: Vec<Div> = self.annotations.iter().filter(|a| a.page == index + 1 && matches!(a.kind, Kind::Box | Kind::Cut)).map(|a| {
             let [x0, y0, x1, y1] = self.rect_of(a);
-            let color = Theme::highlight_swatch(&a.color);
+            let marked = a.kind == Kind::Cut;
+            let color = if marked { Theme::accent() } else { Theme::highlight_swatch(&a.color) };
             let picked = chosen.as_deref() == Some(a.id.as_str());
             let grips = picked.then(|| [(0., 0.), (1., 0.), (1., 1.), (0., 1.)].map(|(fx, fy)| {
                 div().absolute().left(px((x1 - x0) * scale * fx - GRIP / 2. + 1.)).top(px((y1 - y0) * scale * fy - GRIP / 2. + 1.)).size(px(GRIP)).rounded(px(2.)).bg(gpui::white()).border_1().border_color(color)
             }));
             div().absolute().left(px(x0 * scale - 1.)).top(px(y0 * scale - 1.)).w(px((x1 - x0) * scale + 2.)).h(px((y1 - y0) * scale + 2.)).border_2().border_color(color).rounded(px(2.))
+                .when(marked, |d| d.border_dashed().when(self.tool == Tool::Select, |d| d.cursor_pointer()).when(picked, |d| d.bg(Theme::selection())))
                 .children(grips.into_iter().flatten())
         }).collect();
         // A box being drawn.
@@ -1484,6 +1566,31 @@ impl PdfView {
             .map(|(current, line)| div().absolute().left(px(line[0] * scale - 1.)).top(px(line[1] * scale)).w(px((line[2] - line[0]) * scale + 2.)).h(px((line[3] - line[1]) * scale)).rounded(px(2.)).bg(if current { Theme::found_current() } else { Theme::found() }))
             .collect();
         let sheet = div().relative().flex_none().ml(px(self.sheet_left(pane, width))).w(px(width)).h(px(height)).bg(gpui::white()).border_1().border_color(Theme::line()).overflow_hidden();
+        // The facing copy of the page: each paragraph translated stands in the paragraph's own box, on the
+        // page's white, set no larger than the paragraph and as small as it takes to stand in it
+        // (`translation::fit`). One being asked for is tinted; the rest of the page is as it was.
+        if pane == 1 && let Some(facing) = &self.facing {
+            let picture = image.as_ref().map(|(image, _)| image.clone());
+            let pieces = facing.get(&index).map(Vec::as_slice).unwrap_or_default().iter().filter_map(|piece| {
+                let [x0, y0, x1, y1] = piece.rect;
+                // The colour the paragraph stands on (a tinted box, a table's band), read off the page beside it.
+                let (paper, ink) = picture.as_ref().and_then(|image| ground(image, (w, h), piece.rect)).unwrap_or((gpui::white(), gpui::black()));
+                let place = div().absolute().left(px((x0 - 1.) * scale)).top(px((y0 - 0.5) * scale)).w(px((x1 - x0 + 2.) * scale));
+                match &piece.text {
+                    Some(text) => {
+                        let size = wisp_core::translation::fit(text, x1 - x0, y1 - y0, piece.size);
+                        Some(place.min_h(px((y1 - y0 + 1.) * scale)).max_h(px((y1 - y0).max(size * wisp_core::translation::LEADING) * scale + size * scale)).overflow_hidden().bg(paper).text_color(ink).text_size(px(size * scale)).line_height(px(size * wisp_core::translation::LEADING * scale)).child(text.clone()))
+                    }
+                    None if piece.busy => Some(place.h(px((y1 - y0 + 1.) * scale)).rounded(px(2.)).bg(Theme::accent().opacity(0.10))),
+                    None => None,
+                }
+            });
+            let sheet = match image {
+                Some((image, _)) => sheet.child(img(image).w(px(width)).h(px(height))).children(pieces),
+                None => sheet.flex().items_center().justify_center().text_size(text_px(12.)).text_color(Theme::text_placeholder()).child(tf!("第 {} 页", "Page {}", index + 1)),
+            };
+            return div().w_full().flex().pb(px(PAGE_GAP)).child(sheet).into_any_element();
+        }
         let sheet = match image {
             Some((image, _)) => sheet.when(cutting || !free, |d| d.cursor_crosshair()).when(free, |d| d.cursor_text()).child(img(image).w(px(width)).h(px(height))).children(annotations).children(selected).children(marks).children(found).children(cut).children(shapes).children(drawing).children(notes),
             None => sheet.flex().items_center().justify_center().text_size(text_px(12.)).text_color(Theme::text_placeholder()).child(if self.broken.contains(&index) { tf!("第 {} 页无法渲染", "Cannot render page {}", index + 1) } else { tf!("第 {} 页", "Page {}", index + 1) }),
@@ -1528,6 +1635,7 @@ impl PdfView {
     /// starts there; on a box or a note, that is taken hold of.
     fn press(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus);
+        cx.emit(PdfEvent::Worked);
         let chosen = self.mark_menu.take();
         (self.selection, self.selecting, self.translation, self.pressed_mark, self.shape_drag) = (None, false, None, None, None);
         // The half pressed in is the one worked in; a drag stays in it. The line between the two is neither.
@@ -1540,6 +1648,8 @@ impl PdfView {
             // A piece of the page is cut out from here.
             self.cut = self.locate(pane, event.position).map(|(page, x, y)| (page, [x, y, x, y]));
             self.selecting = self.cut.is_some();
+            // A click on a piece marked before is for that mark, not a new piece.
+            self.pressed_mark = self.cut.and_then(|(page, [x, y, ..])| Some((self.cut_mark_at(page, x, y)?, event.position)));
             return cx.notify();
         }
         let Some((page, x, y)) = self.locate(pane, event.position) else {
@@ -1573,7 +1683,7 @@ impl PdfView {
         }
         self.mark_menu = None;
         if self.note_draft.is_none() && !self.note_editing { self.note_open = None }
-        self.pressed_mark = self.highlight_at(page, x, y).map(|(id, line)| (MarkMenu { id, page, x, line }, event.position));
+        self.pressed_mark = self.highlight_at(page, x, y).map(|(id, line)| MarkMenu { id, page, x, line }).or_else(|| self.cut_mark_at(page, x, y)).map(|menu| (menu, event.position));
         if let Some((marks, at)) = self.marks.get(&page).and_then(|marks| Some((marks, pdftext::mark_at(marks, x, y)?))) {
             self.selection = Some(Selection { page, anchor: at, focus: at });
             self.selecting = true;
@@ -1594,6 +1704,15 @@ impl PdfView {
         self.annotations.iter().rev().filter(|a| a.kind == Kind::Highlight && a.page == page + 1).find_map(|a| {
             let line = a.boxes.iter().find(|b| x >= b[0] - 1. && x <= b[2] + 1. && y >= b[1] - 1. && y <= b[3] + 1.)?;
             Some((a.id.clone(), (line[1], line[3])))
+        })
+    }
+
+    /// The piece marked to be cut out under a point of a 0-based page, as the menu a click on it opens: the
+    /// one made last where they overlap. Its edge is taken hold of by `shape_at`; this is the whole of it.
+    fn cut_mark_at(&self, page: usize, x: f32, y: f32) -> Option<MarkMenu> {
+        self.annotations.iter().rev().filter(|a| a.kind == Kind::Cut && a.page == page + 1).find_map(|a| {
+            let [x0, y0, x1, y1] = self.rect_of(a);
+            (x >= x0 && x <= x1 && y >= y0 && y <= y1).then(|| MarkMenu { id: a.id.clone(), page, x: x0, line: (y0, y1) })
         })
     }
 
@@ -1728,9 +1847,14 @@ impl PdfView {
         self.cutting
     }
 
-    /// The piece cut out, as a PNG: taken from the picture the page is drawn with.
+    /// The piece cut out, as a PNG.
     fn cut_picture(&self) -> Option<Vec<u8>> {
-        let (page, [x0, y0, x1, y1]) = self.cut?;
+        let (page, rect) = self.cut?;
+        self.picture_of(page, rect)
+    }
+
+    /// A piece of a 0-based page as a PNG: taken from the picture the page is drawn with.
+    fn picture_of(&self, page: usize, [x0, y0, x1, y1]: [f32; 4]) -> Option<Vec<u8>> {
         let (image, scale, _) = self.images.get(&page)?;
         let (width, height) = (image.size(0).width.0 as u32, image.size(0).height.0 as u32);
         let edge = |at: f32, most: u32| ((at * scale).round().max(0.) as u32).min(most);
@@ -1763,6 +1887,39 @@ impl PdfView {
         let bbox = [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)];
         let caption = self.marks.get(&page).and_then(|marks| wisp_core::figure::caption(marks, bbox));
         cx.emit(PdfEvent::Figure(Piece { png, page: page + 1, bbox, caption }));
+    }
+
+    /// Leave the piece cut out marked on its page, a dashed frame to click later: for the figure library or
+    /// a question then. Cutting stays on for the next one.
+    fn mark_cut(&mut self, cx: &mut Context<Self>) {
+        let Some((page, rect)) = self.cut.take() else { return };
+        cx.emit(PdfEvent::AddShape { paper: self.paper_id.clone(), resource: self.resource_id.clone(), page: page + 1, kind: Kind::Cut, rect, note: String::new() });
+        cx.notify();
+    }
+
+    /// The piece of the menu's mark, with its 0-based page and its place there.
+    fn marked_piece(&self) -> Option<(Vec<u8>, usize, [f32; 4])> {
+        let menu = self.mark_menu.as_ref()?;
+        let mark = self.annotations.iter().find(|a| a.id == menu.id && a.kind == Kind::Cut)?;
+        let (page, rect) = (mark.page.checked_sub(1)?, self.rect_of(mark));
+        Some((self.picture_of(page, rect)?, page, rect))
+    }
+
+    /// Hand the piece of the menu's mark to the figure library, as `collect_cut` does a piece just cut. The mark stays.
+    fn collect_mark(&mut self, cx: &mut Context<Self>) {
+        let Some((png, page, bbox)) = self.marked_piece() else { return };
+        self.mark_menu = None;
+        let caption = self.marks.get(&page).and_then(|marks| wisp_core::figure::caption(marks, bbox));
+        cx.emit(PdfEvent::Figure(Piece { png, page: page + 1, bbox, caption }));
+        cx.notify();
+    }
+
+    /// Hand the piece of the menu's mark to a conversation as a picture, and go back to selecting text. The mark stays.
+    fn send_mark(&mut self, to_library: bool, cx: &mut Context<Self>) {
+        let Some((png, ..)) = self.marked_piece() else { return };
+        (self.mark_menu, self.cut, self.cutting) = (None, None, false);
+        cx.emit(PdfEvent::Picture(png, to_library));
+        cx.notify();
     }
 
     /// The piece cut out is in the figure library: the next one can be cut.
@@ -2027,19 +2184,24 @@ impl PdfView {
                 .when(piece, |d| d.child(button("pdf-cut-keep", t("收藏到图片库")).text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.collect_cut(cx)))))
                 .when(piece && self.library_chat, |d| d.child(button("pdf-cut-library", t("截图加到文献库对话")).on_click(cx.listener(|this, _, _, cx| this.send_cut(true, cx)))).child(button("pdf-cut-paper", t("截图加到这篇的对话")).on_click(cx.listener(|this, _, _, cx| this.send_cut(false, cx)))))
                 .when(piece && !self.library_chat, |d| d.child(button("pdf-cut-paper", t("用这张截图提问")).on_click(cx.listener(|this, _, _, cx| this.send_cut(false, cx)))))
+                // Or left on the page as a mark, to come back to.
+                .when(piece, |d| d.child(button("pdf-cut-mark", t("标记")).tooltip(ui::tip(t("在页面上留一圈虚线，之后点它再收藏或提问"))).on_click(cx.listener(|this, _, _, cx| this.mark_cut(cx)))))
                 .when(piece, |d| d.child(button("pdf-cut-cancel", t("取消")).on_click(cx.listener(|this, _, _, cx| this.toggle_cutting(cx)))))
                 .into_any_element(),
         )
     }
 
     /// What can be done with a highlight clicked, under the line clicked (over it at the viewer's foot):
-    /// its colours, the one it has ringed, and 删除高亮. The same small bar as the selection's.
+    /// its colours, the one it has ringed, and 删除高亮. The same small bar as the selection's. A piece marked
+    /// to be cut out has what a piece just cut has instead of colours: the figure library, a question.
     fn mark_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let menu = self.mark_menu.as_ref()?;
         let mark = self.annotations.iter().find(|a| a.id == menu.id)?;
         let scale = self.scale_of(menu.page);
         let (x, y) = self.sheet_place(menu.page)?;
         const HEIGHT: f32 = 34.;
+        let marked = mark.kind == Kind::Cut;
+        let button = |id: &'static str, label: &'static str| div().id(id).flex().flex_none().items_center().h(text_px(26.)).px(px(9.)).rounded(px(6.)).cursor_pointer().hover(|s| s.bg(Theme::hover())).child(label);
         let below = y + menu.line.1 * scale + 6.;
         let top = if below + HEIGHT + 8. <= self.height { below } else { y + menu.line.0 * scale - 6. - HEIGHT };
         let swatches = COLORS.iter().zip(COLOR_NAMES).map(|(&key, name)| {
@@ -2062,7 +2224,7 @@ impl PdfView {
             div()
                 .id("pdf-mark-menu")
                 .absolute()
-                .left(px((x + menu.x * scale - 16.).clamp(8., (self.width - 240.).max(8.))))
+                .left(px((x + menu.x * scale - if marked { 0. } else { 16. }).clamp(8., (self.width - if marked { 420. } else { 240. }).max(8.))))
                 .top(px(top.clamp(8., (self.height - HEIGHT - 8.).max(8.))))
                 .flex()
                 .items_center()
@@ -2078,9 +2240,12 @@ impl PdfView {
                 // A press on the menu is not a press on the page; one anywhere else puts it away.
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| if this.mark_menu.take().is_some() { cx.notify() }))
-                .children(swatches)
+                .when(!marked, |d| d.children(swatches))
+                .when(marked, |d| d.child(button("pdf-mark-keep", t("收藏到图片库")).text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.collect_mark(cx)))))
+                .when(marked && self.library_chat, |d| d.child(button("pdf-mark-library", t("截图加到文献库对话")).on_click(cx.listener(|this, _, _, cx| this.send_mark(true, cx)))).child(button("pdf-mark-paper", t("截图加到这篇的对话")).on_click(cx.listener(|this, _, _, cx| this.send_mark(false, cx)))))
+                .when(marked && !self.library_chat, |d| d.child(button("pdf-mark-paper", t("用这张截图提问")).on_click(cx.listener(|this, _, _, cx| this.send_mark(false, cx)))))
                 .child(div().flex_none().w(px(1.)).h(px(16.)).mx(px(4.)).bg(Theme::line()))
-                .child(div().id("pdf-mark-remove").flex().flex_none().items_center().h(text_px(26.)).px(px(9.)).rounded(px(6.)).cursor_pointer().text_color(Theme::danger()).hover(|s| s.bg(Theme::hover())).child(if mark.kind == Kind::Box { t("删除方框") } else { t("删除高亮") }).on_click(cx.listener(|this, _, _, cx| this.remove_mark(cx))))
+                .child(div().id("pdf-mark-remove").flex().flex_none().items_center().h(text_px(26.)).px(px(9.)).rounded(px(6.)).cursor_pointer().text_color(Theme::danger()).hover(|s| s.bg(Theme::hover())).child(match mark.kind { Kind::Box => t("删除方框"), Kind::Cut => t("删除标记"), _ => t("删除高亮") }).on_click(cx.listener(|this, _, _, cx| this.remove_mark(cx))))
                 .into_any_element(),
         )
     }
@@ -2096,7 +2261,7 @@ impl PdfView {
                 let (page, top) = (annotation.page, annotation.boxes.first().map(|b| b[1]).unwrap_or(0.));
                 let note = annotation.note.clone();
                 let editing = self.annotation_edit.as_deref() == Some(id.as_str());
-                let kind = match annotation.kind { Kind::Underline => t("下划线"), Kind::Highlight => t("高亮"), Kind::Box => t("方框"), Kind::Note => t("便签") };
+                let kind = match annotation.kind { Kind::Underline => t("下划线"), Kind::Highlight => t("高亮"), Kind::Box => t("方框"), Kind::Note => t("便签"), Kind::Cut => t("截图标记") };
                 div().id(SharedString::from(id)).p(px(10.)).border_b_1().border_color(Theme::line()).flex().flex_col().gap(px(7.))
                     .child(div().flex().flex_wrap().items_center().gap(px(4.))
                         .children(matches!(annotation.kind, Kind::Highlight | Kind::Box).then(|| div().flex_none().size(px(8.)).mr(px(2.)).rounded_full().bg(Theme::highlight_swatch(&annotation.color))))
@@ -2170,6 +2335,13 @@ impl Render for PdfView {
             return ui::empty_state("file-text", t("正在打开 PDF…"), "").size_full().into_any_element();
         }
         self.device_scale = window.scale_factor();
+        // The page and its translation are read as one: the half last scrolled leads the other.
+        if self.facing.is_some() && self.split != Split::Off {
+            let (lead, other) = (self.active, 1 - self.active);
+            let (top, theirs) = (self.panes[lead].list.logical_scroll_top(), self.panes[other].list.logical_scroll_top());
+            if top.item_ix != theirs.item_ix || top.offset_in_item != theirs.offset_in_item { self.panes[other].list.scroll_to(top) }
+            self.panes[other].scroll_x = self.panes[lead].scroll_x;
+        }
         let (measured, wheel, slid) = (cx.entity(), cx.entity(), cx.entity());
         let bars = [0, 1].map(|pane| self.sideways_bar(pane, cx));
         let mut bars = bars.into_iter();
@@ -2279,7 +2451,7 @@ impl Render for PdfView {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that would bring in gpui's own `test` attribute.
-    use super::{BAR_INSET, BAR_THUMB_MIN, CARD_EDGE, CardPlace, CitationFocus, CitationStatus, DIVIDER, MARGIN, PAGE_GAP, POINT_PX, Split, Zoom, bar_thumb, card_place, page_scale, pane_at, pane_size, picture_serves, render_scale, search_words, zoom_step};
+    use super::{BAR_INSET, BAR_THUMB_MIN, CARD_EDGE, CardPlace, CitationFocus, CitationStatus, DIVIDER, MARGIN, PAGE_GAP, POINT_PX, Split, Zoom, bar_thumb, beside_split, card_place, page_scale, pane_at, pane_size, picture_serves, render_scale, search_words, zoom_step};
 
     #[test]
     fn a_sentence_not_found_is_looked_for_by_its_words() {
@@ -2289,6 +2461,17 @@ mod tests {
         // A term in a Chinese sentence before the characters around it.
         assert_eq!(search_words("我们用 Arabidopsis 做了实验"), ["Arabidopsis", "我们用", "做了实验"]);
         assert!(search_words("").is_empty());
+    }
+
+    #[test]
+    fn another_file_beside_keeps_how_the_halves_stand() {
+        let (wide, narrow) = (crate::facing::FACING_MIN, crate::facing::FACING_MIN - 1.);
+        // Two files already: the other half changes its file, not its place.
+        assert_eq!(beside_split(Some(Split::Stacked), Split::Off, wide), Split::Stacked);
+        // One file split on itself: its second half takes the other file, as it stood.
+        assert_eq!((beside_split(None, Split::Side, narrow), beside_split(None, Split::Stacked, wide)), (Split::Side, Split::Stacked));
+        // Whole: side by side where two pages have room, else one over the other.
+        assert_eq!((beside_split(None, Split::Off, wide), beside_split(None, Split::Off, narrow)), (Split::Side, Split::Stacked));
     }
 
     #[test]

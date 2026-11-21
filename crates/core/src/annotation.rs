@@ -40,6 +40,20 @@ CREATE TABLE IF NOT EXISTS pdf_shapes (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_pdf_shapes_source ON pdf_shapes(resource_id, page);
+-- Pieces of a page marked to be cut out later (a figure for the slides, a table to ask about): only the
+-- place is kept, the picture is taken from the page when the mark is used. A table of their own, since
+-- the CHECK of `pdf_shapes` in libraries already made knows two kinds only.
+CREATE TABLE IF NOT EXISTS pdf_cuts (
+    id TEXT PRIMARY KEY NOT NULL,
+    paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+    page INTEGER NOT NULL CHECK (page > 0),
+    rect_json TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pdf_cuts_source ON pdf_cuts(resource_id, page);
 "#;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,16 +65,18 @@ pub enum Kind {
     Box,
     /// A sticky note at a spot of a page; its text is `note`.
     Note,
+    /// A piece of a page marked to be cut out later (`pdf_cuts`): drawn as a dashed frame.
+    Cut,
 }
 
 impl Kind {
     pub fn key(self) -> &'static str {
-        match self { Self::Underline => "underline", Self::Highlight => "highlight", Self::Box => "box", Self::Note => "note" }
+        match self { Self::Underline => "underline", Self::Highlight => "highlight", Self::Box => "box", Self::Note => "note", Self::Cut => "cut" }
     }
 
-    /// Placed on the page (`pdf_shapes`), not on its text.
+    /// Placed on the page (`pdf_shapes`, `pdf_cuts`), not on its text.
     pub fn shape(self) -> bool {
-        matches!(self, Self::Box | Self::Note)
+        matches!(self, Self::Box | Self::Note | Self::Cut)
     }
 }
 
@@ -100,7 +116,9 @@ impl Store {
             "SELECT id, paper_id, resource_id, page, kind, quote, boxes_json, note, created_at, updated_at, color FROM (
                SELECT id, paper_id, resource_id, page, kind, quote, boxes_json, note, created_at, updated_at, color FROM pdf_annotations
                UNION ALL
-               SELECT id, paper_id, resource_id, page, kind, '', '[' || rect_json || ']', note, created_at, updated_at, color FROM pdf_shapes)
+               SELECT id, paper_id, resource_id, page, kind, '', '[' || rect_json || ']', note, created_at, updated_at, color FROM pdf_shapes
+               UNION ALL
+               SELECT id, paper_id, resource_id, page, 'cut', '', '[' || rect_json || ']', note, created_at, updated_at, '' FROM pdf_cuts)
              WHERE (?1 = '' OR paper_id = ?1) AND (?2 = '' OR resource_id = ?2)
              AND paper_id NOT IN (SELECT paper_id FROM trashed_papers)
              ORDER BY paper_id, resource_id, page, created_at, id",
@@ -112,7 +130,7 @@ impl Store {
             let invalid = |i, e| rusqlite::Error::FromSqlConversionFailure(i, rusqlite::types::Type::Text, Box::new(e));
             let kind: Kind = serde_json::from_value(serde_json::Value::String(kind)).map_err(|e| invalid(4, e))?;
             let color = match kind {
-                Kind::Underline | Kind::Note => String::new(),
+                Kind::Underline | Kind::Note | Kind::Cut => String::new(),
                 Kind::Highlight | Kind::Box if COLORS.contains(&color.as_str()) => color,
                 Kind::Highlight => COLORS[0].into(),
                 Kind::Box => BOX_COLOR.into(),
@@ -155,7 +173,8 @@ impl Store {
     }
 
     /// A box drawn round part of a page (`rect` its edges), or a sticky note at a spot of it (`rect` that spot twice,
-    /// `note` its text). A box is drawn in `BOX_COLOR` until another is chosen.
+    /// `note` its text). A box is drawn in `BOX_COLOR` until another is chosen. A piece marked to be cut out
+    /// (`Kind::Cut`) is kept once: the same place marked again is the mark there.
     pub fn add_pdf_shape(&mut self, paper: &str, resource: &str, page: usize, kind: Kind, rect: [f32; 4], note: &str) -> Result<Annotation> {
         if !kind.shape() { bail!("下划线和高亮用 add_pdf_annotation 保存。") }
         if page == 0 || page > i32::MAX as usize { bail!("PDF 标注需要有效的页码。") }
@@ -164,7 +183,15 @@ impl Store {
         self.check_pdf(paper, resource)?;
         let now = now_iso();
         let color = if kind == Kind::Box { BOX_COLOR } else { "" };
+        if kind == Kind::Cut && let Some(existing) = self.pdf_annotations(paper, resource)?.into_iter().find(|a| a.kind == kind && a.page == page && a.boxes == [rect]) { return Ok(existing) }
         let shape = Annotation { id: new_id("A"), paper_id: paper.into(), resource_id: resource.into(), page, kind, quote: String::new(), boxes: vec![rect], note: note.trim().into(), color: color.into(), created_at: now.clone(), updated_at: now };
+        if kind == Kind::Cut {
+            self.db.execute(
+                "INSERT INTO pdf_cuts (id, paper_id, resource_id, page, rect_json, note, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+                params![shape.id, paper, resource, page as i64, serde_json::to_string(&rect)?, shape.note, shape.created_at],
+            )?;
+            return Ok(shape);
+        }
         self.db.execute(
             "INSERT INTO pdf_shapes (id, paper_id, resource_id, page, kind, rect_json, note, color, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
             params![shape.id, paper, resource, page as i64, kind.key(), serde_json::to_string(&rect)?, shape.note, color, shape.created_at],
@@ -172,11 +199,15 @@ impl Store {
         Ok(shape)
     }
 
-    /// A box moved or sized, a note moved: on the same page, to `rect`.
+    /// A box or a piece marked moved or sized, a note moved: on the same page, to `rect`.
     pub fn move_pdf_shape(&mut self, resource: &str, id: &str, rect: [f32; 4]) -> Result<()> {
         let kind: Option<String> = self.db.query_row("SELECT kind FROM pdf_shapes WHERE id = ?1 AND resource_id = ?2", params![id, resource], |r| r.get(0)).optional()?;
-        let kind = match kind.as_deref() { Some("box") => Kind::Box, Some(_) => Kind::Note, None => bail!("PDF 标注不存在。") };
-        let rect = valid_rect(kind, rect)?;
+        let Some(kind) = kind else {
+            let rect = serde_json::to_string(&valid_rect(Kind::Cut, rect)?)?;
+            if self.db.execute("UPDATE pdf_cuts SET rect_json = ?1, updated_at = ?2 WHERE id = ?3 AND resource_id = ?4", params![rect, now_iso(), id, resource])? == 0 { bail!("PDF 标注不存在。") }
+            return Ok(());
+        };
+        let rect = valid_rect(if kind == "box" { Kind::Box } else { Kind::Note }, rect)?;
         self.db.execute("UPDATE pdf_shapes SET rect_json = ?1, updated_at = ?2 WHERE id = ?3", params![serde_json::to_string(&rect)?, now_iso(), id])?;
         Ok(())
     }
@@ -186,7 +217,8 @@ impl Store {
         if note.len() > 100_000 { bail!("标注笔记过长。") }
         let params = params![note.trim(), now_iso(), id, resource];
         if self.db.execute("UPDATE pdf_annotations SET note = ?1, updated_at = ?2 WHERE id = ?3 AND resource_id = ?4", params)? == 0
-            && self.db.execute("UPDATE pdf_shapes SET note = ?1, updated_at = ?2 WHERE id = ?3 AND resource_id = ?4", params)? == 0 { bail!("PDF 标注不存在。") }
+            && self.db.execute("UPDATE pdf_shapes SET note = ?1, updated_at = ?2 WHERE id = ?3 AND resource_id = ?4", params)? == 0
+            && self.db.execute("UPDATE pdf_cuts SET note = ?1, updated_at = ?2 WHERE id = ?3 AND resource_id = ?4", params)? == 0 { bail!("PDF 标注不存在。") }
         Ok(())
     }
 
@@ -201,7 +233,8 @@ impl Store {
 
     pub fn remove_pdf_annotation(&mut self, resource: &str, id: &str) -> Result<()> {
         if self.db.execute("DELETE FROM pdf_annotations WHERE id = ?1 AND resource_id = ?2", params![id, resource])? == 0
-            && self.db.execute("DELETE FROM pdf_shapes WHERE id = ?1 AND resource_id = ?2", params![id, resource])? == 0 { bail!("PDF 标注不存在。") }
+            && self.db.execute("DELETE FROM pdf_shapes WHERE id = ?1 AND resource_id = ?2", params![id, resource])? == 0
+            && self.db.execute("DELETE FROM pdf_cuts WHERE id = ?1 AND resource_id = ?2", params![id, resource])? == 0 { bail!("PDF 标注不存在。") }
         Ok(())
     }
 }
@@ -213,7 +246,7 @@ fn valid_rect(kind: Kind, [x0, y0, x1, y1]: [f32; 4]) -> Result<[f32; 4]> {
         Kind::Note => Ok([x0, y0, x0, y0]),
         _ => {
             let rect = [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)];
-            if rect[2] - rect[0] < 1. || rect[3] - rect[1] < 1. { bail!("方框太小。") }
+            if rect[2] - rect[0] < 1. || rect[3] - rect[1] < 1. { bail!(if kind == Kind::Cut { "截图标记太小。" } else { "方框太小。" }) }
             Ok(rect)
         }
     }
@@ -297,6 +330,37 @@ mod tests {
         let mut kept = vec![(first.id, "green".to_string()), (line.id, String::new())];
         kept.sort();
         assert_eq!(left, kept);
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_piece_marked_to_be_cut_out_is_kept_once_moved_noted_and_removed() {
+        let root = std::env::temp_dir().join(new_id("wisp-annotation-cuts"));
+        let source = root.join("source.pdf");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(&source, b"%PDF-1.4 test source").unwrap();
+        let mut store = Store::in_memory(&root).unwrap();
+        let paper = store.add_paper(Paper { title: "Roots".into(), ..Default::default() }).unwrap();
+        let file = store.import_file(&paper.id, &source, "fulltext").unwrap();
+        let frame = store.add_pdf_shape(&paper.id, &file.id, 3, Kind::Box, [50., 100., 200., 300.], "").unwrap();
+        // Dragged from the bottom right up; the same place marked again is the same mark.
+        let cut = store.add_pdf_shape(&paper.id, &file.id, 3, Kind::Cut, [200., 300., 50., 100.], "").unwrap();
+        assert_eq!((cut.kind, cut.boxes[0], cut.color.as_str()), (Kind::Cut, [50., 100., 200., 300.], ""));
+        assert_eq!(store.add_pdf_shape(&paper.id, &file.id, 3, Kind::Cut, [50., 100., 200., 300.], "").unwrap().id, cut.id);
+        assert!(store.add_pdf_shape(&paper.id, &file.id, 3, Kind::Cut, [1., 1., 1.5, 40.], "").is_err());
+        store.move_pdf_shape(&file.id, &cut.id, [60., 110., 210., 320.]).unwrap();
+        store.update_pdf_annotation_note(&file.id, &cut.id, " Slide 3 ").unwrap();
+        assert!(store.recolor_pdf_annotation(&file.id, &cut.id, "green").is_err());
+        assert!(store.move_pdf_shape("other", &cut.id, [1., 1., 40., 40.]).is_err());
+        let all = store.pdf_annotations(&paper.id, &file.id).unwrap();
+        let kept = all.iter().find(|a| a.id == cut.id).unwrap();
+        assert_eq!((all.len(), kept.kind, kept.boxes[0], kept.note.as_str()), (2, Kind::Cut, [60., 110., 210., 320.], "Slide 3"));
+        // The box beside it stays where it was.
+        assert_eq!(all.iter().find(|a| a.id == frame.id).unwrap().boxes[0], [50., 100., 200., 300.]);
+        store.remove_pdf_annotation(&file.id, &cut.id).unwrap();
+        assert!(store.remove_pdf_annotation(&file.id, &cut.id).is_err());
+        assert_eq!(store.pdf_annotations(&paper.id, &file.id).unwrap().len(), 1);
         drop(store);
         std::fs::remove_dir_all(root).unwrap();
     }

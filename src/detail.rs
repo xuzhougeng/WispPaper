@@ -472,18 +472,37 @@ impl Workspace {
             None => file_title,
         };
         let beside = lib.split && lib.tab == Tab::Ask;
+        let facing = lib.facing;
         let reading = lib.reading;
         // 朗读: how the reading of this file stands, while it is read.
         let aloud = lib.aloud.as_ref().filter(|r| r.resource == file_id).and(lib.aloud_shown.clone());
         // With the library's conversation on show as well, a selection can go to either.
         let library_chat = lib.page == crate::app::Page::Ask;
-        pdf.update(cx, |pdf, _| {
-            pdf.set_width(width);
-            pdf.library_chat = library_chat;
-        });
-        let (page, count, percent, zoom, cutting, split, pen, marks_open, pdf_height) = {
+        // Another file of the paper in the other half: each half is a viewer of its own, drawn in its place
+        // whichever is worked in.
+        let pair = lib.beside.as_ref().map(|beside| (beside.view.clone(), beside.split, beside.first));
+        let pdf_height = lib.pdf_area(cx).1;
+        let half_width = match &pair { Some((_, Split::Side, _)) => ((width - crate::pdf::DIVIDER) / 2.).max(0.), _ => width };
+        for view in std::iter::once(&pdf).chain(pair.as_ref().map(|(view, ..)| view)) {
+            view.update(cx, |pdf, _| {
+                pdf.set_width(half_width);
+                pdf.library_chat = library_chat;
+            });
+        }
+        let (page, count, percent, zoom, cutting, split, pen, marks_open) = {
             let view = pdf.read(cx);
-            (view.current_page(), view.page_count(), view.percent(), view.zoom(), view.cutting(), view.split(), view.tool(), view.annotations_open(), view.height())
+            (view.current_page(), view.page_count(), view.percent(), view.zoom(), view.cutting(), pair.as_ref().map_or(view.split(), |(_, split, _)| *split), view.tool(), view.annotations_open())
+        };
+        let viewer = match pair {
+            None => pdf.into_any_element(),
+            Some((other, split, first)) => {
+                let (one, two) = if first { (other, pdf) } else { (pdf, other) };
+                let half = |view: Entity<crate::pdf::PdfView>| div().flex_1().min_w_0().min_h_0().overflow_hidden().child(view);
+                // The same band as between the halves of one file split.
+                let line = div().flex_none().bg(Theme::line_strong());
+                let line = if split == Split::Stacked { line.h(px(crate::pdf::DIVIDER)).w_full() } else { line.w(px(crate::pdf::DIVIDER)).h_full() };
+                div().size_full().flex().when(split == Split::Stacked, |d| d.flex_col()).child(half(one)).child(line).child(half(two)).into_any_element()
+            }
         };
         // The tools stand in the toolbar, or float at the page's right edge: a habit, kept for every paper.
         let floating = self.settings.pdf_tools_floating;
@@ -536,6 +555,9 @@ impl Workspace {
                                 .when(!zoom.fits() && fit != Zoom::FitPage, |d| d.child(ui::ghost_button("pdf-zoom-fit", None, Some(fit_label(fit).into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).on_click(self.on(Cmd::PdfZoom(ZoomTo::Set(fit)), cx)))),
                         )
                     })
+                    // How the paper is read, a switch on what it changes: the pages again beside themselves, their
+                    // paragraphs translated in place. Lit while on, with how far the translation is and the one thing to do next.
+                    .when(count > 0 && !beside, |d| d.child(ui::ghost_button("pdf-facing", Some("languages"), Some(t("译文").into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).when(facing, |d| d.text_color(Theme::accent())).tooltip(ui::tip(if facing { t("收起译文") } else { t("对照译文：左边原文，右边把每段换成译文的页面") })).on_click(self.on(Cmd::ToggleFacing, cx))).children(self.facing_controls(cx)))
                     // The same file twice, side by side or one over the other: a figure in one half, the page that speaks of it in the other.
                     .when(docked, |d| d.child(ui::ghost_button("pdf-split", None, Some(split_label.into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).when(split != Split::Off, |d| d.text_color(Theme::accent())).on_click(self.on_menu(MenuKind::PdfSplit, cx))))
                     // Cut a piece out of a page (a figure, a table): to keep in the figure library, or as a picture for the next question.
@@ -558,7 +580,7 @@ impl Workspace {
                     // Beside the conversation: put the PDF away again.
                     .when(beside, |d| d.child(tool("pdf-beside-close", "x").on_click(self.on(Cmd::BesidePdf(false), cx)))),
             )
-            .child(div().flex_1().min_h_0().relative().child(pdf).when(floating && count > 0, |d| d.child(self.pdf_tool_column(file_id, width, pdf_height, cutting, split, pen, marks_open, cx))))
+            .child(div().flex_1().min_h_0().relative().child(viewer).when(floating && count > 0, |d| d.child(self.pdf_tool_column(file_id, width, pdf_height, cutting, split, pen, marks_open, cx))))
             .into_any_element()
     }
 

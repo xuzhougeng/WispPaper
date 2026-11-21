@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>先聊，后建库：从首页的助手开始 · Wisp Study 教程</title>
+<meta name="description" content="还没想好文献库叫什么，就先和首页的助手聊：让它检索、收进几篇文献，或者从一份 Word 稿件的参考文献表里读出文献，聊出眉目后一键建成文献库。">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F5F4F1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1A1B1D" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="../app-icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../app-icon.png">
+<link rel="stylesheet" href="../style.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body class="doc">
+<a class="skip" href="#main">跳到正文</a>
+
+<header class="top">
+  <div class="wrap top-in">
+    <a class="brand" href="../index.html" aria-label="Wisp Study"><img src="../app-icon.svg" width="26" height="26" alt=""><span>Wisp Study</span></a>
+    <nav aria-label="站点">
+      <a href="index.html" aria-current="page">教程</a>
+      <a href="../index.html#ideas">理念</a>
+      <a href="../index.html#tools">工具</a>
+      <a href="../index.html#download">下载</a>
+    </nav>
+    <a class="gh" href="https://github.com/xuzhougeng/WispStudy">GitHub<span aria-hidden="true"> ↗</span></a>
+  </div>
+</header>
+
+<main id="main" class="wrap doc-wrap">
+  <nav class="crumbs" aria-label="位置"><a href="index.html">教程</a><span>›</span>收集</nav>
+
+  <header class="doc-head">
+    <p class="kicker">教程 02　·　收集</p>
+    <h1>先聊，后建库：从首页的助手开始</h1>
+    <p class="lead">有个念头，还说不清它算不算一个课题；或者手里只有一份写了一半的开题报告。这时不必先新建文献库、起名字、写主题。本篇从首页右下角的助手开始：问一个调研的问题，让它检索、收进几篇文献；再拿一份 Word 稿件，让它读出参考文献表里的每一条。聊出眉目后点「建成文献库」，对话和文献原地变成一个文献库。</p>
+    <dl class="facts">
+      <div><dt>场景</dt><dd>想比较植物单细胞核测序和原生质体单细胞测序；另有一份开题报告，参考文献要收进来。</dd></div>
+      <div><dt>需要</dt><dd>一个在「设置 › AI」里配置好的模型服务，能联网；一份带参考文献表的 Word 文件（可选）。</dd></div>
+      <div><dt>用时</dt><dd>约 10 分钟，其中助手检索三四分钟。</dd></div>
+    </dl>
+  </header>
+
+  <div class="doc-cols">
+    <nav class="toc" aria-label="本篇的小节">
+      <h2>本篇</h2>
+      <ol>
+        <li><a href="#s1">打开首页的助手</a></li>
+        <li><a href="#s2">问一个调研的问题</a></li>
+        <li><a href="#s3">同意之后，文献收进对话</a></li>
+        <li><a href="#s4">建成文献库</a></li>
+        <li><a href="#s5">从一份 Word 稿件建文献库</a></li>
+        <li class="plain"><a href="#recap">回顾</a></li>
+      </ol>
+    </nav>
+
+    <article class="prose">
+      <section id="s1">
+        <h2><i>1</i>打开首页的助手</h2>
+        <p>启动后是首页，列着你的文献库；本例是一个全新的数据目录，一个库都没有。右下角的蓝色圆按钮是助手，点开是对话页：上面一个输入框，写着「有个想法，或者一份稿子？直接说」，下面是四个开头：「调研一个想法」「审一份稿件」「找几篇文献」「从 Word 建文献库」。点它们只往框里放一句开头（审稿件和从 Word 建库会先让你选文件），不会自己发出去。</p>
+        <p>这一页没有侧栏，左上角「← 首页」或 <kbd>Esc</kbd> 回去，没发出去的字和文件都留着。只是打开这一页、打几个字，磁盘上什么都不会留下；发出第一个问题时，才会建立这次对话。</p>
+        <p>直接写下想调研的事：</p>
+        <blockquote><cite>提问</cite><p>我想调研一下：植物单细胞核测序（snRNA-seq）和原生质体单细胞测序，各适合什么组织？近五年有哪些直接比较两者的研究？找几篇值得读的收进来。</p></blockquote>
+
+        <figure class="shot">
+          <img src="../img/t/home-01-ask.jpg" width="1372" height="867" loading="lazy" alt="首页助手的对话页：居中的输入框里写着调研的问题，框下是四个开头：调研一个想法、审一份稿件、找几篇文献、从 Word 建文献库。左上角是「← 首页」。">
+          <figcaption><b>图 1</b>　首页助手的对话页。还没有文献库，也不需要先建一个。</figcaption>
+        </figure>
+      </section>
+
+      <section id="s2">
+        <h2><i>2</i>问一个调研的问题</h2>
+        <p>按 <kbd>Enter</kbd> 发出。对话以第一个问题命名，标题下写着「还没有文献库：需要文献时，助手到文献数据库里检索」。助手知道这里还没有一篇文献，自己去 PubMed、Europe PMC、Crossref、arXiv 查。这一次它先说「我先在 PubMed 和 Europe PMC 上并行检索」，试了两个检索式，觉得「结果太宽泛，我换更具体的检索式」，又试了三次，挑出值得读的几篇，存成一条检索式。</p>
+        <p>试检索只是看看能查到什么，不会收进任何东西。要真把文献收进来，助手会停下来问你：</p>
+
+        <figure class="shot">
+          <img src="../img/t/home-02-consent.jpg" width="1372" height="867" loading="lazy" alt="对话里两行工具调用「试检索 ×2」「试检索 ×3 · 保存检索式」，下面一张卡片：「助手想收进或改动这次对话里的文献，等你同意」，写着运行检索式，框里是检索式的名称「snRNA-seq vs 原生质体 scRNA-seq 比较 · PubMed」和由六个 PubMed 编号组成的检索式，最多取最新的 10 条；下面是允许、这次对话里都允许、不允许三个按钮。">
+          <figcaption><b>图 2</b>　收进文献前的卡片，写着要在哪个数据库运行什么检索式。这一次助手挑中的是六篇，检索式就是它们的 PubMed 编号。</figcaption>
+        </figure>
+
+        <p>卡片上写着要运行的是哪个数据库的哪条检索式、最多取几条。看一眼再决定：「允许」只放行这一次，「这次对话里都允许」之后不再问，「不允许」就不收。灰色的「试检索 ×3 · 保存检索式」一行可以点开，看它每次查了什么、查到多少条。</p>
+      </section>
+
+      <section id="s3">
+        <h2><i>3</i>同意之后，文献收进对话</h2>
+        <p>点「允许」。标题下变成「这次对话收进了 6 篇文献」，上方多了「文献 6」，列出这次对话收进的文献。助手列出收进的 6 篇，并说明它们现在只在这次对话里。</p>
+        <p>它没有急着回答第一问「各适合什么组织」：手里只有题录和摘要，它说读完全文才能判断哪几篇真正做了同一组织的并排比较，建库之后可以先为它们找开放获取的全文。这正是该由你决定的下一步，所以回答下面放了一张卡片：「这次对话收进了 6 篇文献。建成文献库后，它会出现在首页」，旁边是「建成文献库」和「稍后」。</p>
+
+        <figure class="shot">
+          <img src="../img/t/home-03-answer.jpg" width="1372" height="867" loading="lazy" alt="对话的回答列出 6 篇收进的文献（Wei 2026、Schmidt 2025、Cervantes-Pérez 2022、Sunaga-Franze 2021、Farmer 2021、Long 2021），下面是一张卡片，写着这次对话收进了 6 篇文献，按钮「建成文献库」和「稍后」；对话上方是「文献 6」「历史」「新对话」「建成文献库」。">
+          <figcaption><b>图 3</b>　6 篇文献收进了这次对话。卡片上的按钮按下才执行；「稍后」先收起，再收进文献时还会出现。</figcaption>
+        </figure>
+
+        <aside class="note"><b>提示</b>助手在一件事做完、下一步该你拿主意时，常会在回答下面放这样一张卡片。按钮只有几种：替你说一句话、建成文献库、查找开放全文、打开筛选或写作等页面，都要你按下才执行。</aside>
+      </section>
+
+      <section id="s4">
+        <h2><i>4</i>建成文献库</h2>
+        <p>点「建成文献库」（卡片上的和对话右上角的是同一个）。对话框和新建文献库的一样：名称、主题、标识色。名称旁的 AI 图标让模型按这次对话拟名称和主题，本例拟的是「植物 snRNA-seq 与原生质体 scRNA-seq 比较」，主题写了两三句，说明收什么、关心什么。不满意就改。</p>
+
+        <figure class="shot">
+          <img src="../img/t/home-04-promote.jpg" width="1372" height="867" loading="lazy" alt="「建成文献库」对话框：名称一栏是模型拟的「植物 snRNA-seq 与原生质体 scRNA-seq 比较」，主题一栏是一段说明，标识色一行七个色点选中蓝色；下方说明对话、收进的文献和交来的稿件都留在原处，按钮是取消和建成文献库。">
+          <figcaption><b>图 4</b>　名称和主题由模型按对话拟出，可以改。对话、文献和稿件都留在原处，不用搬。</figcaption>
+        </figure>
+
+        <p>点「建成文献库」，窗口就地变成这个文献库：左边出现侧栏，「全部文献 6」「缺 PDF 6」；「检索与导入」里是助手存下的那条检索式，以后可以再运行或设成定期更新；刚才的对话在「助手」里，接着问就行。回到首页，这个库和别的库一样是一张卡片。</p>
+
+        <figure class="shot">
+          <img src="../img/t/home-05-library.jpg" width="1372" height="867" loading="lazy" alt="建成后的文献库窗口：侧栏顶上是蓝色标识的「植物 snRNA-seq 与原生…」，全部文献 6、缺 PDF 6、检索与导入 1、筛选 6；中间是原来那段对话，标题为「助手」。">
+          <figcaption><b>图 5</b>　对话原地成为文献库的「助手」对话，6 篇文献就是这个库的文献。</figcaption>
+        </figure>
+
+        <p>接下来可以做的，和别的文献库一样：让助手为这几篇「查找开放全文」（没有 PDF 的文献，详情里也有这个按钮），下载到能找到的 PDF，再回到「助手」接着问第一问。批量检索和筛选见<a href="start.html">从一个课题开始</a>。</p>
+      </section>
+
+      <section id="s5">
+        <h2><i>5</i>从一份 Word 稿件建文献库</h2>
+        <p>另一种开头：开题报告已经写了引言，参考文献表里有八条，要把它们收进一个文献库。回到首页的助手，点「从 Word 建文献库」，选这份 <code>开题报告.docx</code>。文件作为小标签放进输入框，框里填好一句「把这份 Word 文件参考文献表里的文献都收进来，建成一个文献库。」，可以改，也可以直接发出。也可以把 .docx 拖到首页上，再自己说要做什么。</p>
+
+        <figure class="shot">
+          <img src="../img/t/home-06-word.jpg" width="1372" height="867" loading="lazy" alt="首页助手的输入框里，上方是文件标签「开题报告.docx」，下面是一句「把这份 Word 文件参考文献表里的文献都收进来，建成一个文献库。」">
+          <figcaption><b>图 6</b>　「从 Word 建文献库」先选文件，再在框里放一句开头，发不发由你。</figcaption>
+        </figure>
+
+        <p>发出后，对话以「开题报告 的参考文献」命名。助手读出参考文献表里的每一条，征得你同意后收进来。文件里带 Zotero 或 Mendeley 的引用域时，文献信息直接从域里取；这份报告是手写的编号列表，就按「参考文献」后面的条目逐条读。有 DOI 的到 Crossref 核对，没有 DOI 的按条目文字到 Crossref 查，题目、年份都对得上才采用。</p>
+        <p>本例八条里有四条（[3]、[5]、[6]、[8]）原文没写 DOI，都查到了。回答说「参考文献表里的 8 篇文献都已收进这次对话。没有跳过的条目，也没有无法识别的条目。这些条目是按文字识别的，不是来自 Zotero 引用域」，并建议抽查一下题目是否对得上。读不出、对不上的条目不会被凭空补写，助手会逐条告诉你。</p>
+
+        <figure class="shot">
+          <img src="../img/t/home-07-references.jpg" width="1372" height="867" loading="lazy" alt="「开题报告 的参考文献」对话：助手列出收进的 8 篇文献，每篇后面括号里是 DOI，从 Spatiotemporal Developmental Trajectories in the Arabidopsis Root 到 Towards Building a Plant Cell Atlas；下面一张卡片写着这 8 篇文献已收进这次对话，按钮「建成文献库」。">
+          <figcaption><b>图 7</b>　八条参考文献都对上了 Crossref 的记录，原文缺 DOI 的四条也补上了。只按文字读出、没能核对的条目，助手会提醒你核对。</figcaption>
+        </figure>
+
+        <p>Word 文件本身不会被改动。之后同样点「建成文献库」。还没想好的对话就留着：首页助手下面的「最近对话」按时间列出它们，写着收进了几篇、哪天；点一行接着聊，右键可以重命名、建成文献库或删除。删除和移除文献库一样，只是把文件夹移到数据目录的 <code>removed</code> 下。</p>
+
+        <figure class="shot">
+          <img src="../img/t/home-08-recent.jpg" width="1372" height="867" loading="lazy" alt="首页助手的对话页，输入框下面是「最近对话」，两行：「我想调研一下：植物单细胞核测序（snRNA-s…」6 篇，「开题报告 的参考文献」8 篇，日期都是 2026.11.20。">
+          <figcaption><b>图 8</b>　「最近对话」。还没建成文献库的对话都在这里，不会出现在首页的文献库列表里。</figcaption>
+        </figure>
+
+        <aside class="note"><b>提示</b>已有文献库时，同一件事在库里的「助手」也能做：附上 Word 文件，说「把参考文献收进来」。要审一份稿件而不是收它的参考文献，用「审一份稿件」：稿件显示在对话右边，助手把意见作为批注留在原文上，见<a href="revise.html">和合作者改稿</a>。</aside>
+        <aside class="note warn"><b>注意</b>对话的内容会发给你配置的模型服务；检索词会发给 PubMed、Europe PMC 等数据库，没有 DOI 的参考文献条目，其文字会发给 Crossref 查询。</aside>
+      </section>
+
+      <section id="recap" class="recap">
+        <h2>回顾</h2>
+        <ul>
+          <li>首页右下角的助手是一个还没有文献库的对话：发出第一个问题时才建立，「最近对话」里随时接着聊。</li>
+          <li>助手自己检索；要把文献收进来时，卡片上写明在哪个数据库运行哪条检索式，等你允许。</li>
+          <li>「从 Word 建文献库」读出参考文献表的每一条，到 Crossref 核对、补上 DOI；读不出的逐条告诉你，Word 文件不动。</li>
+          <li>「建成文献库」让模型拟名称和主题，对话和文献原地成为一个文献库。</li>
+          <li>下一步：已有的文献在 Zotero 或 PDF 文件夹里，见<a href="migrate.html">把已有的文献搬进来</a>。</li>
+        </ul>
+      </section>
+    </article>
+  </div>
+
+  <nav class="pager" aria-label="上一篇和下一篇">
+    <a class="prev" href="start.html"><small>上一篇 · 01</small><strong>从一个课题开始</strong></a>
+    <a class="next" href="migrate.html"><small>下一篇 · 03</small><strong>把已有的文献搬进来</strong></a>
+  </nav>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-in">
+    <div class="refs">
+      <h2>参考</h2>
+      <ol>
+        <li><a href="index.html">全部教程</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispStudy/blob/main/docs/FEATURES.md">功能详解：每个页面能做什么</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispStudy/blob/main/docs/DATA.md">数据与隐私：文件放在哪里，哪些数据会离开本机</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispStudy/issues">问题与想法：Issues</a></li>
+      </ol>
+    </div>
+    <div class="colophon">
+      <p><b>关于这篇教程</b>　截图和数字来自 2026 年 11 月在 macOS 上用 v0.14.0 的一次实际操作；图 2 是同一个问题重问一次时截下的。模型每次的回答不一样，你照做时措辞、检索式和篇数会有出入，步骤是一样的。</p>
+      <p><b>助手可能出错</b>　它的建议和回答都要你确认；关键的数字和结论请对照原文。</p>
+    </div>
+  </div>
+</footer>
+</body>
+</html>
