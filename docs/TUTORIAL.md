@@ -1,6 +1,6 @@
 # 案例：从零建一个「植物单细胞转录组」文献库
 
-> 按场景写的九篇教程在项目主页上：[教程](https://xuzhougeng.github.io/WispStudy/tutorials/)。其中第一篇是这份记录按当前版本整理过的样子；这里保留的是 v0.2.0 时的原始记录。
+> 按场景写的十一篇教程在项目主页上：[教程](https://xuzhougeng.github.io/WispStudy/tutorials/)。其中第一篇是这份记录按当前版本整理过的样子；这里保留的是 v0.2.0 时的原始记录。
 
 已经有 Zotero 文献库，想连同本地 PDF、标签和笔记一起迁移，可以先看[从 Zotero 导入文献](ZOTERO.md)，再从本教程的筛选步骤继续。
 

@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>把一篇文献讲成组会幻灯片 · Wisp Study 教程</title>
+<meta name="description" content="从 PDF 上截下要讲的图，收进图片库，再用 /slides 让助手读完全文、写出一份带图、带讲稿的 .pptx，在 PowerPoint、Keynote 或 WPS 里接着改。">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F5F4F1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1A1B1D" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="../app-icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../app-icon.png">
+<link rel="stylesheet" href="../style.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body class="doc">
+<a class="skip" href="#main">跳到正文</a>
+
+<header class="top">
+  <div class="wrap top-in">
+    <a class="brand" href="../index.html" aria-label="Wisp Study"><img src="../app-icon.svg" width="26" height="26" alt=""><span>Wisp Study</span></a>
+    <nav aria-label="站点">
+      <a href="index.html" aria-current="page">教程</a>
+      <a href="../index.html#ideas">理念</a>
+      <a href="../index.html#tools">工具</a>
+      <a href="../index.html#download">下载</a>
+    </nav>
+    <a class="gh" href="https://github.com/xuzhougeng/WispStudy">GitHub<span aria-hidden="true"> ↗</span></a>
+  </div>
+</header>
+
+<main id="main" class="wrap doc-wrap">
+  <nav class="crumbs" aria-label="位置"><a href="index.html">教程</a><span>›</span>阅读</nav>
+
+  <header class="doc-head">
+    <p class="kicker">教程 05　·　阅读</p>
+    <h1>把一篇文献讲成组会幻灯片</h1>
+    <p class="lead">文章读完了，下周要在组会上讲。本篇先从 PDF 上截下要讲的几张图收进图片库，再让助手读完全文，写出一份 PowerPoint 文件：标题页、每页几条要点、图和图注、页脚的出处页码，讲稿写在备注里。版面是起点，不是成品，拿到 PowerPoint、Keynote 或 WPS 里接着改。</p>
+    <dl class="facts">
+      <div><dt>场景</dt><dd>把一篇水稻愈伤组织单细胞图谱的文章做成组会汇报。</dd></div>
+      <div><dt>需要</dt><dd>一篇带 PDF 的文献，一个在「设置 › AI」里配置好的模型服务。</dd></div>
+      <div><dt>用时</dt><dd>约 10 分钟，其中助手写幻灯片两分钟左右。</dd></div>
+    </dl>
+  </header>
+
+  <div class="doc-cols">
+    <nav class="toc" aria-label="本篇的小节">
+      <h2>本篇</h2>
+      <ol>
+        <li><a href="#s1">截下要讲的图</a></li>
+        <li><a href="#s2">收进图片库</a></li>
+        <li><a href="#s3">用 /slides 让助手写幻灯片</a></li>
+        <li><a href="#s4">打开文件，接着改</a></li>
+        <li class="plain"><a href="#recap">回顾</a></li>
+      </ol>
+    </nav>
+
+    <article class="prose">
+      <section id="s1">
+        <h2><i>1</i>截下要讲的图</h2>
+        <p>要讲的是 2026 年发表在 BMC Plant Biology 上的 A single-cell transcriptome atlas reveals the transcriptionally earliest state in rice callus，全文 15 页，库里已存了 PDF。在列表上方搜索 <code>callus</code>，点这一篇，右侧切到「PDF」。</p>
+        <p>幻灯片里的图只从图片库里来，助手不会自己去 PDF 上裁图。所以先决定要讲哪几张：这篇讲的是愈伤组织里谁最先出现，要用到图 1（细胞图谱）、图 2（发育轨迹）和图 4（根分生组织龛的建立）。翻到第 5 页，点工具栏的「截图」（按钮变成「取消截图」），在页面上框住图 1。框好后旁边出现四个按钮：「收藏到图片库」「用这张截图提问」「标记」「取消」。</p>
+
+        <figure class="shot">
+          <img src="../img/t/slides-01-cut.jpg" width="1372" height="867" loading="lazy" alt="右侧 PDF 停在第 5 页，图 1 被绿色框框住，框下方是一排按钮：收藏到图片库、用这张截图提问、标记、取消。">
+          <figcaption><b>图 1</b>　第 5 页的图 1 被框住。「标记」把这块留在页面上，是一个虚线框，以后再处理。</figcaption>
+        </figure>
+
+        <p>还没想好要不要讲某张图时，点「标记」：这块地方以虚线框留在页面上，下次点进框里，同样可以收藏或拿来提问，也可以删掉。读的时候先把可能要讲的图都圈出来，做幻灯片之前再逐个收藏，这样不会漏。</p>
+      </section>
+
+      <section id="s2">
+        <h2><i>2</i>收进图片库</h2>
+        <p>点「收藏到图片库」。对话框左边是截图，下面写着「第 5 页」和出处；右边是图号、图注、标签、备注。这一页的图注就排在图下面，图号 <code>Fig. 1</code> 和整段图注都是从页面文字里读出来的，对话框顶上提醒「收藏前看一眼，不对的地方改掉」。</p>
+        <p>标签是空的。点「标签」右边的 AI 图标，模型看着这张图填上了 <code>UMAP, 点图, 多面板组合排版</code>。这些标签以后用来在图片库里找图，可以改，也可以不要；字段旁的 AI 图标只是建议，点「收藏」才会存下来。</p>
+
+        <figure class="shot">
+          <img src="../img/t/slides-02-collect.jpg" width="1372" height="867" loading="lazy" alt="「收藏到图片库」对话框：左边是图 1 的截图，下面写着第 5 页和文献出处；右边图号为 Fig. 1，图注是从页面读出的英文图注，标签一栏是模型填的「UMAP, 点图, 多面板组合排版」，右下角是取消和收藏。">
+          <figcaption><b>图 2</b>　图号和图注从页面读出，标签由模型看图填写。都可以改，点「收藏」才存。</figcaption>
+        </figure>
+
+        <p>同样收下第 7 页的图 2 和第 9 页的图 4。左侧「收藏」里切到「图片」，三张图都在，上方按标签筛选（「UMAP 1」「多面板组合排版 1」「点图 1」），搜索框查的是图注、图号、标签和备注。点一张卡片打开它，可以再改字段，「打开原文」回到截图的那一页，「复制图片」「另存为…」把它拿去别处用。</p>
+
+        <figure class="shot">
+          <img src="../img/t/slides-03-figures.jpg" width="1372" height="867" loading="lazy" alt="「收藏」页切到「图片 3」，列出图 4 和图 2 的卡片，每张写着图号、页码、图注开头和出处；上方是标签筛选：全部 3、UMAP 1、多面板组合排版 1、点图 1。">
+          <figcaption><b>图 3</b>　图片库里的三张图。幻灯片能用的图就是这些。</figcaption>
+        </figure>
+      </section>
+
+      <section id="s3">
+        <h2><i>3</i>用 /slides 让助手写幻灯片</h2>
+        <p>回到这篇文献，点「提问」。在输入框里打 <code>/</code>，命令列表里选 <code>/slides</code>，后面写上要求：</p>
+        <blockquote><cite>提问</cite><p>/slides 下周组会汇报用，8 页左右，讲清楚愈伤组织最早的转录状态是怎么找到的</p></blockquote>
+        <p>就单篇文献提问时 <code>/slides</code> 后面不用写是哪一篇；在文献库的「助手」里写成 <code>/slides P3</code>，或者直接说「把这篇做成组会汇报的 PPT」。助手先读全文，再查图片库里这篇已收藏的图，对话里收成一行「读取文献 · 查询图片库」。</p>
+
+        <figure class="shot">
+          <img src="../img/t/slides-04-working.jpg" width="1372" height="867" loading="lazy" alt="提问布局：中间是 /slides 的提问，下面一行「读取文献 · 查询图片库」，再下面是「正在整理查到的内容… 18s」；右边是这篇的 PDF 第 1 页。">
+          <figcaption><b>图 4</b>　助手先读全文、查图片库，再动笔。</figcaption>
+        </figure>
+
+        <p>写文件之前会弹出保存对话框，默认放在「文稿」里，文件名取自幻灯片的标题；关掉对话框就是不写，已有的同名文件不会被覆盖。本例用时不到两分钟，写出的是 <code>水稻愈伤组织最早转录状态的单细胞图谱.pptx</code>。</p>
+        <p>回答不重复幻灯片的内容，而是交代它做了什么：标题页加 9 页内容，按「背景与问题 → 方法 → 主要结果 → 结论与局限」排；哪几页放了图片库里的图 1、图 2、图 4；图注太长，幻灯片上只留前三行，全文在备注里。它也说了没做到的：图 3、图 5、图 6 不在图片库里，所以讲亚群分析和分化愈伤的那几页没有图，「需要的话，在 PDF 页上框选收藏这几张图后，我可以重做一次」。最后它提醒两点讲的时候要说清楚：「最早状态」是由 RNA velocity 和拟时序推断的，没有做谱系追踪；OsDWT1 与赤霉素的关联只是表达上的同步变化，没有遗传验证。</p>
+
+        <figure class="shot">
+          <img src="../img/t/slides-05-answer.jpg" width="1372" height="867" loading="lazy" alt="回答的后半段：列出 9 页内容的标题，「放了图的页」「没有图的页」「依据」三段说明，以及讲的时候要注意的两点；回答下面是复制、重新回答、分支和「存为笔记」。">
+          <figcaption><b>图 5</b>　助手说明了每页讲什么、哪几页有图、哪几张图没收藏所以没放。它也说明自己没有在 PowerPoint 里检查过版面。</figcaption>
+        </figure>
+
+        <aside class="note"><b>提示</b>想让某张图出现在幻灯片里，就先把它收进图片库，再说一次 <code>/slides</code>。表格也按图截下来收藏：助手不会自己画表格或图表。</aside>
+      </section>
+
+      <section id="s4">
+        <h2><i>4</i>打开文件，接着改</h2>
+        <p>双击这个 .pptx，在 PowerPoint、Keynote 或 WPS 里打开。下面是其中六页：标题页写着作者、年份和期刊；有图的页左边是要点，右边或下面是图和图注；每页页脚是出处和页码，例如「Lyu et al., 2026 · p. 5 (Fig. 1)」，讲到哪句被问起，翻回原文那一页就行。</p>
+
+        <figure class="shot">
+          <img src="../img/t/slides-06-deck.jpg" width="1352" height="1176" loading="lazy" alt="六页幻灯片的缩略图，两列三行：标题页「水稻愈伤组织最早转录状态的单细胞图谱」；方法：样本与单细胞建库；结果 1：愈伤细胞图谱与注释，右边是图 1；结果 2：奠基细胞是胚性愈伤最早状态，下面是图 2；结果 4：奠基细胞转变为根分生组织龛，右边是图 4；结论与局限。">
+          <figcaption><b>图 6</b>　写出的 10 页中的 6 页（第 1、3、5、6、8、10 页）。要点的字号按内容选，太多时自动接到下一页。</figcaption>
+        </figure>
+
+        <p>讲稿在每页的备注里，有图的页还附了完整图注。比如图 1 那页的备注先是一句要讲的话：「指出奠基细胞的三类证据：拟南芥早期愈伤起始细胞同源基因、WOX11 同源基因、原位杂交的 RAmy3D/E」，下面是图 1 的全文图注。演讲者视图里一眼就能看到。</p>
+        <p>版面是程序排的：白底、一种强调色，没有动画和模板。换成课题组的模板、调整措辞、把一页拆成两页，都在演示软件里做。要大改结构时，在同一个对话里接着说（「把方法压成一页，结果 3 和 4 合并」），助手会写一份新文件，旧的不动。</p>
+
+        <aside class="note warn"><b>注意</b>要点是模型读全文后写的概括，数字和结论都要对照原文过一遍；页脚的页码就是为此留的。生成幻灯片时，这篇的全文和图片库里各张图的图号、图注、标签会发给你配置的模型服务；图片本身由程序从本机放进文件，不经过模型。只有填标签、图注时点了 AI 图标，那张图才会发出去。</aside>
+      </section>
+
+      <section id="recap" class="recap">
+        <h2>回顾</h2>
+        <ul>
+          <li>在 PDF 上「截图」框住要讲的图，「收藏到图片库」；还没想好的先「标记」成虚线框。</li>
+          <li>图号和图注从页面上读出，标签可以让模型看图填写，收藏前看一遍。</li>
+          <li><code>/slides</code> 让助手读全文、查图片库，写出带图、带出处页脚、讲稿在备注里的 .pptx；保存位置由你选。</li>
+          <li>幻灯片里没有的图，是因为没收藏：收进图片库再做一次。数字和结论对照原文核对。</li>
+          <li>下一步：把问题扩大到整个文献库，见<a href="ask.html">向整个文献库提问</a>。</li>
+        </ul>
+      </section>
+    </article>
+  </div>
+
+  <nav class="pager" aria-label="上一篇和下一篇">
+    <a class="prev" href="read.html"><small>上一篇 · 04</small><strong>精读一篇文献</strong></a>
+    <a class="next" href="ask.html"><small>下一篇 · 06</small><strong>向整个文献库提问</strong></a>
+  </nav>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-in">
+    <div class="refs">
+      <h2>参考</h2>
+      <ol>
+        <li><a href="index.html">全部教程</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispStudy/blob/main/docs/FEATURES.md">功能详解：每个页面能做什么</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispStudy/blob/main/docs/DATA.md">数据与隐私：文件放在哪里，哪些数据会离开本机</a></li>
+        <li><a href="https://github.com/xuzhougeng/WispStudy/issues">问题与想法：Issues</a></li>
+      </ol>
+    </div>
+    <div class="colophon">
+      <p><b>关于这篇教程</b>　截图和数字来自 2026 年 11 月在 macOS 上用 v0.14.0 的一次实际操作。模型每次的回答不一样，你照做时措辞和数字会有出入，步骤是一样的。幻灯片的缩略图是用 LibreOffice 打开这份 .pptx 得到的。</p>
+      <p><b>助手可能出错</b>　它的建议和回答都要你确认；关键的数字和结论请对照原文。</p>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

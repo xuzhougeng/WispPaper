@@ -1638,9 +1638,17 @@ fn suggest_screening(store: &mut Store, info: &LibraryInfo, args: &Value) -> Res
 
 /// What a call would do, a line per thing it changes, for the person who
 /// is asked whether it may run; an error when it cannot run as written.
-/// Only `organise_papers` has more to say than its arguments already do.
+/// A saved search is named by its id in the call: the card says what it asks of which database.
 pub fn preview_call(store: &Store, name: &str, args: &Value) -> Result<Vec<String>, String> {
     match name {
+        "run_search" | "remove_search" => {
+            let id = text(args, "id").map_err(|e| e.to_string())?;
+            let search = store.list_searches().map_err(|e| format!("{e:#}"))?.into_iter().find(|s| s.id == id).ok_or_else(|| format!("检索式不存在：{id}"))?;
+            let source = sources::KINDS.iter().find(|(key, _)| *key == search.kind).map_or(search.kind.as_str(), |(_, name)| name);
+            let title = if search.name.trim().is_empty() || search.name.trim() == source { source.to_string() } else { format!("{} · {source}", search.name.trim()) };
+            let detail = if name == "run_search" { format!("{}（最多取最新的 {} 条）", search.query, search.max_results) } else { search.query.clone() };
+            Ok(vec![format!("《{title}》：{detail}")])
+        }
         "export_note" | "save_note_to_notion" => {
             let info = std::fs::read_to_string(store.root().join(libraries::INFO_FILE)).ok().and_then(|s| serde_json::from_str::<LibraryInfo>(&s).ok()).unwrap_or_default();
             let doc = crate::notes::from_args(store, &info, args).map_err(|e| e.to_string())?;
@@ -2381,6 +2389,11 @@ pub(crate) mod tests {
         let online = |name: &str, args: Value| super::call(&root, name, &args, &crossref, &no_download);
         assert!(online("save_search", json!({"source": "crossref", "query": "root", "maxResults": sources::MAX_RESULTS + 1})).is_err());
         let saved = online("save_search", json!({"source": "crossref", "query": "root", "maxResults": 600})).unwrap();
+        // The card that asks names the database and the query, not the id the model gave.
+        let info = find_library(&root, "").unwrap();
+        let card = preview_call(&Store::open(&info.dir).unwrap(), "run_search", &json!({"id": saved["id"]})).unwrap();
+        assert_eq!(card, vec!["《Crossref》：root（最多取最新的 600 条）"]);
+        assert!(preview_call(&Store::open(&info.dir).unwrap(), "remove_search", &json!({"id": "S-none"})).unwrap_err().contains("检索式不存在"));
         let run = online("run_search", json!({"id": saved["id"]})).unwrap();
         assert_eq!((run["total"].as_u64(), run["fetched"].as_u64(), run["added"].as_u64()), (Some(900), Some(200), Some(200)));
         assert!(run["stopped"].as_str().unwrap().contains("网络请求失败"));
