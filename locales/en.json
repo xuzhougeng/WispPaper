@@ -1576,5 +1576,15 @@
   "正在读取段落…": "Reading paragraphs…",
   "翻译全文": "Translate full text",
   "继续翻译": "Continue translating",
-  "没有从这个 PDF 里读出成段的文字，无法对照翻译。扫描件要先有文字层。": "No paragraphs could be read from this PDF, so there is nothing to translate beside it. A scan needs a text layer first."
+  "没有从这个 PDF 里读出成段的文字，无法对照翻译。扫描件要先有文字层。": "No paragraphs could be read from this PDF, so there is nothing to translate beside it. A scan needs a text layer first.",
+  "朗读": "Read aloud",
+  "朗读的声音": "Reading voice",
+  "女声": "Female",
+  "男声": "Male",
+  "停止朗读": "Stop reading",
+  "从这一页起朗读": "Read aloud from this page",
+  "从这一页起朗读，读到参考文献为止": "Read aloud from this page up to the references",
+  "这里没有可朗读的文字。": "There is no text here to read aloud.",
+  "朗读用的是 DeepSeek 的语音服务：请先在「设置 › AI」添加 DeepSeek。": "Reading aloud uses DeepSeek's speech service: add DeepSeek in Settings › AI first.",
+  "PDF 工具栏和选中文字的「朗读」用 DeepSeek 的语音服务：先在「模型」里添加 DeepSeek 并填写 API Key。": "Read aloud (PDF toolbar and selected text) uses DeepSeek's speech service: add DeepSeek under Models and fill in its API key."
 }

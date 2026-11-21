@@ -884,13 +884,15 @@ pub struct TurnReader {
     inputs: Vec<String>,
     /// OpenAI: the text, and (id, name, arguments) of each tool call.
     text: String,
+    /// OpenAI: the thinking a service sends beside the text (`reasoning_content`: DeepSeek, Kimi, GLM).
+    reasoning: String,
     calls: Vec<(String, String, String)>,
     stop: String,
 }
 
 impl TurnReader {
     pub fn new(protocol: Protocol) -> TurnReader {
-        TurnReader { protocol, blocks: vec![], inputs: vec![], text: String::new(), calls: vec![], stop: String::new() }
+        TurnReader { protocol, blocks: vec![], inputs: vec![], text: String::new(), reasoning: String::new(), calls: vec![], stop: String::new() }
     }
 
     /// One line of the stream: the answer text it adds, if any. `Err` is an
@@ -965,6 +967,8 @@ impl TurnReader {
                     name.push_str(call["function"]["name"].as_str().unwrap_or(""));
                     arguments.push_str(call["function"]["arguments"].as_str().unwrap_or(""));
                 }
+                // Kept to be sent back: DeepSeek refuses (400) a request with tools whose earlier turns lack it.
+                if let Some(thinking) = choice["delta"]["reasoning_content"].as_str() { self.reasoning.push_str(thinking) }
                 if let Some(text) = choice["delta"]["content"].as_str() && !text.is_empty() {
                     self.text.push_str(text);
                     return Ok(Some(text.to_string()));
@@ -1037,6 +1041,8 @@ impl TurnReader {
                 } else {
                     let mut message = json!({"role": "assistant", "content": if self.text.is_empty() { Value::Null } else { json!(self.text) }});
                     if !wire_calls.is_empty() { message["tool_calls"] = json!(wire_calls) }
+                    // The service's own thinking goes back with its turn, as it sent it; only a service that sent it gets it.
+                    if !self.reasoning.is_empty() { message["reasoning_content"] = json!(self.reasoning) }
                     message
                 };
                 Turn { message, calls, stop }
@@ -2189,6 +2195,33 @@ mod tests {
         let (_, nothing) = read(Protocol::Anthropic, &["event: ping", "data: {\"type\":\"ping\"}"]);
         assert_eq!((nothing.message.clone(), nothing.stop.as_str()), (Value::Null, "end"));
         assert_eq!(TurnReader::new(Protocol::Anthropic).line(r#"data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#), Err("Overloaded".into()));
+    }
+
+    #[test]
+    fn thinking_goes_back_with_its_turn() {
+        // DeepSeek (and Kimi, GLM) stream their thinking as `reasoning_content`: not shown, but sent back with the turn,
+        // or DeepSeek refuses the next step of a tool loop with HTTP 400.
+        let (text, turn) = read(
+            Protocol::OpenAI,
+            &[
+                r#"data: {"choices":[{"delta":{"role":"assistant","content":null,"reasoning_content":"先看"},"finish_reason":null}]}"#,
+                r#"data: {"choices":[{"delta":{"reasoning_content":"全文。"},"finish_reason":null}]}"#,
+                r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"library_status","arguments":"{}"}}]},"finish_reason":null}]}"#,
+                r#"data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ],
+        );
+        assert_eq!(text, "");
+        assert_eq!(turn.message, json!({"role": "assistant", "content": null, "reasoning_content": "先看全文。", "tool_calls": [{"id": "call_a", "type": "function", "function": {"name": "library_status", "arguments": "{}"}}]}));
+        let profile = Profile { protocol: Protocol::OpenAI, base_url: "https://api.deepseek.com".into(), api_key: "k".into(), model: "deepseek-v4-pro".into(), ..Default::default() };
+        let ctx = Context { instructions: "I".into(), documents: "D".into(), ..Default::default() };
+        let mut wire = vec![user_message("Q")];
+        wire.extend(turn.wire());
+        wire.extend(tool_results(Protocol::OpenAI, &[("call_a".into(), "{}".into(), false)]));
+        let next = chat_request(&profile, &ctx, &wire, &[]).unwrap();
+        assert_eq!(next.body["messages"][2]["reasoning_content"], "先看全文。");
+        // A service that sends no thinking gets none back.
+        let (_, plain) = read(Protocol::OpenAI, &[r#"data: {"choices":[{"delta":{"content":"Hi"},"finish_reason":"stop"}]}"#]);
+        assert!(plain.message.get("reasoning_content").is_none());
     }
 
     #[test]

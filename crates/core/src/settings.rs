@@ -81,6 +81,8 @@ pub struct Settings {
     pub translate_workers: usize,
     /// The instructions translations are made with; empty means `ai::TRANSLATION_PROMPT`.
     pub translation_prompt: String,
+    /// The voice papers are read aloud in, a key of `speech::VOICES`; empty is the service's default.
+    pub speech_voice: String,
     /// The slash commands the person wrote: prompt templates under a name (`ai::read_input`).
     pub commands: Vec<Command>,
     /// The MCP servers whose tools the assistant may call (设置 › 自定义 › 连接器).
@@ -156,7 +158,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         let providers = provider::DEFAULT_PRESETS.iter().filter_map(|key| provider::preset(key)).map(Provider::from_preset).collect();
-        let mut settings = Settings { data_dir: String::new(), providers, legacy_profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translate_workers: 4, translation_prompt: String::new(), commands: vec![], connectors: vec![], skills_off: vec![], auto_update: true, auto_download: true, restore_session: true, appearance: String::new(), high_contrast: false, language: Language::default(), density: String::new(), font_family: String::new(), cjk_font_family: String::new(), font_size: DEFAULT_FONT_SIZE, reading_appearance: ReadingAppearance::default(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., pdf_first: false, pdf_tools_floating: false, pdf_tools_at: None, column_widths: BTreeMap::new(), columns_hidden: vec![], floating: Default::default(), keep_running: true, agent_writing: false, agent_manuscript_width: 0., author: String::new(), cite_style: String::new(), citation_cards_hidden: false, library_order: vec![] };
+        let mut settings = Settings { data_dir: String::new(), providers, legacy_profiles: vec![], tasks: Tasks::default(), screen_workers: 3, translate_workers: 4, translation_prompt: String::new(), speech_voice: String::new(), commands: vec![], connectors: vec![], skills_off: vec![], auto_update: true, auto_download: true, restore_session: true, appearance: String::new(), high_contrast: false, language: Language::default(), density: String::new(), font_family: String::new(), cjk_font_family: String::new(), font_size: DEFAULT_FONT_SIZE, reading_appearance: ReadingAppearance::default(), proxy: String::new(), shortcuts: BTreeMap::new(), detail_width: 0., sidebar_width: 0., sidebar_hidden: false, chat_width: 0., ask_list_width: 0., pdf_first: false, pdf_tools_floating: false, pdf_tools_at: None, column_widths: BTreeMap::new(), columns_hidden: vec![], floating: Default::default(), keep_running: true, agent_writing: false, agent_manuscript_width: 0., author: String::new(), cite_style: String::new(), citation_cards_hidden: false, library_order: vec![] };
         settings.tidy();
         settings
     }
@@ -501,6 +503,13 @@ impl Settings {
         all.iter().find(|profile| profile.missing().is_none()).or(all.first()).cloned()
     }
 
+    /// The service papers are read aloud with (朗读): DeepSeek's, the first set up with a key, else
+    /// the first set up at all; `None` while there is none.
+    pub fn speech_provider(&self) -> Option<&Provider> {
+        let deepseek = || self.providers.iter().filter(|p| p.preset == "deepseek" || crate::speech::is_service(&p.base_url));
+        deepseek().find(|p| !p.key().is_empty()).or_else(|| deepseek().next())
+    }
+
     /// The model a task's writing is done with: the task's own when it answers in words, else the
     /// one for questions. 提取 shares screening's model, and cannot be done by one that only judges.
     pub fn speaking_profile_for(&self, task: Task) -> Profile {
@@ -799,6 +808,19 @@ mod tests {
     }
 
     #[test]
+    fn papers_are_read_aloud_by_deepseek() {
+        let mut s = Settings::default();
+        assert_eq!(s.speech_provider().map(|p| p.preset.as_str()), Some("deepseek"));
+        // One set up by hand at DeepSeek's address counts, and one with a key comes first.
+        s.providers.push(Provider { name: "mine".into(), base_url: "https://api.deepseek.com/v1".into(), api_key: "k".into(), ..Default::default() });
+        s.providers[0].api_key.clear();
+        s.providers[0].preset = "deepseek".into();
+        if s.providers[0].key().is_empty() { assert_eq!(s.speech_provider().map(|p| p.title()), Some("mine".into())) }
+        s.providers.retain(|p| p.preset != "deepseek" && !crate::speech::is_service(&p.base_url));
+        assert!(s.speech_provider().is_none());
+    }
+
+    #[test]
     fn models_per_task() {
         let mut s = Settings::default();
         // A new file has DeepSeek, Kimi and GLM, none with a key: the first model is used until one can answer.
@@ -814,7 +836,7 @@ mod tests {
         s.tasks.set(Task::Chat, "m4");
         assert_eq!(Task::WORDS.map(|task| uses(&s, task)), ["glm-5.3", "glm-5.3", "glm-5.3", "glm-5.3"]);
         s.tasks.set(Task::Translate, "m2");
-        assert_eq!(Task::WORDS.map(|task| uses(&s, task)), ["glm-5.3", "glm-5.3", "deepseek-v4-flash", "glm-5.3"]);
+        assert_eq!(Task::WORDS.map(|task| uses(&s, task)), ["glm-5.3", "glm-5.3", "deepseek-flash", "glm-5.3"]);
         // A removed model or provider takes its bindings along; an id is not handed out twice while in use.
         s.remove_provider(2);
         assert_eq!((s.tasks.chat.as_str(), s.tasks.translate.as_str(), uses(&s, Task::Chat).as_str()), ("", "m2", "deepseek-v4-pro"));
@@ -871,7 +893,7 @@ mod tests {
         s.set_model_kind(0, 2, "");
         assert_eq!((s.tasks.image.as_str(), s.providers[0].models[2].interface.as_str(), s.profiles().len()), ("", "", 6));
         s.set_model_kind(0, 0, crate::imagegen::KIND);
-        assert_eq!((s.providers[0].models[0].draws(), s.profile_for(Task::Chat).map(|p| p.model)), (true, Some("deepseek-v4-flash".into())));
+        assert_eq!((s.providers[0].models[0].draws(), s.profile_for(Task::Chat).map(|p| p.model)), (true, Some("deepseek-flash".into())));
         // Kept in the file, and read back as it was.
         let dir = std::env::temp_dir().join(format!("wisp-settings-{}", crate::model::new_id("T")));
         let path = dir.join("settings.json");

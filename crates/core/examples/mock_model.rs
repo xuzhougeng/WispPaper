@@ -161,6 +161,25 @@ fn picture(request: &str) -> Option<String> {
     Some(format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len()))
 }
 
+/// The answer to a request for speech (朗读, `POST /v1/tools/tts`): a soft tone in 16-bit PCM at 24 kHz, a
+/// twentieth of a second per character, its pitch by the voice; `None` for any other request.
+fn speech(request: &str) -> Option<String> {
+    // Only the body is at hand: a request for speech is known by its voice and its format.
+    let value: serde_json::Value = serde_json::from_str(request).ok()?;
+    if value.get("voice_id").is_none() || value["format"] != "pcm" { return None }
+    let text = value["text"].as_str().unwrap_or("");
+    println!("speech: voice {} for {:?}", value["voice_id"].as_str().unwrap_or("(none)"), text.chars().take(40).collect::<String>());
+    if text.contains("试试失败") {
+        let body = r#"{"error":{"message":"Content Exists Risk"}}"#;
+        return Some(format!("HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len()));
+    }
+    let pitch = if value["voice_id"] == "tide" { 220. } else { 330. };
+    let samples = (text.chars().count() * 1200).min(24_000 * 60);
+    // Latin-1 so each byte stays one char of the reply; written back as bytes by `answer`.
+    let sound: String = (0..samples).flat_map(|n| (((n as f32 * pitch * std::f32::consts::TAU / 24_000.).sin() * 3000.) as i16).to_le_bytes()).map(char::from).collect();
+    Some(format!("HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{sound}", samples * 2))
+}
+
 /// The answer to a System One request (a state and typed questions); `None` for any other request.
 fn judgement(request: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(request).ok()?;
@@ -204,6 +223,15 @@ fn main() {
 fn answer(mut stream: TcpStream, delay: u64) {
     {
         let request = body(&mut stream);
+        if let Some(reply) = speech(&request) {
+            std::thread::sleep(std::time::Duration::from_millis(delay));
+            // The sound's bytes went into chars one for one; they go out as those bytes again.
+            let (head, sound) = reply.split_once("\r\n\r\n").unwrap_or((&reply, ""));
+            let mut bytes = format!("{head}\r\n\r\n").into_bytes();
+            bytes.extend(sound.chars().map(|c| c as u32 as u8));
+            let _ = stream.write_all(&bytes);
+            return;
+        }
         if let Some(reply) = judgement(&request).or_else(|| picture(&request)) {
             std::thread::sleep(std::time::Duration::from_millis(delay));
             let _ = stream.write_all(reply.as_bytes());

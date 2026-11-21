@@ -303,6 +303,8 @@ pub enum Cmd {
     SetAppearance(String),
     SetLanguage(Language),
     SetDensity(String),
+    /// The voice 朗读 reads in, a key of `speech::VOICES`.
+    SetSpeechVoice(String),
     /// The Latin or the Chinese interface font; empty is the platform's own.
     SetFontFamily(crate::settings::FontSlot, String),
     SetFontSize(f32),
@@ -429,6 +431,8 @@ pub enum Cmd {
     PdfBeside(String),
     /// Cut a piece out of a page as a picture for a question, or stop doing so.
     PdfCut,
+    /// Read the file on show aloud from the page in view, or stop reading it.
+    ReadAloud,
     /// Draw boxes or place sticky notes on the pages, or go back to selecting text.
     PdfTool(crate::pdf::Tool),
     /// Show this file of the selected paper in the viewer (its main text or an attachment).
@@ -1524,6 +1528,10 @@ pub struct Library {
     pub note_links: BTreeMap<String, String>,
     /// The viewer of the file worked in: the toolbar, the keys and a citation followed speak of it.
     pub pdf: Option<Entity<PdfView>>,
+    /// 朗读: the file on show read aloud, and how it stood when last drawn. It belongs to the viewer:
+    /// another file on show, or the library closed, stops it (dropping it stops the sound).
+    pub aloud: Option<crate::read_aloud::Reading>,
+    pub aloud_shown: Option<crate::read_aloud::Status>,
     pdf_events: Option<Subscription>,
     /// Another file of the paper in the other half of the viewer (#185), while there is one.
     pub beside: Option<Beside>,
@@ -2681,6 +2689,10 @@ impl Workspace {
                 self.save_settings(cx);
             }
             Cmd::ResetTranslationPrompt => self.reset_translation_prompt(cx),
+            Cmd::SetSpeechVoice(voice) => {
+                self.settings.speech_voice = voice;
+                self.save_settings(cx);
+            }
             Cmd::AddCommand => self.add_command(cx),
             Cmd::Custom(what) => self.run_custom(what, window, cx),
             Cmd::SelectCommand(index) => self.select_command(index, cx),
@@ -3015,6 +3027,14 @@ impl Workspace {
             }
             Cmd::PdfCut => {
                 if let Some(pdf) = self.lib.as_ref().and_then(|lib| lib.pdf.clone()) { pdf.update(cx, |pdf, cx| pdf.toggle_cutting(cx)) }
+            }
+            Cmd::ReadAloud => {
+                if let Some(lib) = self.lib.as_mut().filter(|lib| lib.aloud.is_some()) {
+                    (lib.aloud, lib.aloud_shown) = (None, None);
+                    cx.notify();
+                } else {
+                    self.read_aloud(None, cx);
+                }
             }
             Cmd::PdfTool(tool) => {
                 if let Some(pdf) = self.lib.as_ref().and_then(|lib| lib.pdf.clone()) { pdf.update(cx, |pdf, cx| pdf.set_tool(tool, cx)) }
@@ -3971,6 +3991,8 @@ impl Workspace {
             float_area: (0., 0.),
             notes,
             pdf: None,
+            aloud: None,
+            aloud_shown: None,
             pdf_events: None,
             beside: None,
             zoom: Zoom::FitWidth,
@@ -4089,6 +4111,64 @@ impl Workspace {
         let model = profile.and_then(|id| self.settings.profile(&id)).unwrap_or(usual);
         let model = (model.id.clone(), model.labelled());
         pdf.update(cx, |pdf, cx| pdf.show_translation(state, model, models, cx));
+    }
+
+    /// 朗读: read `selection` aloud, or (`None`) the file on show from the page in view to its reference
+    /// list. The pages are the text kept for the file, else read off it on the reading's thread.
+    fn read_aloud(&mut self, selection: Option<String>, cx: &mut Context<Self>) {
+        let Some(provider) = self.settings.speech_provider().cloned() else { return self.fail(t("朗读用的是 DeepSeek 的语音服务：请先在「设置 › AI」添加 DeepSeek。"), cx) };
+        let (key, voice) = (provider.key(), self.settings.speech_voice.clone());
+        if key.is_empty() { return self.fail(tf!("朗读要用 DeepSeek 的 API Key：请在「设置 › AI」里给 {} 填写。", "Reading aloud needs a DeepSeek API key: add one for {} in Settings › AI.", provider.title()), cx) }
+        let Some(lib) = self.lib.as_mut() else { return };
+        let Some(pdf) = lib.pdf.clone() else { return };
+        let (resource, page) = { let view = pdf.read(cx); (view.resource_id().to_string(), view.current_page()) };
+        // The text kept for the file when there is some; the file itself is read on the reading's thread.
+        let kept = match lib.store.fulltext_pages(&resource) { Ok(Some(Ok(pages))) => Some(pages), _ => None };
+        let path = lib.files.iter().find(|f| f.id == resource).map(|f| lib.store.file_path(f));
+        let pieces = move || -> Result<Vec<(usize, String)>, String> {
+            use wisp_core::speech;
+            if let Some(text) = selection { return Ok(speech::pieces(&speech::readable(&text), speech::PIECE).into_iter().map(|piece| (0, piece)).collect()) }
+            let pages = match (kept, path) {
+                (Some(pages), _) => pages,
+                (None, Some(path)) => wisp_core::fulltext::file_pages(&path).map_err(|error| tf!("读不出这个 PDF 的文字：{}", "Could not read this PDF's text: {}", error))?,
+                (None, None) => vec![],
+            };
+            Ok(speech::from_pages(&pages, page))
+        };
+        let (base, proxy) = (provider.base_url.clone(), provider.proxy.clone());
+        lib.aloud = Some(crate::read_aloud::Reading::start(resource, pieces, move |text| wisp_core::speech::request(&base, &key, &proxy, &voice, text)));
+        lib.aloud_shown = lib.aloud.as_ref().map(|reading| reading.status());
+        let library = lib.info.id.clone();
+        // How the reading stands is looked at twice a second, and drawn again only when that changed.
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
+            let going = this.update(cx, |this, cx| {
+                let Some(lib) = this.lib.as_mut().filter(|lib| lib.info.id == library) else { return false };
+                let Some(reading) = lib.aloud.as_ref() else { return false };
+                // The viewer went to another file, or was put away: the reading was its.
+                let on_show = lib.pdf.as_ref().map(|pdf| pdf.read(cx).resource_id().to_string());
+                if on_show.as_deref() != Some(reading.resource.as_str()) {
+                    (lib.aloud, lib.aloud_shown) = (None, None);
+                    cx.notify();
+                    return false;
+                }
+                let status = reading.status();
+                if status.over {
+                    (lib.aloud, lib.aloud_shown) = (None, None);
+                    if let Some(error) = status.error { this.fail(tf!("朗读停了：{}", "Reading aloud stopped: {}", error), cx) }
+                    cx.notify();
+                    return false;
+                }
+                if lib.aloud_shown.as_ref() != Some(&status) {
+                    lib.aloud_shown = Some(status);
+                    cx.notify();
+                }
+                true
+            });
+            if !matches!(going, Ok(true)) { break }
+        })
+        .detach();
+        cx.notify();
     }
 
     /// Open the PDF viewer when its tab is showing and the paper has a PDF.
@@ -4211,6 +4291,7 @@ impl Workspace {
             PdfEvent::Worked => self.work_in(&view, cx),
             PdfEvent::Copied => self.say(t("已复制"), cx),
             PdfEvent::Translate(text, profile) => self.translate_passage(text.clone(), profile.clone(), cx),
+            PdfEvent::ReadAloud(text) => self.read_aloud(Some(text.clone()), cx),
             PdfEvent::Figure(piece) => self.collect_piece(piece, cx),
             PdfEvent::Annotate { paper, resource, page, kind, quote, boxes } => self.change_pdf_annotation(resource, |store| store.add_pdf_annotation(paper, resource, *page, *kind, quote, boxes).map(|_| ()), cx),
             PdfEvent::AnnotationNote { resource, id, note } => self.change_pdf_annotation(resource, |store| store.update_pdf_annotation_note(resource, id, note), cx),
@@ -7217,6 +7298,12 @@ impl Workspace {
                 "try" => self.lib.as_ref().and_then(|l| l.searches.get(arg.parse::<usize>().unwrap_or(0)).map(|s| Cmd::TrySearch(s.id.clone()))),
                 "wide" => Some(Cmd::ToggleWide),
                 "cut" => Some(Cmd::PdfCut),
+                // `readaloud` reads the PDF on show aloud from the page in view (again stops it); `readaloud:selection` reads what is selected on it.
+                "readaloud" if arg == "selection" => {
+                    if let Some(text) = self.lib.as_ref().and_then(|l| l.pdf.clone()).and_then(|pdf| pdf.read(cx).selected()).map(|(_, text)| text) { self.read_aloud(Some(text), cx) }
+                    return;
+                }
+                "readaloud" => Some(Cmd::ReadAloud),
                 // `pdftool:box` / `pdftool:note` draw boxes / place a note on the PDF on show; again, or `pdftool:off`, selects text.
                 "pdftool" => Some(Cmd::PdfTool(match arg { "box" => crate::pdf::Tool::Box, "note" => crate::pdf::Tool::Note, _ => crate::pdf::Tool::Select })),
                 // `readfile:<n>` reads the n-th PDF of the selected paper (0 its main text, then its attachments) in the viewer.
