@@ -51,7 +51,7 @@ impl Workspace {
     /// is turned on or another file is shown, leave them alone otherwise.
     pub(crate) fn load_facing(&mut self, cx: &mut Context<Self>) {
         let Some(lib) = self.lib.as_mut() else { return };
-        let file = if lib.facing && lib.tab == Tab::Pdf { lib.selected.as_deref().and_then(|id| lib.pdf_file(id)).cloned() } else { None };
+        let file = if lib.facing_shown() { lib.selected.as_deref().and_then(|id| lib.pdf_file(id)).cloned() } else { None };
         let Some(file) = file else {
             // Put away, or a paper without a PDF: nothing more is asked for; what was asked is still kept.
             (lib.facing_text, lib.facing_run, lib.facing_start) = (None, None, false);
@@ -118,7 +118,7 @@ impl Workspace {
         lib.facing = !lib.facing;
         // The click is the request: this paper is translated as soon as its paragraphs are read.
         lib.facing_start = lib.facing;
-        if lib.facing && lib.selected.is_some() { lib.tab = Tab::Pdf }
+        if lib.facing && lib.selected.is_some() && !lib.pdf_on_show() { lib.tab = Tab::Pdf }
         let ready = lib.facing && lib.facing_text.as_ref().is_some_and(|facing| facing.standing == Standing::Ready);
         self.ensure_pdf(cx);
         if ready { self.run_facing(cx) }
