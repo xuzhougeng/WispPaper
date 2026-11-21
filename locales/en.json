@@ -1586,5 +1586,12 @@
   "从这一页起朗读，读到参考文献为止": "Read aloud from this page up to the references",
   "这里没有可朗读的文字。": "There is no text here to read aloud.",
   "朗读用的是 DeepSeek 的语音服务：请先在「设置 › AI」添加 DeepSeek。": "Reading aloud uses DeepSeek's speech service: add DeepSeek in Settings › AI first.",
-  "PDF 工具栏和选中文字的「朗读」用 DeepSeek 的语音服务：先在「模型」里添加 DeepSeek 并填写 API Key。": "Read aloud (PDF toolbar and selected text) uses DeepSeek's speech service: add DeepSeek under Models and fill in its API key."
+  "PDF 工具栏和选中文字的「朗读」用 DeepSeek 的语音服务：先在「模型」里添加 DeepSeek 并填写 API Key。": "Read aloud (PDF toolbar and selected text) uses DeepSeek's speech service: add DeepSeek under Models and fill in its API key.",
+  "播客": "Podcast",
+  "正在写播客稿…": "Writing the podcast script…",
+  "停止播客": "Stop podcast",
+  "播客：两位主持人聊这篇论文": "Podcast: two hosts talk this paper over",
+  "一女一男两位主持人聊这篇论文：模型先写对话稿，再用 DeepSeek 的两种声音读出来；全部生成后，声音和稿子存为这篇的附件": "Two hosts, a woman and a man, talk this paper over: a model writes their script, DeepSeek's two voices speak it; once all of it is made, the sound and the script are kept as this paper's attachments",
+  "播客用的是 DeepSeek 的语音服务：请先在「设置 › AI」添加 DeepSeek。": "A podcast uses DeepSeek's speech service: add DeepSeek in Settings › AI first.",
+  "播客的声音和稿子已存为这篇的附件": "The podcast's sound and script are kept as this paper's attachments"
 }
