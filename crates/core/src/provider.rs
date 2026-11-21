@@ -26,7 +26,7 @@ pub struct Preset {
 }
 
 pub const PRESETS: [Preset; 8] = [
-    Preset { key: "deepseek", name: "DeepSeek", protocol: Protocol::OpenAI, base_url: "https://api.deepseek.com", key_env: "DEEPSEEK_API_KEY", models: &["deepseek-v4-pro", "deepseek-v4-flash"], images: &[], judges: &[], console: "https://platform.deepseek.com/api_keys" },
+    Preset { key: "deepseek", name: "DeepSeek", protocol: Protocol::OpenAI, base_url: "https://api.deepseek.com", key_env: "DEEPSEEK_API_KEY", models: &["deepseek-v4-pro", "deepseek-flash"], images: &[], judges: &[], console: "https://platform.deepseek.com/api_keys" },
     Preset { key: "kimi", name: "Kimi", protocol: Protocol::OpenAI, base_url: "https://api.moonshot.cn/v1", key_env: "MOONSHOT_API_KEY", models: &["kimi-k2.6"], images: &[], judges: &[], console: "https://platform.moonshot.cn/console/api-keys" },
     Preset { key: "glm", name: "GLM", protocol: Protocol::OpenAI, base_url: "https://open.bigmodel.cn/api/paas/v4", key_env: "ZHIPUAI_API_KEY", models: &["glm-5.3", "glm-5.1"], images: &[], judges: &[], console: "https://open.bigmodel.cn/usercenter/apikeys" },
     Preset { key: "claude", name: "Claude", protocol: Protocol::Anthropic, base_url: ANTHROPIC_BASE, key_env: "ANTHROPIC_API_KEY", models: &[DEFAULT_MODEL, "claude-sonnet-5-5", "claude-haiku-5-5"], images: &[], judges: &[], console: "https://console.anthropic.com/settings/keys" },

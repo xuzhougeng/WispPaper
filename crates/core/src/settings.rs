@@ -836,7 +836,7 @@ mod tests {
         s.tasks.set(Task::Chat, "m4");
         assert_eq!(Task::WORDS.map(|task| uses(&s, task)), ["glm-5.3", "glm-5.3", "glm-5.3", "glm-5.3"]);
         s.tasks.set(Task::Translate, "m2");
-        assert_eq!(Task::WORDS.map(|task| uses(&s, task)), ["glm-5.3", "glm-5.3", "deepseek-v4-flash", "glm-5.3"]);
+        assert_eq!(Task::WORDS.map(|task| uses(&s, task)), ["glm-5.3", "glm-5.3", "deepseek-flash", "glm-5.3"]);
         // A removed model or provider takes its bindings along; an id is not handed out twice while in use.
         s.remove_provider(2);
         assert_eq!((s.tasks.chat.as_str(), s.tasks.translate.as_str(), uses(&s, Task::Chat).as_str()), ("", "m2", "deepseek-v4-pro"));
@@ -893,7 +893,7 @@ mod tests {
         s.set_model_kind(0, 2, "");
         assert_eq!((s.tasks.image.as_str(), s.providers[0].models[2].interface.as_str(), s.profiles().len()), ("", "", 6));
         s.set_model_kind(0, 0, crate::imagegen::KIND);
-        assert_eq!((s.providers[0].models[0].draws(), s.profile_for(Task::Chat).map(|p| p.model)), (true, Some("deepseek-v4-flash".into())));
+        assert_eq!((s.providers[0].models[0].draws(), s.profile_for(Task::Chat).map(|p| p.model)), (true, Some("deepseek-flash".into())));
         // Kept in the file, and read back as it was.
         let dir = std::env::temp_dir().join(format!("wisp-settings-{}", crate::model::new_id("T")));
         let path = dir.join("settings.json");
