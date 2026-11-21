@@ -1808,11 +1808,27 @@ impl Workspace {
                             .items_end()
                             .gap(px(6.))
                             .child(ui::ghost_button(SharedString::from(format!("chat-attach-{side}")), Some("plus"), None).h(text_px(30.)).min_w(px(30.)).rounded(px(15.)).on_click(self.on(Cmd::AttachImages(talk), cx)))
-                            .child(div().flex().flex_1().min_w_0().py(px(5.)).max_h(px(170.)).overflow_hidden().text_size(text_px(13.)).line_height(text_px(20.)).text_color(Theme::text()).child(chat.input.clone()))
+                            .child(div().id(SharedString::from(format!("chat-input-{side}"))).flex().items_start().flex_1().min_w_0().my(px(5.)).max_h(px(170.)).overflow_y_scroll().track_scroll(&chat.input_scroll).text_size(text_px(13.)).line_height(text_px(20.)).text_color(Theme::text()).child(chat.input.clone()))
                             .child(if chat.busy { round(format!("chat-stop-{side}"), "square", true).on_click(self.on(Cmd::StopChat(talk), cx)) } else { round(format!("chat-send-{side}"), "send", ready).on_click(self.on(Cmd::Ask(talk), cx)) }),
                     ),
             )
-            .child(div().flex().gap(px(8.)).px(px(4.)).text_size(text_px(11.)).text_color(Theme::text_placeholder()).child(div().flex_1().min_w_0().truncate().child(if talk == Talk::Paper { t("Enter 发送 · 回答可能有误，请对照原文") } else { t("Enter 发送，Shift+Enter 换行 · 回答可能有误，请对照原文") })).child(div().flex_none().max_w(relative(0.4)).truncate().child(model.to_string())))
+            .child(div().flex().gap(px(8.)).px(px(4.)).text_size(text_px(11.)).text_color(Theme::text_placeholder()).child(div().flex_1().min_w_0().truncate().child(if talk == Talk::Paper { t("Enter 发送 · 回答可能有误，请对照原文") } else { t("Enter 发送，Shift+Enter 换行 · 回答可能有误，请对照原文") })).child(
+                // The model that answers, picked here as in 设置 › AI › 任务 (助手's model): no trip to the settings to try another.
+                div()
+                    .id(SharedString::from(format!("chat-model-{side}")))
+                    .flex()
+                    .flex_none()
+                    .max_w(relative(0.4))
+                    .items_center()
+                    .gap(px(2.))
+                    .px(px(4.))
+                    .rounded(px(4.))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(Theme::hover()).text_color(Theme::text_secondary()))
+                    .on_click(self.on_menu(MenuKind::TaskModel(wisp_core::settings::Task::Chat), cx))
+                    .child(div().min_w_0().truncate().child(model.to_string()))
+                    .child(ui::icon("chevron-down", 10., Theme::text_placeholder())),
+            ))
     }
 }
 

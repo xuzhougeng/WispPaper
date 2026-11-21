@@ -192,6 +192,12 @@ pub struct TextInput {
     selection_geometry: Option<SelectionGeometry>,
     selection_toolbar_visible: bool,
     selection_toolbar_dismissed: bool,
+    /// The scroll area a growing multi-line field is shown in (the chat's question box): moving the caret
+    /// or typing scrolls it so the caret stays in sight. Scrolling by hand is left alone until the caret moves again.
+    pub follow: Option<ScrollHandle>,
+    /// The caret, the length of the text and the field's width when the caret was last brought into sight:
+    /// text wrapped anew to another width moves the caret too.
+    followed: (usize, usize, Pixels),
 }
 
 /// The most changes a field can go back through.
@@ -240,6 +246,8 @@ impl TextInput {
             selection_geometry: None,
             selection_toolbar_visible: false,
             selection_toolbar_dismissed: false,
+            follow: None,
+            followed: (0, 0, px(0.)),
         }
     }
 
@@ -1208,6 +1216,20 @@ impl Element for InputElement {
             // Unfocused, a long value shows its beginning rather than wherever the caret was left.
             scroll_x = if input.focus.is_focused(window) { input.scroll_x.min(caret_at.x).max(caret_at.x - width).max(px(0.)) } else { px(0.) };
         }
+        // In a scroll area of its owner, the caret that moved (or text typed) is brought into sight there.
+        let at = (input.cursor(), input.text.len(), bounds.size.width);
+        let follow = input.follow.clone().filter(|_| input.multiline && input.focus.is_focused(window) && at != input.followed);
+        if let Some(handle) = &follow {
+            let view = handle.bounds();
+            let line = row_of(&probe, cursor).map_or(window.line_height(), |row| row.line_height);
+            let (top, bottom) = (bounds.top() + caret_at.y, bounds.top() + caret_at.y + line);
+            let mut offset = handle.offset();
+            if top < view.top() { offset.y += view.top() - top } else if bottom > view.bottom() { offset.y -= bottom - view.bottom() }
+            if offset != handle.offset() {
+                handle.set_offset(offset);
+                window.refresh();
+            }
+        }
         let origin = point(bounds.left() - scroll_x, bounds.top());
         // The rows a stretch of the drawn text covers, line by line.
         let quads = |a: usize, b: usize, color: Hsla| {
@@ -1278,6 +1300,7 @@ impl Element for InputElement {
                 input.hovered = None;
                 cx.emit(InputEvent::LinkHovered);
             }
+            if follow.is_some() { input.followed = at }
             input.link_boxes = link_boxes;
             input.selection_geometry = geometry;
             input.selection_toolbar_visible = false;
