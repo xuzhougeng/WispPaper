@@ -24,6 +24,7 @@
 //! - `revise`   改稿: the assistant's changes to a section as blocks of words to find and words to put there
 //! - `markdown` the Markdown of an answer → blocks to draw
 //! - `ai`       context building, request bodies and stream parsing for 文献库提问
+//! - `podcast`  播客: a paper talked over by two hosts, the script asked of a model and its sound kept as WAV
 //! - `speech`   朗读: a paper's text in pieces for DeepSeek's speech service, and the sound it sends
 //! - `screening` the person's side of 筛选: the keys, a round of papers one by one, suggestions confirmed together
 //! - `sources`  literature database searches: URLs to ask, records read from the replies
@@ -77,6 +78,7 @@ pub mod retrieval;
 pub mod review;
 pub mod revise;
 pub mod screening;
+pub mod podcast;
 pub mod speech;
 pub mod selection;
 pub mod settings;

@@ -189,6 +189,19 @@ pub fn from_pages(pages: &[String], first: usize) -> Vec<(usize, String)> {
     out
 }
 
+/// The whole readable text of the pages, up to the reference list: what a podcast is written from.
+pub fn body(pages: &[String]) -> String {
+    let mut out: Vec<String> = vec![];
+    for page in pages {
+        let lines: Vec<&str> = page.lines().collect();
+        let end = lines.iter().position(|line| references_heading(line));
+        let text = readable(&lines[..end.unwrap_or(lines.len())].join("\n"));
+        if !text.is_empty() { out.push(text) }
+        if end.is_some() { break }
+    }
+    out.join(" ")
+}
+
 /// The sound as it arrives, bytes to samples: a sample whose two bytes come in two reads is kept whole.
 #[derive(Default)]
 pub struct Pcm {
