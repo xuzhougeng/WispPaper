@@ -30,6 +30,7 @@ mod notes;
 mod palette;
 mod pdf;
 mod picture;
+mod read_aloud;
 mod revise;
 mod screen;
 mod screen_confirm;

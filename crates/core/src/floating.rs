@@ -97,7 +97,7 @@ pub fn button_at(stored: Option<(f32, f32)>, area: (f32, f32)) -> (f32, f32) {
 
 /// The PDF's tools floating as a column over the page (`Settings::pdf_tools_at`): its size,
 /// how near the area's edges it may go, and where it stands until it is moved (under 标注).
-pub const TOOLS: (f32, f32) = (36., 176.);
+pub const TOOLS: (f32, f32) = (36., 206.);
 pub const TOOLS_MARGIN: f32 = 4.;
 pub const TOOLS_HOME: (f32, f32) = (8., 44.);
 

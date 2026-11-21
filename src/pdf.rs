@@ -30,6 +30,8 @@ pub enum PdfEvent {
     /// Translate the selected text: the text, and the model service (its id) asked for this once, else the one translation is bound to.
     /// The answer comes back through `PdfView::show_translation`.
     Translate(String, Option<String>),
+    /// Read the selected text aloud (朗读).
+    ReadAloud(String),
     /// Reading metadata, saved by the owner before the viewer redraws it.
     Annotate { paper: String, resource: String, page: usize, kind: Kind, quote: String, boxes: Vec<[f32; 4]> },
     AnnotationNote { resource: String, id: String, note: String },
@@ -1809,6 +1811,12 @@ impl PdfView {
         true
     }
 
+    /// Hand the selected text to the window to be read aloud.
+    fn read_selection_aloud(&mut self, cx: &mut Context<Self>) {
+        let Some((_, text)) = self.selected() else { return };
+        cx.emit(PdfEvent::ReadAloud(text));
+    }
+
     /// Translate the selected text, with the model service `profile` for this once or the usual one.
     pub fn translate(&mut self, profile: Option<String>, cx: &mut Context<Self>) {
         let (Some(selection), Some((_, text))) = (self.selection, self.selected()) else { return };
@@ -2014,6 +2022,7 @@ impl PdfView {
                 .when(!piece && self.library_chat, |d| d.child(button("pdf-quote-library", t("加到文献库对话")).text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.quote(true, cx)))).child(button("pdf-quote-paper", t("加到这篇的对话")).text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.quote(false, cx)))))
                 .when(!piece && !self.library_chat, |d| d.child(button("pdf-quote-paper", t("添加到对话")).text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.quote(false, cx)))))
                 .when(!piece, |d| d.child(button("pdf-translate", t("翻译")).on_click(cx.listener(|this, _, _, cx| this.translate(None, cx)))))
+                .when(!piece, |d| d.child(button("pdf-read-aloud", t("朗读")).on_click(cx.listener(|this, _, _, cx| this.read_selection_aloud(cx)))))
                 // A piece of the page: a figure to keep, or a picture for the next question.
                 .when(piece, |d| d.child(button("pdf-cut-keep", t("收藏到图片库")).text_color(Theme::accent()).on_click(cx.listener(|this, _, _, cx| this.collect_cut(cx)))))
                 .when(piece && self.library_chat, |d| d.child(button("pdf-cut-library", t("截图加到文献库对话")).on_click(cx.listener(|this, _, _, cx| this.send_cut(true, cx)))).child(button("pdf-cut-paper", t("截图加到这篇的对话")).on_click(cx.listener(|this, _, _, cx| this.send_cut(false, cx)))))

@@ -96,6 +96,10 @@ Models per task: `Settings::providers` holds any number of model services (`prov
 
 Proxies: `Settings::proxy` is global and applied with `wisp_net::set_proxy` (app start, 设置 › 网络, and `wisp`); `Profile::proxy` overrides it for one model service (`direct` = none) and travels in `HttpRequest::proxy`. Empty everywhere means ureq reads the environment. `settings::proxy_problem` is the address check.
 
+## 朗读 (`speech.rs`)
+
+Not a model: DeepSeek's speech service (`POST {host}/v1/tools/tts`, `speech::endpoint` takes the host's root whatever path chat has), with the key of the provider `Settings::speech_provider` picks (preset `deepseek` or an address at deepseek.com, one with a key first). `speech::request` asks for `format: pcm` (16-bit mono, 24 kHz) in `Settings::speech_voice` (`speech::VOICES`, `stella` / `tide`) with `filter_markdown` off. What is read: `speech::from_pages` from a 1-based page on, each page through `readable` (lines joined again, a word hyphenated at a line's end made whole, lines that are only a number, bracketed citation numbers and web addresses left out) and cut by `pieces` at sentence ends into `PIECE` (in `billed`: the service counts a Chinese character twice); it stops at a reference list's heading (`references_heading`). `speech::Pcm` turns the bytes as they arrive into samples, keeping a sample split between two reads. `wisp_net::speak` sends a request and hands the sound to a callback as it streams (retrying a busy service before sound comes, like `post_json`; both go through `post_retrying`). The mock model answers such a request with a tone.
+
 ## Translation
 
 Translation: `ai::translate_request` (instructions from `Settings::translation_prompt`, else `ai::TRANSLATION_PROMPT`), kept in the library's `translations` table under `store::translation_key` (text and instructions), so a text is requested once. The window translates the selected paper's title and abstract while `Library::show_translation` is on.

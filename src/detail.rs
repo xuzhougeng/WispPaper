@@ -473,6 +473,8 @@ impl Workspace {
         };
         let beside = lib.split && lib.tab == Tab::Ask;
         let reading = lib.reading;
+        // 朗读: how the reading of this file stands, while it is read.
+        let aloud = lib.aloud.as_ref().filter(|r| r.resource == file_id).and(lib.aloud_shown.clone());
         // With the library's conversation on show as well, a selection can go to either.
         let library_chat = lib.page == crate::app::Page::Ask;
         pdf.update(cx, |pdf, _| {
@@ -541,6 +543,8 @@ impl Workspace {
                     // Marks placed on the page rather than its text: a box round a figure or a passage, a sticky note anywhere.
                     .when(docked, |d| d.child(ui::ghost_button("pdf-box", Some("square"), Some(t("方框").into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).when(pen == Tool::Box, |d| d.text_color(Theme::accent())).tooltip(ui::tip(t("在页面上拖出方框，框住图表或文字"))).on_click(self.on(Cmd::PdfTool(Tool::Box), cx))))
                     .when(docked, |d| d.child(ui::ghost_button("pdf-note", Some("sticky-note"), Some(t("便签").into())).h(text_px(24.)).px(px(6.)).text_size(text_px(12.)).when(pen == Tool::Note, |d| d.text_color(Theme::accent())).tooltip(ui::tip(t("点击页面任意位置添加便签"))).on_click(self.on(Cmd::PdfTool(Tool::Note), cx))))
+                    // 朗读 from the page in view; while it reads, the same button stops it and says which page is heard.
+                    .when(docked, |d| d.child(self.read_aloud_button(aloud.as_ref(), cx)))
                     // The whole window for this paper; in reading mode the way back is at the top.
                     // Its shortcut in the tooltip: the way in from the list without opening the paper first.
                     .when(!reading, |d| {
@@ -560,8 +564,26 @@ impl Workspace {
 
     /// The PDF's tools as a column of icons at the page's right edge, under 标注 (or beside its list
     /// while that is open): at hand wherever the page is read, the names in the tooltips.
+    /// 朗读 in the PDF's toolbar: from the page in view, or, while reading, 停止 with the page heard
+    /// (a spinner while the next sound is on its way).
+    fn read_aloud_button(&self, aloud: Option<&crate::read_aloud::Status>, cx: &mut Context<Self>) -> AnyElement {
+        let button = ui::ghost_button("pdf-read-aloud", None, None).h(text_px(24.)).px(px(6.)).gap(px(4.)).text_size(text_px(12.)).on_click(self.on(Cmd::ReadAloud, cx));
+        match aloud {
+            None => button.child(ui::icon("volume-2", 14., Theme::text_secondary())).child(t("朗读")).tooltip(ui::tip(t("从这一页起朗读，读到参考文献为止"))).into_any_element(),
+            Some(status) => {
+                let label = match status.page { Some(page) => tf!("停止朗读 · 第 {} 页", "Stop · page {}", page), None => t("停止朗读").to_string() };
+                button
+                    .text_color(Theme::accent())
+                    .child(if status.waiting { ui::spinner("pdf-read-aloud-wait", 14., Theme::accent()).into_any_element() } else { ui::icon("volume-2", 14., Theme::accent()).into_any_element() })
+                    .child(label)
+                    .into_any_element()
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn pdf_tool_column(&self, file_id: String, width: f32, pdf_height: f32, cutting: bool, split: Split, pen: Tool, marks_open: bool, cx: &mut Context<Self>) -> AnyElement {
+        let aloud = self.lib.as_ref().and_then(|lib| lib.aloud.as_ref()).is_some_and(|r| r.resource == file_id);
         let tool = |id: &'static str, icon: &'static str, lit: bool, tip: &'static str| ui::ghost_button(id, None, None).size(px(28.)).child(ui::icon(icon, 16., if lit { Theme::accent() } else { Theme::text_secondary() })).tooltip(ui::tip(t(tip)));
         let line = || div().flex_none().h(px(1.)).mx(px(4.)).my(px(2.)).bg(Theme::line());
         // Where the reader dragged it, or under 标注; there, it stands to the left of the list of marks
@@ -611,6 +633,7 @@ impl Workspace {
             .child(tool("pdf-float-cut", "scissors", cutting, if cutting { "取消截图" } else { "截图" }).on_click(self.on(Cmd::PdfCut, cx)))
             .child(tool("pdf-float-box", "square", pen == Tool::Box, "在页面上拖出方框，框住图表或文字").on_click(self.on(Cmd::PdfTool(Tool::Box), cx)))
             .child(tool("pdf-float-note", "sticky-note", pen == Tool::Note, "点击页面任意位置添加便签").on_click(self.on(Cmd::PdfTool(Tool::Note), cx)))
+            .child(tool("pdf-float-read", "volume-2", aloud, if aloud { "停止朗读" } else { "从这一页起朗读" }).on_click(self.on(Cmd::ReadAloud, cx)))
             .child(line())
             .child(tool("pdf-float-open", "link", false, "用系统应用打开").on_click(self.on(Cmd::OpenFile(file_id), cx)))
             .into_any_element()

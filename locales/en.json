@@ -1563,5 +1563,15 @@
   "回答中": "Answering",
   "等你同意": "Waiting for you",
   "放到后台的那段对话答完了，在「历史」里可以找到": "The conversation left answering in the background has finished; find it in History",
-  "上一段对话还在后台回答，在「历史」里可以找到。": "The previous conversation is still answering in the background. Find it in History."
+  "上一段对话还在后台回答，在「历史」里可以找到。": "The previous conversation is still answering in the background. Find it in History.",
+  "朗读": "Read aloud",
+  "朗读的声音": "Reading voice",
+  "女声": "Female",
+  "男声": "Male",
+  "停止朗读": "Stop reading",
+  "从这一页起朗读": "Read aloud from this page",
+  "从这一页起朗读，读到参考文献为止": "Read aloud from this page up to the references",
+  "这里没有可朗读的文字。": "There is no text here to read aloud.",
+  "朗读用的是 DeepSeek 的语音服务：请先在「设置 › AI」添加 DeepSeek。": "Reading aloud uses DeepSeek's speech service: add DeepSeek in Settings › AI first.",
+  "PDF 工具栏和选中文字的「朗读」用 DeepSeek 的语音服务：先在「模型」里添加 DeepSeek 并填写 API Key。": "Read aloud (PDF toolbar and selected text) uses DeepSeek's speech service: add DeepSeek under Models and fill in its API key."
 }

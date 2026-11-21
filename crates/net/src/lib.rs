@@ -314,10 +314,29 @@ pub fn judge(request: HttpRequest) -> Result<Value, String> {
     post_json(&request, Duration::from_secs(60))
 }
 
-/// POST a request whose answer is one JSON document, waiting `answer` for
-/// it to begin. A service too busy to take it (or never reached) is asked
-/// again, up to twice; an error response is said in the service's words.
+/// POST a request whose answer is one JSON document, waiting `answer` for it to begin (`post_retrying`).
 fn post_json(request: &HttpRequest, answer: Duration) -> Result<Value, String> {
+    let mut response = post_retrying(request, answer)?;
+    response.body_mut().with_config().limit(MAX_PICTURE).read_json::<Value>().map_err(|e| format!("无法解析模型服务的返回内容：{e}"))
+}
+
+/// Ask the speech service for one piece of text read aloud (`speech::request`) and hand the sound to
+/// `take` as it arrives, in reads of a few kilobytes; `take` answers false to stop. A service too
+/// busy to begin is asked again; once sound has come, a cut connection is an error, not a retry.
+pub fn speak(request: &HttpRequest, mut take: impl FnMut(&[u8]) -> bool) -> Result<(), String> {
+    use std::io::Read;
+    let mut response = post_retrying(request, Duration::from_secs(60))?;
+    let mut reader = response.body_mut().as_reader();
+    let mut buffer = [0u8; 16 * 1024];
+    loop {
+        let n = reader.read(&mut buffer).map_err(|err| format!("朗读的声音没有传完：{err}"))?;
+        if n == 0 || !take(&buffer[..n]) { return Ok(()) }
+    }
+}
+
+/// POST a request, asking again (up to twice) while the service is too busy or was not reached, and
+/// return a response that succeeded; an error response is said in the service's words.
+fn post_retrying(request: &HttpRequest, answer: Duration) -> Result<ureq::http::Response<ureq::Body>, String> {
     let agent = patient_agent(None, &request.proxy, answer)?;
     let body = request.body.to_string();
     let mut tries = 0;
@@ -342,7 +361,7 @@ fn post_json(request: &HttpRequest, answer: Duration) -> Result<Value, String> {
         let body = response.body_mut().read_to_string().unwrap_or_default();
         return Err(ai::error_message(status, &body));
     }
-    response.body_mut().with_config().limit(MAX_PICTURE).read_json::<Value>().map_err(|e| format!("无法解析模型服务的返回内容：{e}"))
+    Ok(response)
 }
 
 #[cfg(test)]
@@ -639,6 +658,27 @@ event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{
     }
 
     /// A paper judged by a model that judges: what is sent where, what is made of the answer, and how its errors read.
+    #[test]
+    fn sound_comes_as_it_is_sent() {
+        let ask = |base: String| wisp_core::speech::request(&base, "test-key", "", "tide", "Hello.").unwrap();
+        let (base, server) = serve("HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\nconnection: close\r\n\r\n\x00\x40\x00\x20\x01");
+        let mut pcm = wisp_core::speech::Pcm::default();
+        let mut samples = vec![];
+        speak(&ask(base), |bytes| { samples.extend(pcm.samples(bytes)); true }).unwrap();
+        assert_eq!(samples, [0.5, 0.25]);
+        let received = server.join().unwrap();
+        assert!(received.starts_with("POST /v1/tools/tts "), "{received}");
+        assert!(received.contains("\"voice_id\":\"tide\"") && received.contains("\"format\":\"pcm\""), "{received}");
+
+        // A refusal is said in the service's words; a busy service is asked again.
+        let (base, _server) = serve("HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{\"error\":{\"message\":\"Content Exists Risk\"}}");
+        assert_eq!(speak(&ask(base), |_| true), Err("请求被拒绝（HTTP 400）：Content Exists Risk".into()));
+        let (base, _server) = serve_in_turn(vec!["HTTP/1.1 503 Service Unavailable\r\nconnection: close\r\ncontent-length: 0\r\n\r\n", "HTTP/1.1 200 OK\r\nconnection: close\r\ncontent-length: 2\r\n\r\n\x00\x00"]);
+        let mut got = 0;
+        speak(&ask(base), |bytes| { got += bytes.len(); true }).unwrap();
+        assert_eq!(got, 2);
+    }
+
     #[test]
     fn judgements() {
         let paper = Paper { title: "A single-cell atlas of the root".into(), abstract_text: "We profile 100,000 cells.".into(), ..Default::default() };
