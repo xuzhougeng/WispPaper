@@ -112,6 +112,8 @@ impl Workspace {
 
     /// Show the translation beside the pages and begin translating, or put it away. Put away, nothing more is asked for.
     pub(crate) fn toggle_facing(&mut self, cx: &mut Context<Self>) {
+        // The translation takes the other half: a file shown there is put away.
+        if self.lib.as_ref().is_some_and(|lib| !lib.facing) { self.close_beside(cx) }
         let Some(lib) = self.lib.as_mut() else { return };
         lib.facing = !lib.facing;
         // The click is the request: this paper is translated as soon as its paragraphs are read.

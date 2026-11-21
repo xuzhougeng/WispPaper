@@ -476,13 +476,31 @@ impl Workspace {
         let reading = lib.reading;
         // With the library's conversation on show as well, a selection can go to either.
         let library_chat = lib.page == crate::app::Page::Ask;
-        pdf.update(cx, |pdf, _| {
-            pdf.set_width(width);
-            pdf.library_chat = library_chat;
-        });
-        let (page, count, percent, zoom, cutting, split, pen, marks_open, pdf_height) = {
+        // Another file of the paper in the other half: each half is a viewer of its own, drawn in its place
+        // whichever is worked in.
+        let pair = lib.beside.as_ref().map(|beside| (beside.view.clone(), beside.split, beside.first));
+        let pdf_height = lib.pdf_area(cx).1;
+        let half_width = match &pair { Some((_, Split::Side, _)) => ((width - crate::pdf::DIVIDER) / 2.).max(0.), _ => width };
+        for view in std::iter::once(&pdf).chain(pair.as_ref().map(|(view, ..)| view)) {
+            view.update(cx, |pdf, _| {
+                pdf.set_width(half_width);
+                pdf.library_chat = library_chat;
+            });
+        }
+        let (page, count, percent, zoom, cutting, split, pen, marks_open) = {
             let view = pdf.read(cx);
-            (view.current_page(), view.page_count(), view.percent(), view.zoom(), view.cutting(), view.split(), view.tool(), view.annotations_open(), view.height())
+            (view.current_page(), view.page_count(), view.percent(), view.zoom(), view.cutting(), pair.as_ref().map_or(view.split(), |(_, split, _)| *split), view.tool(), view.annotations_open())
+        };
+        let viewer = match pair {
+            None => pdf.into_any_element(),
+            Some((other, split, first)) => {
+                let (one, two) = if first { (other, pdf) } else { (pdf, other) };
+                let half = |view: Entity<crate::pdf::PdfView>| div().flex_1().min_w_0().min_h_0().overflow_hidden().child(view);
+                // The same band as between the halves of one file split.
+                let line = div().flex_none().bg(Theme::line_strong());
+                let line = if split == Split::Stacked { line.h(px(crate::pdf::DIVIDER)).w_full() } else { line.w(px(crate::pdf::DIVIDER)).h_full() };
+                div().size_full().flex().when(split == Split::Stacked, |d| d.flex_col()).child(half(one)).child(line).child(half(two)).into_any_element()
+            }
         };
         // The tools stand in the toolbar, or float at the page's right edge: a habit, kept for every paper.
         let floating = self.settings.pdf_tools_floating;
@@ -558,7 +576,7 @@ impl Workspace {
                     // Beside the conversation: put the PDF away again.
                     .when(beside, |d| d.child(tool("pdf-beside-close", "x").on_click(self.on(Cmd::BesidePdf(false), cx)))),
             )
-            .child(div().flex_1().min_h_0().relative().child(pdf).when(floating && count > 0, |d| d.child(self.pdf_tool_column(file_id, width, pdf_height, cutting, split, pen, marks_open, cx))))
+            .child(div().flex_1().min_h_0().relative().child(viewer).when(floating && count > 0, |d| d.child(self.pdf_tool_column(file_id, width, pdf_height, cutting, split, pen, marks_open, cx))))
             .into_any_element()
     }
 

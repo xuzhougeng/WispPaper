@@ -19,6 +19,8 @@ actions!(pdf, [CopySelection, FindInPdf]);
 
 /// What the viewer tells whoever shows it.
 pub enum PdfEvent {
+    /// The pointer went down or turned the wheel in the viewer: beside a viewer of another file of the paper, this is the one worked in from now on.
+    Worked,
     /// The selected text went to the clipboard.
     Copied,
     /// Add what is selected to a conversation: the 1-based page, the text, and whether to the library's (else the paper's own).
@@ -247,7 +249,8 @@ pub enum Split {
 }
 
 /// The band between the two halves, in logical pixels: wide enough to tell a page that both halves show from one page.
-const DIVIDER: f32 = 4.;
+/// Two viewers of two files of a paper side by side have the same band between them.
+pub const DIVIDER: f32 = 4.;
 
 /// The size of a half of a viewer of this size; all of it while it is not split.
 fn pane_size(split: Split, view: (f32, f32)) -> (f32, f32) {
@@ -255,6 +258,16 @@ fn pane_size(split: Split, view: (f32, f32)) -> (f32, f32) {
         Split::Off => view,
         Split::Side => (((view.0 - DIVIDER) / 2.).max(0.), view.1),
         Split::Stacked => (view.0, ((view.1 - DIVIDER) / 2.).max(0.)),
+    }
+}
+
+/// How the viewer stands once another file of the paper is put in its other half: as its halves stand
+/// now (two files, or one file twice), else side by side where a viewer `width` wide has room for two pages.
+pub fn beside_split(two_files: Option<Split>, one_file: Split, width: f32) -> Split {
+    match (two_files, one_file) {
+        (Some(split), _) if split != Split::Off => split,
+        (_, Split::Off) => if width >= crate::facing::FACING_MIN { Split::Side } else { Split::Stacked },
+        (_, split) => split,
     }
 }
 
@@ -1280,6 +1293,7 @@ impl PdfView {
     fn wheel(&mut self, event: &ScrollWheelEvent, bounds: Bounds<Pixels>, cx: &mut Context<Self>) -> bool {
         let delta = event.delta.pixel_delta(px(20.));
         let (dx, dy) = (f32::from(delta.x), f32::from(delta.y));
+        cx.emit(PdfEvent::Worked);
         // The half under the pointer is the one worked in from here on.
         let at = (f32::from(event.position.x - bounds.origin.x), f32::from(event.position.y - bounds.origin.y));
         let view = (f32::from(bounds.size.width), f32::from(bounds.size.height));
@@ -1315,6 +1329,7 @@ impl PdfView {
         let (thumb, left) = bar_thumb(self.pane_size().0, self.max_x, self.panes[pane].scroll_x);
         let at = f32::from(x - self.panes[pane].list.viewport_bounds().left()) - BAR_INSET;
         self.sliding = Some((pane, if at >= left && at <= left + thumb { at - left } else { thumb / 2. }));
+        cx.emit(PdfEvent::Worked);
         self.slide(x, cx);
     }
 
@@ -1618,6 +1633,7 @@ impl PdfView {
     /// starts there; on a box or a note, that is taken hold of.
     fn press(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus);
+        cx.emit(PdfEvent::Worked);
         let chosen = self.mark_menu.take();
         (self.selection, self.selecting, self.translation, self.pressed_mark, self.shape_drag) = (None, false, None, None, None);
         // The half pressed in is the one worked in; a drag stays in it. The line between the two is neither.
@@ -2426,7 +2442,7 @@ impl Render for PdfView {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that would bring in gpui's own `test` attribute.
-    use super::{BAR_INSET, BAR_THUMB_MIN, CARD_EDGE, CardPlace, CitationFocus, CitationStatus, DIVIDER, MARGIN, PAGE_GAP, POINT_PX, Split, Zoom, bar_thumb, card_place, page_scale, pane_at, pane_size, picture_serves, render_scale, search_words, zoom_step};
+    use super::{BAR_INSET, BAR_THUMB_MIN, CARD_EDGE, CardPlace, CitationFocus, CitationStatus, DIVIDER, MARGIN, PAGE_GAP, POINT_PX, Split, Zoom, bar_thumb, beside_split, card_place, page_scale, pane_at, pane_size, picture_serves, render_scale, search_words, zoom_step};
 
     #[test]
     fn a_sentence_not_found_is_looked_for_by_its_words() {
@@ -2436,6 +2452,17 @@ mod tests {
         // A term in a Chinese sentence before the characters around it.
         assert_eq!(search_words("我们用 Arabidopsis 做了实验"), ["Arabidopsis", "我们用", "做了实验"]);
         assert!(search_words("").is_empty());
+    }
+
+    #[test]
+    fn another_file_beside_keeps_how_the_halves_stand() {
+        let (wide, narrow) = (crate::facing::FACING_MIN, crate::facing::FACING_MIN - 1.);
+        // Two files already: the other half changes its file, not its place.
+        assert_eq!(beside_split(Some(Split::Stacked), Split::Off, wide), Split::Stacked);
+        // One file split on itself: its second half takes the other file, as it stood.
+        assert_eq!((beside_split(None, Split::Side, narrow), beside_split(None, Split::Stacked, wide)), (Split::Side, Split::Stacked));
+        // Whole: side by side where two pages have room, else one over the other.
+        assert_eq!((beside_split(None, Split::Off, wide), beside_split(None, Split::Off, narrow)), (Split::Side, Split::Stacked));
     }
 
     #[test]
