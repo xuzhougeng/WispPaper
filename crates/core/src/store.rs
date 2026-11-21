@@ -179,6 +179,16 @@ CREATE TABLE IF NOT EXISTS screening_rounds (
     counts TEXT NOT NULL DEFAULT '[0,0,0,0,0]'
 );
 
+-- Where each PDF was last read (#194): the 0-based page at the top of the
+-- view and how far down it, in the page's points. resource_id is a file of
+-- `resources`; a row left by a file taken away since is never read.
+CREATE TABLE IF NOT EXISTS reading_places (
+    resource_id TEXT PRIMARY KEY NOT NULL,
+    page INTEGER NOT NULL,
+    down REAL NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 -- Translations already made, so that a title or an abstract is translated
 -- once. The key is `translation_key`: the source text and the instructions.
 CREATE TABLE IF NOT EXISTS translations (
@@ -1140,6 +1150,27 @@ impl Store {
         Ok(self.list_suggestions()?.into_iter().find(|s| s.paper_id == paper_id))
     }
 
+    // ---- reading places
+
+    /// Where each PDF was left, by its resource id: the page at the top of the view and how far down it.
+    pub fn reading_places(&self) -> Result<HashMap<String, (usize, f32)>> {
+        let mut statement = self.db.prepare("SELECT resource_id, page, down FROM reading_places")?;
+        let rows = statement.query_map([], |r| Ok((r.get::<_, String>(0)?, (r.get::<_, i64>(1)?.max(0) as usize, r.get::<_, f64>(2)? as f32))))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Keep where these PDFs were left, in place of what was kept for them.
+    pub fn save_reading_places(&mut self, places: &[(String, (usize, f32))]) -> Result<()> {
+        if places.is_empty() { return Ok(()) }
+        let tx = self.db.transaction()?;
+        let now = now_iso();
+        for (id, (page, down)) in places {
+            tx.execute("INSERT INTO reading_places(resource_id, page, down, updated_at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(resource_id) DO UPDATE SET page = excluded.page, down = excluded.down, updated_at = excluded.updated_at", params![id, *page as i64, f64::from(*down), now])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     // ---- translations
 
     /// The translation kept under a `translation_key`, if there is one.
@@ -1911,6 +1942,19 @@ mod tests {
         store.trash_paper(&paper.id).unwrap();
         store.delete_paper(&paper.id).unwrap();
         assert!(store.list_conversations(&paper.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn reading_places_are_kept() {
+        let mut store = Store::in_memory(Path::new("/tmp/wisp-places")).unwrap();
+        assert!(store.reading_places().unwrap().is_empty());
+        store.save_reading_places(&[("r1".into(), (4, 120.5)), ("r2".into(), (0, 0.))]).unwrap();
+        // Read on: the later place takes the earlier one's.
+        store.save_reading_places(&[("r1".into(), (7, 33.))]).unwrap();
+        let places = store.reading_places().unwrap();
+        assert_eq!(places.len(), 2);
+        assert_eq!(places["r1"], (7, 33.));
+        assert_eq!(places["r2"], (0, 0.));
     }
 
     #[test]
