@@ -28,7 +28,7 @@ cargo clippy --all-targets              # expected to be warning-free
 
 | Before working on | Read |
 |---|---|
-| A module of the engine: docx, slides (pptx), 批注, 配引用, 出处, 改稿, 助手写, 图片库, screening, 提取, providers / 生图 / 判断, translation, full text and structure, candidates, open full texts, search sources, note saving | `docs/dev/core.md` |
+| A module of the engine: journal metrics (分区 / 影响因子), docx, slides (pptx), 批注, 配引用, 出处, 改稿, 助手写, 图片库, screening, 提取, providers / 生图 / 判断, translation, full text and structure, candidates, open full texts, search sources, note saving | `docs/dev/core.md` |
 | A feature of the window: the conversations, 写作 and its modes, citations, 综述, 图片库, 提取, 筛选, 自定义 (connectors, skills, OAuth), settings, layout, keyboard and selection, the PDF view, the text input | `docs/dev/app.md` |
 | Anything the person sees: layout, a new panel, header, bar or label (the design principles, 安静的版面) | `docs/dev/design.md` |
 | Running, scripting and looking at the app | `docs/dev/debugging.md` |

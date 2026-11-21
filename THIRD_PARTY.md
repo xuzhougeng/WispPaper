@@ -21,6 +21,10 @@ Wisp Study 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随
 - `scripts/sign-windows-esigner.ps1` 和发布工作流里的签名步骤来自 [BiblioCell](https://github.com/xuzhougeng/BiblioCell) 的 `scripts/` 和 `.github/workflows/release.yml`。
 - 文献模型、去重规则、BibTeX / CSV 导出、筛选排序移植自 [BiblioCell](https://github.com/xuzhougeng/BiblioCell)。
 
+## 期刊数据
+
+`crates/core/data/journals.tsv`（期刊的影响因子与分区，编进程序）由 `crates/core/data/journals.py` 从 [ShowJCR](https://github.com/hitfyd/ShowJCR)（GPL-3.0）整理的数据表生成：JCR 2025 影响因子与分区（Clarivate Journal Citation Reports）、中科院文献情报中心分区表升级版 2025、新锐期刊分区表 2026（xr-scholar.com）和国际期刊预警名单 2025。这些数据的权利归各自的发布方所有，此处只摘取了刊名、ISSN、影响因子、最佳分区和大类分区等字段，供查阅参考；不随本项目的 MIT 许可一起授权。
+
 ## 图标
 
 `assets/icons/*.svg` 除 `provider-*.svg` 外全部来自 [Lucide](https://lucide.dev/)（lucide-static 0.469.0，ISC 许可，见 `assets/icons/LICENSE-lucide`），文件名按用途改过。

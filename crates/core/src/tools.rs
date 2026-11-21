@@ -171,6 +171,7 @@ pub fn catalog() -> Vec<ToolDef> {
             }),
             &[],
         ),
+        scoped("journal_metrics", "查期刊分区与影响因子", "查一种期刊的影响因子和分区：JCR 影响因子与最佳分区（Q1–Q4）、中科院分区表升级版大类分区与是否 Top、新锐期刊分区表分区，以及预警名单。数据随应用附带，不联网。给 journal（刊名，全称或 PubMed 式缩写，或 ISSN），或 paperId（用这篇文献的期刊）。查不到时 found 为 false。", json!({"journal": {"type": "string", "description": "刊名或 ISSN，例如 Nature Communications、Nat Commun、2041-1723。"}, "paperId": {"type": "string", "description": "文献 ID；不给 journal 时用这篇文献的期刊。"}}), &[]),
         scoped("get_paper", "读取文献", "按 ID 读取一篇文献的完整记录：书目信息、摘要、笔记、标签、自定义词条和附件。", json!({"id": {"type": "string", "description": "文献 ID，例如 list_papers 返回的 id。"}}), &["id"]),
         scoped(
             "search_fulltext",
@@ -767,6 +768,7 @@ fn dispatch(store: &mut Store, info: &LibraryInfo, name: &str, args: &Value, fet
         "list_figures" => list_figures(store, info, args),
         "list_pdf_annotations" => list_pdf_annotations(store, args),
         "get_paper" => get_paper(store, args),
+        "journal_metrics" => journal_metrics(store, args),
         "search_fulltext" => search_fulltext(store, args),
         "read_fulltext" => read_fulltext(store, args),
         _ => Err(anyhow!("没有这个工具：{name}")),
@@ -923,6 +925,22 @@ fn list_pdf_annotations(store: &Store, args: &Value) -> Result<Value> {
     Ok(json!({"total": total, "offset": offset, "annotations": annotations}))
 }
 
+/// A journal's metrics from the table the app carries, by its name, its ISSN or a paper of it.
+fn journal_metrics(store: &mut Store, args: &Value) -> Result<Value> {
+    let asked = args["journal"].as_str().map(str::trim).unwrap_or("");
+    let name = match args["paperId"].as_str().filter(|id| asked.is_empty() && !id.is_empty()) {
+        Some(id) => store.get_paper(id)?.journal,
+        None => asked.to_string(),
+    };
+    if name.is_empty() { bail!("需要参数 journal（刊名或 ISSN）或 paperId；这篇文献没有期刊名时也查不了。") }
+    let table = crate::journals::table();
+    let found = table.by_issn(&name).filter(|_| crate::journals::issn_key(&name).len() == 8).or_else(|| table.find(&name));
+    Ok(match found {
+        Some(journal) => json!({"found": true, "asked": name, "journal": journal, "summary": journal.summary(), "editions": crate::journals::EDITIONS}),
+        None => json!({"found": false, "asked": name, "editions": crate::journals::EDITIONS}),
+    })
+}
+
 fn get_paper(store: &mut Store, args: &Value) -> Result<Value> {
     let paper = store.get_paper(text(args, "id")?)?;
     let mut out = serde_json::to_value(&paper)?;
@@ -939,6 +957,7 @@ fn get_paper(store: &mut Store, args: &Value) -> Result<Value> {
     out["fields"] = Value::Object(fields);
     out["fieldProposals"] = json!(proposed);
     out["link"] = json!(paper.link());
+    out["journalMetrics"] = json!(crate::journals::find(&paper.journal));
     out["suggestion"] = json!(store.suggestion(&paper.id)?);
     let mut files = vec![];
     for file in store.paper_files(&paper.id)? {
@@ -2773,6 +2792,19 @@ pub(crate) mod tests {
         assert_eq!(library_catalog().iter().filter(|tool| tool.confirm).map(|tool| tool.name).collect::<Vec<_>>().len(), 19);
         // The tools that write a manuscript are asked about outside the conversation that writes it.
         assert!(MANUSCRIPT.iter().all(|name| catalog().iter().any(|tool| tool.name == *name && tool.writes && tool.confirm)));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn journal_metrics_by_name_issn_or_paper() {
+        let (root, _) = sample();
+        let id = Store::open(&crate::libraries::list(&root)[0].dir).unwrap().add_paper(Paper { title: "Hairs".into(), journal: "Nat Commun".into(), ..Default::default() }).unwrap().id;
+        let by_paper = call(&root, "journal_metrics", &json!({"paperId": id})).unwrap();
+        assert_eq!((by_paper["found"].as_bool(), by_paper["journal"]["quartile"].as_str()), (Some(true), Some("Q1")));
+        assert_eq!(call(&root, "journal_metrics", &json!({"journal": "2041-1723"})).unwrap()["journal"], by_paper["journal"]);
+        assert_eq!(call(&root, "get_paper", &json!({"id": id})).unwrap()["journalMetrics"], by_paper["journal"]);
+        assert_eq!(call(&root, "journal_metrics", &json!({"journal": "Journal of Nothing At All Whatsoever"})).unwrap()["found"], false);
+        assert!(call(&root, "journal_metrics", &json!({})).unwrap_err().contains("需要参数 journal"));
         std::fs::remove_dir_all(root).ok();
     }
 
