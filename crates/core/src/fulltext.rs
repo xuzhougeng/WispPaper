@@ -217,6 +217,53 @@ fn streams(glyphs: &[String], boxes: &[[f32; 4]]) -> [Vec<(char, usize)>; 2] {
     })
 }
 
+/// Where a sentence read aloud stands among the glyphs of a page: the range of glyphs from its first
+/// words to its last. What is read leaves out the citation numbers and addresses the page has
+/// (`speech::readable`), so the sentence is not looked for whole: its beginning, then its end not far
+/// after it; when the end is not found, as far on as the sentence is long.
+pub fn find_spoken(glyphs: &[String], boxes: &[[f32; 4]], sentence: &str) -> Option<std::ops::Range<usize>> {
+    let wanted: Vec<char> = bare(sentence).chars().collect();
+    if wanted.len() < 2 { return None }
+    let edge = wanted.len().min(24);
+    let head = &wanted[..edge];
+    // Without the bracketed and raised citation numbers first, as it was read; then as the page has it.
+    let (raised, cited) = (raised_numbers(glyphs, boxes), bracketed_numbers(glyphs));
+    let read: Vec<(char, usize)> = glyphs.iter().enumerate().filter(|(index, _)| !raised[*index] && !cited[*index]).flat_map(|(index, glyph)| bare(glyph).chars().map(move |c| (c, index)).collect::<Vec<_>>()).collect();
+    let [_, whole] = streams(glyphs, boxes);
+    for stream in [read, whole] {
+        let Some(start) = stream.windows(edge).position(|window| window.iter().map(|(c, _)| c).eq(head.iter())) else { continue };
+        // The end: after the beginning, within what left-out addresses could add; shorter when an address cut it.
+        let reach = (start + wanted.len() * 2 + 120).min(stream.len());
+        let end = [24, 12, 6].into_iter().map(|length: usize| length.min(edge)).find_map(|length| {
+            let tail = &wanted[wanted.len() - length..];
+            (start + wanted.len() - length..reach.saturating_sub(length - 1)).find(|at| stream[*at..*at + length].iter().map(|(c, _)| c).eq(tail.iter())).map(|at| at + length - 1)
+        });
+        let mut end = stream[end.unwrap_or((start + wanted.len() - 1).min(stream.len() - 1))].1 + 1;
+        // The full stop or bracket after the last word belongs to the sentence too.
+        while glyphs.get(end).is_some_and(|g| !g.trim().is_empty() && bare(g).is_empty() && !g.contains(['[', '［'])) { end += 1 }
+        return Some(stream[start].1..end);
+    }
+    None
+}
+
+/// Which glyphs make a bracketed citation (`[12]`, `[3–5, 8]`, `［1］`), brackets included: what reading aloud leaves out.
+fn bracketed_numbers(glyphs: &[String]) -> Vec<bool> {
+    let mut cited = vec![false; glyphs.len()];
+    let mut index = 0;
+    while index < glyphs.len() {
+        if matches!(glyphs[index].trim(), "[" | "［") {
+            let inner = |g: &String| g.chars().all(|c| c.is_ascii_digit() || matches!(c, ',' | '，' | '-' | '–' | '—' | ' '));
+            let close = (index + 1..glyphs.len().min(index + 24)).find(|at| !inner(&glyphs[*at]));
+            if let Some(close) = close.filter(|close| matches!(glyphs[*close].trim(), "]" | "］") && glyphs[index + 1..*close].iter().any(|g| g.chars().any(|c| c.is_ascii_digit()))) {
+                cited[index..=close].iter_mut().for_each(|c| *c = true);
+                index = close;
+            }
+        }
+        index += 1;
+    }
+    cited
+}
+
 /// Every place words typed to look for stand among the glyphs of a page, in
 /// order and apart: the ranges of glyphs they cover. Compared as `bare`
 /// text, so case, spaces, hyphens and line breaks do not matter, and raised
@@ -402,6 +449,22 @@ mod tests {
         assert_eq!(find_quote(&glyphs, "nothing of the kind here"), None);
         assert_eq!(find_quote(&glyphs, "with"), None);
         assert_eq!(find_quote(&[], "prepared with 10x"), None);
+    }
+
+    #[test]
+    fn a_sentence_read_aloud_is_found_with_what_reading_left_out() {
+        let page = "Intro. Cells divide fast [12] when the medium is rich, see https://x.org/a for the data. Next one.";
+        let glyphs: Vec<String> = page.chars().map(String::from).collect();
+        // What `speech::readable` makes of it: the number and the address gone.
+        let heard = "Cells divide fast when the medium is rich, see for the data.";
+        let found = find_spoken(&glyphs, &[], heard).unwrap();
+        assert_eq!(glyphs[found].concat(), "Cells divide fast [12] when the medium is rich, see https://x.org/a for the data.");
+        assert_eq!(glyphs[find_spoken(&glyphs, &[], "Next one.").unwrap()].concat(), "Next one.");
+        // An end that is not there: as far on as the sentence is long.
+        let drifting = "Cells divide fast when the medium is rich and nothing else matters";
+        assert_eq!(glyphs[find_spoken(&glyphs, &[], drifting).unwrap()].concat(), "Cells divide fast [12] when the medium is rich, see https://x.org/a for the da");
+        assert_eq!(find_spoken(&glyphs, &[], "Nothing like it."), None);
+        assert_eq!(find_spoken(&glyphs, &[], "."), None);
     }
 
     #[test]

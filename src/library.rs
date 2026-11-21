@@ -464,7 +464,7 @@ impl Workspace {
                 .when_some(count, |d, n| d.child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(n.to_string())))
         };
         let on_papers = lib.page == Page::Papers;
-        let view_rows: Vec<AnyElement> = VIEWS
+        let mut view_rows: Vec<AnyElement> = VIEWS
             .into_iter()
             .map(|(id, icon, label, view)| {
                 // 收藏 holds the starred papers and the figure library: both count, and either page is its own.
@@ -473,6 +473,29 @@ impl Workspace {
                 nav(id, icon, t(label), Some(filter::view_count(&lib.papers, view, now) + collected).filter(|n| *n > 0), active, Cmd::SetView(view), self, cx).into_any_element()
             })
             .collect();
+        // 播客: the playlist of the podcasts kept in the library, once there is one; lit while one plays.
+        let podcasts = crate::app::podcast_list(lib).len();
+        if podcasts > 0 {
+            let playing = lib.aloud.as_ref().is_some_and(|r| r.kind == crate::read_aloud::Kind::Podcast);
+            view_rows.push(
+                div()
+                    .id("view-podcasts")
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .h(text_px(30.))
+                    .px(px(8.))
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(Theme::hover()))
+                    .when(playing, |d| d.text_color(Theme::accent()))
+                    .on_click(self.on_menu(MenuKind::Podcasts, cx))
+                    .child(ui::icon("headphones", 16., if playing { Theme::accent() } else { Theme::text_secondary() }))
+                    .child(div().flex_1().min_w_0().truncate().child(t("播客")))
+                    .child(div().text_size(text_px(12.)).text_color(Theme::text_tertiary()).child(podcasts.to_string()))
+                    .into_any_element(),
+            );
+        }
         let tags = filter::tag_counts(&lib.papers);
         let tag_rows: Vec<AnyElement> = tags
             .iter()

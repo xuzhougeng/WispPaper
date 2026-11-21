@@ -91,6 +91,7 @@ impl Render for Workspace {
             .children(self.render_modal(window, cx))
             .children(self.render_palette(cx))
             .children(self.render_menu(cx))
+            .children(if self.settings_view.is_none() { self.podcast_bar(cx) } else { None })
             .children(self.render_toast())
             // While an edge is held (the sidebar's, the detail panel's, the one between a conversation and its PDF), a layer over everything hears the pointer
             // wherever it goes: an element only hears the moves made over it.

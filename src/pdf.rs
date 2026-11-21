@@ -32,8 +32,8 @@ pub enum PdfEvent {
     /// Translate the selected text: the text, and the model service (its id) asked for this once, else the one translation is bound to.
     /// The answer comes back through `PdfView::show_translation`.
     Translate(String, Option<String>),
-    /// Read the selected text aloud (朗读).
-    ReadAloud(String),
+    /// Read the selected text aloud (朗读): its 1-based page and the text.
+    ReadAloud(usize, String),
     /// Reading metadata, saved by the owner before the viewer redraws it.
     Annotate { paper: String, resource: String, page: usize, kind: Kind, quote: String, boxes: Vec<[f32; 4]> },
     AnnotationNote { resource: String, id: String, note: String },
@@ -461,6 +461,8 @@ enum Request {
     Find(u64, Option<usize>, String),
     /// Look for words typed into the find bar, on every page.
     Search(u64, String),
+    /// Look for the sentence being read aloud on its 0-based page (or the next one).
+    Spoken(u64, usize, String),
     /// The glyphs of a page, for selecting text on it.
     Marks(usize),
 }
@@ -478,6 +480,8 @@ enum Reply {
     NotFound(u64),
     /// Where the words of the find bar stand: each place's page and one box per line, in reading order.
     Hits(u64, Vec<(usize, Vec<[f32; 4]>)>),
+    /// Where the sentence read aloud is: its page and one box per line, none when it was not found.
+    Spoken(u64, usize, Vec<[f32; 4]>),
     Marks(usize, Vec<Mark>),
 }
 
@@ -598,7 +602,12 @@ fn worker(path: PathBuf, requests: mpsc::Receiver<Request>, replies: async_chann
         // Of several quotations asked for in a row, only the last still matters.
         let find = waiting.iter().rev().find_map(|request| match request {
             Request::Find(request, page, quote) => Some((*request, *page, quote.clone())),
-            Request::Page(..) | Request::Marks(_) | Request::Search(..) => None,
+            Request::Page(..) | Request::Marks(_) | Request::Search(..) | Request::Spoken(..) => None,
+        });
+        // Reading aloud moves on a sentence at a time: only the latest is looked for.
+        let spoken = waiting.iter().rev().find_map(|request| match request {
+            Request::Spoken(request, page, sentence) => Some((*request, *page, sentence.clone())),
+            _ => None,
         });
         let search = waiting.iter().rev().find_map(|request| match request {
             Request::Search(request, words) => Some((*request, words.clone())),
@@ -629,6 +638,16 @@ fn worker(path: PathBuf, requests: mpsc::Receiver<Request>, replies: async_chann
                 }
             }
             if replies.send_blocking(reply).is_err() { return }
+        }
+
+        if let Some((request, page, sentence)) = spoken {
+            // A sentence may run on to the next page; it is looked for there too.
+            let found = [page, page + 1].into_iter().filter(|index| *index < pages.len()).find_map(|index| {
+                let glyphs = glyphs_of(index, &mut read)?;
+                wisp_core::fulltext::find_spoken(&glyphs.texts, &glyphs.boxes, &sentence).map(|range| (index, wisp_core::fulltext::line_boxes(&glyphs.boxes[range])))
+            });
+            let (index, boxes) = found.unwrap_or((page, vec![]));
+            if replies.send_blocking(Reply::Spoken(request, index, boxes)).is_err() { return }
         }
 
         if let Some((request, words)) = search {
@@ -753,6 +772,18 @@ pub struct PdfView {
     finder: Option<Finder>,
     /// Counts the searches asked for, so a late answer to an older one is dropped.
     searches: u64,
+    /// 朗读: the sentence being heard, marked on its page.
+    spoken: Spoken,
+}
+
+/// The sentence read aloud as the page shows it: the one asked for (1-based page and sentence), and where
+/// it was found (0-based page and one box per line).
+#[derive(Default)]
+struct Spoken {
+    request: u64,
+    asked: Option<(usize, String)>,
+    page: usize,
+    boxes: Vec<[f32; 4]>,
 }
 
 impl EventEmitter<PdfEvent> for PdfView {}
@@ -825,6 +856,7 @@ impl PdfView {
             focus: cx.focus_handle(),
             finder: None,
             searches: 0,
+            spoken: Spoken::default(),
         }
     }
 
@@ -1220,6 +1252,38 @@ impl PdfView {
         }
     }
 
+    /// 朗读: mark the sentence heard (a 1-based page and the sentence), or none. The view follows it while
+    /// the sentence before was in view; a reader who scrolled away to look at something is left there.
+    pub fn follow_spoken(&mut self, heard: Option<(usize, String)>, cx: &mut Context<Self>) {
+        if self.spoken.asked == heard { return }
+        self.spoken.request = self.spoken.request.wrapping_add(1);
+        match heard {
+            Some((page, sentence)) if page > 0 && !sentence.trim().is_empty() => {
+                let _ = self.requests.send(Request::Spoken(self.spoken.request, page - 1, sentence.clone()));
+                self.spoken.asked = Some((page, sentence));
+            }
+            _ => {
+                self.spoken = Spoken { request: self.spoken.request, ..Spoken::default() };
+                cx.notify();
+            }
+        }
+    }
+
+    /// Whether lines of a 0-based page (in its points) stand wholly in the view of the half worked in.
+    fn in_view(&self, index: usize, lines: &[[f32; 4]]) -> bool {
+        let (Some(first), Some(last)) = (lines.first(), lines.last()) else { return false };
+        let top = self.list().logical_scroll_top();
+        if index < top.item_ix || self.sizes.is_empty() { return false }
+        let height = self.pane_size().1;
+        let mut y = -f32::from(top.offset_in_item);
+        for page in top.item_ix..index {
+            y += self.sizes.get(page).map_or(842., |size| size.1) * self.scale_of(page) + PAGE_GAP;
+            if y > height { return false }
+        }
+        let scale = self.scale_of(index);
+        y + first[1] * scale >= 0. && y + last[3] * scale <= height
+    }
+
     /// How many logical pixels a point of this page takes.
     fn scale_of(&self, index: usize) -> f32 {
         page_scale(self.zoom, self.sizes.get(index).copied().unwrap_or((595., 842.)), self.pane_size())
@@ -1428,6 +1492,18 @@ impl PdfView {
                 }
             }
             Reply::NotFound(request) => { self.citation.finish(request, None); }
+            Reply::Spoken(request, index, boxes) => {
+                if request != self.spoken.request { return }
+                // Followed while what was heard before was in view (or nothing was): the sentence comes to a third of the way down.
+                let follow = self.spoken.boxes.is_empty() || self.in_view(self.spoken.page, &self.spoken.boxes);
+                if follow && !boxes.is_empty() && !self.in_view(index, &boxes) {
+                    let scale = self.scale_of(index);
+                    let down = (boxes[0][1] * scale - self.pane_size().1 / 3.).max(0.);
+                    self.list().scroll_to(ListOffset { item_ix: index, offset_in_item: px(down) });
+                }
+                // Not found on the page: the last sentence found stays marked until the next one is.
+                if !boxes.is_empty() { (self.spoken.page, self.spoken.boxes) = (index, boxes) }
+            }
             Reply::Hits(request, hits) => {
                 let Some(finder) = self.finder.as_mut().filter(|finder| finder.request == request) else { return };
                 // A word of a sentence not found that is on no page either: the next one.
@@ -1558,6 +1634,8 @@ impl PdfView {
             .filter(|_| cited)
             .map(|line| div().absolute().left(px(line[0] * scale - 1.)).top(px(line[1] * scale)).w(px((line[2] - line[0]) * scale + 2.)).h(px((line[3] - line[1]) * scale)).rounded(px(2.)).bg(hsla(50. / 360., 1., 0.5, 0.35)))
             .collect();
+        // The sentence being read aloud: a band of the accent under its lines.
+        let spoken: Vec<Div> = self.spoken.boxes.iter().filter(|_| self.spoken.page == index).map(|line| div().absolute().left(px(line[0] * scale - 2.)).top(px(line[1] * scale - 1.)).w(px((line[2] - line[0]) * scale + 4.)).h(px((line[3] - line[1]) * scale + 2.)).rounded(px(3.)).bg(Theme::spoken())).collect();
         // What the find bar found on this page: the place gone to stronger.
         let found: Vec<Div> = self
             .finder
@@ -1592,7 +1670,7 @@ impl PdfView {
             return div().w_full().flex().pb(px(PAGE_GAP)).child(sheet).into_any_element();
         }
         let sheet = match image {
-            Some((image, _)) => sheet.when(cutting || !free, |d| d.cursor_crosshair()).when(free, |d| d.cursor_text()).child(img(image).w(px(width)).h(px(height))).children(annotations).children(selected).children(marks).children(found).children(cut).children(shapes).children(drawing).children(notes),
+            Some((image, _)) => sheet.when(cutting || !free, |d| d.cursor_crosshair()).when(free, |d| d.cursor_text()).child(img(image).w(px(width)).h(px(height))).children(annotations).children(spoken).children(selected).children(marks).children(found).children(cut).children(shapes).children(drawing).children(notes),
             None => sheet.flex().items_center().justify_center().text_size(text_px(12.)).text_color(Theme::text_placeholder()).child(if self.broken.contains(&index) { tf!("第 {} 页无法渲染", "Cannot render page {}", index + 1) } else { tf!("第 {} 页", "Page {}", index + 1) }),
         };
         // Draw over the image without changing its size or covering the text.
@@ -1968,10 +2046,12 @@ impl PdfView {
         true
     }
 
-    /// Hand the selected text to the window to be read aloud.
-    fn read_selection_aloud(&mut self, cx: &mut Context<Self>) {
-        let Some((_, text)) = self.selected() else { return };
-        cx.emit(PdfEvent::ReadAloud(text));
+    /// Hand the selected text to the window to be read aloud, and let go of it: the sentence heard is marked instead.
+    pub fn read_selection_aloud(&mut self, cx: &mut Context<Self>) {
+        let Some((page, text)) = self.selected() else { return };
+        self.selection = None;
+        cx.emit(PdfEvent::ReadAloud(page, text));
+        cx.notify();
     }
 
     /// Translate the selected text, with the model service `profile` for this once or the usual one.
